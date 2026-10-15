@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 
 const props = defineProps<{
   modelValue: number
@@ -15,6 +17,7 @@ const emit = defineEmits<{
   (e: 'dragEnd'): void
   (e: 'dblclick'): void
 }>()
+const { t } = useI18n()
 
 const isDragging = ref(false)
 const startX = ref(0)
@@ -24,6 +27,20 @@ const pointerTarget = ref<HTMLElement | null>(null)
 const pointerId = ref<number | null>(null)
 const showRightPane = computed(() => props.showRightPane !== false)
 const effectiveRightWidth = computed(() => (showRightPane.value ? previewWidth.value : 0))
+
+function handleKeydown(event: KeyboardEvent) {
+  if (props.disabled || !isPlainNavigationKey(event)) return
+  const step = event.shiftKey ? 64 : 16
+  let next: number | null = null
+  if (event.key === 'ArrowLeft') next = props.modelValue + step
+  if (event.key === 'ArrowRight') next = props.modelValue - step
+  if (event.key === 'Home' && props.minWidth !== undefined) next = props.minWidth
+  if (event.key === 'End' && props.maxWidth !== undefined) next = props.maxWidth
+  if (next === null) return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('update:modelValue', clampWidth(next))
+}
 
 watch(
   () => props.modelValue,
@@ -137,9 +154,18 @@ onBeforeUnmount(() => {
 
     <div
       v-show="showRightPane"
-      class="group relative z-20 -mx-1.5 flex h-full w-3 cursor-col-resize items-center justify-center select-none touch-none"
+      role="separator"
+      aria-orientation="vertical"
+      :aria-label="String(t('header.windowTabs.resizingSplit'))"
+      :aria-valuenow="Math.round(modelValue)"
+      :aria-valuemin="minWidth"
+      :aria-valuemax="maxWidth"
+      :aria-disabled="disabled || undefined"
+      :tabindex="disabled ? -1 : 0"
+      class="group relative z-20 -mx-1.5 flex h-full w-3 cursor-col-resize items-center justify-center select-none touch-none outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :class="{ 'pointer-events-none opacity-50': disabled }"
       @pointerdown="handlePointerDown"
+      @keydown="handleKeydown"
       @dblclick="$emit('dblclick')"
     >
       <div class="h-full w-px bg-border/40 transition-colors group-hover:bg-primary/50" />
@@ -148,6 +174,7 @@ onBeforeUnmount(() => {
     <div
       class="relative shrink-0 overflow-hidden"
       :aria-hidden="!showRightPane"
+      :inert="!showRightPane ? true : undefined"
       :class="[showRightPane ? '' : 'pointer-events-none', { 'transition-[width] duration-200 ease-out': !isDragging }]"
       :style="{ width: `${effectiveRightWidth}px` }"
     >

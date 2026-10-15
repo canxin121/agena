@@ -1166,6 +1166,19 @@ export const useUiStore = defineStore('ui', () => {
     return true
   }
 
+  function reorderWorkspaceTab(windowId: string, offset: number): boolean {
+    const group = getWorkspaceGroupById(getWorkspaceWindowGroupId(windowId))
+    if (!group) return false
+    const index = group.tabIds.indexOf(windowId)
+    if (index < 0) return false
+    const next = Math.max(0, Math.min(group.tabIds.length - 1, index + offset))
+    const ids = [...group.tabIds]
+    ids.splice(index, 1)
+    ids.splice(next, 0, windowId)
+    setWorkspaceGroupTabs(group.id, ids, { activeWindowId: group.activeWindowId })
+    return true
+  }
+
   function moveWorkspaceWindowToGroup(
     windowId: string,
     targetGroupId: string,
@@ -2343,6 +2356,7 @@ export const useUiStore = defineStore('ui', () => {
     ensureWorkspaceWindowInGroupSplit,
     removeWorkspaceWindowFromGroupSplit,
     moveWorkspaceGroupToIndex,
+    reorderWorkspaceTab,
     moveWorkspaceWindowToGroup,
     ungroupWorkspaceWindow,
     getWorkspaceWindowById,

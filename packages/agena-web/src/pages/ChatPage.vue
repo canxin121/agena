@@ -635,6 +635,7 @@ function tryOpenPromptHistory(): boolean {
 
 function handlePromptHistoryKeydown(event: KeyboardEvent): boolean {
   if (!promptHistoryOpen.value) return false
+  if (event.defaultPrevented || isImeComposing(event)) return true
 
   const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
   if (event.key === 'Escape' && plain) {
@@ -668,6 +669,17 @@ function handlePromptHistoryKeydown(event: KeyboardEvent): boolean {
     event.preventDefault()
     if (promptHistoryFocus.value === 'results') movePromptHistoryNewer()
     else focusPromptHistoryInput()
+    return true
+  }
+  if (['Home', 'End', 'PageUp', 'PageDown'].includes(event.key) && plain && promptHistoryFocus.value === 'results') {
+    event.preventDefault()
+    const last = Math.max(0, filteredPromptHistoryEntries.value.length - 1)
+    promptHistoryIndex.value =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? last
+          : Math.max(0, Math.min(last, promptHistoryIndex.value + (event.key === 'PageDown' ? 10 : -10)))
     return true
   }
   if (event.key.toLowerCase() === 'r' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
@@ -2283,6 +2295,8 @@ const viewCtx = {
   handleDraftInput,
   handleDraftKeydown,
   handlePromptHistoryKeydown,
+  closePromptHistory,
+  closeCommandPalette,
   selectPromptHistoryEntry,
   updatePromptHistoryQuery,
   handleCommandPaletteKeydown,

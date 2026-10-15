@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { nextTick, ref, watch, type Component } from 'vue'
+import { computed, nextTick, ref, useId, watch, type Component } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import ListRowButton from '@/components/ui/ListRowButton.vue'
 import type { Command } from '@/pages/chat/useChatCommands'
+import { useComposerPaletteFocus } from '@/composables/useComposerPaletteFocus'
 
 // Intentionally UI-only; ChatPage keeps state + keyboard navigation.
 
@@ -18,6 +19,7 @@ const props = defineProps<{
   commands: CommandItem[]
   activeIndex: number
   commandIcon: (cmd: CommandItem) => Component
+  listId?: string
 }>()
 
 const emit = defineEmits<{
@@ -25,11 +27,17 @@ const emit = defineEmits<{
   (e: 'update:query', value: string): void
   (e: 'keydown', event: KeyboardEvent): void
   (e: 'select', cmd: CommandItem): void
+  (e: 'dismiss'): void
 }>()
 
 const rootEl = ref<HTMLDivElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const { t } = useI18n()
+const fallbackId = useId()
+const resultsId = computed(() => props.listId || `commands-${fallbackId}`)
+const activeId = computed(() =>
+  props.commands[props.activeIndex] ? `${resultsId.value}-${props.activeIndex}` : undefined,
+)
 
 function containsTarget(target: Node | null): boolean {
   if (!target) return false
@@ -38,17 +46,27 @@ function containsTarget(target: Node | null): boolean {
 
 defineExpose({ rootEl, containsTarget })
 
-watch(
-  () => [props.open, props.autoFocus] as const,
-  ([open, autoFocus]) => {
-    if (!open || !autoFocus) return
-    void nextTick(() => searchInput.value?.focus())
-  },
+useComposerPaletteFocus(
+  rootEl,
+  searchInput,
+  () => props.open,
+  () => props.autoFocus,
+  () => emit('dismiss'),
 )
 
 function setIndex(i: number) {
   emit('update:activeIndex', i)
 }
+
+watch(
+  () => [props.open, props.activeIndex, props.commands] as const,
+  async () => {
+    if (!props.open) return
+    await nextTick()
+    rootEl.value?.querySelector('[data-command-active="true"]')?.scrollIntoView({ block: 'nearest' })
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -69,11 +87,23 @@ function setIndex(i: number) {
         autocomplete="off"
         spellcheck="false"
         :aria-label="t('chat.commandPalette.search')"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="true"
+        :aria-controls="resultsId"
+        :aria-activedescendant="activeId"
         @input="$emit('update:query', ($event.target as HTMLInputElement).value)"
         @keydown="$emit('keydown', $event)"
       />
     </div>
-    <div class="max-h-64 overflow-auto px-2 py-2">
+    <div
+      :id="resultsId"
+      role="listbox"
+      tabindex="-1"
+      :aria-label="t('chat.commandPalette.search')"
+      :aria-busy="loading"
+      class="max-h-64 overflow-auto px-2 py-2"
+    >
       <div v-if="loading && !commands.length" class="flex items-center justify-center py-4 text-muted-foreground">
         <RiRefreshLine class="h-4 w-4 animate-spin" />
       </div>
@@ -85,7 +115,13 @@ function setIndex(i: number) {
           v-for="(cmd, idx) in commands"
           :key="cmd.name"
           :active="idx === activeIndex"
+          :data-command-active="idx === activeIndex"
+          :id="`${resultsId}-${idx}`"
+          role="option"
+          :aria-selected="idx === activeIndex"
+          :tabindex="-1"
           size="sm"
+          @mousedown.prevent
           @click="$emit('select', cmd)"
           @mouseenter="setIndex(idx)"
         >

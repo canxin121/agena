@@ -287,6 +287,12 @@ function handleRowDragStart(event: DragEvent) {
     @focusout="handleRowFocusOut"
   >
     <SidebarListItem
+      :data-keyboard-item="`session:${sessionId}`"
+      :data-keyboard-label="titleText"
+      :data-keyboard-level="2 + Math.max(0, Math.round(((indentPx || 2) - 2) / 10))"
+      :data-keyboard-expanded="isParent || isExpanded ? String(isExpanded) : undefined"
+      :data-keyboard-selected="String(multiSelectEnabled ? multiSelected : selected)"
+      :data-keyboard-multiselect="String(multiSelectEnabled)"
       :active="selected"
       :indent="indentPx"
       :as="isInlineRename ? 'div' : 'button'"
@@ -304,6 +310,7 @@ function handleRowDragStart(event: DragEvent) {
           <button
             v-if="isParent || isExpanded"
             type="button"
+            data-keyboard-toggle
             class="h-5 w-5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
             :aria-label="
               String(
@@ -424,6 +431,7 @@ function handleRowDragStart(event: DragEvent) {
 
           <template v-else-if="uiIsCompactLayout && canShowActions">
             <ListItemOverflowActionButton
+              data-keyboard-menu
               mobile
               :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
               @trigger="handleMobileOpenActionsClick"
@@ -432,6 +440,7 @@ function handleRowDragStart(event: DragEvent) {
 
           <template v-else-if="canShowActions">
             <ListItemOverflowActionButton
+              data-keyboard-menu
               :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
               @trigger="handleDesktopOpenActionMenu"
             />

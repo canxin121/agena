@@ -35,7 +35,7 @@ test('the focused pane composer wins over another pane and over hidden tabs', ()
   assert.equal(picked, focused)
 })
 
-test('a hidden composer is still a last resort when nothing is visible', () => {
+test('hidden composers are excluded so the caller can activate a chat pane', () => {
   const hidden = { id: 'hidden' } as unknown as HTMLElement
   const picked = pickComposerFocusTarget({
     windowId: 'window-2',
@@ -43,7 +43,7 @@ test('a hidden composer is still a last resort when nothing is visible', () => {
     isVisible: () => false,
   })
 
-  assert.equal(picked, hidden)
+  assert.equal(picked, null)
 })
 
 test('the Cmd+I shortcut uses the pane-scoped picker', () => {

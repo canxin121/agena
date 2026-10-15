@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, isRef, ref, unref } from 'vue'
+import { computed, defineAsyncComponent, isRef, ref, unref, useId } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -21,6 +21,8 @@ import {
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
+import TranscriptKeyboardToolbar from '@/components/chat/TranscriptKeyboardToolbar.vue'
+import { getComposerInput } from './composerInput'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
@@ -45,6 +47,15 @@ const btw = useBtwStore()
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
 const props = defineProps<{ ctx: ChatPageViewContext }>()
 const ctx = props.ctx
+const commandListId = `commands-${useId()}`
+
+function copyKeyboardMessage(id: string) {
+  const message = ctx.chat.messages.find((message) => String(message.info.id) === id)
+  if (message) ctx.handleCopyMessage(message)
+}
+function focusKeyboardPlan() {
+  ctx.planViewerOpen.value = true
+}
 
 const { t } = useI18n()
 
@@ -133,6 +144,8 @@ const {
   handleDraftInput,
   handleDraftKeydown,
   handlePromptHistoryKeydown,
+  closePromptHistory,
+  closeCommandPalette,
   selectPromptHistoryEntry,
   updatePromptHistoryQuery,
   handleCommandPaletteKeydown,
@@ -381,6 +394,18 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               </div>
             </div>
 
+            <TranscriptKeyboardToolbar
+              v-if="chat.selectedSessionId && !transcriptVimEnabled"
+              :root="pageRef"
+              :has-older="!chat.selectedHistory.exhausted"
+              :load-older="ctx.loadOlderHistory"
+              :plan-available="ctx.planVisible.value"
+              @copy="copyKeyboardMessage"
+              @search="openTranscriptSearch(true)"
+              @input="getComposerInput(composerRef)?.focus()"
+              @plan="focusKeyboardPlan"
+            />
+
             <div
               v-if="transcriptSearchOpen"
               class="chat-message-column flex items-center gap-2 border-t border-border/50 py-1.5"
@@ -606,6 +631,9 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                 :fullscreen="composerFullscreenActive"
                 :attached-files="attachedFiles"
                 :pending-attachments="pendingAttachments"
+                :command-open="commandOpen"
+                :command-list-id="commandListId"
+                :command-active-id="commands[commandIndex] ? `${commandListId}-${commandIndex}` : undefined"
                 class="flex-1 shrink-0 sm:shrink min-h-0"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
@@ -730,8 +758,10 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     @update:active-index="(value) => (promptHistoryIndex = value)"
                     @keydown="handlePromptHistoryKeydown"
                     @select="selectPromptHistoryEntry"
+                    @dismiss="closePromptHistory"
                   />
                   <CommandPalette
+                    :list-id="commandListId"
                     :open="commandOpen"
                     :auto-focus="commandFocusSearch"
                     :loading="commandsLoading"
@@ -743,6 +773,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     @update:active-index="(value) => (commandIndex = value)"
                     @keydown="handleCommandPaletteKeydown"
                     @select="selectCommand"
+                    @dismiss="closeCommandPalette"
                   />
                 </template>
                 <template #controls>

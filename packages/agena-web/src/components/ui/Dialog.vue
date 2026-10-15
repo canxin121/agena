@@ -4,16 +4,24 @@ import { computed } from 'vue'
 import { cn } from '@/lib/utils'
 import DialogHeader from '@/components/ui/DialogHeader.vue'
 import { useUiStore } from '@/stores/ui'
+import { useDialogReturnFocus } from '@/composables/useDialogReturnFocus'
 
-const props = defineProps<{
-  open: boolean
-  title?: string
-  description?: string
-  maxWidth?: string
-  mobileFullscreen?: boolean
-  /** The child owns scrolling (editors, plan viewers, split panes). */
-  bodyScroll?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    title?: string
+    description?: string
+    maxWidth?: string
+    mobileFullscreen?: boolean
+    /** The child owns scrolling (editors, plan viewers, split panes). */
+    bodyScroll?: boolean
+  }>(),
+  {
+    // Vue casts an absent Boolean prop to false. Scrolling must be opt-out;
+    // otherwise ordinary dialogs silently clip everything below the viewport.
+    bodyScroll: true,
+  },
+)
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -26,6 +34,7 @@ function onUpdateOpen(open: boolean) {
 }
 
 const ui = useUiStore()
+const onCloseAutoFocus = useDialogReturnFocus(() => props.open)
 const useMobileFullscreen = computed(() => Boolean(props.mobileFullscreen && ui.isCompactTouch))
 const contentClass = computed(() =>
   cn(
@@ -44,10 +53,14 @@ const contentClass = computed(() =>
       <DialogOverlay
         class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
-      <DialogContent :class="contentClass">
+      <DialogContent :class="contentClass" @close-auto-focus="onCloseAutoFocus">
         <DialogHeader :title="title" :description="description" @close="onUpdateOpen(false)" />
         <div
-          class="min-h-0 min-w-0 flex-1 p-3 sm:p-4"
+          data-dialog-body
+          :tabindex="bodyScroll === false ? undefined : 0"
+          :role="bodyScroll === false ? undefined : 'region'"
+          :aria-label="title"
+          class="min-h-0 min-w-0 flex-1 p-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-4"
           :class="
             bodyScroll === false
               ? 'flex flex-col overflow-hidden'

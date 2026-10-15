@@ -20,6 +20,9 @@ import {
 } from '@remixicon/vue'
 
 import Dialog from '@/components/ui/Dialog.vue'
+import KeyboardShortcutEditor from '@/components/KeyboardShortcutEditor.vue'
+import { keyboardOverrides } from '@/app/runtime/keyboardPreferences'
+import { formatShortcut, shortcutBindings, type ShortcutActionId } from '@/app/runtime/keyboardShortcutActions'
 import { reloadAgenaRuntime } from '@/lib/reload'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
@@ -36,6 +39,28 @@ const settings = useSettingsStore()
 const { t } = useI18n()
 
 const mod = computed(() => getModifierLabel())
+const shortcutLabelKeys: Record<ShortcutActionId, string> = {
+  help: 'showKeyboardShortcuts',
+  settings: 'openSettings',
+  sidebar: 'toggleSessionSidebar',
+  composer: 'focusChatInput',
+  'new-session': 'createNewSession',
+  theme: 'cycleTheme',
+  'tab-chat': 'openChat',
+  'tab-files': 'openFiles',
+  'tab-preview': 'openPreview',
+  'tab-terminal': 'openTerminal',
+  'tab-git': 'openGitPanel',
+}
+const shortcutLabels = computed(
+  () =>
+    Object.fromEntries(
+      Object.entries(shortcutLabelKeys).map(([id, key]) => [id, String(t(`help.dialog.shortcuts.${key}`))]),
+    ) as Record<ShortcutActionId, string>,
+)
+const keysFor = (action: ShortcutActionId) =>
+  shortcutBindings(action, keyboardOverrides.value).map(formatShortcut).join(' / ') ||
+  String(t('keyboard.shortcutDisabled'))
 
 // Vim shortcuts only work while the transcript Vim mode is on.
 const transcriptVimEnabled = computed(() =>
@@ -53,15 +78,26 @@ const sections = computed((): ShortcutSection[] => {
       category: String(t('help.dialog.sections.navigationCommands')),
       items: [
         {
-          keys: `Ctrl+H / ${m}+.`,
+          keys: keysFor('help'),
           description: String(t('help.dialog.shortcuts.showKeyboardShortcuts')),
           icon: RiQuestionLine,
         },
         {
-          keys: `${m}+L`,
+          keys: keysFor('sidebar'),
           description: String(t('help.dialog.shortcuts.toggleSessionSidebar')),
           icon: RiLayoutLeftLine,
         },
+        { keys: 'F6 / Shift+F6', description: String(t('help.dialog.shortcuts.keyboardRegions')) },
+        { keys: 'Tab / Shift+Tab', description: String(t('help.dialog.shortcuts.focusControls')) },
+        { keys: '↑ / ↓ · Home / End · Enter', description: String(t('help.dialog.shortcuts.optionNavigation')) },
+        { keys: 'PageUp / PageDown · Home / End', description: String(t('help.dialog.shortcuts.scrollRegion')) },
+        { keys: '← / → · Home / End · Delete', description: String(t('help.dialog.shortcuts.workspaceTabs')) },
+        { keys: 'Shift+F10', description: String(t('help.dialog.shortcuts.tabContextMenu')) },
+        { keys: '↑ / ↓ · ← / → · Home / End · F2', description: String(t('keyboard.treeHint')) },
+        { keys: 'Alt+Shift+↑ / ↓ · Home / End', description: String(t('keyboard.transcriptHint')) },
+        { keys: 'Shift+↑ / ↓ / ← / →', description: String(t('keyboard.panHint')) },
+        { keys: 'F6', description: String(t('keyboard.previewExitHint')) },
+        { keys: '↑ / ↓ / ← / → · Shift · Home / End', description: String(t('keyboard.resizeHint')) },
       ],
     },
     {
@@ -98,13 +134,16 @@ const sections = computed((): ShortcutSection[] => {
       category: String(t('help.dialog.sections.sessionManagement')),
       items: [
         {
-          keys: `${m}+N`,
+          keys: keysFor('new-session'),
           description: String(t('help.dialog.shortcuts.createNewSession')),
           icon: RiAddLine,
         },
         { keys: `${m}+Enter`, description: String(t('help.dialog.shortcuts.sendMessage')) },
-        // Vim enters INSERT with `i`; without the mode the platform focus
-        // shortcut (macOS) remains the only keyboard route into the composer.
+        {
+          keys: keysFor('composer'),
+          description: String(t('help.dialog.shortcuts.focusChatInput')),
+          icon: RiText,
+        },
         ...(vim
           ? [
               {
@@ -114,15 +153,7 @@ const sections = computed((): ShortcutSection[] => {
                 vimOnly: true,
               },
             ]
-          : m === 'Cmd'
-            ? [
-                {
-                  keys: `${m}+I`,
-                  description: String(t('help.dialog.shortcuts.focusChatInput')),
-                  icon: RiText,
-                },
-              ]
-            : []),
+          : []),
         { keys: `Ctrl+P`, description: String(t('help.dialog.shortcuts.openPlan')), vimOnly: true },
         {
           keys: `Ctrl+C`,
@@ -135,13 +166,33 @@ const sections = computed((): ShortcutSection[] => {
     {
       category: String(t('help.dialog.sections.interface')),
       items: [
-        { keys: `${m}+/`, description: String(t('help.dialog.shortcuts.cycleTheme')), icon: RiPaletteLine },
-        { keys: `${m}+1`, description: String(t('help.dialog.shortcuts.openChat')), icon: RiChat4Line },
-        { keys: `${m}+2`, description: String(t('help.dialog.shortcuts.openFiles')), icon: RiFolder6Line },
-        { keys: `${m}+3`, description: String(t('help.dialog.shortcuts.openPreview')), icon: RiGlobalLine },
-        { keys: `${m}+4`, description: String(t('help.dialog.shortcuts.openTerminal')), icon: RiTerminalBoxLine },
-        { keys: `${m}+5`, description: String(t('help.dialog.shortcuts.openGitPanel')), icon: RiGitMergeLine },
-        { keys: `${m}+,`, description: String(t('help.dialog.shortcuts.openSettings')), icon: RiSettings3Line },
+        { keys: keysFor('theme'), description: String(t('help.dialog.shortcuts.cycleTheme')), icon: RiPaletteLine },
+        { keys: keysFor('tab-chat'), description: String(t('help.dialog.shortcuts.openChat')), icon: RiChat4Line },
+        {
+          keys: keysFor('tab-files'),
+          description: String(t('help.dialog.shortcuts.openFiles')),
+          icon: RiFolder6Line,
+        },
+        {
+          keys: keysFor('tab-preview'),
+          description: String(t('help.dialog.shortcuts.openPreview')),
+          icon: RiGlobalLine,
+        },
+        {
+          keys: keysFor('tab-terminal'),
+          description: String(t('help.dialog.shortcuts.openTerminal')),
+          icon: RiTerminalBoxLine,
+        },
+        {
+          keys: keysFor('tab-git'),
+          description: String(t('help.dialog.shortcuts.openGitPanel')),
+          icon: RiGitMergeLine,
+        },
+        {
+          keys: keysFor('settings'),
+          description: String(t('help.dialog.shortcuts.openSettings')),
+          icon: RiSettings3Line,
+        },
       ],
     },
   ]
@@ -189,7 +240,7 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
           <div class="space-y-1">
             <button
               type="button"
-              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"
+              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @click="reloadConfiguration"
             >
               <div class="flex items-center gap-2 min-w-0">
@@ -207,7 +258,7 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
 
             <button
               type="button"
-              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"
+              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @click="setTheme('light')"
             >
               <div class="flex items-center gap-2 min-w-0">
@@ -225,7 +276,7 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
 
             <button
               type="button"
-              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"
+              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @click="setTheme('dark')"
             >
               <div class="flex items-center gap-2 min-w-0">
@@ -243,7 +294,7 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
 
             <button
               type="button"
-              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"
+              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @click="setTheme('system')"
             >
               <div class="flex items-center gap-2 min-w-0">
@@ -261,6 +312,8 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
           </div>
         </section>
 
+        <KeyboardShortcutEditor :labels="shortcutLabels" />
+
         <section v-for="section in sections" :key="section.category">
           <div class="text-[11px] font-semibold tracking-wider uppercase text-muted-foreground mb-2">
             {{ section.category }}
@@ -269,14 +322,14 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
             <div
               v-for="item in section.items"
               :key="item.keys + item.description"
-              class="flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40"
+              class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md px-2 py-1 hover:bg-secondary/40"
             >
               <div class="flex items-center gap-2 min-w-0">
                 <component v-if="item.icon" :is="item.icon" class="h-4 w-4 text-muted-foreground" />
-                <span class="typography-meta text-foreground/90 truncate">{{ item.description }}</span>
+                <span class="typography-meta text-foreground/90 break-words">{{ item.description }}</span>
               </div>
               <kbd
-                class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono bg-muted rounded border border-border/30"
+                class="inline-flex max-w-full items-center gap-1 break-words px-2 py-0.5 text-[11px] font-mono bg-muted rounded border border-border/30"
               >
                 {{ item.keys }}
               </kbd>

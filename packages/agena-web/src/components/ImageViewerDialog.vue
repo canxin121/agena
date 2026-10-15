@@ -6,6 +6,7 @@ import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiSubtract
 
 import IconButton from '@/components/ui/IconButton.vue'
 import { useUiStore } from '@/stores/ui'
+import { isImeComposing } from '@/lib/imeKeyboard'
 
 const ui = useUiStore()
 const { t } = useI18n()
@@ -24,6 +25,12 @@ const viewportEl = ref<HTMLElement | null>(null)
 const imageEl = ref<HTMLImageElement | null>(null)
 const panX = ref(0)
 const panY = ref(0)
+const panControls = [
+  { label: 'keyboard.panLeft', symbol: '←', x: 64, y: 0 },
+  { label: 'keyboard.panUp', symbol: '↑', x: 0, y: 64 },
+  { label: 'keyboard.panDown', symbol: '↓', x: 0, y: -64 },
+  { label: 'keyboard.panRight', symbol: '→', x: -64, y: 0 },
+]
 const isDragging = ref(false)
 const dragStartClientX = ref(0)
 const dragStartClientY = ref(0)
@@ -72,18 +79,18 @@ function computePanBounds() {
   if (!viewport || !image) return { maxX: 0, maxY: 0 }
 
   const zoom = Math.max(0.2, Math.min(5, Number(ui.imageViewerZoom) || 1))
-  const imageRect = image.getBoundingClientRect()
-  const viewportRect = viewport.getBoundingClientRect()
-  if (!imageRect.width || !imageRect.height || !viewportRect.width || !viewportRect.height) {
+  const baseWidth = image.clientWidth
+  const baseHeight = image.clientHeight
+  const viewportWidth = viewport.clientWidth
+  const viewportHeight = viewport.clientHeight
+  if (!baseWidth || !baseHeight || !viewportWidth || !viewportHeight) {
     return { maxX: 0, maxY: 0 }
   }
 
-  const baseWidth = imageRect.width / zoom
-  const baseHeight = imageRect.height / zoom
   const scaledWidth = baseWidth * zoom
   const scaledHeight = baseHeight * zoom
-  const maxX = Math.max(0, (scaledWidth - viewportRect.width) / 2)
-  const maxY = Math.max(0, (scaledHeight - viewportRect.height) / 2)
+  const maxX = Math.max(0, (scaledWidth - viewportWidth) / 2)
+  const maxY = Math.max(0, (scaledHeight - viewportHeight) / 2)
   return { maxX, maxY }
 }
 
@@ -96,6 +103,12 @@ function clampPanPosition() {
 function resetPanPosition() {
   panX.value = 0
   panY.value = 0
+}
+
+function panBy(x: number, y: number) {
+  panX.value += x
+  panY.value += y
+  clampPanPosition()
 }
 
 function applyZoom(nextZoomRaw: number, pointerX = 0, pointerY = 0) {
@@ -303,7 +316,25 @@ function onImageLoaded() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (!ui.isImageViewerOpen) return
+  if (
+    !ui.isImageViewerOpen ||
+    event.defaultPrevented ||
+    isImeComposing(event) ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey
+  )
+    return
+
+  if (event.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+    event.preventDefault()
+    event.stopPropagation()
+    panBy(
+      event.key === 'ArrowLeft' ? 64 : event.key === 'ArrowRight' ? -64 : 0,
+      event.key === 'ArrowUp' ? 64 : event.key === 'ArrowDown' ? -64 : 0,
+    )
+    return
+  }
 
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -387,7 +418,7 @@ onBeforeUnmount(() => {
         class="fixed inset-0 z-[81] flex min-h-0 flex-col bg-black/20 pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)] text-white outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       >
         <DialogTitle class="sr-only">{{ t('ui.imageViewer.title') }}</DialogTitle>
-        <div class="flex items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
+        <div class="flex flex-wrap items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm font-medium">{{ activeItem?.title || activeItem?.alt || '' }}</div>
             <div class="text-xs text-white/70">{{ total ? `${activeIndex + 1} / ${total}` : '' }}</div>
@@ -450,6 +481,22 @@ onBeforeUnmount(() => {
               <RiCloseLine class="h-4 w-4" />
             </IconButton>
           </div>
+        </div>
+
+        <div
+          class="flex flex-wrap items-center justify-center gap-1 border-b border-white/15 bg-black/40 px-3 py-1 text-xs"
+        >
+          <span class="mr-2 text-white/70">{{ t('keyboard.panHint') }}</span>
+          <button
+            v-for="control in panControls"
+            :key="control.label"
+            type="button"
+            class="rounded px-2 py-1 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            :aria-label="String(t(control.label))"
+            @click="panBy(control.x, control.y)"
+          >
+            {{ control.symbol }}
+          </button>
         </div>
 
         <div class="relative min-h-0 flex-1">

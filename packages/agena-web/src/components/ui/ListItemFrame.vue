@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useSlots } from 'vue'
+import { computed, useSlots, type HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 
 type ListItemActionVisibility = 'hover' | 'always'
@@ -17,6 +17,7 @@ const props = withDefaults(
     iconClass?: string
     contentClass?: string
     metaClass?: string
+    primaryAttrs?: HTMLAttributes & Record<string, unknown>
   }>(),
   {
     active: false,
@@ -88,6 +89,7 @@ function handleRootClick(event: MouseEvent) {
     :class="rootClass"
     :style="{ paddingLeft: typeof indent === 'number' ? `${indent}px` : undefined }"
     :disabled="resolvedAs === 'button' ? disabled : undefined"
+    v-bind="!usesButtonSurrogate ? primaryAttrs : undefined"
     @click="handleRootClick"
   >
     <div
@@ -101,6 +103,7 @@ function handleRootClick(event: MouseEvent) {
       v-if="usesButtonSurrogate"
       type="button"
       data-oc-list-item-primary
+      v-bind="primaryAttrs"
       class="flex min-w-0 flex-1 items-center gap-2 self-stretch bg-transparent p-0 text-left text-inherit outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       :disabled="disabled"
       @click.stop="emit('click', $event)"

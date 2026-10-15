@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
 import { RiHistoryLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ListRowButton from '@/components/ui/ListRowButton.vue'
+import { useComposerPaletteFocus } from '@/composables/useComposerPaletteFocus'
 
 const props = defineProps<{
   open: boolean
@@ -11,6 +12,7 @@ const props = defineProps<{
   query: string
   entries: string[]
   activeIndex: number
+  listId?: string
 }>()
 
 const emit = defineEmits<{
@@ -18,28 +20,40 @@ const emit = defineEmits<{
   (e: 'update:query', value: string): void
   (e: 'keydown', event: KeyboardEvent): void
   (e: 'select', text: string): void
+  (e: 'dismiss'): void
 }>()
 
 const rootEl = ref<HTMLDivElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
 const { t } = useI18n()
+const fallbackId = useId()
+const resultsId = computed(() => props.listId || `prompt-history-${fallbackId}`)
+const activeId = computed(() =>
+  props.entries[props.activeIndex] !== undefined ? `${resultsId.value}-${props.activeIndex}` : undefined,
+)
+const { focusSearch } = useComposerPaletteFocus(
+  rootEl,
+  searchInput,
+  () => props.open,
+  () => props.autoFocus,
+  () => emit('dismiss'),
+)
 
 function containsTarget(target: Node | null): boolean {
   if (!target) return false
   return Boolean(rootEl.value && rootEl.value.contains(target))
 }
 
-function focusSearch() {
-  void nextTick(() => searchInput.value?.focus())
-}
-
 defineExpose({ rootEl, containsTarget, focusSearch })
 
 watch(
-  () => [props.open, props.autoFocus] as const,
-  ([open, autoFocus]) => {
-    if (open && autoFocus) focusSearch()
+  () => [props.open, props.activeIndex, props.entries] as const,
+  async () => {
+    if (!props.open) return
+    await nextTick()
+    rootEl.value?.querySelector('[data-history-active="true"]')?.scrollIntoView({ block: 'nearest' })
   },
+  { flush: 'post' },
 )
 
 function setIndex(index: number) {
@@ -56,6 +70,7 @@ function preview(text: string): string {
     v-if="open"
     ref="rootEl"
     data-prompt-history-palette="true"
+    data-keyboard-overlay="true"
     class="absolute bottom-full mb-2 left-0 w-full max-w-[560px] rounded-xl border border-border bg-background/95 shadow-lg z-20"
   >
     <div class="flex items-center gap-2 border-b border-border/60 px-3 py-2">
@@ -70,12 +85,23 @@ function preview(text: string): string {
         autocomplete="off"
         spellcheck="false"
         :aria-label="t('chat.composer.promptHistory.search')"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded="true"
+        :aria-controls="resultsId"
+        :aria-activedescendant="activeId"
         @input="$emit('update:query', ($event.target as HTMLInputElement).value)"
         @keydown="$emit('keydown', $event)"
       />
     </div>
 
-    <div class="max-h-64 overflow-auto px-2 py-2">
+    <div
+      :id="resultsId"
+      role="listbox"
+      tabindex="-1"
+      :aria-label="t('chat.composer.promptHistory.label')"
+      class="max-h-64 overflow-auto px-2 py-2"
+    >
       <div v-if="entries.length === 0" class="px-3 py-2 text-sm text-muted-foreground">
         {{ query.trim() ? t('chat.composer.promptHistory.noMatches') : t('chat.composer.promptHistory.empty') }}
       </div>
@@ -84,8 +110,13 @@ function preview(text: string): string {
           v-for="(entry, index) in entries"
           :key="entry"
           :active="index === activeIndex"
+          :id="`${resultsId}-${index}`"
+          role="option"
+          :data-history-active="index === activeIndex"
+          :tabindex="-1"
           size="sm"
           :aria-selected="index === activeIndex"
+          @mousedown.prevent
           @click="$emit('select', entry)"
           @mouseenter="setIndex(index)"
         >

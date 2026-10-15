@@ -166,6 +166,8 @@ export type ChatPageViewContext = {
   handleDraftKeydown: (event: KeyboardEvent) => void
   handleCommandPaletteKeydown: (event: KeyboardEvent) => void
   handlePromptHistoryKeydown: (event: KeyboardEvent) => void
+  closePromptHistory: () => void
+  closeCommandPalette: () => void
   selectPromptHistoryEntry: (text?: string) => void
   updatePromptHistoryQuery: (query: string) => void
   commandOpen: MaybeRef<boolean>

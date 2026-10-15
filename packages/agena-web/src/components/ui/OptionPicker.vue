@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { RiArrowDownSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -191,17 +191,12 @@ function handleOutsidePointer(event: MouseEvent | TouchEvent) {
   open.value = false
 }
 
-watch(open, (isOpen, wasOpen) => {
+watch(open, (isOpen) => {
   if (!isOpen) {
     query.value = ''
     if (pointerHandler) {
       document.removeEventListener('pointerdown', pointerHandler, true)
       pointerHandler = null
-    }
-    if (wasOpen) {
-      void nextTick(() => {
-        triggerEl.value?.focus({ preventScroll: true })
-      })
     }
     return
   }
@@ -281,9 +276,11 @@ function optionLabel(opt: PickerOption): string {
       :disabled="disabled"
       :class="triggerClasses"
       :aria-label="triggerAriaLabel"
-      aria-haspopup="menu"
+      aria-haspopup="dialog"
       :aria-expanded="open"
       @click.stop="toggleOpen"
+      @keydown.down.prevent="setOpen(true)"
+      @keydown.up.prevent="setOpen(true)"
     >
       <span class="min-w-0 flex items-center gap-2">
         <component v-if="icon" :is="icon" class="h-4 w-4 text-muted-foreground flex-shrink-0" />

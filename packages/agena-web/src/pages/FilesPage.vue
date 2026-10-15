@@ -16,6 +16,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 
 import FileViewerPane from './files/components/FileViewerPane.vue'
 import FilesExplorerPane from './files/components/FilesExplorerPane.vue'
+import FilesMoveDialog from './files/components/FilesMoveDialog.vue'
 
 import {
   extensionFromPath,
@@ -541,6 +542,7 @@ const dialogSubmitting = ref(false)
 const moveDialogOpen = ref(false)
 const moveDialogInput = ref('')
 const moveDialogSubmitting = ref(false)
+const moveDialogError = ref('')
 
 const deletingPaths = ref<Set<string>>(new Set())
 const selectedPaths = ref<Set<string>>(new Set())
@@ -3323,6 +3325,7 @@ function openMoveSelectedDialog(paths?: string[]) {
   const fallbackTarget = activeCreateDir.value || rootPath
   const rel = relativeToWorkspace(fallbackTarget)
   moveDialogInput.value = rel && rel !== '.' ? rel : '.'
+  moveDialogError.value = ''
   moveDialogOpen.value = true
 }
 
@@ -3384,10 +3387,10 @@ async function moveNodeByDrag(sourcePath: string, targetDir: string): Promise<bo
 
 async function moveSelectedNodes(paths: string[], destinationInput: string) {
   const rootPath = root.value
-  if (!rootPath) return
+  if (!rootPath) return { failed: paths, error: String(t('files.errors.moveTargetOutsideWorkspace')) }
 
   const targets = normalizeSelectedTargets(paths)
-  if (!targets.length) return
+  if (!targets.length) return { failed: [], error: '' }
 
   const destination = resolveMoveDestinationPath(destinationInput)
   if (!destination || !withinWorkspace(destination, rootPath)) {
@@ -3399,10 +3402,12 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
   let firstError = ''
   let affectedCurrentSelection = false
   const movedPaths: string[] = []
+  const failed: string[] = []
 
   for (const target of targets) {
     if (destination === target || destination.startsWith(`${target}/`)) {
       failedCount += 1
+      failed.push(target)
       if (!firstError) firstError = String(t('files.errors.moveTargetInsideSelection'))
       continue
     }
@@ -3410,6 +3415,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
     const baseName = target.split('/').filter(Boolean).pop() || ''
     if (!baseName) {
       failedCount += 1
+      failed.push(target)
       continue
     }
 
@@ -3432,46 +3438,61 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
       }
     } catch (err) {
       failedCount += 1
+      failed.push(target)
       if (!firstError) {
         firstError = err instanceof Error ? err.message : String(err)
       }
     }
   }
 
+  // Commit mutation outcomes before refreshing: a failed refresh must never
+  // make a retry move paths that the server has already moved successfully.
+  selectedPaths.value = new Set(failed)
   if (successCount > 0) {
     invalidateFileReadCache({ directory: rootPath, paths: movedPaths })
     if (affectedCurrentSelection) {
       resetViewerSelectionState()
       selectedDirectoryPath.value = ''
     }
-    clearSelectedPaths()
     selectedDirectoryPath.value = destination
-    await ensureDirectoryExpanded(destination)
-    await refreshRoot({ paths: movedPaths })
+    try {
+      await ensureDirectoryExpanded(destination)
+      await refreshRoot({ paths: movedPaths })
+    } catch (err) {
+      toasts.push('error', err instanceof Error ? err.message : String(err))
+    }
   }
 
   if (successCount > 0 && failedCount === 0) {
     toasts.push('success', t('files.toasts.movedCount', { count: successCount }))
-    return
+    return { failed, error: '' }
   }
   if (successCount > 0 && failedCount > 0) {
     toasts.push('info', t('files.toasts.movedPartial', { success: successCount, failed: failedCount }))
-    return
+    return { failed, error: firstError || String(t('files.toasts.moveFailedCount', { count: failedCount })) }
   }
   if (failedCount > 0) {
     toasts.push('error', firstError || t('files.toasts.moveFailedCount', { count: failedCount }))
   }
+  return { failed, error: firstError }
 }
 
 async function submitMoveDialog() {
   if (moveDialogSubmitting.value) return
   moveDialogSubmitting.value = true
+  moveDialogError.value = ''
   try {
-    await moveSelectedNodes(Array.from(selectedPaths.value), moveDialogInput.value)
+    const result = await moveSelectedNodes(Array.from(selectedPaths.value), moveDialogInput.value)
+    if (result.failed.length) {
+      selectedPaths.value = new Set(result.failed)
+      moveDialogError.value = result.error
+      return
+    }
     moveDialogOpen.value = false
     moveDialogInput.value = ''
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
+    moveDialogError.value = msg
     toasts.push('error', msg)
   } finally {
     moveDialogSubmitting.value = false
@@ -4368,32 +4389,15 @@ onMounted(async () => {
       </div>
     </FormDialog>
 
-    <FormDialog
+    <FilesMoveDialog
       :open="moveDialogOpen"
-      :title="String(t('files.explorer.selection.bulkMoveTitle'))"
-      :description="String(t('files.explorer.selection.bulkMoveDescription', { count: selectedPaths.size }))"
-      @update:open="
-        (v) => {
-          if (!v) closeMoveDialog()
-        }
-      "
-    >
-      <div class="space-y-3">
-        <Input
-          v-model="moveDialogInput"
-          :placeholder="String(t('files.explorer.selection.bulkMovePlaceholder'))"
-          class="h-9 font-mono"
-        />
-        <div class="flex items-center justify-end gap-2">
-          <Button variant="ghost" :disabled="moveDialogSubmitting" @click="closeMoveDialog">{{
-            t('common.cancel')
-          }}</Button>
-          <Button :disabled="moveDialogSubmitting || !moveDialogInput.trim()" @click="submitMoveDialog">
-            {{ moveDialogSubmitting ? t('common.working') : t('files.explorer.selection.bulkMove') }}
-          </Button>
-        </div>
-      </div>
-    </FormDialog>
+      v-model="moveDialogInput"
+      :count="selectedPaths.size"
+      :error="moveDialogError"
+      :submitting="moveDialogSubmitting"
+      @update:open="!$event && closeMoveDialog()"
+      @submit="submitMoveDialog"
+    />
 
     <div class="flex-1 min-h-0 m-0 p-0">
       <div v-if="!root" class="h-full">
@@ -4463,6 +4467,7 @@ onMounted(async () => {
                   :collapse-all="collapseAllDirectories"
                   :active-create-dir="activeCreateDir"
                   :expand-directory="ensureDirectoryExpanded"
+                  :toggle-directory="toggleDirectory"
                   :create-node="createNodeFromExplorer"
                   :rename-node="renameNodeFromExplorer"
                   :move-node-by-drag="moveNodeByDrag"

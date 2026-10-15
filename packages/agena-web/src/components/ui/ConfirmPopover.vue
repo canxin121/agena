@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useSlots, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   DialogContent,
@@ -22,6 +22,7 @@ import { lockListItemActionsForAnchor } from '@/components/ui/listItemActionVisi
 import { tooltipMotionClass } from '@/components/ui/tooltip.variants'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
+import { useDialogReturnFocus } from '@/composables/useDialogReturnFocus'
 
 const props = withDefaults(
   defineProps<{
@@ -65,6 +66,9 @@ const emit = defineEmits<{
 const ui = useUiStore()
 const slots = useSlots()
 const { t } = useI18n()
+const contentId = useId()
+const titleId = `confirmation-${contentId}-title`
+const descriptionId = `confirmation-${contentId}-description`
 
 const hasTrigger = computed(() => Boolean(slots.default))
 const useDialog = computed(() => props.forceDialog || ui.isCompactTouch || !hasTrigger.value)
@@ -78,6 +82,7 @@ const openModel = computed({
     emit('update:open', next)
   },
 })
+const onCloseAutoFocus = useDialogReturnFocus(() => openModel.value)
 
 const confirmButtonVariant = computed(() => (props.variant === 'destructive' ? 'destructive' : 'default'))
 const confirmButtonDisabled = computed(() => props.confirmDisabled || props.busy)
@@ -270,9 +275,7 @@ function onConfirm() {
       <DialogOverlay
         class="fixed inset-0 z-[80] pointer-events-auto bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
-      <DialogContent
-        :class="dialogContentClass"
-      >
+      <DialogContent :class="dialogContentClass" @close-auto-focus="onCloseAutoFocus">
         <div v-if="title || description" class="flex flex-col space-y-1.5 text-center sm:text-left min-w-0">
           <DialogTitle v-if="title" class="text-lg font-semibold leading-none tracking-tight break-words">{{
             title
@@ -313,14 +316,18 @@ function onConfirm() {
     </PopoverTrigger>
 
     <PopoverAnchor
-      v-if="anchorToCursor && virtualRef"
-      :virtual-ref="virtualRef"
+      v-if="anchorToCursor"
+      :element="virtualRef"
       class="absolute w-0 h-0 overflow-hidden"
       aria-hidden="true"
     />
 
     <PopoverPortal>
       <PopoverContent
+        :aria-labelledby="title ? titleId : undefined"
+        :aria-label="title ? undefined : effectiveConfirmText"
+        :aria-describedby="description ? descriptionId : undefined"
+        @close-auto-focus="onCloseAutoFocus"
         :class="
           cn(
             'z-[80] w-64 rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur outline-none overflow-hidden',
@@ -337,8 +344,8 @@ function onConfirm() {
         :prioritize-position="true"
       >
         <div v-if="title || description" class="p-2 border-b border-border/60">
-          <div v-if="title" class="text-xs font-semibold text-foreground px-1 mb-0.5">{{ title }}</div>
-          <p v-if="description" class="text-[11px] leading-snug text-muted-foreground px-1">
+          <div v-if="title" :id="titleId" class="text-xs font-semibold text-foreground px-1 mb-0.5">{{ title }}</div>
+          <p v-if="description" :id="descriptionId" class="text-[11px] leading-snug text-muted-foreground px-1">
             {{ description }}
           </p>
         </div>

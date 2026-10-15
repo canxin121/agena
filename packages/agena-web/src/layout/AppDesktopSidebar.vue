@@ -67,7 +67,9 @@ const NAV_ICONS: Record<MainTabId, Component> = {
 const diffFileCount = ref(0)
 const { startWatch: startDiffWatch, stopWatch: stopDiffWatch } = useGitWatchSse<{ totalFiles: number }>({
   buildUrl: (directory) => `/api/v1/workbench/git/watch?directory=${encodeURIComponent(directory)}`,
-  onPayload: (payload) => { diffFileCount.value = Math.max(0, Number(payload.totalFiles) || 0) },
+  onPayload: (payload) => {
+    diffFileCount.value = Math.max(0, Number(payload.totalFiles) || 0)
+  },
 })
 
 function getRememberedSettingsRoute(): string {
@@ -212,7 +214,12 @@ async function activateRailItem(tabId: MainTabId) {
         </button>
       </div>
 
-      <nav class="flex flex-1 flex-col gap-1.5" :aria-label="String(t('aria.primaryNavigation'))">
+      <nav
+        data-keyboard-region
+        tabindex="-1"
+        class="flex flex-1 flex-col gap-1.5"
+        :aria-label="String(t('aria.primaryNavigation'))"
+      >
         <button
           v-for="item in primaryRailItems"
           :key="item.id"
@@ -272,6 +279,10 @@ async function activateRailItem(tabId: MainTabId) {
           : 'pointer-events-none h-0 overflow-hidden opacity-0'
       "
       :aria-hidden="!props.expanded || props.resizing"
+      :inert="!props.expanded || props.resizing ? true : undefined"
+      data-keyboard-region
+      data-keyboard-sidebar
+      tabindex="-1"
     >
       <div v-if="activeTab === 'chat'" class="min-h-0 flex-1 overflow-hidden">
         <ChatSidebar class="h-full" />

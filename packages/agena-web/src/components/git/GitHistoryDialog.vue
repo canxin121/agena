@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiCloseLine, RiRefreshLine, RiTextWrap } from '@remixicon/vue'
@@ -302,10 +303,12 @@ function onFilterRefTypeChange(value: string | number) {
             <div v-if="!commits.length" class="p-3 text-xs text-muted-foreground">
               {{ t('git.ui.dialogs.history.emptyCommits') }}
             </div>
-            <div v-else class="divide-y divide-border/40">
+            <div v-else v-keyboard-collection class="divide-y divide-border/40">
               <button
                 v-for="c in commits"
                 :key="c.hash"
+                :data-keyboard-item="c.hash"
+                :data-keyboard-label="c.subject || c.shortHash"
                 type="button"
                 class="w-full text-left p-3 hover:bg-muted/40 transition-colors"
                 :class="selected?.hash === c.hash ? 'bg-muted/50' : ''"
@@ -480,10 +483,12 @@ function onFilterRefTypeChange(value: string | number) {
                 <div v-if="!files.length" class="p-2 text-xs text-muted-foreground">
                   {{ t('git.ui.dialogs.history.emptyFiles') }}
                 </div>
-                <div v-else class="divide-y divide-border/40">
+                <div v-else v-keyboard-collection class="divide-y divide-border/40">
                   <button
                     v-for="f in files"
                     :key="`${f.status}:${f.path}`"
+                    :data-keyboard-item="f.path"
+                    :data-keyboard-label="f.path"
                     type="button"
                     class="w-full text-left px-2 py-1.5 text-xs hover:bg-muted/40"
                     :class="selectedFile?.path === f.path ? 'bg-muted/60' : ''"

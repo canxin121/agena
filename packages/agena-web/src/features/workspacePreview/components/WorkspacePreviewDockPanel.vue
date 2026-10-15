@@ -33,6 +33,8 @@ import { useWorkspacePreviewStore } from '@/stores/workspacePreview'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useVisibleSubscription } from '@/composables/useVisibleSubscription'
+import { isImeComposing } from '@/lib/imeKeyboard'
+import { installPreviewKeyboardBridge, keyboardViewportSize, type ViewportResizeAxis } from '../model/previewKeyboard'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -216,6 +218,7 @@ function rotateViewport() {
 }
 
 function onWidthKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || isImeComposing(event) || event.altKey || event.ctrlKey || event.metaKey) return
   const step = event.shiftKey ? VIEWPORT_SIZE_FAST_STEP_PX : VIEWPORT_SIZE_STEP_PX
   if (event.key === 'ArrowUp') {
     event.preventDefault()
@@ -241,6 +244,7 @@ function onWidthKeydown(event: KeyboardEvent) {
 }
 
 function onHeightKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || isImeComposing(event) || event.altKey || event.ctrlKey || event.metaKey) return
   const step = event.shiftKey ? VIEWPORT_SIZE_FAST_STEP_PX : VIEWPORT_SIZE_STEP_PX
   if (event.key === 'ArrowUp') {
     event.preventDefault()
@@ -350,6 +354,47 @@ function stopViewportResize(event: PointerEvent) {
 }
 
 const iframeEl = ref<HTMLIFrameElement | null>(null)
+const previewEntry = ref<HTMLButtonElement | null>(null)
+const keyboardBridgeReady = ref(false)
+let disposeKeyboardBridge: (() => void) | null = null
+
+function resetKeyboardBridge() {
+  disposeKeyboardBridge?.()
+  disposeKeyboardBridge = null
+  keyboardBridgeReady.value = false
+}
+watch(iframeEl, resetKeyboardBridge, { flush: 'sync' })
+
+function enterPreview() {
+  if (!keyboardBridgeReady.value) {
+    openInNewWindow()
+    return
+  }
+  const context = resolveIframeContext()
+  if (!context) {
+    resetKeyboardBridge()
+    openInNewWindow()
+    return
+  }
+  const first = Array.from(
+    context.doc.querySelectorAll<HTMLElement>(
+      'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"], [contenteditable="true"]',
+    ),
+  ).find((element) => element.getClientRects().length && !element.closest('[inert], [hidden]'))
+  if (first) first.focus()
+  else {
+    iframeEl.value?.focus()
+    context.win.focus()
+  }
+}
+
+function resizeViewportWithKeyboard(event: KeyboardEvent, axis: ViewportResizeAxis) {
+  const size = keyboardViewportSize(event, axis, viewportWidthPx.value, viewportHeightPx.value)
+  if (!size) return
+  event.preventDefault()
+  event.stopPropagation()
+  preview.setViewportSize(size)
+}
 const touchOverlayEl = ref<HTMLElement | null>(null)
 
 const touchSimulationSupported = computed(
@@ -1111,12 +1156,18 @@ async function stopActiveSession() {
 }
 
 function onIframeLoad() {
+  resetKeyboardBridge()
+  if (iframeEl.value) {
+    disposeKeyboardBridge = installPreviewKeyboardBridge(iframeEl.value, () => previewEntry.value?.focus())
+    keyboardBridgeReady.value = Boolean(disposeKeyboardBridge)
+  }
   iframeLoading.value = false
   iframeError.value = ''
   touchSimulationReady.value = touchSimulationEnabled.value && Boolean(resolveIframeContext())
 }
 
 function onIframeError() {
+  resetKeyboardBridge()
   iframeLoading.value = false
   iframeError.value = String(t('workspaceDock.preview.states.errorDescription'))
   touchSimulationReady.value = false
@@ -1148,6 +1199,7 @@ watch(
 )
 
 watch(frameSrc, () => {
+  resetKeyboardBridge()
   touchSimulationReady.value = false
 })
 
@@ -1185,6 +1237,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  resetKeyboardBridge()
   clearFrameTimer()
   frameRequestId++
   frameProbeController?.abort()
@@ -1193,6 +1246,20 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col gap-2 p-3">
+    <div v-if="frameSrc" class="flex flex-wrap items-center gap-2 text-xs">
+      <button
+        ref="previewEntry"
+        type="button"
+        :disabled="iframeLoading"
+        class="rounded border border-border px-2 py-1 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
+        @click="enterPreview"
+      >
+        {{ t(keyboardBridgeReady ? 'keyboard.enterPreview' : 'keyboard.previewNewTab') }}
+      </button>
+      <span class="text-muted-foreground">{{
+        t(keyboardBridgeReady ? 'keyboard.previewExitHint' : 'keyboard.previewExternalHint')
+      }}</span>
+    </div>
     <div v-if="controlsVisible" class="rounded-md border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
       <div v-if="controlsVariant === 'full'" class="relative flex items-center gap-1.5">
         <button
@@ -1621,6 +1688,7 @@ onBeforeUnmount(() => {
                     v-if="frameSrc"
                     ref="iframeEl"
                     :src="frameSrc"
+                    :tabindex="keyboardBridgeReady ? 0 : -1"
                     class="h-full w-full border-0"
                     :class="resizingViewport ? 'pointer-events-none' : ''"
                     :title="String(t('workspaceDock.preview.iframeTitle'))"
@@ -1652,9 +1720,15 @@ onBeforeUnmount(() => {
               <!-- Firefox-like resize handles (external) -->
               <button
                 type="button"
-                class="group absolute -right-4 top-0 bottom-0 z-30 w-4 touch-none cursor-ew-resize"
+                class="group absolute -right-4 top-0 bottom-0 z-30 w-4 touch-none cursor-ew-resize focus-visible:ring-2 focus-visible:ring-ring"
+                role="separator"
+                aria-orientation="vertical"
+                :aria-valuemin="240"
+                :aria-valuemax="4096"
+                :aria-valuenow="viewportWidthPx"
+                :aria-label="t('keyboard.resizeWidth')"
+                @keydown="resizeViewportWithKeyboard($event, 'x')"
                 :title="String(t('workspaceDock.preview.resizeViewport'))"
-                :aria-label="String(t('workspaceDock.preview.resizeViewport'))"
                 @pointerdown.prevent.stop="startViewportResize($event, 'x')"
                 @pointermove="moveViewportResize"
                 @pointerup="stopViewportResize"
@@ -1667,9 +1741,15 @@ onBeforeUnmount(() => {
 
               <button
                 type="button"
-                class="group absolute left-0 right-0 -bottom-4 z-30 h-4 touch-none cursor-ns-resize"
+                class="group absolute left-0 right-0 -bottom-4 z-30 h-4 touch-none cursor-ns-resize focus-visible:ring-2 focus-visible:ring-ring"
+                role="separator"
+                aria-orientation="horizontal"
+                :aria-valuemin="180"
+                :aria-valuemax="4096"
+                :aria-valuenow="viewportHeightPx"
+                :aria-label="t('keyboard.resizeHeight')"
+                @keydown="resizeViewportWithKeyboard($event, 'y')"
                 :title="String(t('workspaceDock.preview.resizeViewport'))"
-                :aria-label="String(t('workspaceDock.preview.resizeViewport'))"
                 @pointerdown.prevent.stop="startViewportResize($event, 'y')"
                 @pointermove="moveViewportResize"
                 @pointerup="stopViewportResize"
@@ -1682,9 +1762,10 @@ onBeforeUnmount(() => {
 
               <button
                 type="button"
-                class="group absolute -right-5 -bottom-5 z-40 h-5 w-5 touch-none cursor-nwse-resize"
+                class="group absolute -right-5 -bottom-5 z-40 h-5 w-5 touch-none cursor-nwse-resize focus-visible:ring-2 focus-visible:ring-ring"
+                @keydown="resizeViewportWithKeyboard($event, 'both')"
                 :title="String(t('workspaceDock.preview.resizeViewport'))"
-                :aria-label="String(t('workspaceDock.preview.resizeViewport'))"
+                :aria-label="t('keyboard.resizeBoth', { width: viewportWidthPx, height: viewportHeightPx })"
                 @pointerdown.prevent.stop="startViewportResize($event, 'both')"
                 @pointermove="moveViewportResize"
                 @pointerup="stopViewportResize"
@@ -1705,7 +1786,9 @@ onBeforeUnmount(() => {
           >
             <iframe
               v-if="frameSrc"
+              ref="iframeEl"
               :src="frameSrc"
+              :tabindex="keyboardBridgeReady ? 0 : -1"
               class="h-full w-full border-0"
               :title="String(t('workspaceDock.preview.iframeTitle'))"
               loading="eager"

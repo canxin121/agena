@@ -1,4 +1,5 @@
 import { useUiStore } from '@/stores/ui'
+import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 
 const SIDEBAR_MIN_WIDTH = 280
 const SIDEBAR_MAX_WIDTH = 520
@@ -12,6 +13,20 @@ type DesktopSidebarResizeOptions = {
 
 export function useDesktopSidebarResize() {
   const ui = useUiStore()
+
+  function resizeDesktopSidebarFromKeyboard(event: KeyboardEvent) {
+    if (ui.isCompactLayout || !ui.isSidebarOpen || !isPlainNavigationKey(event)) return
+    const step = event.shiftKey ? 64 : 16
+    let width: number | null = null
+    if (event.key === 'ArrowLeft') width = ui.sidebarWidth - step
+    if (event.key === 'ArrowRight') width = ui.sidebarWidth + step
+    if (event.key === 'Home') width = SIDEBAR_MIN_WIDTH
+    if (event.key === 'End') width = SIDEBAR_MAX_WIDTH
+    if (width === null) return
+    event.preventDefault()
+    event.stopPropagation()
+    ui.sidebarWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width))
+  }
 
   function startDesktopSidebarResize(e: PointerEvent, options?: DesktopSidebarResizeOptions) {
     if (ui.isCompactLayout || !ui.isSidebarOpen) return
@@ -69,5 +84,5 @@ export function useDesktopSidebarResize() {
     window.addEventListener('pointercancel', up)
   }
 
-  return { startDesktopSidebarResize }
+  return { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard }
 }

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RiArrowLeftSLine, RiPlayListAddLine, RiQuestionLine, RiMapPin2Line, RiSettings3Line } from '@remixicon/vue'
 import { cn } from '@/lib/utils'
-import { MAIN_TABS, isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
+import { isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useUiStore } from '@/stores/ui'
 import { useHealthStore } from '@/stores/health'
@@ -47,12 +47,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateHeaderHeight)
   window.removeEventListener('orientationchange', updateHeaderHeight)
 })
-
-function mainTabRoute(path: string): string {
-  const normalizedPath = String(path || '').trim()
-  if (!normalizedPath) return '/chat'
-  return normalizedPath
-}
 
 // Sync Route -> UI Store (for mobile title / persistence + workspace windows)
 watch(
@@ -103,41 +97,6 @@ const mobilePanelToggleLabel = computed(() => {
   if (panel === 'git') return String(t('header.openSourceControlPanel'))
   if (panel === 'settings') return String(t('header.openSettingsPanel'))
   return String(t('header.openSessions'))
-})
-
-// -- Keyboard Shortcuts (Cmd+1..4) --
-function hasModifier(e: KeyboardEvent): boolean {
-  return e.metaKey || e.ctrlKey
-}
-
-let keyHandler: ((e: KeyboardEvent) => void) | null = null
-
-onMounted(() => {
-  keyHandler = (e: KeyboardEvent) => {
-    if (!hasModifier(e) || e.shiftKey || e.altKey) return
-    const num = Number.parseInt(e.key, 10)
-    if (!Number.isFinite(num)) return
-
-    if (num < 1 || num > MAIN_TABS.length) return
-
-    e.preventDefault()
-    const tab = MAIN_TABS[num - 1]
-    if (tab) {
-      if (ui.isCompactLayout) {
-        void router.push(mainTabRoute(tab.path))
-      } else {
-        void workspaceNavigation.openMainTab(tab.id, { path: mainTabRoute(tab.path) })
-      }
-    }
-  }
-  window.addEventListener('keydown', keyHandler)
-})
-
-onBeforeUnmount(() => {
-  if (keyHandler) {
-    window.removeEventListener('keydown', keyHandler)
-    keyHandler = null
-  }
 })
 
 // -- Actions --
@@ -203,6 +162,8 @@ function openHelpDialog() {
 <template>
   <header
     ref="headerRef"
+    data-keyboard-region
+    tabindex="-1"
     :class="
       ui.isCompactLayout
         ? 'header-safe-area border-b border-border/50 relative z-20 bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/75'

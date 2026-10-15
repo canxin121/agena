@@ -90,7 +90,7 @@ const workspacePane = useWorkspacePaneContext()
 const visible = usePaneVisibility()
 const route = useRoute()
 const router = useRouter()
-const { startDesktopSidebarResize } = useDesktopSidebarResize()
+const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 const { t, te } = useI18n()
 
 const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
@@ -561,6 +561,14 @@ const dirtyHint = computed(
             v-if="!ui.isCompactLayout && !useDesktopSidebarHost"
             class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
             @pointerdown="startDesktopSidebarResize"
+            role="separator"
+            aria-orientation="vertical"
+            :aria-label="String(t('header.windowTabs.resizingSidebar'))"
+            :aria-valuenow="Math.round(ui.sidebarWidth)"
+            :aria-valuemin="280"
+            :aria-valuemax="520"
+            tabindex="0"
+            @keydown="resizeDesktopSidebarFromKeyboard"
           />
           <SettingsSidebar
             :tabs="tabs"

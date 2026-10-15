@@ -22,14 +22,11 @@ export function pickComposerFocusTarget(opts: {
   isVisible?: (element: HTMLElement) => boolean
 }): HTMLElement | null {
   const isVisible = opts.isVisible || (() => true)
-  let fallback: HTMLElement | null = null
-
   for (const selector of composerFocusSelectors(opts.windowId)) {
     for (const element of opts.queryAll(selector)) {
-      fallback = fallback || element
       if (isVisible(element)) return element
     }
   }
 
-  return fallback
+  return null
 }

@@ -5,6 +5,7 @@ import { DialogContent, DialogOverlay, DialogPortal, DialogRoot } from 'radix-vu
 import DialogHeader from '@/components/ui/DialogHeader.vue'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
+import { useDialogReturnFocus } from '@/composables/useDialogReturnFocus'
 
 const props = withDefaults(
   defineProps<{
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 }>()
 
 const ui = useUiStore()
+const onCloseAutoFocus = useDialogReturnFocus(() => props.open)
 const isMobileSheet = computed(() => Boolean(ui.isCompactTouch))
 
 const MOBILE_SHEET_MARGIN_PX = 8
@@ -218,7 +220,7 @@ onBeforeUnmount(() => {
       <DialogOverlay
         class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
-      <DialogContent :class="contentClass" :style="contentStyle">
+      <DialogContent :class="contentClass" :style="contentStyle" @close-auto-focus="onCloseAutoFocus">
         <DialogHeader :title="sheetTitle" :description="description" @close="close" />
 
         <div :class="contentBodyClass">

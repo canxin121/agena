@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { RiDeleteBinLine, RiHistoryLine, RiPencilLine, RiSubtractLine } from '@remixicon/vue'
 import { RiArrowGoBackLine, RiCloseLine, RiListCheck3, RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -281,7 +282,7 @@ function runMobileAction(path: string, actionId: string) {
       </template>
     </SectionToggleButton>
 
-    <div v-if="expanded" class="space-y-0.5 px-1 pb-1">
+    <div v-if="expanded" v-keyboard-collection class="space-y-0.5 px-1 pb-1">
       <div v-if="loading && !files.length" class="oc-vscode-empty">{{ t('common.loading') }}</div>
       <div v-else-if="!files.length" class="oc-vscode-empty">{{ t('git.ui.workingTree.empty.stagedChanges') }}</div>
 

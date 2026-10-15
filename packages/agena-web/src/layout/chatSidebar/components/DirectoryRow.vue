@@ -107,6 +107,12 @@ function handleContextMenu(event: MouseEvent) {
 
 <template>
   <SidebarListItem
+    :data-keyboard-item="`directory:${directory.id}`"
+    :data-keyboard-label="directoryEntryLabel(directory)"
+    data-keyboard-level="1"
+    :data-keyboard-expanded="String(!collapsed)"
+    :data-keyboard-multiselect="String(multiSelectEnabled)"
+    :data-keyboard-selected="String(multiSelected || focused)"
     :active="rowActive"
     :actions-always-visible="actionsAlwaysVisible"
     class="relative gap-1.5"
@@ -117,6 +123,7 @@ function handleContextMenu(event: MouseEvent) {
       <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />
       <button
         type="button"
+        data-keyboard-toggle
         class="h-3.5 w-3.5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
         :aria-label="
           collapsed

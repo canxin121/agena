@@ -87,6 +87,7 @@ const spinnerSize = computed(() => {
     <Button
       ref="triggerEl"
       v-bind="passthroughAttrs"
+      :aria-label="attrs['aria-label'] || (attrs['aria-labelledby'] ? undefined : tooltipText || undefined)"
       :title="nativeTitle"
       :variant="variant"
       :size="buttonSize"
@@ -103,6 +104,7 @@ const spinnerSize = computed(() => {
     v-else
     ref="triggerEl"
     v-bind="passthroughAttrs"
+    :aria-label="attrs['aria-label'] || (attrs['aria-labelledby'] ? undefined : tooltipText || undefined)"
     :title="nativeTitle"
     :variant="variant"
     :size="buttonSize"

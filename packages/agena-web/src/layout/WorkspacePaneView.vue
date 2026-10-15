@@ -196,7 +196,19 @@ provide(workspacePaneContextKey, {
 </script>
 
 <template>
-  <section class="flex h-full min-h-0 flex-col bg-background" :data-workspace-pane-window="windowId">
+  <section
+    class="flex h-full min-h-0 flex-col bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    :data-workspace-pane-window="windowId"
+    :data-keyboard-route="scopedRoute.path"
+    :aria-busy="!routeReady || !pageMounted"
+    :id="`workspace-panel-${windowId}`"
+    :role="ui.isCompactLayout ? 'region' : 'tabpanel'"
+    :aria-labelledby="ui.isCompactLayout ? undefined : `workspace-tab-${windowId}`"
+    :aria-label="ui.isCompactLayout ? windowTab?.title : undefined"
+    data-keyboard-region
+    tabindex="-1"
+    @focusin="ui.setFocusedWorkspaceWindow(windowId)"
+  >
     <div class="min-h-0 flex-1 overflow-hidden">
       <RouterView v-if="routeReady && pageMounted" :route="scopedRoute" />
       <div v-else class="h-full min-h-0 animate-pulse bg-muted/20" aria-hidden="true" />

@@ -43,7 +43,7 @@ const route = useRoute()
 const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
-const { startDesktopSidebarResize } = useDesktopSidebarResize()
+const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 useAppRuntime()
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
@@ -705,8 +705,16 @@ watch(
         >
           <div
             v-if="ui.isSidebarOpen"
-            class="absolute right-0 top-0 z-30 h-full w-1 cursor-col-resize hover:bg-primary/40"
+            role="separator"
+            aria-orientation="vertical"
+            :aria-label="String(t('header.windowTabs.resizingSidebar'))"
+            :aria-valuenow="Math.round(ui.sidebarWidth)"
+            :aria-valuemin="280"
+            :aria-valuemax="520"
+            tabindex="0"
+            class="absolute right-0 top-0 z-30 h-full w-1 cursor-col-resize hover:bg-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @pointerdown="handleDesktopSidebarResize"
+            @keydown="resizeDesktopSidebarFromKeyboard"
           />
 
           <div
@@ -738,12 +746,18 @@ watch(
             :class="mobileSidebarPointerReady ? '' : 'pointer-events-none'"
             :style="{ bottom: compactBottomInset }"
             :aria-hidden="!ui.isSessionSwitcherOpen"
+            data-keyboard-region
+            data-keyboard-sidebar
+            tabindex="-1"
           >
             <ChatSidebar mobile-variant />
           </div>
 
           <main
             class="relative min-h-0 flex-1 overflow-hidden"
+            :data-keyboard-region="!useWorkspaceWindowLayout || !activePrimaryWindowId ? '' : undefined"
+            tabindex="-1"
+            :inert="ui.isCompactLayout && usesChatShellSidebar && ui.isSessionSwitcherOpen ? true : undefined"
             @dragenter="handleWorkspaceMainDragEnter"
             @dragover="handleWorkspaceMainDragOver"
             @dragleave="handleWorkspaceMainDragLeave"

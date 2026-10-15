@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiCheckLine } from '@remixicon/vue'
 
 import Input from '@/components/ui/Input.vue'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
 import { cn } from '@/lib/utils'
+import { isPlainNavigationKey, isVisibleKeyboardTarget, navigationIndex } from '@/lib/keyboardNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -40,6 +41,7 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const panelId = useId()
 const { t } = useI18n()
 
 const open = ref(false)
@@ -96,6 +98,7 @@ function addRaw(raw: string) {
   query.value = ''
   // Keep the menu open for rapid entry.
   open.value = true
+  void nextTick(() => rootRef.value?.querySelector('input')?.focus())
 }
 
 function addCustom() {
@@ -109,24 +112,53 @@ function chooseOption(value: string) {
     emit('remove', v)
     query.value = ''
     open.value = true
+    void nextTick(() => rootRef.value?.querySelector('input')?.focus())
     return
   }
   addRaw(v)
 }
 
 function onKeydown(e: KeyboardEvent) {
+  if (!isPlainNavigationKey(e) || e.shiftKey) return
+  const input = e.target instanceof HTMLInputElement
+  if (input && ['ArrowDown', 'ArrowUp'].includes(e.key) && !open.value) {
+    e.preventDefault()
+    open.value = true
+    void nextTick(() => onKeydown(new KeyboardEvent('keydown', { key: e.key })))
+    return
+  }
+  if (open.value && (['ArrowDown', 'ArrowUp'].includes(e.key) || (!input && ['Home', 'End'].includes(e.key)))) {
+    const buttons = Array.from(
+      rootRef.value?.querySelectorAll<HTMLElement>('[data-inline-option]:not(:disabled)') || [],
+    ).filter(isVisibleKeyboardTarget)
+    const current = buttons.findIndex((button) => button === document.activeElement)
+    const index = navigationIndex(e.key, current, buttons.length)
+    if (index !== null) {
+      e.preventDefault()
+      e.stopPropagation()
+      buttons[index]!.focus({ preventScroll: true })
+      buttons[index]!.scrollIntoView({ block: 'nearest' })
+    }
+    return
+  }
+  if (e.key === 'Escape' && open.value) {
+    e.preventDefault()
+    e.stopPropagation()
+    open.value = false
+    rootRef.value?.querySelector('input')?.focus()
+    // Focusing the input opens suggestions; Escape must leave them closed.
+    open.value = false
+    return
+  }
+  if (!input) return
   if (e.key === 'Enter') {
     e.preventDefault()
     if (canOfferCustom.value) {
       addCustom()
       return
     }
-    const first = showOptions.value[0]
+    const first = showOptions.value.find((option) => !option.disabled)
     if (first && !first.disabled) chooseOption(first.value)
-    return
-  }
-  if (e.key === 'Escape') {
-    open.value = false
     return
   }
   if (e.key === 'Backspace' && !query.value.trim()) {
@@ -176,19 +208,34 @@ function optionLabel(opt: PickerOption): string {
 </script>
 
 <template>
-  <div ref="rootRef" class="relative">
+  <div
+    ref="rootRef"
+    class="relative"
+    @keydown="onKeydown"
+    @focusout="
+      (event) => {
+        if (!rootRef?.contains(event.relatedTarget as Node | null)) open = false
+      }
+    "
+  >
     <Input
       v-model="query"
       :placeholder="placeholderText"
       :class="cn('w-full', monospace ? 'font-mono' : '')"
       :disabled="disabled"
+      aria-haspopup="dialog"
+      :aria-expanded="open"
+      :aria-controls="open ? panelId : undefined"
       @focus="onFocus"
-      @keydown="onKeydown"
       @paste="onPaste"
     />
 
     <div
       v-if="open"
+      :id="panelId"
+      role="dialog"
+      :aria-label="panelTitle || placeholderText"
+      data-keyboard-overlay="true"
       class="absolute left-0 right-0 top-full mt-2 rounded-xl border border-border bg-background/95 text-foreground shadow-lg outline-none overflow-hidden z-20"
     >
       <div v-if="panelTitle" class="px-3 py-2 border-b border-border/40 text-xs font-semibold text-foreground">
@@ -198,6 +245,7 @@ function optionLabel(opt: PickerOption): string {
       <div class="max-h-64 overflow-auto p-1">
         <button
           v-if="canOfferCustom"
+          data-inline-option
           type="button"
           class="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-secondary/40"
           @mousedown.prevent
@@ -210,6 +258,7 @@ function optionLabel(opt: PickerOption): string {
 
         <button
           v-for="opt in showOptions"
+          data-inline-option
           :key="opt.value"
           type="button"
           class="w-full flex items-start justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-secondary/40 disabled:opacity-50 disabled:pointer-events-none"

@@ -73,6 +73,7 @@ const sizeClass = computed(() => (props.size === 'sm' ? 'h-5 w-5' : 'h-6 w-6'))
     <Button
       ref="triggerEl"
       v-bind="passthroughAttrs"
+      :aria-label="attrs['aria-label'] || (attrs['aria-labelledby'] ? undefined : tooltipText || undefined)"
       :title="nativeTitle"
       type="button"
       variant="ghost"
@@ -96,6 +97,7 @@ const sizeClass = computed(() => (props.size === 'sm' ? 'h-5 w-5' : 'h-6 w-6'))
     v-else
     ref="triggerEl"
     v-bind="passthroughAttrs"
+    :aria-label="attrs['aria-label'] || (attrs['aria-labelledby'] ? undefined : tooltipText || undefined)"
     :title="nativeTitle"
     type="button"
     variant="ghost"

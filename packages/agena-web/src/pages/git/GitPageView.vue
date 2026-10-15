@@ -67,7 +67,7 @@ const props = defineProps({
     default: false,
   },
 })
-const { startDesktopSidebarResize } = useDesktopSidebarResize()
+const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 const { t } = useI18n()
 const route = useRoute()
 const workspacePane = useWorkspacePaneContext()
@@ -1433,6 +1433,14 @@ void diffPaneRef
           v-if="canResizeSidebar"
           class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
           @pointerdown="startDesktopSidebarResize"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="String(t('header.windowTabs.resizingSidebar'))"
+          :aria-valuenow="Math.round(ui.sidebarWidth)"
+          :aria-valuemin="280"
+          :aria-valuemax="520"
+          tabindex="0"
+          @keydown="resizeDesktopSidebarFromKeyboard"
         />
         <div class="oc-vscode-pane-header">
           <div class="oc-vscode-pane-title">{{ t('git.ui.sourceControl') }}</div>

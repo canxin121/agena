@@ -338,7 +338,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
   <article
     ref="articleRef"
     :id="`${pane?.windowId.value || 'page'}-msg-${messageId}`"
-    class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-1"
+    class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     style="content-visibility: auto; contain-intrinsic-size: auto 120px"
     :class="[
       selected(messageNodeKey) ? 'bg-primary/10' : '',

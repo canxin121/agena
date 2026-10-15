@@ -13,7 +13,7 @@ test('option menus render above standard dialogs and below confirmation overlays
 
 test('mobile option sheets use a nested Radix dialog focus scope', () => {
   assert.match(source, /<DialogRoot/)
-  assert.match(source, /<DialogContent as-child>/)
+  assert.match(source, /<DialogContent\b[^>]*\bas-child\b[^>]*>/)
   assert.match(source, /<DialogTitle/)
   assert.match(source, /tabindex="-1"/)
   assert.match(source, /focusMobilePanel/)
@@ -38,6 +38,12 @@ test('option menus restore trigger focus without stealing focus from a newly ope
   assert.match(source, /captureReturnFocus/)
   assert.match(source, /restoreReturnFocus/)
   assert.match(source, /target\.isConnected/)
-  assert.match(source, /active !== document\.body && active !== document\.documentElement/)
+  assert.match(source, /active !== document\.body &&\s*active !== document\.documentElement/)
   assert.match(source, /target\.focus\(\{ preventScroll: true \}\)/)
+  assert.match(
+    source,
+    /function onCloseAutoFocus\(event: Event\) \{[\s\S]*?event\.preventDefault\(\)[\s\S]*?restoreReturnFocus\(\)/,
+  )
+  assert.match(source, /<DialogContent\b[^>]*@close-auto-focus="onCloseAutoFocus"/)
+  assert.match(source, /<PopoverContent\b[^>]*@close-auto-focus="onCloseAutoFocus"/)
 })

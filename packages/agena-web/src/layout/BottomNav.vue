@@ -35,6 +35,8 @@ function isActive(tab: NavigationMainTabId) {
 
 <template>
   <nav
+    data-keyboard-region
+    tabindex="-1"
     class="oc-bottom-nav fixed bottom-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-t border-border pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)]"
     :aria-label="String(t('aria.primaryNavigation'))"
   >

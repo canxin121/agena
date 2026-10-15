@@ -11,6 +11,7 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { isImeComposing } from '@/lib/imeKeyboard'
 
 type DesktopAnchorLike =
   | HTMLElement
@@ -145,6 +146,46 @@ async function restoreReturnFocus() {
   const active = document.activeElement
   if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return
   target.focus({ preventScroll: true })
+}
+
+function onCloseAutoFocus(event: Event) {
+  event.preventDefault()
+  void restoreReturnFocus()
+}
+
+async function focusDesktopPanel() {
+  await syncDesktopPosition()
+  await nextTick()
+  if (!props.open || isMobileSheet.value) return
+  const target = panelEl.value?.querySelector<HTMLElement>('[data-attachment-first]')
+  if (!target) return
+  // Button's transition-all can animate inherited visibility after positioning.
+  // Wait for that transition before focusing; focusing a hidden child is ignored.
+  void getComputedStyle(target).visibility
+  await Promise.allSettled(target.getAnimations().map((animation) => animation.finished))
+  if (!props.open || (document.activeElement !== returnFocusEl && document.activeElement !== document.body)) return
+  target.focus({ preventScroll: true })
+}
+
+let focusOutTimer: ReturnType<typeof setTimeout> | undefined
+function onDesktopFocusOut(event: FocusEvent) {
+  if (focusOutTimer) clearTimeout(focusOutTimer)
+  if (event.relatedTarget instanceof Node && panelEl.value?.contains(event.relatedTarget)) return
+  if (
+    event.relatedTarget instanceof Element &&
+    event.relatedTarget.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
+  )
+    return
+  // A microtask can run between native focusout and focusin. Wait until the
+  // browser completes the focus move before deciding that the panel was left.
+  focusOutTimer = setTimeout(() => {
+    if (!props.open || isMobileSheet.value || ui.isImageViewerOpen) return
+    const active = document.activeElement
+    if (!active || active === document.body) return
+    if (active instanceof Element && active.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]'))
+      return
+    if (!panelEl.value?.contains(active)) close()
+  }, 0)
 }
 
 function unwrapRefCandidate(value: unknown): unknown {
@@ -292,15 +333,25 @@ function onDocumentClick(event: MouseEvent) {
   const target = event.target as Node | null
   if (!target) return
   if (panelEl.value?.contains(target)) return
+  if (target instanceof Element && target.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]'))
+    return
   const anchor = resolveDesktopAnchorEl()
   if (anchor?.contains(target)) return
   close()
 }
 
 function onDocumentKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || isImeComposing(event) || ui.isImageViewerOpen) return
   if (!props.open || isMobileSheet.value) return
   if (event.key !== 'Escape') return
+  const surface =
+    event.target instanceof Element
+      ? event.target.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
+      : null
+  if (surface && surface !== panelEl.value && !panelEl.value?.contains(surface)) return
   if (!escapeBelongsToThisPane(event.target as Node | null)) return
+  event.preventDefault()
+  event.stopPropagation()
   close()
 }
 
@@ -451,6 +502,7 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
+      if (focusOutTimer) clearTimeout(focusOutTimer)
       captureReturnFocus()
       const margin = viewportMarginPx.value
       // Reset the desktop style so we avoid flashing stale positions.
@@ -465,14 +517,14 @@ watch(
         void syncMobileSheetPosition()
       } else {
         bindDesktopEvents()
-        void syncDesktopPosition()
+        void focusDesktopPanel()
       }
       return
     }
 
     unbindDesktopEvents()
     unbindMobileViewportEvents()
-    void restoreReturnFocus()
+    if (!isMobileSheet.value) void restoreReturnFocus()
   },
   { immediate: true },
 )
@@ -513,6 +565,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  if (focusOutTimer) clearTimeout(focusOutTimer)
   unbindDesktopEvents()
   unbindMobileViewportEvents()
 })
@@ -523,10 +576,15 @@ onBeforeUnmount(() => {
     <div
       v-if="open && !isMobileSheet"
       ref="panelEl"
+      role="dialog"
+      :aria-label="effectiveTitle"
+      data-keyboard-overlay="true"
+      tabindex="-1"
       class="pointer-events-auto fixed z-[60] w-[min(420px,calc(100vw-1rem))] max-h-[min(72dvh,560px)] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col"
       :style="desktopStyle"
       @pointerdown.stop
       @click.stop
+      @focusout="onDesktopFocusOut"
     >
       <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/40">
         <div class="min-w-0 flex items-center gap-2">
@@ -556,7 +614,7 @@ onBeforeUnmount(() => {
 
       <div class="p-3 flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
         <div class="flex flex-wrap items-center gap-2">
-          <Button size="xs" variant="outline" class="h-8" @click="$emit('attachLocal')">
+          <Button data-attachment-first size="xs" variant="outline" class="h-8" @click="$emit('attachLocal')">
             <RiFileUploadLine class="h-4 w-4 mr-1.5" />
             {{ t('chat.attachments.actions.addFromComputer') }}
           </Button>
@@ -692,9 +750,10 @@ onBeforeUnmount(() => {
   <DialogRoot :open="open && isMobileSheet" @update:open="onMobileDialogOpenChange">
     <DialogPortal>
       <DialogOverlay class="fixed inset-0 z-[64] bg-black/55 backdrop-blur-sm" />
-      <DialogContent as-child>
+      <DialogContent as-child @close-auto-focus="onCloseAutoFocus">
         <div
           ref="panelEl"
+          data-keyboard-overlay="true"
           tabindex="-1"
           class="fixed z-[65] max-w-[24rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col outline-none"
           :style="mobileSheetStyle"

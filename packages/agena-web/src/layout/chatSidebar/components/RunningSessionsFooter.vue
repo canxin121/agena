@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { computed, type ComponentPublicInstance } from 'vue'
 import { RiArrowDownSLine, RiArrowRightSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -100,7 +101,11 @@ function statusMeta(sessionId: string) {
 </script>
 
 <template>
-  <div class="flex-shrink-0 border-t border-sidebar-border/60 bg-sidebar/95">
+  <div
+    v-keyboard-collection="{ tree: true }"
+    :aria-label="String(t('chat.sidebar.footers.running.title'))"
+    class="flex-shrink-0 border-t border-sidebar-border/60 bg-sidebar/95"
+  >
     <div
       :class="[
         'group h-10 px-3 flex items-center justify-between gap-2 rounded-md transition-colors',

@@ -13,7 +13,7 @@ test('OptionMenu captures pointer/click and avoids click-through', () => {
   assert.ok(optionMenuSource.includes('@click.stop'))
   assert.match(optionMenuSource, /<DialogRoot :open="open && isMobileSheet"/)
   assert.match(optionMenuSource, /<DialogOverlay class="fixed inset-0 z-\[74\]/)
-  assert.match(optionMenuSource, /<DialogContent as-child>/)
+  assert.match(optionMenuSource, /<DialogContent\b[^>]*\bas-child\b[^>]*>/)
   assert.match(optionMenuSource, /<PopoverContent[\s\S]*as-child/)
   assert.ok(optionMenuSource.includes('const viewportTop = resolveViewportTop()'))
   assert.ok(

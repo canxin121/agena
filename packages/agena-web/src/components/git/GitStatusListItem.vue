@@ -119,6 +119,10 @@ function handleRowDragStart(event: DragEvent) {
 
 <template>
   <ListItemFrame
+    :data-keyboard-item="path"
+    :data-keyboard-label="path"
+    :data-keyboard-multiselect="String(showSelection)"
+    :primary-attrs="{ 'aria-pressed': showSelection ? selected : undefined }"
     draggable="true"
     :active="active"
     :action-visibility="hasMobileActions ? 'always' : 'hover'"
@@ -151,7 +155,12 @@ function handleRowDragStart(event: DragEvent) {
 
     <template #actions>
       <template v-if="hasMobileActions">
-        <ListItemOverflowActionButton mobile :label="mobileActionTitleText" @trigger="handleMobileActionTrigger" />
+        <ListItemOverflowActionButton
+          data-keyboard-menu
+          mobile
+          :label="mobileActionTitleText"
+          @trigger="handleMobileActionTrigger"
+        />
 
         <OptionMenu
           :open="mobileActionMenuOpen"

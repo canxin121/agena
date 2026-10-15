@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, type Component } from 'vue'
+import { computed, nextTick, ref, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiChat4Line,
@@ -7,6 +7,7 @@ import {
   RiFolder6Line,
   RiGitMergeLine,
   RiGlobalLine,
+  RiMore2Line,
   RiSettings3Line,
   RiTerminalBoxLine,
 } from '@remixicon/vue'
@@ -26,6 +27,8 @@ import { cn } from '@/lib/utils'
 import { useUiStore, type WorkspaceWindowTab } from '@/stores/ui'
 import { useWorkspacePaneHosts } from '@/layout/workspacePaneHosts'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import { focusKeyboardRegion, isPlainNavigationKey, navigationIndex } from '@/lib/keyboardNavigation'
+import { isImeComposing } from '@/lib/imeKeyboard'
 
 const props = defineProps<{
   groupId: string
@@ -91,9 +94,15 @@ const activeWindow = computed<WorkspaceWindowTab | null>(() => {
 const activeWindowId = computed(() => String(activeWindow.value?.id || '').trim())
 const canDragTabs = computed(() => !ui.isCompactLayout)
 const isTabStripDropActive = ref(false)
+const tabStripEl = ref<HTMLElement | null>(null)
 const tabContextMenuOpen = ref(false)
 const tabContextWindowId = ref('')
 const tabContextMenuAnchorEl = ref<HTMLElement | null>(null)
+const tabContextReturnId = ref('')
+function tabContextReturnTarget() {
+  const id = tabContextReturnId.value
+  return id ? document.querySelector<HTMLElement>(`[data-workspace-tab-primary="${CSS.escape(id)}"]`) : null
+}
 
 const tabContextWindowIndex = computed(() =>
   groupTabs.value.findIndex((item) => item.id === String(tabContextWindowId.value || '').trim()),
@@ -108,6 +117,41 @@ const tabContextMenuGroups = computed<OptionMenuGroup[]>(() => {
   const count = groupTabs.value.length
   const validTarget = index >= 0
   return [
+    {
+      id: 'tab-layout-actions',
+      items: [
+        { id: 'duplicate', label: String(t('keyboard.duplicateTab')), disabled: !validTarget },
+        { id: 'split', label: String(t('keyboard.splitTab')), disabled: !validTarget },
+        { id: 'detach', label: String(t('keyboard.detachTab')), disabled: !validTarget || count < 2 },
+        { id: 'tab-left', label: String(t('keyboard.moveTabLeft')), disabled: index <= 0 },
+        { id: 'tab-right', label: String(t('keyboard.moveTabRight')), disabled: !validTarget || index >= count - 1 },
+        {
+          id: 'group-left',
+          label: String(t('keyboard.moveGroupLeft')),
+          disabled: ui.workspaceGroups.findIndex((g) => g.id === props.groupId) <= 0,
+        },
+        {
+          id: 'group-right',
+          label: String(t('keyboard.moveGroupRight')),
+          disabled: ui.workspaceGroups.findIndex((g) => g.id === props.groupId) >= ui.workspaceGroups.length - 1,
+        },
+        ...ui.workspaceGroups
+          .filter((g) => g.id !== props.groupId)
+          .flatMap((g) => {
+            const number = ui.workspaceGroups.findIndex((candidate) => candidate.id === g.id) + 1
+            return [
+              { id: `move-group:${g.id}`, label: String(t('keyboard.moveToGroup', { number })) },
+              { id: `merge-group:${g.id}`, label: String(t('keyboard.mergeIntoGroup', { number })) },
+            ]
+          }),
+        ...ui.workspaceWindows
+          .filter((w) => w.id !== tabContextWindowId.value)
+          .map((w) => ({
+            id: `replace:${w.id}`,
+            label: String(t('keyboard.replaceTab', { title: windowTitle(w) })),
+          })),
+      ],
+    },
     {
       id: 'tab-close-actions',
       items: [
@@ -173,6 +217,12 @@ function focusPaneWindow(windowId?: string) {
 
 function handlePanePointerDown() {
   focusPaneWindow()
+}
+
+function handlePaneFocusIn(event: FocusEvent) {
+  const target = event.target
+  const tab = target instanceof HTMLElement ? target.closest<HTMLElement>('[data-workspace-tab-id]') : null
+  focusPaneWindow(tab?.dataset.workspaceTabId)
 }
 
 function tabLabel(tab: MainTabId): string {
@@ -324,13 +374,61 @@ async function closeTab(windowId: string) {
   const targetId = String(windowId || '').trim()
   if (!targetId) return
 
+  const restoreFocus = Boolean(tabStripEl.value?.contains(document.activeElement)) || tabContextMenuOpen.value
   const wasRouteActive = String(ui.activeWorkspaceWindowId || '').trim() === targetId
   ui.closeWorkspaceWindow(targetId)
 
-  if (!wasRouteActive) return
-  const fallback = ui.activeWorkspaceWindow || ui.workspaceWindows[0] || null
-  if (!fallback) return
-  await navigateToWindow(fallback.id, true)
+  if (wasRouteActive) {
+    const fallback = ui.activeWorkspaceWindow || ui.workspaceWindows[0] || null
+    if (fallback) await navigateToWindow(fallback.id, true)
+    else await workspaceNavigation.navigateToEmptyWorkspace(true)
+  }
+  if (restoreFocus) await focusActiveTab()
+}
+
+async function focusActiveTab() {
+  await nextTick()
+  const buttons = Array.from(tabStripEl.value?.querySelectorAll<HTMLElement>('[data-workspace-tab-primary]') || [])
+  const target = buttons.find((button) => button.dataset.workspaceTabPrimary === activeWindowId.value) || buttons[0]
+  if (target) target.focus()
+  else {
+    const region = document.querySelector<HTMLElement>('[data-keyboard-region]')
+    if (region) focusKeyboardRegion(region)
+  }
+}
+
+function onTabStripKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || isImeComposing(event) || event.altKey || event.ctrlKey || event.metaKey) return
+  const target = event.target
+  if (!(target instanceof HTMLElement) || !target.hasAttribute('data-workspace-tab-primary')) return
+  const windowId = target.dataset.workspaceTabPrimary || ''
+  if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') {
+    event.preventDefault()
+    event.stopPropagation()
+    tabContextWindowId.value = windowId
+    tabContextReturnId.value = ''
+    tabContextMenuAnchorEl.value = target
+    tabContextMenuOpen.value = true
+    return
+  }
+  if (!isPlainNavigationKey(event) || event.shiftKey) return
+  if (event.key === 'Delete') {
+    event.preventDefault()
+    event.stopPropagation()
+    void closeTab(windowId)
+    return
+  }
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tabs = groupTabs.value
+  const index = navigationIndex(
+    event.key,
+    tabs.findIndex((tab) => tab.id === windowId),
+    tabs.length,
+  )
+  if (index === null) return
+  event.preventDefault()
+  event.stopPropagation()
+  void activateTab(tabs[index]!.id).then(focusActiveTab)
 }
 
 function openTabContextMenu(event: MouseEvent, windowId: string) {
@@ -338,6 +436,7 @@ function openTabContextMenu(event: MouseEvent, windowId: string) {
   const anchor = event.currentTarget
   if (!targetId || !(anchor instanceof HTMLElement)) return
   tabContextWindowId.value = targetId
+  tabContextReturnId.value = ''
   tabContextMenuAnchorEl.value = anchor
   tabContextMenuOpen.value = true
 }
@@ -352,16 +451,17 @@ async function closeTabIds(windowIds: string[], fallbackWindowId = '') {
   const removesRouteActive = Boolean(routeActiveId && ids.includes(routeActiveId))
 
   for (const id of ids) ui.closeWorkspaceWindow(id)
-  if (!removesRouteActive) return
-
-  const preferredFallbackId = String(fallbackWindowId || '').trim()
-  const fallback =
-    (preferredFallbackId ? ui.getWorkspaceWindowById(preferredFallbackId) : null) ||
-    ui.activeWorkspaceWindow ||
-    ui.workspaceWindows[0] ||
-    null
-  if (!fallback) return
-  await navigateToWindow(fallback.id, true)
+  if (removesRouteActive) {
+    const preferredFallbackId = String(fallbackWindowId || '').trim()
+    const fallback =
+      (preferredFallbackId ? ui.getWorkspaceWindowById(preferredFallbackId) : null) ||
+      ui.activeWorkspaceWindow ||
+      ui.workspaceWindows[0] ||
+      null
+    if (fallback) await navigateToWindow(fallback.id, true)
+    else await workspaceNavigation.navigateToEmptyWorkspace(true)
+  }
+  await focusActiveTab()
 }
 
 async function handleTabContextMenuSelect(item: OptionMenuItem) {
@@ -369,6 +469,34 @@ async function handleTabContextMenuSelect(item: OptionMenuItem) {
   const tabIds = groupTabs.value.map((tab) => tab.id)
   const index = tabIds.indexOf(targetId)
   if (!targetId || index < 0) return
+
+  let destinationId = targetId
+  let handled = true
+  if (item.id === 'duplicate') destinationId = ui.duplicateWorkspaceWindow(targetId)
+  else if (item.id === 'split') {
+    ui.splitWorkspaceWindowToRight(targetId)
+    destinationId = ui.activeWorkspaceWindowId
+  } else if (item.id === 'detach') ui.ungroupWorkspaceWindow(targetId)
+  else if (item.id === 'tab-left' || item.id === 'tab-right')
+    ui.reorderWorkspaceTab(targetId, item.id === 'tab-left' ? -1 : 1)
+  else if (item.id === 'group-left' || item.id === 'group-right') {
+    const groupIndex = ui.workspaceGroups.findIndex((g) => g.id === props.groupId)
+    ui.moveWorkspaceGroupToIndex(props.groupId, groupIndex + (item.id === 'group-left' ? -1 : 2))
+  } else if (item.id.startsWith('move-group:')) {
+    ui.moveWorkspaceWindowToGroup(targetId, item.id.slice('move-group:'.length), { activateTargetGroup: true })
+  } else if (item.id.startsWith('merge-group:')) {
+    const groupId = item.id.slice('merge-group:'.length)
+    for (const id of tabIds) ui.moveWorkspaceWindowToGroup(id, groupId, { activateTargetGroup: true })
+    ui.selectWorkspaceWindow(targetId)
+  } else if (item.id.startsWith('replace:')) {
+    destinationId = item.id.slice('replace:'.length)
+    ui.replaceWorkspaceWindowContent(destinationId, targetId)
+  } else handled = false
+  if (handled) {
+    tabContextReturnId.value = destinationId
+    await navigateToWindow(destinationId, true)
+    return
+  }
 
   if (item.id === 'close-current') {
     await closeTab(targetId)
@@ -505,6 +633,7 @@ async function handleTabStripDrop(event: DragEvent) {
     class="app-region-no-drag flex h-full min-h-0 flex-col border-l border-border/60 bg-background"
     :data-workspace-pane-group="groupId"
     @pointerdown.capture="handlePanePointerDown"
+    @focusin="handlePaneFocusIn"
   >
     <div
       class="relative min-h-0 border-b border-border/60 bg-secondary/20 px-1.5 py-1"
@@ -513,7 +642,15 @@ async function handleTabStripDrop(event: DragEvent) {
       @dragleave="handleTabStripDragLeave"
       @drop="void handleTabStripDrop($event)"
     >
-      <div class="flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div
+        ref="tabStripEl"
+        role="tablist"
+        :aria-label="String(t('keyboard.workspaceTabs'))"
+        data-keyboard-region
+        tabindex="-1"
+        class="flex min-w-0 items-center gap-1 overflow-x-auto"
+        @keydown="onTabStripKeydown"
+      >
         <div
           v-for="windowTab in groupTabs"
           :key="`${groupId}:${windowTab.id}`"
@@ -527,13 +664,27 @@ async function handleTabStripDrop(event: DragEvent) {
         >
           <button
             type="button"
+            :data-workspace-tab-primary="windowTab.id"
+            :id="`workspace-tab-${windowTab.id}`"
+            role="tab"
+            :aria-selected="isWindowActive(windowTab.id)"
+            :aria-controls="`workspace-panel-${windowTab.id}`"
+            :tabindex="isWindowActive(windowTab.id) ? 0 : -1"
             class="flex min-w-0 flex-1 select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             :title="windowTitle(windowTab)"
-            :aria-pressed="isWindowActive(windowTab.id)"
             @click="void activateTab(windowTab.id)"
           >
             <component :is="TAB_ICONS[windowTab.mainTab]" class="h-3.5 w-3.5 flex-shrink-0" />
             <span class="truncate text-[12px] font-medium">{{ windowTitle(windowTab) }}</span>
+          </button>
+
+          <button
+            type="button"
+            class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :aria-label="String(t('keyboard.tabActions', { title: windowTitle(windowTab) }))"
+            @click.stop="openTabContextMenu($event, windowTab.id)"
+          >
+            <RiMore2Line class="h-3.5 w-3.5" />
           </button>
 
           <button
@@ -559,6 +710,7 @@ async function handleTabStripDrop(event: DragEvent) {
 
       <OptionMenu
         v-model:open="tabContextMenuOpen"
+        :return-focus-target="tabContextReturnTarget"
         :groups="tabContextMenuGroups"
         :title="tabContextMenuTitle"
         :searchable="false"

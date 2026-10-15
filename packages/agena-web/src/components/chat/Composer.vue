@@ -25,6 +25,9 @@ const props = defineProps<{
   modeLabel?: string
   attachedFiles: AttachedFile[]
   pendingAttachments: PendingAttachment[]
+  commandListId?: string
+  commandActiveId?: string
+  commandOpen?: boolean
 }>()
 const emit = defineEmits<{
   (e: 'update:draft', value: string): void
@@ -603,6 +606,9 @@ defineExpose({
       contenteditable="true"
       role="textbox"
       aria-multiline="true"
+      :aria-haspopup="commandOpen ? 'listbox' : undefined"
+      :aria-controls="commandOpen ? commandListId : undefined"
+      :aria-activedescendant="commandOpen ? commandActiveId : undefined"
       :aria-label="t('chat.composer.input.placeholder')"
       :data-placeholder="t('chat.composer.input.placeholder')"
       data-chat-input="true"

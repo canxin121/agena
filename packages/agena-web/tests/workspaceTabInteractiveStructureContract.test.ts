@@ -6,7 +6,10 @@ const source = readFileSync(new URL('../src/layout/WorkspaceEditorGroupPane.vue'
 
 test('workspace tabs keep the primary tab action and close action as sibling native buttons', () => {
   assert.doesNotMatch(source, /role="button"/)
-  assert.match(source, /type="button"[\s\S]*:aria-pressed="isWindowActive\(windowTab\.id\)"/)
+  assert.match(source, /type="button"[\s\S]*:aria-selected="isWindowActive\(windowTab\.id\)"/)
+  assert.match(source, /role="tablist"/)
+  assert.match(source, /role="tab"/)
+  assert.match(source, /:aria-controls="`workspace-panel-\$\{windowTab\.id\}`"/)
   assert.match(source, /group-focus-within:opacity-100/)
   assert.doesNotMatch(source, /@keydown\.enter/)
   assert.doesNotMatch(source, /@keydown\.space/)

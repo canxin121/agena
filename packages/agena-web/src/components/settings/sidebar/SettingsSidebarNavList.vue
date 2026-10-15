@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 
 import SettingsSidebarNavRow from './SettingsSidebarNavRow.vue'
 import type { SettingsSidebarRenderGroup, SettingsSidebarTabRow } from './settingsSidebarNavigation'
@@ -25,7 +26,7 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
 </script>
 
 <template>
-  <div class="min-h-0 overflow-x-hidden">
+  <div v-keyboard-collection="{ tree: true }" :aria-label="String(t('nav.settings'))" class="min-h-0 overflow-x-hidden">
     <div v-if="!hasRows" class="px-4 py-8 text-center text-muted-foreground">
       <div class="typography-ui-label font-semibold">{{ t('common.noOptionsFound') }}</div>
     </div>
@@ -42,6 +43,11 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
           <SettingsSidebarNavRow
             v-for="row in group.items"
             :key="row.key"
+            :data-keyboard-item="row.key"
+            :data-keyboard-level="row.depth + 1"
+            :data-keyboard-expanded="row.hasChildren ? String(row.expanded) : undefined"
+            :data-keyboard-selected="String(row.active)"
+            :data-keyboard-label="row.label"
             :label="row.label"
             :active="row.active"
             :branch-active="row.branchActive"

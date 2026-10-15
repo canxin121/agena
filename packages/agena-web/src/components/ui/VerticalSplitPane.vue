@@ -118,6 +118,7 @@ onBeforeUnmount(() => {
       class="min-h-0 overflow-hidden relative flex flex-col"
       :class="collapseTop ? 'h-0 flex-none pointer-events-none' : 'flex-1'"
       :aria-hidden="collapseTop ? 'true' : undefined"
+      :inert="collapseTop ? true : undefined"
     >
       <slot name="top" />
     </div>

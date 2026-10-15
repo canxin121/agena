@@ -8,7 +8,7 @@ test('mobile attachments sheet uses a Radix dialog focus scope above bottom navi
   assert.match(source, /<DialogRoot/)
   assert.match(source, /<DialogPortal>/)
   assert.match(source, /<DialogOverlay class="fixed inset-0 z-\[64\]/)
-  assert.match(source, /<DialogContent as-child>/)
+  assert.match(source, /<DialogContent\b[^>]*as-child[^>]*>/)
   assert.match(source, /<DialogTitle/)
   assert.match(source, /fixed z-\[65\]/)
   assert.match(source, /tabindex="-1"/)

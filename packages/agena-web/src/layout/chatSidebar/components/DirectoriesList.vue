@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { RiCloseLine, RiDeleteBinLine, RiFileList2Line, RiListCheck3, RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -179,7 +180,11 @@ function sessionSelectableCount(directoryId: string): number {
 </script>
 
 <template>
-  <div class="min-h-0 overflow-x-hidden overflow-visible">
+  <div
+    v-keyboard-collection="{ tree: true }"
+    :aria-label="String(t('header.openSessions'))"
+    class="min-h-0 overflow-x-hidden overflow-visible"
+  >
     <div class="space-y-0.5 pb-0.5 pl-2 pr-1">
       <div v-if="directories.length === 0" class="px-2 py-6 text-center text-muted-foreground">
         <div class="typography-ui-label font-semibold">{{ t('chat.sidebar.directoriesList.empty.title') }}</div>
@@ -201,6 +206,8 @@ function sessionSelectableCount(directoryId: string): number {
             <SidebarTextButton
               v-for="hit in sessionSearchHits"
               :key="String(hit.session.id)"
+              :data-keyboard-item="String(hit.session.id)"
+              :data-keyboard-label="sessionLabel(hit.session)"
               class="w-full rounded-md px-2 py-1 hover:dark:bg-accent/40 hover:bg-primary/6"
               @click="props.locateFromSearch(hit)"
             >

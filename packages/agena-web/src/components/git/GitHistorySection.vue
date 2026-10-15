@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { RiGitCommitLine, RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -81,7 +82,7 @@ function formatDate(value: string): string {
       </template>
     </SectionToggleButton>
 
-    <div v-if="expanded" class="space-y-0.5 px-1 pb-1">
+    <div v-if="expanded" v-keyboard-collection class="space-y-0.5 px-1 pb-1">
       <div
         v-if="error"
         class="mx-1 rounded-sm border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive/90"
@@ -101,6 +102,8 @@ function formatDate(value: string): string {
         <SidebarListItem
           v-for="commit in commits"
           :key="commit.hash"
+          :data-keyboard-item="commit.hash"
+          :data-keyboard-label="commit.subject || commit.shortHash"
           :active="selectedHash === commit.hash"
           class="py-1.5"
           @click="$emit('select', commit)"

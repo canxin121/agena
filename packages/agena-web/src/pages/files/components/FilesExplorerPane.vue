@@ -36,6 +36,9 @@ import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
+import { isImeComposing } from '@/lib/imeKeyboard'
+import { isTextEditingTarget } from '@/lib/keyboardNavigation'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 
 import { fileIconClass, fileIconComponent } from '../fileKinds'
@@ -81,6 +84,7 @@ const props = defineProps<{
   refreshRoot: () => void | Promise<void>
   collapseAll: () => void
   expandDirectory: (dirPath: string) => void | Promise<void>
+  toggleDirectory?: (dirPath: string) => void | Promise<void>
   createNode: (kind: InlineCreateKind, basePath: string, name: string) => Promise<boolean>
   renameNode: (node: FileNode, name: string) => Promise<boolean>
   moveNodeByDrag: (sourcePath: string, targetDir: string) => Promise<boolean>
@@ -96,6 +100,7 @@ const props = defineProps<{
 const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isCompactTouch))
 
 const uploadInputRef = ref<HTMLInputElement | null>(null)
+const treeRef = ref<HTMLElement | null>(null)
 const dropTargetDir = ref('')
 const rootDropActive = ref(false)
 const actionMenuOpen = ref(false)
@@ -421,16 +426,37 @@ function flashDragFeedback(kind: 'invalid' | 'success', path: string) {
 }
 
 function resetInlineCreate() {
+  const path = inlineCreateParentPath.value
+  const restore = Boolean(
+    inlineCreateInputRef.value?.closest('[data-inline-create-root]')?.contains(document.activeElement),
+  )
   inlineCreateKind.value = null
   inlineCreateParentPath.value = ''
   inlineCreateName.value = ''
   inlineCreateBusy.value = false
+  if (restore) restoreTreeFocus(path)
 }
 
 function resetInlineRename() {
+  const path = inlineRenamePath.value
+  const restore = Boolean(
+    inlineRenameInputRef.value?.closest('[data-inline-rename-root]')?.contains(document.activeElement),
+  )
   inlineRenamePath.value = ''
   inlineRenameName.value = ''
   inlineRenameBusy.value = false
+  if (restore) restoreTreeFocus(path)
+}
+
+function restoreTreeFocus(path: string) {
+  void nextTick(() => {
+    if (document.activeElement !== document.body) return
+    const row = treeRef.value?.querySelector<HTMLElement>(`[data-node-path="${CSS.escape(path)}"]`)
+    const primary =
+      row?.querySelector<HTMLElement>('[data-oc-list-item-primary]') ||
+      treeRef.value?.querySelector<HTMLElement>('[tabindex="0"]')
+    primary?.focus()
+  })
 }
 
 function setInlineCreateInputRef(el: Element | ComponentPublicInstance | null) {
@@ -480,6 +506,23 @@ async function startCreate(kind: InlineCreateKind) {
   await nextTick()
   inlineCreateInputRef.value?.focus()
   inlineCreateInputRef.value?.select()
+}
+
+function onTreeRowKeydown(event: KeyboardEvent, node: FileNode) {
+  if (
+    event.key !== 'F2' ||
+    event.defaultPrevented ||
+    isImeComposing(event) ||
+    isTextEditingTarget(event.target) ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey
+  )
+    return
+  event.preventDefault()
+  event.stopPropagation()
+  void startRename(node)
 }
 
 async function startRename(node: FileNode) {
@@ -545,6 +588,8 @@ async function submitInlineRename(node: FileNode) {
     const ok = await props.renameNode(node, name)
     if (ok) {
       resetInlineRename()
+      const parent = node.path.slice(0, node.path.lastIndexOf('/'))
+      void nextTick(() => restoreTreeFocus(`${parent}/${name}`))
     }
   } finally {
     inlineRenameBusy.value = false
@@ -769,6 +814,7 @@ const fileActionGroups: OptionMenuGroup[] = [
       { id: 'download', label: t('files.actions.download'), icon: RiDownload2Line },
       { id: 'copy-path', label: t('files.actions.copyPath'), icon: RiFileCopy2Line },
       { id: 'copy-absolute-path', label: t('files.actions.copyAbsolutePath'), icon: RiFileCopy2Line },
+      { id: 'move', label: t('keyboard.moveFile'), icon: RiArrowUpLine },
     ],
   },
 ]
@@ -779,6 +825,7 @@ const folderActionGroups: OptionMenuGroup[] = [
     items: [
       { id: 'copy-path', label: t('files.actions.copyPath'), icon: RiFileCopy2Line },
       { id: 'copy-absolute-path', label: t('files.actions.copyAbsolutePath'), icon: RiFileCopy2Line },
+      { id: 'move', label: t('keyboard.moveFile'), icon: RiArrowUpLine },
     ],
   },
 ]
@@ -800,6 +847,7 @@ function rowActionMenuGroups(node: FileNode): OptionMenuGroup[] {
   )
 
   items.push({ id: 'rename', label: t('files.explorer.actions.rename'), icon: RiEditLine })
+  items.push({ id: 'move', label: t('keyboard.moveFile'), icon: RiArrowUpLine })
   items.push({
     id: 'delete',
     label: t('files.explorer.actions.delete'),
@@ -883,6 +931,11 @@ function toggleFileActionMenu(path: string) {
 }
 
 async function runFileActionMenu(node: FileNode, item: OptionMenuItem) {
+  if (item.id === 'move') {
+    await props.openMoveSelectedDialog([node.path])
+    fileActionMenuPath.value = ''
+    return
+  }
   const action = item.id as FileActionId
   if (action !== 'download' && action !== 'copy-path' && action !== 'copy-absolute-path') return
   await props.runFileAction(action, node)
@@ -890,6 +943,11 @@ async function runFileActionMenu(node: FileNode, item: OptionMenuItem) {
 }
 
 async function runTreeRowActionMenu(node: FileNode, item: OptionMenuItem) {
+  if (item.id === 'move') {
+    await props.openMoveSelectedDialog([node.path])
+    fileActionMenuPath.value = ''
+    return
+  }
   if (item.id === 'rename') {
     await startRename(node)
     fileActionMenuPath.value = ''
@@ -1268,7 +1326,13 @@ onBeforeUnmount(() => {
         @dragleave="onExplorerDragLeave"
         @drop="onExplorerDrop"
       >
-        <div data-explorer-tree="true" class="px-1 pb-2 pt-1">
+        <div
+          ref="treeRef"
+          v-keyboard-collection="{ tree: true }"
+          data-explorer-tree="true"
+          :aria-label="String(t('files.explorer.view.tree'))"
+          class="px-1 pb-2 pt-1"
+        >
           <div v-if="!hasRootChildren" class="space-y-1.5 px-1 py-1.5">
             <div v-for="i in 8" :key="`tree-skeleton-${i}`" class="rounded-sm px-1.5 py-1">
               <div class="flex items-center gap-2" :style="{ paddingLeft: `${((i - 1) % 3) * 14}px` }">
@@ -1285,6 +1349,8 @@ onBeforeUnmount(() => {
                 type="button"
                 class="flex h-[22px] w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
                 :data-directory-page="entry.path"
+                :data-keyboard-item="`more:${entry.path}`"
+                :data-keyboard-level="entry.depth + 1"
                 :style="{ paddingLeft: `${8 + entry.depth * 14}px` }"
                 :disabled="entry.loading"
                 @click="props.loadMoreDirectory?.(entry.path)"
@@ -1344,7 +1410,7 @@ onBeforeUnmount(() => {
                     :placeholder="t('files.dialog.namePlaceholder')"
                     :disabled="inlineRenameBusy"
                     @keydown.enter.prevent="submitInlineRename(entry.row.node)"
-                    @keydown.esc.prevent="resetInlineRename"
+                    @keydown.esc.prevent.stop="resetInlineRename"
                   />
 
                   <template #actions>
@@ -1372,6 +1438,16 @@ onBeforeUnmount(() => {
 
                 <SidebarListItem
                   v-else
+                  :data-keyboard-item="entry.row.node.path"
+                  :data-keyboard-label="entry.row.node.name"
+                  :data-keyboard-level="entry.row.depth + 1"
+                  :data-keyboard-expanded="
+                    entry.row.node.type === 'directory' ? String(entry.row.isExpanded) : undefined
+                  "
+                  :data-keyboard-multiselect="String(multiSelectEnabled)"
+                  :data-keyboard-selected="
+                    String(isNodeSelected(entry.row.node.path) || selectedFilePath === entry.row.node.path)
+                  "
                   :active="isNodeSelected(entry.row.node.path) || selectedFilePath === entry.row.node.path"
                   :indent="8 + entry.row.depth * 14"
                   :actions-always-visible="isCompactLayout"
@@ -1392,6 +1468,7 @@ onBeforeUnmount(() => {
                       ? 'oc-tree-drop-success'
                       : '',
                   ]"
+                  @keydown="onTreeRowKeydown($event, entry.row.node)"
                   @click="handleTreeNodeClick($event, entry.row.node)"
                   @pointerdown="onRowPointerDown($event, entry.row.node)"
                   :draggable="entry.row.node.type === 'file'"
@@ -1405,11 +1482,32 @@ onBeforeUnmount(() => {
                       v-if="multiSelectEnabled"
                       :selected="isNodeSelected(entry.row.node.path)"
                     />
-                    <template v-if="entry.row.node.type === 'directory'">
+                    <button
+                      v-if="entry.row.node.type === 'directory'"
+                      type="button"
+                      data-keyboard-toggle
+                      tabindex="-1"
+                      :aria-expanded="entry.row.isExpanded"
+                      :aria-label="
+                        String(
+                          t(
+                            entry.row.isExpanded
+                              ? 'chat.sidebar.directoriesList.collapseDirectory'
+                              : 'chat.sidebar.directoriesList.expandDirectory',
+                          ),
+                        )
+                      "
+                      class="rounded focus-visible:ring-2 focus-visible:ring-ring"
+                      @click.stop="
+                        props.toggleDirectory
+                          ? props.toggleDirectory(entry.row.node.path)
+                          : props.handleNodeClick(entry.row.node, { toggle: false, range: false })
+                      "
+                    >
                       <RiLoader4Line v-if="entry.row.isLoading" class="h-3.5 w-3.5 shrink-0 animate-spin" />
                       <RiFolderOpenFill v-else-if="entry.row.isExpanded" class="h-3.5 w-3.5 shrink-0 text-primary/75" />
                       <RiFolder3Fill v-else class="h-3.5 w-3.5 shrink-0 text-primary/75" />
-                    </template>
+                    </button>
                     <template v-else>
                       <component
                         :is="fileIconComponent(entry.row.node.extension)"
@@ -1425,6 +1523,7 @@ onBeforeUnmount(() => {
                     <div v-if="isCompactLayout" class="relative" data-file-action-root="true">
                       <SidebarIconButton
                         size="sm"
+                        data-keyboard-menu
                         :title="t('files.explorer.actions.actions')"
                         :active="fileActionMenuPath === entry.row.node.path"
                         @click.stop="void toggleFileActionMenu(entry.row.node.path)"
@@ -1453,6 +1552,7 @@ onBeforeUnmount(() => {
                       <div class="relative" data-file-action-root="true">
                         <SidebarIconButton
                           size="sm"
+                          data-keyboard-menu
                           :title="
                             entry.row.node.type === 'directory'
                               ? t('files.explorer.actions.folderActions')
@@ -1483,6 +1583,7 @@ onBeforeUnmount(() => {
 
                       <SidebarIconButton
                         size="sm"
+                        data-keyboard-rename
                         :title="t('files.explorer.actions.rename')"
                         @click.stop="startRename(entry.row.node)"
                       >
@@ -1543,7 +1644,7 @@ onBeforeUnmount(() => {
                   "
                   :disabled="inlineCreateBusy"
                   @keydown.enter.prevent="submitInlineCreate"
-                  @keydown.esc.prevent="resetInlineCreate"
+                  @keydown.esc.prevent.stop="resetInlineCreate"
                 />
                 <template #actions>
                   <SidebarIconButton

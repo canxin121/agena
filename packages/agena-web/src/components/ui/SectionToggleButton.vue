@@ -25,12 +25,20 @@ const hasCount = computed(() => props.count !== null && props.count !== undefine
 </script>
 
 <template>
-  <button type="button" :class="cn('oc-vscode-section-head group', props.class)" @click="emit('toggle')">
-    <component :is="open ? RiArrowDownSLine : RiArrowRightSLine" class="h-3.5 w-3.5" />
-    <span class="oc-vscode-section-label">{{ label }}</span>
-    <span v-if="hasCount" class="oc-vscode-count-badge">{{ count }}</span>
+  <div :class="cn('oc-vscode-section-head group', props.class)">
+    <button
+      type="button"
+      :aria-expanded="open"
+      :aria-label="label"
+      class="flex min-w-0 flex-1 items-center gap-1 self-stretch rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      @click="emit('toggle')"
+    >
+      <component :is="open ? RiArrowDownSLine : RiArrowRightSLine" class="h-3.5 w-3.5" />
+      <span class="oc-vscode-section-label">{{ label }}</span>
+      <span v-if="hasCount" class="oc-vscode-count-badge">{{ count }}</span>
+    </button>
     <span v-if="showActions && $slots.actions" class="oc-vscode-row-actions !pointer-events-auto !opacity-100">
       <slot name="actions" />
     </span>
-  </button>
+  </div>
 </template>

@@ -18,7 +18,6 @@ test('a submitted user message keeps a numbered placeholder per attachment and g
   // instead of splitting the text around each inline attachment.
   assert.ok(page.includes("if (composed.typedText) parts.push({ type: 'text', text: composed.text })"))
   assert.ok(page.includes('for (const id of composed.attachmentIds) {'))
-  assert.ok(page.includes("text: composed.typedText ? composed.text : ''"))
   assert.equal(page.includes('const orderedSegments: ComposerSegment[]'), false)
 })
 

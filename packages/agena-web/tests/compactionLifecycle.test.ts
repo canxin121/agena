@@ -199,11 +199,8 @@ test('the real message list nests compaction beside the answer with identical pa
       sessionEnded: true,
       retryStatus: null,
       currentPhase: '',
-      awaitingAssistant: false,
       activityCollapseSignal: 0,
       isPartExpanded: () => true,
-      optimisticUser: null,
-      showOptimisticUser: false,
     })
       .use(createPinia())
       .use(i18n)

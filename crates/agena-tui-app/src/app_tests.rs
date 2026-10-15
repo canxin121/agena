@@ -3170,275 +3170,95 @@ mod prompt_history_tests {
 }
 
 #[cfg(test)]
-mod pending_message_tests {
-    use super::super::{PendingUserMessage, TranscriptState};
+mod persisted_user_message_tests {
+    use super::super::TranscriptState;
     use super::parts_fixtures;
-    use agena_domain::{
-        ActivityId, ActivityPayload, ActivityProvenance, CommandReferenceActivity,
-        ComposerActivity, ComposerDocument, ComposerNode,
-    };
 
     #[test]
-    fn optimistic_user_input_uses_the_same_part_projection_as_persisted_input() {
-        let activity_id = ActivityId::new();
+    fn committed_user_parts_render_before_any_assistant_reply() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 9,
-            document: ComposerDocument(vec![
-                ComposerNode::Text {
-                    text: "use ".to_owned(),
-                },
-                ComposerNode::Activity {
-                    activity: Box::new(ComposerActivity {
-                        id: activity_id,
-                        payload: ActivityPayload::CommandReference(CommandReferenceActivity {
-                            name: "batch".to_owned(),
-                            description: "Run independent work".to_owned(),
-                            content_hash: "sha256:test".to_owned(),
-                            source: "test".to_owned(),
-                            aliases: Vec::new(),
-                        }),
-                        provenance: ActivityProvenance::default(),
-                    }),
-                },
-                ComposerNode::Text {
-                    text: " now".to_owned(),
-                },
-            ]),
-            confirmed: false,
-        });
-
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(1, 2, "user", "visible before the model replies"),
+        ]);
         let rendered = transcript.rendered(100);
-        let activity_line = rendered
-            .lines
-            .iter()
-            .position(|line| line.text.contains("Command: batch"))
-            .expect("full optimistic Command Activity");
-        assert!(
-            rendered.lines.iter().any(|line| line.text.contains("use")),
-            "optimistic text must render as its own text part"
-        );
-        assert!(
-            rendered.lines.iter().any(|line| line.text.contains("now")),
-            "text after an optimistic activity must remain its own text part"
-        );
-        assert!(
-            !rendered.nodes.iter().any(|node| node.key
-                == agena_tui_transcript::TranscriptNodeKey::Content {
-                    entry_id: agena_tui_transcript::TranscriptEntryId::PendingTurn(9),
-                    content_id: Some(agena_tui_transcript::TranscriptContentId::PendingDocument(
-                        9
-                    )),
-                }),
-            "optimistic input must not create a composite body/document part"
-        );
-        assert!(activity_line < rendered.lines.len());
-        assert!(rendered.nodes.iter().any(|node| {
-            node.key
-                == agena_tui_transcript::TranscriptNodeKey::Activity {
-                    entry_id: agena_tui_transcript::TranscriptEntryId::PendingTurn(9),
-                    content_id: agena_tui_transcript::TranscriptContentId::PendingPart {
-                        pending_id: 9,
-                        index: 1,
-                    },
-                }
-        }));
-    }
-
-    #[test]
-    fn confirmed_optimistic_message_is_atomically_replaced_by_its_persisted_message() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            ..TranscriptState::default()
-        };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 42,
-            document: ComposerDocument(vec![ComposerNode::Text {
-                text: "send this now".to_string(),
-            }]),
-            confirmed: false,
-        });
-
-        let pending_lines = transcript
-            .rendered(80)
-            .lines
-            .iter()
-            .map(|line| line.text.clone())
-            .collect::<Vec<_>>();
-        assert!(
-            pending_lines
-                .iter()
-                .any(|line| line.contains("send this now"))
-        );
-        assert!(
-            pending_lines
-                .first()
-                .is_some_and(|line| line.starts_with("user "))
-        );
-
-        transcript.confirm_pending_user_message(42);
-        assert!(
-            transcript
-                .rendered(80)
-                .lines
-                .iter()
-                .any(|line| line.text.contains("send this now"))
-        );
-        assert_eq!(transcript.rendered(80).lines[0].text, "user");
-
-        transcript.merge_parts(vec![
-            parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(1, 2, "user", "send this now"),
-            parts_fixtures::run(3, "assistant", "in_progress"),
-        ]);
-
-        assert!(transcript.pending_user_messages.is_empty());
         assert_eq!(
-            transcript
-                .rendered(80)
+            rendered
                 .lines
                 .iter()
-                .filter(|line| line.text.contains("send this now"))
+                .filter(|line| line.text.contains("visible before the model replies"))
                 .count(),
             1
         );
-    }
-
-    #[test]
-    fn empty_continuation_turn_does_not_consume_an_optimistic_user_message() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            ..TranscriptState::default()
-        };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 43,
-            document: ComposerDocument(vec![ComposerNode::Text {
-                text: "next real user message".to_owned(),
-            }]),
-            confirmed: true,
-        });
-
-        transcript.merge_parts(vec![
-            parts_fixtures::run(1, "assistant", "completed"),
-            parts_fixtures::text(1, 2, "assistant", "continued after permission"),
-        ]);
-
-        assert_eq!(transcript.pending_user_messages.len(), 1);
-        let rendered = transcript
-            .rendered(100)
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
         assert!(
-            rendered.contains("continued after permission"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("next real user message"), "{rendered}");
-        assert!(!rendered.contains("(empty)"), "{rendered}");
-    }
-
-    #[test]
-    fn input_materializing_on_an_existing_turn_replaces_the_optimistic_message() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            ..TranscriptState::default()
-        };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 44,
-            document: ComposerDocument(vec![ComposerNode::Text {
-                text: "materialized once".to_owned(),
-            }]),
-            confirmed: true,
-        });
-
-        let empty_parts = vec![
-            parts_fixtures::run(1, "assistant", "in_progress"),
-            parts_fixtures::text(1, 2, "assistant", "assistant reply"),
-        ];
-        let materialized_parts = vec![
-            parts_fixtures::run(1, "user", "completed"),
-            parts_fixtures::text(1, 2, "user", "materialized once"),
-            parts_fixtures::run(3, "assistant", "in_progress"),
-            parts_fixtures::text(3, 4, "assistant", "assistant reply"),
-        ];
-
-        transcript.merge_parts(empty_parts);
-        assert_eq!(transcript.pending_user_messages.len(), 1);
-
-        transcript.merge_parts(materialized_parts);
-
-        assert!(transcript.pending_user_messages.is_empty());
-        let rendered = transcript
-            .rendered(100)
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            rendered.matches("materialized once").count(),
-            1,
-            "{rendered}"
-        );
-        assert!(rendered.contains("assistant reply"), "{rendered}");
-    }
-
-    #[test]
-    fn optimistic_user_message_precedes_its_empty_active_reply_envelope() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            parts: vec![parts_fixtures::run(1, "assistant", "in_progress")],
-            ..TranscriptState::default()
-        };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 46,
-            document: ComposerDocument(vec![ComposerNode::Text {
-                text: "must render before the reply".to_owned(),
-            }]),
-            confirmed: false,
-        });
-
-        let lines = transcript
-            .rendered(100)
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>();
-        let user = lines
-            .iter()
-            .position(|line| line.starts_with("user"))
-            .expect("optimistic user header");
-        let assistant = lines
-            .iter()
-            .position(|line| line.starts_with("assistant"))
-            .expect("active assistant header");
-        assert!(user < assistant, "rendered lines: {lines:?}");
-        assert_eq!(
-            lines
+            rendered
+                .lines
                 .iter()
-                .filter(|line| line.contains("must render before the reply"))
+                .all(|line| !line.text.starts_with("assistant"))
+        );
+    }
+
+    #[test]
+    fn refresh_and_live_delivery_keep_one_copy_per_committed_user_run() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        let submitted = vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(1, 2, "user", "same question"),
+        ];
+        transcript.merge_parts(submitted.clone());
+        assert!(!transcript.merge_part(submitted[1].clone()));
+        transcript.merge_parts(submitted);
+        let rendered = transcript.rendered(100);
+        assert_eq!(
+            rendered
+                .lines
+                .iter()
+                .filter(|line| line.text.contains("same question"))
                 .count(),
             1
+        );
+
+        // Identical text in a distinct server run is a deliberate second send.
+        let mut repeated = transcript.parts.clone();
+        repeated.extend(vec![
+            parts_fixtures::run(3, "assistant", "completed"),
+            parts_fixtures::text(3, 4, "assistant", "first answer"),
+            parts_fixtures::run(5, "user", "completed"),
+            parts_fixtures::text(5, 6, "user", "same question"),
+        ]);
+        transcript.merge_parts(repeated);
+        let rendered = transcript.rendered(100);
+        assert_eq!(
+            rendered
+                .lines
+                .iter()
+                .filter(|line| line.text.contains("same question"))
+                .count(),
+            2
         );
     }
 }
 
 #[cfg(test)]
 mod transcript_mouse_scroll_tests {
-    use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus};
+    use agena_domain::ExecutionStatus;
 
-    fn pending_document(text: String) -> ComposerDocument {
-        ComposerDocument(vec![ComposerNode::Text { text }])
+    fn user_parts(text: String) -> Vec<agena_api::part::PartResource> {
+        vec![
+            super::parts_fixtures::run(1, "user", "completed"),
+            super::parts_fixtures::text(1, 2, "user", &text),
+        ]
     }
 
     use super::super::{
-        PendingUserMessage, RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey,
-        TranscriptRun, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
+        RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey, TranscriptRun,
+        TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
     #[test]
@@ -3447,16 +3267,12 @@ mod transcript_mouse_scroll_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..40)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..40)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
         assert_eq!(transcript.navigation_cursor_line(), None);
 
         transcript.ensure_visual_focus(40, 10);
@@ -3476,16 +3292,12 @@ mod transcript_mouse_scroll_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..80)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_bottom(40, 10);
         let bottom = transcript.viewport.top;
@@ -3519,13 +3331,9 @@ mod transcript_mouse_scroll_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                "first paragraph\n\nsecond paragraph\n\nthird paragraph".to_string(),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            "first paragraph\n\nsecond paragraph\n\nthird paragraph".to_string(),
+        ));
 
         transcript.scroll_to_bottom(40, 20);
         assert_eq!(transcript.viewport.top, 0);
@@ -3553,16 +3361,12 @@ mod transcript_mouse_scroll_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..80)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_top(40, 10);
         transcript.relocate_cursor_from_scrollbar(40, 10, 5);
@@ -3839,15 +3643,18 @@ mod transcript_mouse_scroll_tests {
 
 #[cfg(test)]
 mod transcript_paging_tests {
-    use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
+    use agena_domain::{ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        PendingUserMessage, RunRole, RunStatus, TranscriptNodeKey, TranscriptRun, TranscriptState,
+        RunRole, RunStatus, TranscriptNodeKey, TranscriptRun, TranscriptState,
         TranscriptTextPosition, Utc,
     };
 
-    fn pending_document(text: String) -> ComposerDocument {
-        ComposerDocument(vec![ComposerNode::Text { text }])
+    fn user_parts(text: String) -> Vec<agena_api::part::PartResource> {
+        vec![
+            super::parts_fixtures::run(1, "user", "completed"),
+            super::parts_fixtures::text(1, 2, "user", &text),
+        ]
     }
 
     fn line_is_focusable(transcript: &mut TranscriptState, line: usize) -> bool {
@@ -3864,16 +3671,12 @@ mod transcript_paging_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..80)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_top(40, 10);
         assert!(transcript.max_scroll(40, 10) > 30);
@@ -3921,16 +3724,12 @@ mod transcript_paging_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..80)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_top(40, 10);
         let bottom_line = (0..10)
@@ -3961,16 +3760,12 @@ mod transcript_paging_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..80)
-                    .map(|line| format!("line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_top(40, 10);
         assert!(!transcript.viewport.follow_tail);
@@ -4083,16 +3878,12 @@ mod transcript_paging_tests {
             session_id: Some(7),
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 1,
-            document: pending_document(
-                (0..4)
-                    .map(|line| format!("short line {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            ),
-            confirmed: false,
-        });
+        transcript.merge_parts(user_parts(
+            (0..4)
+                .map(|line| format!("short line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ));
 
         transcript.scroll_to_top(40, 10);
         let total_lines = transcript.rendered(40).lines.len();
@@ -5646,10 +5437,9 @@ mod transcript_expansion_tests {
 
 #[cfg(test)]
 mod live_transcript_tests {
-    use super::super::{PendingUserMessage, TranscriptState};
+    use super::super::TranscriptState;
     use super::parts_fixtures;
     use agena_api::part::PartResource;
-    use agena_domain::{ComposerDocument, ComposerNode};
 
     /// A completed assistant run carrying a tall multi-line body, used to
     /// exercise viewport follow/recovery across full parts refreshes. Each
@@ -5709,7 +5499,7 @@ mod live_transcript_tests {
     }
 
     #[test]
-    fn user_input_materialization_replaces_the_optimistic_entry() {
+    fn user_input_refresh_does_not_duplicate_the_committed_entry() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             parts: vec![
@@ -5718,24 +5508,19 @@ mod live_transcript_tests {
             ],
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 45,
-            document: ComposerDocument(vec![ComposerNode::Text {
-                text: "one live message".to_owned(),
-            }]),
-            confirmed: true,
-        });
-        assert_eq!(transcript.pending_user_messages.len(), 1);
+        let submitted = vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(1, 2, "user", "one live message"),
+        ];
+        transcript.merge_parts(submitted.clone());
+        assert!(!transcript.merge_part(submitted[1].clone()));
 
-        // The durable projection now carries the user run with its text; the
-        // optimistic entry is reconciled away.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
             parts_fixtures::text(1, 2, "user", "one live message"),
             parts_fixtures::run(3, "assistant", "completed"),
             parts_fixtures::text(3, 4, "assistant", "a reply"),
         ]);
-        assert!(transcript.pending_user_messages.is_empty());
         let rendered = transcript
             .rendered(80)
             .lines
@@ -6227,7 +6012,7 @@ mod new_session_model_stack_tests {
             }]),
         };
 
-        app.handle_session_created(Some(draft), None, Some(model_stack), Ok(session_resource()));
+        app.handle_session_created(Some(draft), Some(model_stack), Ok(session_resource()));
 
         assert_eq!(
             app.run_options
@@ -6257,7 +6042,7 @@ mod new_session_model_stack_tests {
             None,
         );
 
-        app.handle_session_created(None, None, None, Ok(session_resource()));
+        app.handle_session_created(None, None, Ok(session_resource()));
 
         assert!(
             app.run_options.model.is_none(),

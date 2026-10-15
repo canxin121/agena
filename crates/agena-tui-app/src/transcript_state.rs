@@ -477,7 +477,6 @@ impl TranscriptState {
             messages: Vec::new(),
             parts: Vec::new(),
             reply_failures: BTreeMap::new(),
-            pending_user_messages: Vec::new(),
             refreshing: false,
             reconcile_loaded_parts: true,
             removed_part_ids: BTreeSet::new(),
@@ -535,7 +534,6 @@ impl TranscriptState {
         self.messages.clear();
         self.parts.clear();
         self.reply_failures.clear();
-        self.pending_user_messages.clear();
         self.refreshing = false;
         self.refresh_in_flight_since = None;
         self.state_loading = false;
@@ -764,7 +762,6 @@ impl TranscriptState {
                 .iter()
                 .zip(&parts)
                 .any(|(old, incoming)| old.part_id != incoming.part_id);
-        let pending_before = self.pending_user_messages.len();
         let failures_before = self.reply_failures.len();
         self.apply_parts_change(|current| *current = parts);
         self.tool_detail_pending
@@ -775,9 +772,9 @@ impl TranscriptState {
             .retain(|(id, _), _| self.parts.iter().any(|part| part.part_id == *id));
         // Only the entries whose parts actually changed need to re-render.
         // Anything that changes the part set or its order (a new or removed
-        // part, a reordered snapshot, a re-woven pending entry) cannot be
-        // attributed to a projected entry and keeps the full invalidation.
-        if restructured || pending_before != self.pending_user_messages.len() {
+        // part or a reordered snapshot) cannot be attributed to a projected
+        // entry and keeps the full invalidation.
+        if restructured {
             self.invalidate_render();
         } else if changed.is_empty() && failures_before == self.reply_failures.len() {
             // Nothing a render could observe changed.
@@ -808,20 +805,11 @@ impl TranscriptState {
         }
         preserve_loaded_tool_sections(previous, &mut part);
         let part_id = part.part_id;
-        let pending_before = self.pending_user_messages.len();
         self.apply_parts_change(move |parts| parts[index] = part);
-        // A streamed delta invalidates only the entry that owns it: every other
-        // reply keeps its cached rendered block, so the terminal repaints the
-        // changed entry instead of the whole session. Anything the projection
-        // cannot attribute (a re-woven pending entry, an unknown owner) falls
-        // back to the full invalidation.
-        if pending_before != self.pending_user_messages.len() {
-            self.invalidate_render();
-        } else {
-            match self.projected_entry_ids_for_parts(&BTreeSet::from([part_id])) {
-                Some(affected) => self.invalidate_entries(&affected),
-                None => self.invalidate_render(),
-            }
+        // Invalidate only the entry owning the changed durable part.
+        match self.projected_entry_ids_for_parts(&BTreeSet::from([part_id])) {
+            Some(affected) => self.invalidate_entries(&affected),
+            None => self.invalidate_render(),
         }
         true
     }
@@ -1242,41 +1230,14 @@ impl TranscriptState {
         true
     }
 
-    /// Apply one canonical transcript mutation and reconcile optimistic user
-    /// entries against user inputs that became visible because of it.
-    ///
-    /// A run can arrive first as an empty execution envelope and acquire its
-    /// text part in a later durable projection. Visibility is the actual
-    /// transcript boundary: a user run marker crossing from no-text to
-    /// text-carrying replaces exactly one pending user entry, while
-    /// permission continuations with empty input replace none.
+    /// Apply a canonical transcript mutation. User entries come exclusively
+    /// from persisted parts, just like assistant entries.
     fn apply_parts_change(&mut self, change: impl FnOnce(&mut Vec<agena_api::part::PartResource>)) {
-        let visible_before = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
-
         change(&mut self.parts);
         self.record_reply_failures();
-        // A reply the user revealed keeps showing the rows it covers: the window
-        // follows those rows while the reply streams instead of sliding back to
-        // the recent-part budget and hiding them again. Entries the user
-        // collapsed explicitly are skipped, so an explicit collapse still wins.
+        // Keep explicitly revealed rows visible as the reply grows; an
+        // explicitly collapsed entry still keeps its bounded part window.
         self.reveal_loaded_fold_activities();
-
-        let visible_after = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
-        let newly_visible = visible_after.saturating_sub(visible_before);
-        let reconciled = newly_visible.min(self.pending_user_messages.len());
-        self.pending_user_messages.drain(..reconciled);
-    }
-
-    pub(crate) fn add_pending_user_message(&mut self, message: PendingUserMessage) {
-        self.pending_user_messages.push(message);
-        self.viewport.reduce(TranscriptAction::FollowTail);
-        self.invalidate_render();
-    }
-
-    pub(crate) fn remove_pending_user_message(&mut self, id: u64) {
-        self.pending_user_messages
-            .retain(|message| message.id != id);
-        self.invalidate_render();
     }
 
     /// Remove a withdrawn run from the local transcript immediately. The live
@@ -1298,26 +1259,6 @@ impl TranscriptState {
             .retain(|id| remaining.contains(id));
         self.record_reply_failures();
         self.invalidate_render();
-    }
-
-    pub(crate) fn remove_pending_user_messages_for_document(
-        &mut self,
-        document: &agena_domain::ComposerDocument,
-    ) {
-        self.pending_user_messages
-            .retain(|message| &message.document != document);
-        self.invalidate_render();
-    }
-
-    pub(crate) fn confirm_pending_user_message(&mut self, id: u64) {
-        if let Some(message) = self
-            .pending_user_messages
-            .iter_mut()
-            .find(|message| message.id == id)
-        {
-            message.confirmed = true;
-            self.invalidate_render();
-        }
     }
 
     /// Remember the latest structured failure observed per run marker so a
@@ -2046,22 +1987,8 @@ impl TranscriptState {
                 .collect();
             self.projected_entries = Some(entries);
         }
-        let pending_entries;
-        let entries = if self.pending_user_messages.is_empty() {
-            self.projected_entries.as_ref().expect("projected entries")
-        } else {
-            pending_entries = weave_pending_user_entries(
-                &self.parts,
-                self.projected_entries
-                    .as_ref()
-                    .expect("projected entries")
-                    .clone(),
-                self.pending_user_messages.as_slice(),
-            );
-            &pending_entries
-        };
-        if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
-        {
+        let entries = self.projected_entries.as_ref().expect("projected entries");
+        if entries.is_empty() && self.session_id.is_some() {
             lines.push(std::sync::Arc::new(
                 RenderedLine::dim(ui_text::t(&self.i18n, "transcript-empty-session"))
                     .with_copy_projection(String::new(), 0),
@@ -4305,58 +4232,6 @@ impl TranscriptState {
     }
 }
 
-/// A run is an "empty active reply envelope" when it is an assistant run whose
-/// marker is non-terminal and whose projection carries no body yet. Optimistic
-/// user messages are woven just ahead of such envelopes so the just-sent input
-/// is visible while the assistant streams.
-fn weave_pending_user_entries<'a>(
-    parts: &[agena_api::part::PartResource],
-    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
-    pending_messages: &'a [PendingUserMessage],
-) -> Vec<agena_tui_transcript::TranscriptEntry<'a>> {
-    let empty_active_replies = empty_active_run_ids(parts);
-    let mut pending = pending_messages.iter();
-    let mut entries = Vec::with_capacity(
-        canonical_entries
-            .len()
-            .saturating_add(pending_messages.len()),
-    );
-    for entry in canonical_entries {
-        if matches!(
-            entry.id,
-            agena_tui_transcript::TranscriptEntryId::StoredMessage(run_id)
-                if empty_active_replies.contains(&run_id)
-        ) && let Some(message) = pending.next()
-        {
-            entries.push(agena_tui_transcript::pending_user_entry(
-                message.id,
-                message.confirmed,
-                &message.document,
-            ));
-        }
-        entries.push(entry);
-    }
-    entries.extend(pending.map(|message| {
-        agena_tui_transcript::pending_user_entry(message.id, message.confirmed, &message.document)
-    }));
-    entries
-}
-
-fn empty_active_run_ids(parts: &[agena_api::part::PartResource]) -> BTreeSet<i64> {
-    let text_run_ids = parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .filter_map(|part| part.run_id)
-        .collect::<BTreeSet<_>>();
-    parts
-        .iter()
-        .filter(|part| part.kind == "run" && part.role == "assistant")
-        .filter(|marker| !text_run_ids.contains(&marker.part_id))
-        .filter(|marker| !agena_tui_transcript::part_state_is_terminal(&marker.state))
-        .map(|marker| marker.part_id)
-        .collect()
-}
-
 fn inject_remembered_failures(
     entries: &mut [agena_tui_transcript::TranscriptEntry<'static>],
     reply_failures: &BTreeMap<i64, agena_failure::UserProblem>,
@@ -4822,8 +4697,8 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
 
 use super::TranscriptAction;
 use crate::{
-    BTreeMap, BTreeSet, Duration, I18n, PendingUserMessage, Range, RenderedLine,
-    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    BTreeMap, BTreeSet, Duration, I18n, Range, RenderedLine, RenderedTranscript,
+    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptContentId, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,

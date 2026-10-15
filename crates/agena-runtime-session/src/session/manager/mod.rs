@@ -701,6 +701,7 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             idempotency_key,
         };
         let session_id = request.run.session_id;
+        let (submitted_tx, submitted_rx) = tokio::sync::oneshot::channel();
         let outcome = SessionManager::start_registered_with_restore(
             self,
             session_id,
@@ -709,9 +710,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             "user execution",
             Some(restore_document),
             user_idempotency_key,
+            Some(submitted_rx),
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_run_inner(request, control, steer_rx, None)
+                    .submit_user_run_inner(request, control, steer_rx, None, Some(submitted_tx))
                     .await
             },
         )
@@ -1219,10 +1221,9 @@ impl SessionManager {
         })?
     }
 
-    /// Accept an execution and return its stable identity after
-    /// `ExecutionStarted` is durable. The lifecycle owner continues in the
-    /// background; provider/tool/cancellation outcomes are reported by
-    /// terminal events and never retroactively fail the accepted command.
+    /// Accept an execution and return its stable identity. The lifecycle owner
+    /// continues in the background; provider/tool/cancellation outcomes are
+    /// reported by terminal events and never retroactively fail the accepted command.
     async fn start_registered<T, F, Fut>(
         &self,
         session_id: i64,
@@ -1245,6 +1246,7 @@ impl SessionManager {
             task_name,
             None,
             None,
+            None,
             operation,
         )
         .await
@@ -1258,6 +1260,7 @@ impl SessionManager {
         task_name: &'static str,
         restore_document: Option<agena_domain::ComposerDocument>,
         user_idempotency_key: Option<String>,
+        submission: Option<tokio::sync::oneshot::Receiver<()>>,
         operation: F,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
     where
@@ -1300,11 +1303,12 @@ impl SessionManager {
             permit.control().reply_id(),
         );
         let manager = self.background_handle();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            if let Err(error) = manager
+            let result = manager
                 .drive_registered(session_id, task_name, permit, steer_rx, operation)
-                .await
-            {
+                .await;
+            if let Err(error) = &result {
                 let failure = error.failure();
                 tracing::error!(
                     session_id,
@@ -1312,10 +1316,30 @@ impl SessionManager {
                     failure_id = %failure.id,
                     diagnostic = %error,
                     public_message = %failure.user.fallback,
-                    "accepted execution finished with a failure"
+                    "session execution finished with a failure"
                 );
             }
+            let _ = finished_tx.send(result.map(|_| ()));
         });
+        if let Some(mut submission) = submission {
+            // A user send is acknowledged only after its complete part batch
+            // is committed and published. Keep the owner detached from the
+            // HTTP/RPC waiter so disconnecting cannot interrupt a commit.
+            // Preparation failures must fail the command and restore its draft;
+            // failures after admission belong to the background execution.
+            tokio::select! {
+                biased;
+                Ok(()) = &mut submission => {}
+                finished = finished_rx => {
+                    finished.map_err(|error| AppError::Internal(format!(
+                        "{task_name} lifecycle owner stopped before submission: {error}"
+                    )))??;
+                    return Err(AppError::Internal(format!(
+                        "{task_name} completed without committing its user message"
+                    )));
+                }
+            }
+        }
         Ok(outcome)
     }
 

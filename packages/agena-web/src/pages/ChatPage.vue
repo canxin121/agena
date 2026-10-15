@@ -21,7 +21,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
 
-import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
 import { getComposerInput, type ComposerExpose, type ComposerInput, type ComposerSegment } from './chat/composerInput'
 import { attachmentPlaceholder } from './chat/attachmentPlaceholder'
@@ -176,7 +175,6 @@ const attachments = useChatAttachments({
       files.flatMap((file) => (file.url ? [file.url] : [])),
     ),
     ...(failedDraftSlot.peek()?.files.flatMap((file) => (file.url ? [file.url] : [])) ?? []),
-    ...(optimisticUser.value?.files.flatMap((file) => (file.url ? [file.url] : [])) ?? []),
     ...(ui.isImageViewerOpen ? ui.imageViewerItems.map((item) => item.src) : []),
   ],
 })
@@ -1009,26 +1007,7 @@ const {
   handleCompactSession,
 } = sessionActions
 
-const stream = useMessageStreaming({
-  selectedSessionId: computed(() => chat.selectedSessionId || null),
-  messages: computed(() => chat.messages),
-})
-
-const {
-  awaitingAssistant,
-  pendingSendAt,
-  showOptimisticUser,
-  resetForSessionSwitch,
-  beginOptimisticSend,
-  markOptimisticSent,
-  clearOnSendFailure,
-  clearOnCancellation,
-} = stream
-
-// vue-tsc's template narrowing can be finicky around `Ref<T | null>` even when
-// the runtime checks are correct. Keep this relaxed for now.
-const optimisticUser = stream.optimisticUser
-watch([optimisticUser, failedDraftVersion, () => ui.isImageViewerOpen], attachments.releaseUnusedAttachmentUrls, {
+watch([failedDraftVersion, () => ui.isImageViewerOpen], attachments.releaseUnusedAttachmentUrls, {
   flush: 'post',
 })
 
@@ -1075,8 +1054,6 @@ function restoredComposerFiles(document: JsonValue): AttachedFile[] {
 }
 
 function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
-  const optimistic = optimisticUser.value
-  clearOnCancellation()
   const document = outcome.restored_user_message
   if (document == null) return
 
@@ -1085,20 +1062,8 @@ function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
   // the user's newer local draft takes precedence in the editor.
   if (String(draft.value || '').length > 0 || attachedFiles.value.length > 0) return
 
-  const text = optimistic?.text ?? restoredComposerText(document)
-  const files =
-    optimistic?.files?.map((file, index) => ({
-      id: file.id || `restored-${Date.now()}-${index}`,
-      filename: file.filename,
-      size: typeof file.size === 'number' ? file.size : 0,
-      mime: file.mime,
-      ...(file.url ? { url: file.url } : {}),
-      ...(file.serverPath ? { serverPath: file.serverPath } : {}),
-      delivery: file.delivery || 'reference',
-      state: 'ready' as const,
-    })) ?? restoredComposerFiles(document)
-  draft.value = text
-  attachedFiles.value = files
+  draft.value = restoredComposerText(document)
+  attachedFiles.value = restoredComposerFiles(document)
 }
 
 async function copyToClipboard(text: string | Promise<string>) {
@@ -1220,8 +1185,6 @@ const runUi = useChatRunUi({
   attachedFiles,
   pendingAttachments,
   sending,
-  awaitingAssistant,
-  pendingSendAt,
   renderBlocks,
   onSend: send,
   onCancellation: restoreCancelledComposer,
@@ -1424,7 +1387,6 @@ watch(
     activityExpandedByBlockKey.value = {}
     activityCollapseSignal.value += 1
     navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
-    resetForSessionSwitch()
     revertBusyMessageId.value = ''
     editorFullscreen.value = false
     editorClosing.value = false
@@ -2047,8 +2009,7 @@ async function sendReady(sid: string | null) {
   }
 
   // The editor document is what reaches the provider, so derive the submitted
-  // body from it and keep the optimistic preview identical to the acknowledged
-  // message: one text part with a placeholder per inline attachment, plus the
+  // body from it: one text part with a placeholder per inline attachment, plus the
   // attachments as their own parts.
   const composed = composeOutgoingText(
     outgoingSegments.some((part) => part.type === 'text' && part.text.trim()) || !text
@@ -2057,28 +2018,6 @@ async function sendReady(sid: string | null) {
     filesSnapshot,
     String(t('chat.messageItem.fileFallback')).trim(),
   )
-
-  // The optimistic rows must be numbered like the submitted text, so they
-  // follow the same composer order instead of the staging order of the files.
-  const optimisticFiles = composed.attachmentIds
-    .map((id) => filesSnapshot.find((file) => file.id === id))
-    .filter((file): file is AttachedFile => Boolean(file))
-
-  beginOptimisticSend({
-    sessionId: sid,
-    text: composed.typedText ? composed.text : '',
-    fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
-    attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
-    files: optimisticFiles.map((f) => ({
-      id: f.id,
-      filename: f.filename,
-      size: f.size,
-      mime: f.mime,
-      url: f.url,
-      serverPath: f.serverPath,
-      delivery: f.delivery,
-    })),
-  })
 
   // Remove only the submitted draft and files. A newer edit or attachment
   // staged while this send was preparing belongs to the next message.
@@ -2133,20 +2072,13 @@ async function sendReady(sid: string | null) {
       )
     }
 
-    const state = await chat.sendMessage(sid, { ...runCfg, parts })
+    await chat.sendMessage(sid, { ...runCfg, parts })
 
     // Match the TUI: only a successfully submitted plain-text draft enters
     // global prompt history. Messages containing resources/attachments are
     // intentionally excluded because recalling them would silently lose data.
     if (filesSnapshot.length === 0) recordPromptHistory(text)
-
-    // Mark the optimistic message as sent (generation may still be running).
-    // Acknowledgement is the accepted user run id, not an id/text scan.
-    markOptimisticSent(sid, chatApi.acceptedUserRunId(state), chatApi.acceptedAssistantReplyId(state))
   } catch (e) {
-    // Keep UI consistent if send fails.
-    clearOnSendFailure()
-
     // Restore composer content on failure.
     if (
       chat.selectedSessionId === sid &&
@@ -2404,9 +2336,6 @@ const viewCtx = {
   isStreamingAssistantMessage,
   showAssistantPlaceholder,
   currentPhase,
-  awaitingAssistant,
-  optimisticUser,
-  showOptimisticUser,
   handleForkFromMessage,
   handleRevertFromMessage,
   handleCopyMessage,

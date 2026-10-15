@@ -485,6 +485,7 @@ impl SessionManager {
         control: Arc<ExecutionControl>,
         steer_rx: mpsc::Receiver<Vec<TypedContent>>,
         usage_budget: Option<super::SubtaskUsageBudget>,
+        submitted: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
 
@@ -600,6 +601,12 @@ impl SessionManager {
             )
             .await?;
         control.set_user_run(submit_outcome.run_id, submit_outcome.created);
+        if let Some(submitted) = submitted {
+            // The store has committed every user part and published the
+            // corresponding changes. Clients can now read the real message,
+            // independently of hook recording and the first provider response.
+            let _ = submitted.send(());
+        }
         let mut projected = session.parts().to_vec();
         projected.extend(submit_outcome.parts);
         session.install_projected_parts(projected);
@@ -704,7 +711,7 @@ impl SessionManager {
             "subtask execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_run_inner(request, control, steer_rx, usage_budget)
+                    .submit_user_run_inner(request, control, steer_rx, usage_budget, None)
                     .await
             },
         )

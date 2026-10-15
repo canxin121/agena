@@ -6,7 +6,7 @@ type JsonRecord = Record<string, JsonValue>
  * Canonical attachment display-label vocabulary.
  *
  * The durable transcript projection, the presentation projection, the
- * optimistic composer rows, and message actions all derive attachment labels
+ * composer attachments, and message actions all derive attachment labels
  * through this helper so one attachment has one label everywhere.
  */
 export type AttachmentLabelFields = {

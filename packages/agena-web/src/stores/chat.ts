@@ -4,6 +4,7 @@ import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
+import { sessionWasDeleted } from './chat/sessionMutationSync'
 import { TranscriptCacheIndex } from './chat/transcriptCache'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
 import {
@@ -1708,8 +1709,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     const document = buildDocument(opts)
     if (document.length === 0) return null
+    const generation = transcriptCacheGeneration
     clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
+    if (generation !== transcriptCacheGeneration || sessionWasDeleted(sid)) return state
+    // A successful send now includes committed user parts. Render those exact
+    // identities immediately; SSE and trailing reads merge into the same rows.
+    // Preserve newer live revisions and any older pages the user has loaded.
+    if (state?.parts?.length) {
+      const entries = chatApi.entriesFromParts(sid, state.parts)
+      setSessionMessages(sid, mergeMessageLists(ensureSessionMessages(sid), entries))
+    }
     if (state?.session) {
       const session = {
         ...state.session,

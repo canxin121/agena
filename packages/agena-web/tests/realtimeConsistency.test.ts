@@ -204,22 +204,48 @@ test('removed memberships and deleted sessions cannot be resurrected by pending 
     assert.equal(chat.getSessionById('7'), null)
   }))
 
-test('a send acknowledgement forces a fresh transcript even when a pre-send read is running and SSE is lost', async () =>
+test('a committed send displays immediately despite a stale read, then merges repeated live delivery once', async () =>
   withChat(async (chat) => {
     const pending = deferred<Response>()
+    const accepted = [
+      { ...marker(), role: 'user', state: 'completed' },
+      { ...part(2, 'accepted'), role: 'user', state: 'completed' },
+      {
+        ...part(1, '', 3),
+        kind: 'file_ref',
+        role: 'user',
+        state: 'completed',
+        content: { path: 'uploads/image.png', name: 'image.png', mime: 'image/png' },
+      },
+    ]
     let reads = 0
     globalThis.fetch = (async (url) => {
-      if (String(url).includes('/runs'))
-        return ++reads === 1 ? pending.promise : Response.json(page([marker(), part(2, 'accepted')]))
+      if (String(url).includes('/runs')) return ++reads === 1 ? pending.promise : Response.json(page(accepted))
+      if (String(url).endsWith('/messages')) return Response.json({ ...state(), parts: accepted })
       return Response.json(state())
     }) as typeof fetch
     const reading = chat.refreshMessages('7')
     await chat.sendMessage('7', { text: 'hello' })
+    assert.equal(chat.getMessagesForSession('7')[0]?.parts[0]?.text, 'accepted')
+    assert.equal(
+      chat.getMessagesForSession('7')[0]?.parts.length,
+      2,
+      'text and attachment are visible before any reply',
+    )
     await pause(20)
     assert.equal(reads, 1)
     pending.resolve(Response.json(page([])))
     await reading
-    await until(() => chat.getMessagesForSession('7')[0]?.parts[0]?.text === 'accepted')
+    assert.equal(chat.getMessagesForSession('7')[0]?.parts[0]?.text, 'accepted', 'a stale read must not erase the send')
+    await until(() => reads === 2)
+    for (const entry of accepted) {
+      chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part: entry } })
+    }
+    assert.equal(chat.getMessagesForSession('7').length, 1)
+    assert.deepEqual(
+      chat.getMessagesForSession('7')[0]?.parts.map((part) => part.id),
+      ['2', '3'],
+    )
     assert.equal(reads, 2)
   }))
 

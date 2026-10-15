@@ -194,7 +194,6 @@ pub(crate) struct TranscriptState {
     /// the last failure so the error Activity remains visible. Keyed by the
     /// run marker's `part_id`.
     pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
-    pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) refreshing: bool,
     pub(crate) reconcile_loaded_parts: bool,
     pub(crate) removed_part_ids: BTreeSet<i64>,
@@ -292,13 +291,6 @@ pub(crate) struct TranscriptCache {
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
     pub(crate) activity_summary_collapsed_entries:
         BTreeSet<agena_tui_transcript::TranscriptEntryId>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct PendingUserMessage {
-    pub(crate) id: u64,
-    pub(crate) document: agena_domain::ComposerDocument,
-    pub(crate) confirmed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -14,7 +14,7 @@ import {
   isRunInFlight,
   normalizeRunState,
 } from '../../lib/chatRunState'
-import { attachmentLabel, attachmentLabelFromRecord, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
+import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
 import type { JsonValue } from '@/types/json'
 
 type JsonRecord = Record<string, JsonValue>
@@ -208,91 +208,6 @@ function attachmentLabels(part: MessagePartLike): string[] {
   })
   if (own && !labels.includes(own)) labels.unshift(own)
   return labels
-}
-
-/**
- * Local parts for a pending user turn. They use the same projection as the
- * persisted transcript, so a row never changes shape when the server
- * acknowledges the user run it came from.
- */
-export function optimisticUserParts(args: {
-  key: string
-  text: string
-  files: Array<{
-    id?: string
-    filename: string
-    size?: number
-    mime: string
-    url?: string
-    serverPath?: string
-    delivery?: 'reference' | 'model_input'
-  }>
-  status: 'sending' | 'sent'
-  fileFallbackLabel: string
-  attachmentTitle?: string
-}): TranscriptDisplayPart[] {
-  const status = args.status === 'sending' ? 'in_progress' : 'completed'
-  const parts: TranscriptDisplayPart[] = []
-  if (args.text.trim()) {
-    parts.push({
-      key: `${args.key}:text`,
-      id: `${args.key}:text`,
-      kind: 'text',
-      status,
-      role: 'user',
-      source: {
-        id: `${args.key}:text`,
-        type: 'text',
-        partState: status,
-        agenaKind: 'text',
-        agenaRole: 'user',
-        text: args.text,
-        agenaContent: { text: args.text },
-      },
-      title: '',
-      summary: '',
-      copyText: args.text,
-      toggleable: false,
-      defaultExpanded: true,
-    })
-  }
-  for (const [index, file] of args.files.entries()) {
-    const id = `${args.key}:file:${index}`
-    const label =
-      attachmentLabel({ filename: file.filename, path: file.serverPath }) ||
-      attachmentLabelFromUrl(file.url) ||
-      args.fileFallbackLabel
-    parts.push({
-      key: id,
-      id,
-      kind: 'resource',
-      status,
-      role: 'user',
-      source: {
-        id,
-        type: 'file',
-        partState: status,
-        agenaKind: 'file_ref',
-        agenaRole: 'user',
-        ...(file.filename ? { filename: file.filename } : {}),
-        ...(file.mime ? { mime: file.mime } : {}),
-        ...(file.url ? { url: file.url } : {}),
-        ...(file.serverPath ? { serverPath: file.serverPath } : {}),
-        agenaContent: {
-          ...(file.filename ? { name: file.filename } : {}),
-          ...(file.mime ? { mime: file.mime } : {}),
-          ...(file.url ? { url: file.url } : {}),
-          ...(file.serverPath ? { path: file.serverPath } : {}),
-        },
-      },
-      title: text(args.attachmentTitle) || 'Attachment',
-      summary: label,
-      copyText: label,
-      toggleable: true,
-      defaultExpanded: false,
-    })
-  }
-  return parts
 }
 
 /**
@@ -517,7 +432,7 @@ function displayFields(
   return { title: durablePartKind(part), summary: body, copyText: body }
 }
 
-/// Project a client-local element (optimistic row, in-flight placeholder)
+/// Project a client-local status or pending interaction
 /// through the same part projection the durable transcript uses, so a local
 /// element can never drift from the server-rendered one.
 export function projectLocalPart(

@@ -85,10 +85,7 @@ const {
   sessionEnded,
   retryStatus,
   currentPhase,
-  awaitingAssistant,
   showAssistantPlaceholder,
-  optimisticUser,
-  showOptimisticUser,
 
   // Activity.
   activityCollapseSignal,
@@ -488,13 +485,10 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :retry-status="retryStatus"
                   :retry-countdown="retryCountdownLabel"
                   :current-phase="currentPhase"
-                  :awaiting-assistant="awaitingAssistant"
                   :activity-collapse-signal="activityCollapseSignal"
                   :is-part-expanded="transcriptPartExpanded"
                   :is-node-selected="isTranscriptNodeSelected"
                   :is-node-search-match="isTranscriptNodeSearchMatch"
-                  :optimistic-user="optimisticUser"
-                  :show-optimistic-user="showOptimisticUser"
                   :pending-attention="chat.selectedAttention"
                   :open-mobile-sidebar="openMobileSidebar"
                   @fork="handleForkFromMessage"

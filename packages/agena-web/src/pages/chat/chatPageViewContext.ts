@@ -2,7 +2,6 @@ import type { ComputedRef, Ref, Component } from 'vue'
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
-import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttachments'
 import type { ComposerAttachment } from '@/pages/chat/attachmentIngestion'
 import type { AttentionEvent, MessageEntry, MessageFold } from '@/types/chat'
@@ -109,10 +108,7 @@ export type ChatPageViewContext = {
   sessionEnded: MaybeRef<boolean>
   retryStatus: MaybeRef<RetryStatusLike>
   currentPhase: MaybeRef<string>
-  awaitingAssistant: MaybeRef<boolean>
   showAssistantPlaceholder: MaybeRef<boolean>
-  optimisticUser: MaybeRef<OptimisticUserMessage | null>
-  showOptimisticUser: MaybeRef<boolean>
 
   activityInitiallyExpandedForPart: (part: TranscriptDisplayPart) => boolean
   activityCollapseSignal: MaybeRef<number>

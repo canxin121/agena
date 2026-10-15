@@ -3,7 +3,6 @@ import { describe, expect, test } from 'bun:test'
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
 import {
   durablePartKind,
-  optimisticUserParts,
   projectTranscriptBlocks,
   userInputOrder,
 } from '../src/pages/chat/transcriptProjection'
@@ -124,19 +123,7 @@ describe('TUI-parity transcript projection', () => {
     expect(runtimeTitled?.title).toBe('Shared file')
   })
 
-  test('the optimistic attachment row keeps its shape when the send is acknowledged', () => {
-    const optimistic = optimisticUserParts({
-      key: 'optimistic-user-1',
-      text: 'see attached',
-      files: [{ filename: 'photo.png', mime: 'image/png', serverPath: 'uploads/photo.png' }],
-      status: 'sending',
-      fileFallbackLabel: 'file',
-      attachmentTitle: '附件',
-    })
-    const optimisticFile = optimistic.find((entry) => entry.kind === 'resource')
-    expect(optimisticFile?.title).toBe('附件')
-    expect(optimisticFile?.defaultExpanded).toBe(false)
-
+  test('a committed attachment is localized and collapsed before the assistant replies', () => {
     const durable = projectTranscriptBlocks(
       [
         message('9', 'user', [
@@ -157,10 +144,7 @@ describe('TUI-parity transcript projection', () => {
     const durableFile = (durable[0]?.kind === 'message' ? durable[0].displayParts : []).find(
       (entry) => entry.kind === 'resource',
     )
-    expect([durableFile?.title, durableFile?.defaultExpanded]).toEqual([
-      optimisticFile?.title,
-      optimisticFile?.defaultExpanded,
-    ])
+    expect([durableFile?.title, durableFile?.defaultExpanded]).toEqual(['附件', false])
   })
 
   test('keeps parts inside their run and promotes only the final assistant text to Answer', () => {

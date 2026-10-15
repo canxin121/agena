@@ -68,10 +68,9 @@ impl App {
             }
             AppMessage::SessionCreated {
                 submit_draft,
-                pending_message_id,
                 model_stack,
                 result,
-            } => self.handle_session_created(submit_draft, pending_message_id, model_stack, result),
+            } => self.handle_session_created(submit_draft, model_stack, result),
             AppMessage::SessionStateLoaded {
                 session_id,
                 requested_at,
@@ -131,10 +130,9 @@ impl App {
             }
             AppMessage::SessionMessageSubmitted {
                 session_id,
-                pending_message_id,
                 draft,
                 result,
-            } => self.handle_session_turn_submitted(session_id, pending_message_id, draft, result),
+            } => self.handle_session_turn_submitted(session_id, draft, result),
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, RunOperation::Continue, result)
             }
@@ -368,7 +366,6 @@ impl App {
     pub(crate) fn handle_session_created(
         &mut self,
         submit_draft: Option<ComposerDraft>,
-        pending_message_id: Option<u64>,
         model_stack: Option<RunOptionsState>,
         result: UiResult<SessionResource>,
     ) {
@@ -402,23 +399,7 @@ impl App {
                 self.focus = Focus::Composer;
 
                 if let Some(draft) = submit_draft {
-                    let pending_message_id = match pending_message_id {
-                        Some(pending_message_id) => {
-                            self.transcript
-                                .add_pending_user_message(PendingUserMessage {
-                                    id: pending_message_id,
-                                    document: draft.document.clone(),
-                                    confirmed: false,
-                                });
-                            pending_message_id
-                        }
-                        None => self.begin_pending_user_message(&draft),
-                    };
-                    self.request_submit_message_with_pending(
-                        session.id,
-                        draft,
-                        Some(pending_message_id),
-                    );
+                    self.request_submit_message(session.id, draft);
                 } else {
                     self.flash_success(self.i18n.text_args(
                         "flash-created-session",
@@ -427,10 +408,6 @@ impl App {
                 }
             }
             Err(error) => {
-                if let Some(pending_message_id) = pending_message_id {
-                    self.transcript
-                        .remove_pending_user_message(pending_message_id);
-                }
                 if let Some(draft) =
                     submit_draft.or_else(|| self.session_composer.pending_restore_draft.take())
                 {
@@ -729,7 +706,6 @@ impl App {
     pub(crate) fn handle_session_turn_submitted(
         &mut self,
         session_id: i64,
-        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -739,8 +715,6 @@ impl App {
         );
         match result {
             Ok(execution) => {
-                self.transcript
-                    .confirm_pending_user_message(pending_message_id);
                 self.record_prompt_history_from_draft(&draft);
                 self.session_composer.pending_restore_draft = None;
                 let slot = DraftSlot::Session(session_id);
@@ -768,8 +742,6 @@ impl App {
                 self.try_send_pending();
             }
             Err(error) => {
-                self.transcript
-                    .remove_pending_user_message(pending_message_id);
                 self.session_composer.pending_restore_draft = None;
                 if self.transcript.session_id == Some(session_id) {
                     self.restore_failed_composer_draft(draft);
@@ -811,7 +783,7 @@ impl App {
             // Submit the captured document directly. The editor may already
             // contain the next draft, and restoring into a nonempty editor would
             // discard this captured document before submission.
-            self.request_submit_message_with_pending(session_id, draft, None);
+            self.request_submit_message(session_id, draft);
         }
     }
 
@@ -831,8 +803,6 @@ impl App {
                     self.transcript.remove_run_parts(run_id);
                 }
                 if let Some(document) = outcome.restored_user_message {
-                    self.transcript
-                        .remove_pending_user_messages_for_document(&document);
                     let draft = ComposerDraft { document };
                     // `restore_composer_draft` is intentionally non-clobbering:
                     // if the user typed while the stop request was in flight,
@@ -983,8 +953,8 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, Route, RunActivityTarget,
-    RunOperation, RunOptionsState, SessionExecutionResource, SessionLoadScope, SessionRefresh,
-    SessionResource, UiResult, execution_update_is_stale, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, Route, RunActivityTarget, RunOperation,
+    RunOptionsState, SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource,
+    UiResult, execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;

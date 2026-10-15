@@ -42,7 +42,6 @@ use agena_runtime_contracts::part_content::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TranscriptEntryId {
     TurnInput(TurnId),
-    PendingTurn(u64),
     /// One user-visible canonical assistant reply.
     AssistantReply(AssistantReplyId),
     SessionActivity(ActivityId),
@@ -55,13 +54,6 @@ pub enum TranscriptContentId {
     /// Presentation identity for one editor-like user document. Its nested
     /// nodes retain the canonical segment and Activity identities.
     TurnDocument(TurnId),
-    PendingDocument(u64),
-    /// Stable identity for one optimistic composer node while the canonical
-    /// user_send parts are still being committed.
-    PendingPart {
-        pending_id: u64,
-        index: u32,
-    },
     Text(TextSegmentId),
     Activity(ActivityId),
     /// Stable presentation identity for the terminal outcome of a reply.

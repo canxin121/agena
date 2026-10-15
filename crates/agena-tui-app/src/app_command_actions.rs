@@ -170,9 +170,7 @@ impl App {
                         ]),
                     };
                     match session_id {
-                        Some(session_id) => {
-                            self.request_submit_message_with_pending(session_id, draft, None)
-                        }
+                        Some(session_id) => self.request_submit_message(session_id, draft),
                         None => self.create_session(Some(draft)),
                     }
                 }
@@ -311,7 +309,7 @@ impl App {
         self.apply_transcript_execution(state);
         self.focus = Focus::Composer;
         if let Some(draft) = draft {
-            self.request_submit_message_with_pending(id, draft, None);
+            self.request_submit_message(id, draft);
         }
     }
 

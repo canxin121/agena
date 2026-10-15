@@ -155,8 +155,6 @@ export function useChatRunUi(opts: {
   pendingAttachments: Ref<PendingAttachment[]>
   sending: Ref<boolean>
 
-  awaitingAssistant: Ref<boolean>
-  pendingSendAt: Ref<number | null>
   renderBlocks: ComputedRef<RenderBlock[]>
 
   onSend: () => Promise<void>
@@ -175,8 +173,6 @@ export function useChatRunUi(opts: {
     attachedFiles,
     pendingAttachments,
     sending,
-    awaitingAssistant,
-    pendingSendAt,
     renderBlocks,
     onSend,
     onCancellation,
@@ -196,7 +192,7 @@ export function useChatRunUi(opts: {
     const sid = String(chat.selectedSessionId || '').trim()
     if (!sid) return 'idle'
 
-    // The tagged server state is authoritative. Local submit/optimistic
+    // The tagged server state is authoritative. Local submit
     // flags describe request delivery only and must not manufacture a running
     // runtime phase before the server reports one.
     if (canonicalRunActive.value || compacting?.value) return 'busy'
@@ -246,9 +242,6 @@ export function useChatRunUi(opts: {
     () => stateKind.value,
     (ty, prev) => {
       if (ty !== 'running' && ty !== 'creating') {
-        awaitingAssistant.value = false
-        pendingSendAt.value = null
-
         // Auto-collapse activity once the assistant finishes, so the chat stays readable.
         if (prev === 'running' || prev === 'creating') {
           if (activityAutoCollapseOnIdle.value) collapseAllActivities()
@@ -334,16 +327,12 @@ export function useChatRunUi(opts: {
     const sid = chat.selectedSessionId
     if (!sid) return false
 
-    const cutoff = pendingSendAt.value ? pendingSendAt.value - 500 : null
-
     const list = Array.isArray(chat.messages) ? chat.messages : []
     for (let i = list.length - 1; i >= 0; i -= 1) {
       const m = list[i]
       const info = m?.info
       if (!info) continue
       if (!isAssistantMessageStreaming(info)) continue
-      const created = typeof info.time?.created === 'number' ? info.time.created : 0
-      if (cutoff != null && created && created < cutoff) continue
       if (textFromMessageParts(Array.isArray(m.parts) ? m.parts : [])) return true
     }
     return false

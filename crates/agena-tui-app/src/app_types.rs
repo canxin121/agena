@@ -499,7 +499,6 @@ pub struct App {
     pub(super) prompt_history_reported_error: Option<String>,
     pub(super) pending_prompt_history_error: Option<UiFailure>,
     pub(super) run_activity: RunActivityTracker,
-    pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) surface_layout: crate::SurfaceLayout,
     pub(super) pointer_targets: agena_tui_components::pointer::PointerMap,
@@ -661,7 +660,6 @@ pub(super) enum AppMessage {
     },
     SessionCreated {
         submit_draft: Option<ComposerDraft>,
-        pending_message_id: Option<u64>,
         result: UiResult<SessionResource>,
         /// The run-options model stack in effect when the session was
         /// created without an open session. `open_session` clears the stack
@@ -702,7 +700,6 @@ pub(super) enum AppMessage {
     },
     SessionMessageSubmitted {
         session_id: i64,
-        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     },

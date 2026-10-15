@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import { RiCheckLine, RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
+import { RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
@@ -17,9 +17,8 @@ import type {
 } from '@/components/chat/messageList.types'
 import type { AttentionEvent, MessageFold } from '@/types/chat'
 import { formatTimeHMS } from '@/i18n/intl'
-import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import { partInteractionRequestIds, pendingInteractionPartSource } from '@/pages/chat/transcriptPartPresentation'
-import { optimisticUserParts, projectLocalPart } from '@/pages/chat/transcriptProjection'
+import { projectLocalPart } from '@/pages/chat/transcriptProjection'
 import type { ActivityVisibility } from '@/pages/chat/transcriptActivityFolding'
 
 const props = defineProps<{
@@ -45,13 +44,10 @@ const props = defineProps<{
   retryStatus: RetryStatusLike
   retryCountdown?: string
   currentPhase: string
-  awaitingAssistant: boolean
   activityCollapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
-  optimisticUser: OptimisticUserMessage | null
-  showOptimisticUser: boolean
   pendingAttention?: AttentionEvent | null
   openMobileSidebar?: () => void | Promise<void>
 }>()
@@ -116,34 +112,13 @@ const pendingInteractionPart = computed<TranscriptDisplayPart | null>(() => {
   )
 })
 
-// The pending user turn follows the same canonical part projection as the
-// persisted transcript. It is temporary, but it must not be a second prose
-// renderer that disappears/reappears with a different shape after the server
-// acknowledges the user_send run.
-const optimisticDisplayParts = computed<TranscriptDisplayPart[]>(() => {
-  const message = props.optimisticUser
-  if (!message) return []
-  if (message.parts.length) return message.parts
-  return optimisticUserParts({
-    key: message.key,
-    text: message.text,
-    files: message.files,
-    status: message.status,
-    fileFallbackLabel: String(t('chat.messageItem.fileFallback')).trim(),
-    attachmentTitle: String(t('chat.attachments.rowTitle')).trim(),
-  })
-})
-
 const assistantPlaceholderPart = computed<TranscriptDisplayPart>(() => {
   // The in-flight assistant row is a part projection like every other row:
   // the lifecycle part the durable projection uses, in its running state,
   // so this element shares one label vocabulary with the server-rendered one.
-  // Once the accepted send reports the reply id, the live row already renders
-  // under the identity the durable row will use.
-  const replyId = props.optimisticUser?.replyId || ''
   return projectLocalPart(
     {
-      id: replyId ? `lifecycle:${replyId}` : 'lifecycle:pending',
+      id: 'lifecycle:pending',
       type: 'tool',
       partState: 'in_progress',
       agenaKind: 'assistant_reply_lifecycle',
@@ -324,33 +299,6 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
             :session-id="selectedSessionId"
             @toggle="forwardPartToggle(pendingInteractionPart!, !isPartExpanded(pendingInteractionPart!))"
             @select="$emit('nodeSelect', pendingInteractionPart!.key)"
-          />
-        </div>
-      </article>
-
-      <article v-if="optimisticUser && showOptimisticUser" :key="optimisticUser.key" class="px-1 py-1">
-        <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-          <span class="font-semibold text-primary">user</span>
-          <span v-if="showTimestamps">{{ formatTime(optimisticUser.createdAt) }}</span>
-          <span class="inline-flex items-center gap-1 font-mono">
-            <template v-if="optimisticUser.status === 'sending'">
-              <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
-              {{ t('chat.messages.optimistic.sending') }}
-            </template>
-            <template v-else>
-              <RiCheckLine class="h-3.5 w-3.5 text-emerald-500" />
-              {{ t('chat.messages.optimistic.sent') }}
-            </template>
-          </span>
-        </header>
-        <div class="min-w-0 px-1">
-          <AgenaTranscriptPart
-            v-for="part in optimisticDisplayParts"
-            :key="part.key"
-            :part="part"
-            :expanded="true"
-            :collapse-signal="activityCollapseSignal"
-            :session-id="selectedSessionId"
           />
         </div>
       </article>

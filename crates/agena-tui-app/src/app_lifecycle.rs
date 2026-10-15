@@ -145,7 +145,6 @@ impl App {
             prompt_history_reported_error: None,
             pending_prompt_history_error,
             run_activity: RunActivityTracker::default(),
-            next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             surface_layout: crate::SurfaceLayout::default(),
             pointer_targets: Default::default(),

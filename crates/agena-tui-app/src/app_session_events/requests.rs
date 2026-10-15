@@ -535,28 +535,7 @@ impl App {
         });
     }
 
-    pub(crate) fn begin_pending_user_message(&mut self, draft: &ComposerDraft) -> u64 {
-        let id = self.next_pending_user_message_id;
-        self.next_pending_user_message_id = self.next_pending_user_message_id.saturating_add(1);
-        self.transcript
-            .add_pending_user_message(PendingUserMessage {
-                id,
-                document: draft.document.clone(),
-                confirmed: false,
-            });
-        self.transcript.scroll_to_bottom(
-            self.layout.transcript_body.width,
-            self.layout.transcript_body.height,
-        );
-        id
-    }
-
-    pub(crate) fn request_submit_message_with_pending(
-        &mut self,
-        session_id: i64,
-        draft: ComposerDraft,
-        existing_pending_message_id: Option<u64>,
-    ) {
+    pub(crate) fn request_submit_message(&mut self, session_id: i64, draft: ComposerDraft) {
         if self
             .pending_interactive_kind_for_session(session_id)
             .is_some()
@@ -566,17 +545,12 @@ impl App {
             self.prompt_for_pending_interactive_on_session(session_id);
             return;
         }
-        let pending_message_id =
-            // Only the displayed transcript gets the ghost row and the scroll:
-            // a send queued for another session must not draw into the session the
-            // user is reading, and that session own view confirms it later.
-            existing_pending_message_id.unwrap_or_else(|| {
-                if self.transcript.session_id == Some(session_id) {
-                    self.begin_pending_user_message(&draft)
-                } else {
-                    0
-                }
-            });
+        if self.transcript.session_id == Some(session_id) {
+            self.transcript.scroll_to_bottom(
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            );
+        }
         self.begin_run_operation(
             RunActivityTarget::Session(session_id),
             RunOperation::SubmitMessage,
@@ -588,8 +562,6 @@ impl App {
         let document = match self.build_submission_document(&draft) {
             Ok(document) => document,
             Err(error) => {
-                self.transcript
-                    .remove_pending_user_message(pending_message_id);
                 self.session_composer.pending_restore_draft = None;
                 self.finish_run_operation(
                     RunActivityTarget::Session(session_id),
@@ -615,7 +587,6 @@ impl App {
             let _ = tx
                 .send(AppMessage::SessionMessageSubmitted {
                     session_id,
-                    pending_message_id,
                     draft,
                     result,
                 })
@@ -789,9 +760,9 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, Instant, PendingUserMessage, PermissionReplyKind,
-    PermissionScope, ProviderPickerPurpose, RunActivityTarget, RunOperation, SessionLoadScope,
-    UserInputReply, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, Instant, PermissionReplyKind, PermissionScope,
+    ProviderPickerPurpose, RunActivityTarget, RunOperation, SessionLoadScope, UserInputReply,
+    ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

@@ -77,6 +77,9 @@ pub trait SessionExecutionCommandService: Send + Sync {
         request: crate::SessionCreateRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
+    /// Return after the user run's parts have been committed and published.
+    /// Provider execution continues in the background; clients can immediately
+    /// read and render the stored message without creating local message parts.
     async fn submit_user_run(
         &self,
         request: SessionUserRunRequest,

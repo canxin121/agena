@@ -318,8 +318,7 @@ impl App {
             ..header_inner
         };
 
-        let has_transcript_content = self.transcript.session_id.is_some()
-            || !self.transcript.pending_user_messages.is_empty();
+        let has_transcript_content = self.transcript.session_id.is_some();
         if has_transcript_content {
             self.transcript
                 .ensure_visual_focus(layout.body.width, layout.body.height);

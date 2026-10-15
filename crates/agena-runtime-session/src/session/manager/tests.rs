@@ -6,6 +6,7 @@
 
 mod concurrent_batch;
 mod context_usage;
+mod submission;
 #[path = "task_output_tests.rs"]
 mod task_output_tests;
 
@@ -968,6 +969,7 @@ async fn cancelling_an_unanswered_user_turn_withdraws_it_and_restores_the_docume
             "unanswered user cancellation fixture",
             Some(document),
             Some("restore-cancel-key".to_owned()),
+            None,
             move |manager, control, _steer_rx| async move {
                 let part = new_part_from_content(
                     "text",

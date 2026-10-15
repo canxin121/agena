@@ -199,23 +199,6 @@ pub fn parts_have_non_terminal_runs(parts: &[PartResource]) -> bool {
         .any(|marker| !message_status_is_terminal(message_status_from_string(&marker.state)))
 }
 
-/// Count of user run markers that carry at least one text part. This is the
-/// optimistic-entry boundary: a user input becomes visible exactly when its
-/// run's text part appears in the projection.
-pub fn parts_visible_user_inputs(parts: &[PartResource]) -> usize {
-    let user_runs = parts
-        .iter()
-        .filter(|part| part.kind == "run" && part.role == "user")
-        .map(|part| part.part_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    let text_runs = parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .filter_map(|part| part.run_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    user_runs.intersection(&text_runs).count()
-}
-
 /// The last assistant reply's text from the parts projection: the text parts
 /// of the final assistant `run` marker (design §4.1.1 marker == turn), joined
 /// with newlines. Returns `None` when no assistant run carries text.
@@ -731,8 +714,7 @@ fn part_status_from_state(state: RunStatus) -> PartExecutionStatusResource {
     }
 }
 
-/// Whether a wire run/part state string is terminal. Exposed for the app's
-/// optimistic-entry reconciliation, which inspects marker states directly.
+/// Whether a wire run/part state string is terminal.
 pub fn part_state_is_terminal(state: &str) -> bool {
     message_status_is_terminal(message_status_from_string(state))
 }
@@ -1584,26 +1566,6 @@ mod tests {
         assert!(!parts_have_non_terminal_runs(&done));
         let active = vec![run(1, "assistant", "in_progress")];
         assert!(parts_have_non_terminal_runs(&active));
-    }
-
-    #[test]
-    fn visible_user_inputs_count_only_user_runs_with_text() {
-        let parts = vec![
-            run(1, "user", "completed"),
-            content_part(2, "text", "user", serde_json::json!({ "text": "a" })),
-            run(3, "assistant", "completed"),
-            content_part_for(
-                3,
-                4,
-                "text",
-                "assistant",
-                serde_json::json!({ "text": "b" }),
-            ),
-            run(5, "user", "in_progress"),
-        ];
-        // The trailing in-progress user run has no text yet, so only the
-        // first user run counts.
-        assert_eq!(parts_visible_user_inputs(&parts), 1);
     }
 
     #[test]

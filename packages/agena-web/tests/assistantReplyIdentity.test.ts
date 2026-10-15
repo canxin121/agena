@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { acceptedAssistantReplyId, entriesFromParts } from '../src/stores/chat/api'
+import { entriesFromParts } from '../src/stores/chat/api'
 
 function runMarker(partId: number, role: string, content: Record<string, unknown>) {
   return {
@@ -42,21 +42,5 @@ describe('assistant reply identity', () => {
     ] as never)
     expect(entries[0]?.parts).toHaveLength(1)
     expect(entries[0]?.parts?.[0]).toMatchObject({ id: '10', type: 'compaction', text: 'Checkpoint summary' })
-  })
-
-  test('the accepted send reports the assistant reply it created', () => {
-    const state = {
-      session: { id: 1 },
-      parts: [
-        runMarker(1, 'user', { run_kind: 'user_send' }),
-        runMarker(2, 'assistant', { run_kind: 'assistant_turn', reply_id: 'r-9' }),
-      ],
-    } as never
-    expect(acceptedAssistantReplyId(state)).toBe('r-9')
-  })
-
-  test('a send without an assistant marker yet reports no reply id', () => {
-    const state = { session: { id: 1 }, parts: [runMarker(1, 'user', {})] } as never
-    expect(acceptedAssistantReplyId(state)).toBeNull()
   })
 })

@@ -323,7 +323,6 @@ impl App {
             let _ = tx
                 .send(AppMessage::SessionCreated {
                     submit_draft: None,
-                    pending_message_id: None,
                     model_stack: None,
                     result,
                 })

@@ -44,9 +44,6 @@ impl App {
     }
 
     pub(crate) fn create_session(&mut self, submit_draft: Option<ComposerDraft>) {
-        let pending_message_id = submit_draft
-            .as_ref()
-            .map(|draft| self.begin_pending_user_message(draft));
         if let Some(draft) = submit_draft.as_ref().cloned() {
             self.begin_run_operation(RunActivityTarget::NewSession, RunOperation::CreateSession);
             self.session_composer.pending_restore_draft = Some(draft.clone());
@@ -75,7 +72,6 @@ impl App {
             let _ = tx
                 .send(AppMessage::SessionCreated {
                     submit_draft,
-                    pending_message_id,
                     model_stack,
                     result,
                 })
@@ -245,7 +241,7 @@ impl App {
             .session_id
             .or_else(|| self.sessions.current_selected_id());
         match target_session_id {
-            Some(session_id) => self.request_submit_message_with_pending(session_id, draft, None),
+            Some(session_id) => self.request_submit_message(session_id, draft),
             None => self.create_session(Some(draft)),
         }
     }

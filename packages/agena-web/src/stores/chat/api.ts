@@ -1192,39 +1192,6 @@ export async function sendMessage(sessionId: string, payload: SendMessagePayload
   return state
 }
 
-/**
- * The user run the server accepted for a submitted message. Run markers are
- * the durable identity of a message, so acknowledgement matches this id
- * instead of scanning ids and comparing text.
- */
-export function acceptedUserRunId(state: AgenaExecutionState | null | undefined): string | null {
-  const parts = Array.isArray(state?.parts) ? state.parts : []
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = asRecord(parts[index] as JsonValue)
-    if (str(part.kind) !== 'run') continue
-    if (str(part.role) !== 'user') continue
-    return typeof part.part_id === 'number' ? String(part.part_id) : null
-  }
-  return null
-}
-
-/**
- * The assistant reply the accepted send created, when its run marker is
- * already part of the response. The reply id is the one identity every later
- * projection of that reply (live, failed, continued) keys on.
- */
-export function acceptedAssistantReplyId(state: AgenaExecutionState | null | undefined): string | null {
-  const parts = Array.isArray(state?.parts) ? state.parts : []
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = asRecord(parts[index] as JsonValue)
-    if (str(part.kind) !== 'run') continue
-    if (str(part.role) !== 'assistant') continue
-    const replyId = str(asRecord(part.content as JsonValue).reply_id)
-    return replyId || null
-  }
-  return null
-}
-
 /** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
 export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
   const scope = sessionRoutingScope()

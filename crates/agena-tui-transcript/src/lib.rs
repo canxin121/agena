@@ -21,7 +21,6 @@ pub mod renderer;
 pub mod selection;
 pub mod text;
 
-pub use activity_presentation::pending_user_entry;
 pub use interaction_view::*;
 pub use markdown::*;
 pub use math::*;
@@ -29,7 +28,6 @@ pub use navigation::*;
 pub use parts::{
     TranscriptFold, folds_from_run_window, last_assistant_reply_text, part_state_is_terminal,
     parts_entries, parts_entries_with_folds, parts_have_non_terminal_runs,
-    parts_visible_user_inputs,
 };
 pub use render_model::*;
 pub use renderer::{

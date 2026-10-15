@@ -41,18 +41,22 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
   assert.ok(!catalog.includes("id: 'harnesses'"), 'tool harness settings are removed')
 })
 
-test('the section workbench renders one scope selector beside the selected content', () => {
+test('the section workbench supports a compact permission scope toolbar and retains sidebars for other pages', () => {
   const source = readFileSync(
     resolve(import.meta.dir, '../src/components/settings/workbench/SettingsSectionWorkbench.vue'),
     'utf8',
   )
-  assert.ok(source.includes('<aside v-if="scopes.length"'), 'scoped settings pages expose their scope selector')
+  assert.ok(source.includes("scopes.length && scopeLayout !== 'toolbar'"), 'other scoped pages retain their selector')
+  assert.ok(
+    source.includes("scopes.length && scopeLayout === 'toolbar'"),
+    'permission scopes can use the full page width',
+  )
   assert.equal((source.match(/<aside\b/g) || []).length, 1, 'scope selection is the only workbench aside')
   assert.ok(!source.includes('SearchInput'), 'section-local navigation search must be removed')
   assert.ok(!source.includes('OptionPicker'), 'compact layout must use the shared left navigation')
   assert.ok(source.includes('<slot :active-page="activePage"'))
   assert.ok(source.includes('useRouter'), 'scope selection must remain shareable in the route')
-  assert.ok(source.includes("query: { ...route.query, scope }"), 'scope changes must preserve other route state')
+  assert.ok(source.includes('query: { ...route.query, scope }'), 'scope changes must preserve other route state')
   assert.ok(!source.includes('localStorage'), 'remembering the destination belongs to SettingsPage')
 })
 
@@ -63,7 +67,8 @@ test('permission tool rules follow the shared source scope without a second scop
   const rules = readFileSync(resolve(root, 'PermissionsPanel.vue'), 'utf8')
 
   assert.ok(workbench.includes('defineProps<{ activePage: string; scope: string }>()'))
-  assert.ok(workbench.includes('<PermissionStudioPanel :scope="scope" :section="activePage" />'))
+  assert.match(workbench, /<PermissionStudioPanel[^>]*:scope="scope"[^>]*:section="activePage"/)
+  assert.ok(workbench.includes('scope-layout="toolbar"'))
   assert.equal(workbench.includes('v-model:scope'), false)
   assert.doesNotMatch(workbench, /PermissionsPanel/)
   assert.ok(
@@ -91,8 +96,12 @@ test('every layer-aware settings page reads its scope from the shared navigation
   }
 
   const models = readFileSync(resolve(root, 'ModelsProvidersPanel.vue'), 'utf8')
-  assert.ok(models.includes('<ApprovalSettingsPanel v-else-if="activePage === \'approval-model\'" :scope="scope" />'))
-  assert.ok(models.includes('<ModelDefaultsPanel v-else :scope="scope" />'))
+  assert.ok(
+    models.includes(
+      '<ApprovalSettingsPanel ref="editor" v-else-if="activePage === \'approval-model\'" :scope="scope" />',
+    ),
+  )
+  assert.ok(models.includes('<ModelDefaultsPanel ref="editor" v-else :scope="scope" />'))
 
   // The section header names the active layer once, so the pages below it never
   // repeat the layer or its per-option summary text.

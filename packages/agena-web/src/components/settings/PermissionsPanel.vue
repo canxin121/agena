@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
+import { RiAddLine, RiArrowDownSLine, RiDeleteBinLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import PermissionSettingsCard from './permissions/PermissionSettingsCard.vue'
 import { apiJson } from '@/lib/api'
 import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -69,6 +71,14 @@ const newQualifier = ref('')
 const newMode = ref<PermissionMode>('ask')
 const bulkMode = ref<PermissionMode>('ask')
 const bulkBusy = ref(false)
+const rowBusy = ref<number | null>(null)
+const query = ref('')
+const stateFilter = ref('all')
+const stateOptions = computed(() => [
+  { value: 'all', label: st('All rules') },
+  { value: 'active', label: st('Active') },
+  { value: 'revoked', label: st('revoked') },
+])
 const activeSessionId = computed(() => {
   const id = Number(chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
@@ -88,12 +98,12 @@ const activeWorkspaceId = computed(() => {
 const canEdit = computed(
   () => props.scope === 'global' || (props.scope === 'workspace' && activeWorkspaceId.value !== null),
 )
-const scopeLabel = computed(() => {
-  if (props.scope === 'global') return st('Global')
-  if (props.scope === 'workspace') return st('Workspace')
-  if (props.scope === 'session') return st('Current Session Permission')
-  return st('Effective Permission')
-})
+function scopeLabel(scope: string) {
+  if (scope === 'global') return st('Global')
+  if (scope === 'workspace') return st('Workspace')
+  if (scope === 'session') return st('Current Session Permission')
+  return scope
+}
 
 const modeOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Approve matching tool calls.') },
@@ -112,7 +122,16 @@ const sortedRules = computed(() =>
     })
     .filter((rule) => permissionRuleMatchesScope(rule, props.scope, activeWorkspaceId.value, activeSessionId.value)),
 )
-const selectableRules = computed(() => sortedRules.value.filter((rule) => canRemoveRule(rule)))
+const filteredRules = computed(() =>
+  sortedRules.value.filter((rule) => {
+    if (stateFilter.value === 'active' && rule.revoked_at) return false
+    if (stateFilter.value === 'revoked' && !rule.revoked_at) return false
+    return `${ruleTitle(rule)} ${rule.reason || ''} ${rule.source} ${rule.mode}`
+      .toLowerCase()
+      .includes(query.value.trim().toLowerCase())
+  }),
+)
+const selectableRules = computed(() => filteredRules.value.filter((rule) => canRemoveRule(rule)))
 const selectedRules = computed(() => selectableRules.value.filter((rule) => selectedIds.value.has(rule.id)))
 const selectedActiveRules = computed(() => selectedRules.value.filter((rule) => !rule.revoked_at))
 const allSelected = computed(
@@ -148,6 +167,31 @@ const { loading, error, refresh } = usePaneRead(
     hasMore.value = data?.page?.has_more === true
   },
 )
+defineExpose({ refresh })
+watch(
+  () => [props.scope, activeWorkspaceId.value, activeSessionId.value],
+  () => {
+    clearSelection()
+    createError.value = ''
+  },
+)
+
+async function setRuleMode(rule: PermissionRule, mode: string) {
+  if (!canRemoveRule(rule) || rule.revoked_at || rowBusy.value !== null || bulkBusy.value || mode === rule.mode) return
+  rowBusy.value = rule.id
+  try {
+    await apiJson('/api/v1/permission-rules/batch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rule_ids: [rule.id], scope: props.scope, operation: { action: 'set_mode', mode } }),
+    })
+    await refresh()
+  } catch (reason) {
+    toasts.push('error', reason instanceof Error ? reason.message : String(reason))
+  } finally {
+    rowBusy.value = null
+  }
+}
 
 function toggleRuleSelection(id: number, checked: boolean) {
   const next = new Set(selectedIds.value)
@@ -158,7 +202,9 @@ function toggleRuleSelection(id: number, checked: boolean) {
 
 function toggleAllSelection() {
   if (allSelected.value) {
-    selectedIds.value = new Set([...selectedIds.value].filter((id) => !selectableRules.value.some((rule) => rule.id === id)))
+    selectedIds.value = new Set(
+      [...selectedIds.value].filter((id) => !selectableRules.value.some((rule) => rule.id === id)),
+    )
   } else {
     selectedIds.value = new Set([...selectedIds.value, ...selectableRules.value.map((rule) => rule.id)])
   }
@@ -168,9 +214,14 @@ function clearSelection() {
   selectedIds.value = new Set()
 }
 
+function clearFilters() {
+  query.value = ''
+  stateFilter.value = 'all'
+}
+
 async function applyBulkOperation(action: 'delete' | 'set_mode') {
   const targetRules = action === 'set_mode' ? selectedActiveRules.value : selectedRules.value
-  if (!targetRules.length || bulkBusy.value) return
+  if (!targetRules.length || bulkBusy.value || rowBusy.value !== null) return
   const ruleIds = targetRules.map((rule) => rule.id)
   const scope = props.scope
   const sessionId = activeSessionId.value
@@ -250,209 +301,284 @@ async function createRule() {
 
 async function removeRule(id: number) {
   const rule = rules.value.find((candidate) => candidate.id === id)
-  if (!rule || !canRemoveRule(rule)) return
+  if (!rule || !canRemoveRule(rule) || rowBusy.value !== null || bulkBusy.value) return
+  rowBusy.value = id
   try {
     await apiJson(`/api/v1/permission-rules/${id}`, { method: 'DELETE' })
     toasts.push('success', st('Permission rule removed'))
     await refresh()
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
+  } finally {
+    rowBusy.value = null
   }
 }
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <div class="text-sm text-muted-foreground">
-          {{ $st('Persistent rules Agena applies to tool approval decisions.') }}
-        </div>
-        <div class="mt-1 inline-flex rounded border border-border/60 px-2 py-0.5 text-[11px] font-medium">
-          {{ scopeLabel }}
-        </div>
-      </div>
+  <PermissionSettingsCard
+    :title="$st('Saved approval rules')"
+    :description="$st('Rules remembered from approvals. Changes here take effect immediately.')"
+    :count="sortedRules.length"
+    :icon="RiShieldCheckLine"
+  >
+    <template #actions>
       <IconButton
-        variant="outline"
-        size="md"
-        :tooltip="loading ? $st('Refreshing permission rules') : $st('Refresh permission rules')"
-        :aria-label="loading ? $st('Refreshing permission rules') : $st('Refresh permission rules')"
+        variant="ghost"
+        size="sm"
+        :tooltip="$st('Refresh permission rules')"
+        :aria-label="$st('Refresh permission rules')"
         :disabled="loading"
         @click="refresh"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-
-    <div
-      v-if="!canEdit"
-      class="rounded-md border border-dashed border-border/60 px-3 py-2 text-xs text-muted-foreground"
-    >
-      <div v-if="scope === 'workspace'">{{ $st('Select a workspace to view and manage its permission rules.') }}</div>
-      <div v-else>
-        {{ scope === 'effective' ? $st('Read-only merged policy.') : $st('Applies only to the selected session.') }}
+        ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
+      /></IconButton>
+    </template>
+    <p v-if="scope === 'workspace' && !activeWorkspaceId" class="mb-3 text-xs text-muted-foreground">
+      {{ $st('Select a workspace to view and manage its permission rules.') }}
+    </p>
+    <div v-if="sortedRules.length" class="mb-3 flex flex-wrap items-center gap-2">
+      <SearchInput
+        v-model="query"
+        class="min-w-0 flex-1 basis-48"
+        :placeholder="$st('Search rules…')"
+        :input-aria-label="$st('Search saved approval rules')"
+        :show-search-button="false"
+        :clear-aria-label="$st('Clear search')"
+        :clear-title="$st('Clear search')"
+      />
+      <div class="w-36">
+        <OptionPicker
+          v-model="stateFilter"
+          :options="stateOptions"
+          :include-empty="false"
+          :title="$st('Rule status')"
+        />
       </div>
-      <div v-if="scope === 'session' && !activeSessionId" class="mt-1">{{ $st('No active session') }}</div>
+      <label v-if="selectableRules.length" class="flex items-center gap-2 text-xs text-muted-foreground"
+        ><input
+          type="checkbox"
+          class="accent-primary"
+          :checked="allSelected"
+          :indeterminate="selectedRules.length > 0 && !allSelected"
+          :disabled="bulkBusy || rowBusy !== null"
+          :aria-label="$st('Select all permission rules')"
+          @change="toggleAllSelection"
+        />{{ $st('Select all') }}</label
+      >
     </div>
-
-    <div v-if="canEdit" class="grid gap-3 border-b border-border/60 pb-4">
-      <div class="text-sm font-medium">{{ $st('Create tool rule') }}</div>
-      <div class="grid gap-3 sm:grid-cols-2">
-        <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">{{ $st('Tool name') }}</span>
-          <Input
-            v-model="newToolName"
-            placeholder="shell"
-            :disabled="createBusy"
-            class="h-10 font-mono"
-            @keydown.enter="createRule"
+    <div
+      v-if="selectedRules.length"
+      class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5"
+    >
+      <span class="text-xs font-medium">{{ $st('{count} selected', { count: selectedRules.length }) }}</span>
+      <Button variant="ghost" size="sm" :disabled="bulkBusy" @click="clearSelection">{{ $st('Select none') }}</Button>
+      <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+        <div class="w-32">
+          <OptionPicker
+            v-model="bulkMode"
+            :options="modeOptions"
+            :include-empty="false"
+            :title="$st('Set mode for selected rules')"
+            :disabled="!selectedActiveRules.length || bulkBusy || rowBusy !== null"
+            size="sm"
           />
-        </label>
-        <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">{{ $st('Qualifier') }}</span>
-          <Input
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="!selectedActiveRules.length || bulkBusy || rowBusy !== null"
+          @click="applyBulkOperation('set_mode')"
+          >{{ $st('Apply') }}</Button
+        >
+        <ConfirmPopover
+          :title="$st('Remove selected permission rules?')"
+          :description="$st('Remove {count} selected permission rules?', { count: selectedRules.length })"
+          :confirm-text="$st('Remove selected')"
+          :cancel-text="$st('Cancel')"
+          variant="destructive"
+          :confirm-disabled="bulkBusy || rowBusy !== null"
+          @confirm="applyBulkOperation('delete')"
+        >
+          <Button variant="ghost" size="sm" class="text-destructive" :disabled="bulkBusy || rowBusy !== null">{{
+            $st('Remove selected')
+          }}</Button>
+        </ConfirmPopover>
+      </div>
+    </div>
+    <div
+      v-if="error"
+      role="alert"
+      class="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+    >
+      {{ error }}
+    </div>
+    <p v-if="loading && !rules.length" role="status" class="py-3 text-sm text-muted-foreground">
+      {{ $st('Loading permission rules...') }}
+    </p>
+    <p v-else-if="!sortedRules.length && !error" class="py-3 text-sm text-muted-foreground">
+      {{ $st('No permission rules configured.') }}
+    </p>
+    <div v-else-if="!filteredRules.length && !error" class="rounded-lg bg-muted/20 px-4 py-5 text-center">
+      <p class="text-sm text-muted-foreground">{{ $st('No matching rules.') }}</p>
+      <Button variant="ghost" size="sm" class="mt-1" @click="clearFilters">{{ $st('Clear filters') }}</Button>
+    </div>
+    <div class="grid gap-2">
+      <div
+        v-for="rule in filteredRules"
+        :key="rule.id"
+        class="saved-rule-row rounded-lg border border-border/50 bg-background/20 p-3"
+        :class="rule.revoked_at ? 'opacity-60' : ''"
+      >
+        <input
+          v-if="canRemoveRule(rule)"
+          type="checkbox"
+          class="rule-checkbox accent-primary"
+          :checked="selectedIds.has(rule.id)"
+          :disabled="bulkBusy || rowBusy !== null"
+          :aria-label="$st('Select permission rule {id}', { id: rule.id })"
+          @change="toggleRuleSelection(rule.id, ($event.target as HTMLInputElement).checked)"
+        />
+        <div class="saved-rule-heading min-w-0">
+          <div class="break-all font-mono text-xs font-medium">{{ ruleTitle(rule) }}</div>
+          <p v-if="rule.reason" class="mt-1 line-clamp-2 text-xs text-muted-foreground" :title="rule.reason">
+            {{ rule.reason }}
+          </p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+            <span>{{ scopeLabel(rule.scope) }}</span
+            ><span aria-hidden="true">·</span><span>#{{ rule.id }}</span
+            ><span v-if="rule.source" :title="$st('Source')">{{ rule.source }}</span
+            ><span v-if="rule.revoked_at" class="text-destructive">{{ $st('revoked') }}</span>
+          </div>
+        </div>
+        <div class="saved-rule-mode">
+          <OptionPicker
+            v-if="canRemoveRule(rule) && !rule.revoked_at"
+            :model-value="rule.mode"
+            :options="modeOptions"
+            :include-empty="false"
+            :title="$st('Permission mode')"
+            :disabled="bulkBusy || rowBusy !== null"
+            size="sm"
+            @update:model-value="setRuleMode(rule, $event)"
+          />
+          <span
+            v-else
+            class="inline-flex rounded-md border border-border/60 px-2 py-1 text-xs"
+            :class="rule.mode === 'deny' ? 'bg-destructive/5 text-destructive' : 'bg-muted/20 text-muted-foreground'"
+            >{{ modeOptions.find((option) => option.value === rule.mode)?.label || rule.mode }}</span
+          >
+        </div>
+        <div v-if="canRemoveRule(rule)" class="saved-rule-remove">
+          <ConfirmPopover
+            :title="$st('Remove permission rule?')"
+            :description="ruleTitle(rule)"
+            :confirm-text="$st('Remove rule')"
+            :cancel-text="$st('Cancel')"
+            variant="destructive"
+            :confirm-disabled="bulkBusy || rowBusy !== null"
+            @confirm="removeRule(rule.id)"
+          >
+            <IconButton
+              class="text-muted-foreground hover:text-destructive"
+              variant="ghost"
+              size="sm"
+              :tooltip="$st('Remove rule')"
+              :aria-label="$st('Remove rule')"
+              :disabled="bulkBusy || rowBusy !== null"
+              ><RiDeleteBinLine class="h-4 w-4"
+            /></IconButton>
+          </ConfirmPopover>
+        </div>
+      </div>
+    </div>
+    <p v-if="hasMore" class="mt-3 text-xs text-muted-foreground">
+      {{ $st('More than 200 rules exist. Refine or manage older rules through the CLI.') }}
+    </p>
+    <details v-if="canEdit" class="group mt-3 border-t border-border/50 pt-3">
+      <summary
+        class="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <RiAddLine class="h-4 w-4" />{{ $st('Create tool rule')
+        }}<RiArrowDownSLine class="ml-auto h-4 w-4 transition-transform group-open:rotate-180" />
+      </summary>
+      <form class="saved-rule-form mt-3" @submit.prevent="createRule">
+        <label class="grid min-w-0 gap-1.5"
+          ><span class="text-xs text-muted-foreground">{{ $st('Tool name') }}</span
+          ><Input v-model="newToolName" placeholder="agena.shell.exec" :disabled="createBusy" class="font-mono text-xs"
+        /></label>
+        <label class="grid min-w-0 gap-1.5"
+          ><span class="text-xs text-muted-foreground">{{ $st('Qualifier') }}</span
+          ><Input
             v-model="newQualifier"
             :placeholder="$st('Optional command or operation')"
             :disabled="createBusy"
-            class="h-10 font-mono"
-            @keydown.enter="createRule"
-          />
-        </label>
-      </div>
-      <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-        <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">{{ $st('Mode') }}</span>
-          <OptionPicker
+            class="font-mono text-xs"
+        /></label>
+        <label class="grid min-w-0 gap-1.5"
+          ><span class="text-xs text-muted-foreground">{{ $st('Mode') }}</span
+          ><OptionPicker
             v-model="newMode"
             :options="modeOptions"
             :title="$st('Permission mode')"
             :include-empty="false"
             :disabled="createBusy"
-          />
-        </label>
-        <Button class="h-10" :disabled="!canCreate" @click="createRule">
-          {{ createBusy ? 'Creating...' : $st('Create rule') }}
-        </Button>
-      </div>
-      <div v-if="createError" class="break-words text-xs text-destructive">{{ createError }}</div>
-    </div>
-
-    <div class="grid gap-3">
-      <div
-        v-if="selectableRules.length"
-        class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
-      >
-        <label class="flex items-center gap-2 text-xs font-medium">
-          <input
-            type="checkbox"
-            :checked="allSelected"
-            :aria-label="$st('Select all permission rules')"
-            @change="toggleAllSelection"
-          />
-          {{ $st('Select all') }} ({{ selectableRules.length }})
-        </label>
-        <span class="text-xs text-muted-foreground">{{ $st('{count} selected', { count: selectedRules.length }) }}</span>
-        <div class="ml-auto flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" :disabled="!selectedRules.length || bulkBusy" @click="clearSelection">
-            {{ $st('Select none') }}
-          </Button>
-          <div class="w-36">
-            <OptionPicker
-              v-model="bulkMode"
-              :options="modeOptions"
-              :include-empty="false"
-              :title="$st('Set mode for selected rules')"
-              :disabled="!selectedActiveRules.length || bulkBusy"
-              size="sm"
-            />
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="!selectedActiveRules.length || bulkBusy"
-            @click="applyBulkOperation('set_mode')"
-          >
-            {{ $st('Set mode ({count})', { count: selectedActiveRules.length }) }}
-          </Button>
-          <ConfirmPopover
-            :title="$st('Remove selected permission rules?')"
-            :description="$st('Remove {count} selected permission rules?', { count: selectedRules.length })"
-            :confirm-text="$st('Remove selected')"
-            :cancel-text="$st('Cancel')"
-            variant="destructive"
-            @confirm="applyBulkOperation('delete')"
-          >
-            <Button variant="destructive" size="sm" :disabled="!selectedRules.length || bulkBusy">
-              <RiDeleteBinLine class="mr-1.5 h-4 w-4" />
-              {{ $st('Remove selected ({count})', { count: selectedRules.length }) }}
-            </Button>
-          </ConfirmPopover>
-        </div>
-      </div>
-
-      <div v-if="loading && rules.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('Loading permission rules...') }}
-      </div>
-      <div
-        v-if="error"
-        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-      >
-        {{ error }}
-      </div>
-      <div v-if="!loading && sortedRules.length === 0" class="text-sm text-muted-foreground">
-        {{ $st('No permission rules configured.') }}
-      </div>
-
-      <div v-if="sortedRules.length > 0" class="space-y-2">
-        <div
-          v-for="rule in sortedRules"
-          :key="rule.id"
-          class="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/50 px-3 py-2.5"
-          :class="rule.revoked_at ? 'opacity-60' : ''"
-        >
-          <input
-            v-if="canRemoveRule(rule)"
-            type="checkbox"
-            class="shrink-0"
-            :checked="selectedIds.has(rule.id)"
-            :aria-label="$st('Select permission rule {id}', { id: rule.id })"
-            @change="toggleRuleSelection(rule.id, ($event.target as HTMLInputElement).checked)"
-          />
-          <div class="min-w-0 flex-1">
-            <div class="break-words font-mono text-sm font-semibold">{{ ruleTitle(rule) }}</div>
-            <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <span>#{{ rule.id }}</span>
-              <span>{{ $st('mode:') }} {{ rule.mode }}</span>
-              <span>{{ $st('scope:') }} {{ rule.scope }}</span>
-              <span>{{ $st('source:') }} {{ rule.source }}</span>
-              <span v-if="rule.revoked_at" class="text-destructive">{{ $st('revoked') }}</span>
-            </div>
-          </div>
-
-          <ConfirmPopover
-            v-if="canRemoveRule(rule)"
-            :title="$st('Remove permission rule?')"
-            :description="ruleTitle(rule)"
-            confirm-text="Remove"
-            cancel-text="Cancel"
-            variant="destructive"
-            @confirm="removeRule(rule.id)"
-          >
-            <IconButton
-              variant="outline"
-              size="sm"
-              class="shrink-0 text-destructive"
-              :tooltip="$st('Remove rule')"
-              :aria-label="$st('Remove rule')"
-            >
-              <RiDeleteBinLine class="h-4 w-4" />
-            </IconButton>
-          </ConfirmPopover>
-        </div>
-      </div>
-      <div v-if="hasMore" class="text-xs text-muted-foreground">
-        {{ $st('More than 200 rules exist. Refine or manage older rules through the CLI.') }}
-      </div>
-    </div>
-  </div>
+        /></label>
+        <Button type="submit" variant="outline" size="sm" class="h-9" :disabled="!canCreate">{{
+          createBusy ? $st('Creating…') : $st('Create rule')
+        }}</Button>
+      </form>
+      <p v-if="createError" class="mt-2 break-words text-xs text-destructive" role="alert">{{ createError }}</p>
+    </details>
+  </PermissionSettingsCard>
 </template>
+
+<style scoped>
+.saved-rule-row {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) 2rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+.rule-checkbox {
+  grid-column: 1;
+  grid-row: 1;
+}
+.saved-rule-heading {
+  grid-column: 2;
+  grid-row: 1;
+}
+.saved-rule-mode {
+  grid-column: 2;
+  width: 10rem;
+  max-width: 100%;
+}
+.saved-rule-remove {
+  grid-column: 3;
+  grid-row: 1;
+}
+.saved-rule-form {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  align-items: end;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+@container permissions (min-width: 40rem) {
+  .saved-rule-row {
+    grid-template-columns: 1.25rem minmax(0, 1fr) 9rem 2rem;
+  }
+  .saved-rule-mode {
+    grid-column: 3;
+    grid-row: 1;
+    width: auto;
+  }
+  .saved-rule-remove {
+    grid-column: 4;
+  }
+  .saved-rule-form {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 9rem auto;
+  }
+}
+</style>

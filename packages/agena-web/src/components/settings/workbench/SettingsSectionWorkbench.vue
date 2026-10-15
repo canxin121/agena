@@ -10,9 +10,10 @@ const props = defineProps<{
   pages: SettingsSubpageDefinition[]
   defaultPage: string
   activePage: string
-  // The configuration layer the page is showing. The left navigation owns the
-  // choice, so the header names it once instead of every page repeating it.
+  // The route-backed configuration layer. The selector can sit beside the
+  // content or in a compact toolbar above it.
   activeScope?: string
+  scopeLayout?: 'sidebar' | 'toolbar'
 }>()
 
 const route = useRoute()
@@ -42,7 +43,7 @@ function selectScope(scope: string) {
       :class="
         cn(
           'min-w-0',
-          scopes.length
+          scopes.length && scopeLayout !== 'toolbar'
             ? 'grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-6'
             : fillsViewport
               ? 'flex h-full flex-col'
@@ -50,12 +51,13 @@ function selectScope(scope: string) {
         )
       "
     >
-      <aside v-if="scopes.length" class="min-w-0">
+      <aside v-if="scopes.length && scopeLayout !== 'toolbar'" class="min-w-0">
         <div class="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {{ $st('Configuration scope') }}
         </div>
         <nav
           class="flex gap-1 overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-1 lg:flex-col lg:overflow-visible"
+          :class="scopes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'"
           :aria-label="$st('Configuration scope')"
         >
           <button
@@ -83,12 +85,37 @@ function selectScope(scope: string) {
         <header v-if="activeDefinition" class="mb-5 min-w-0 space-y-1">
           <h1 class="text-lg font-semibold">
             {{ activeDefinition.label }}
-            <span v-if="activeScopeLabel" class="font-normal text-muted-foreground">· {{ activeScopeLabel }}</span>
+            <span v-if="activeScopeLabel && scopeLayout !== 'toolbar'" class="font-normal text-muted-foreground"
+              >· {{ activeScopeLabel }}</span
+            >
           </h1>
           <p v-if="activeDefinition.description" class="max-w-3xl text-sm text-muted-foreground">
             {{ activeDefinition.description }}
           </p>
         </header>
+        <nav
+          v-if="scopes.length && scopeLayout === 'toolbar'"
+          class="mb-4 grid gap-1 rounded-xl border border-border/60 bg-muted/20 p-1 sm:flex sm:flex-wrap"
+          :class="scopes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'"
+          :aria-label="$st('Configuration scope')"
+        >
+          <button
+            v-for="scope in scopes"
+            :key="scope.id"
+            type="button"
+            class="min-w-0 rounded-lg px-2 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-1 sm:px-3"
+            :class="
+              scope.id === activeScope
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+            "
+            :aria-current="scope.id === activeScope ? 'true' : undefined"
+            :title="scope.description"
+            @click="selectScope(scope.id)"
+          >
+            {{ scope.label }}
+          </button>
+        </nav>
         <div :class="cn('min-w-0', fillsViewport ? 'min-h-0 flex-1' : '')">
           <slot :active-page="activePage" :active-definition="activeDefinition" />
         </div>

@@ -6,6 +6,7 @@ import {
   buildSettingsSidebarTabs,
   type SettingsSidebarTab,
 } from '../src/components/settings/sidebar/settingsSidebarNavigation'
+import { buildSettingsScopes } from '../src/components/settings/settingsScopeCatalog'
 import { buildSettingsSidebarNodes } from '../src/components/settings/settingsNavigationCatalog'
 
 const tabs: SettingsSidebarTab[] = [
@@ -211,40 +212,28 @@ test('settings sidebar search reaches scope rows', () => {
   )
 })
 
-test('the settings catalog attaches scope rows to layer-aware pages only', () => {
-  const permissionNodes = buildSettingsSidebarNodes('permissions')
+test('the settings catalog keeps page destinations flat and defines scopes independently', () => {
+  for (const section of ['permissions', 'models-providers', 'diagnostics', 'interface']) {
+    assert.equal(
+      buildSettingsSidebarNodes(section as any).every((node) => !node.children),
+      true,
+    )
+  }
+  for (const page of ['filesystem', 'network', 'tools']) {
+    assert.deepEqual(
+      buildSettingsScopes('permissions', page).map((scope) => scope.id),
+      ['effective', 'global', 'workspace', 'session'],
+    )
+  }
+  for (const page of ['defaults', 'approval-model']) {
+    assert.deepEqual(
+      buildSettingsScopes('models-providers', page).map((scope) => scope.id),
+      ['effective', 'global', 'workspace'],
+    )
+  }
   assert.deepEqual(
-    permissionNodes
-      .find((node) => node.id === 'filesystem')
-      ?.children?.map((child) => [child.id, child.view, child.scope]),
-    [
-      ['effective', 'filesystem', 'effective'],
-      ['global', 'filesystem', 'global'],
-      ['workspace', 'filesystem', 'workspace'],
-      ['session', 'filesystem', 'session'],
-    ],
-  )
-  assert.equal(permissionNodes.find((node) => node.id === 'network')?.children?.length, 4)
-  assert.equal(permissionNodes.find((node) => node.id === 'tools')?.children?.length, 4)
-  assert.deepEqual(
-    buildSettingsSidebarNodes('models-providers')
-      .find((node) => node.id === 'defaults')
-      ?.children?.map((child) => child.scope),
-    ['effective', 'global', 'workspace'],
-  )
-  assert.deepEqual(
-    buildSettingsSidebarNodes('diagnostics')
-      .find((node) => node.id === 'advanced-settings')
-      ?.children?.map((child) => child.scope),
+    buildSettingsScopes('diagnostics', 'advanced-settings').map((scope) => scope.id),
     ['global', 'workspace'],
   )
-  // Pages without a layer choice stay plain destinations.
-  assert.equal(
-    buildSettingsSidebarNodes('models-providers').find((node) => node.id === 'provider-studio')?.children,
-    undefined,
-  )
-  assert.equal(
-    buildSettingsSidebarNodes('interface').every((node) => !node.children),
-    true,
-  )
+  assert.deepEqual(buildSettingsScopes('models-providers', 'provider-studio'), [])
 })

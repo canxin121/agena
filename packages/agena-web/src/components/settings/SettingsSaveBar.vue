@@ -8,6 +8,7 @@ withDefaults(
     dirty: boolean
     saving?: boolean
     disabled?: boolean
+    saveDisabled?: boolean
     error?: string
     saveLabel?: string
     sticky?: boolean
@@ -15,6 +16,7 @@ withDefaults(
   {
     saving: false,
     disabled: false,
+    saveDisabled: false,
     error: '',
     saveLabel: '',
     sticky: false,
@@ -49,12 +51,23 @@ const emit = defineEmits<{
       <span v-else class="text-muted-foreground">{{ $st('All changes are saved.') }}</span>
     </div>
 
-    <div v-if="dirty || saving" class="flex shrink-0 items-center gap-2">
-      <Button variant="ghost" size="sm" :disabled="saving || disabled" @click="emit('discard')">
+    <div v-if="dirty || saving" class="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+      <Button
+        class="h-auto min-w-0 whitespace-normal py-2"
+        variant="ghost"
+        size="sm"
+        :disabled="saving || disabled"
+        @click="emit('discard')"
+      >
         <RiResetLeftLine class="mr-1.5 h-4 w-4" />
         {{ $st('Discard changes') }}
       </Button>
-      <Button size="sm" :disabled="saving || disabled || !dirty" @click="emit('save')">
+      <Button
+        class="h-auto min-w-0 whitespace-normal py-2"
+        size="sm"
+        :disabled="saving || disabled || saveDisabled || !dirty"
+        @click="emit('save')"
+      >
         <RiSave3Line class="mr-1.5 h-4 w-4" />
         {{ saveLabel || $st('Save changes') }}
       </Button>

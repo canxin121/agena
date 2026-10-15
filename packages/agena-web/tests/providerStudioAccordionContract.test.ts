@@ -35,10 +35,9 @@ test('provider studio renders searchable providers and adapters as nested disclo
   assert.ok(providerSource.includes('NEW_PROVIDER_ROW_KEY'))
 })
 
-test('provider studio searches provider CRUD from one box and keeps its rows card-free', () => {
+test('provider studio keeps provider search above clearly grouped configuration cards', () => {
   // Provider create/read/update/delete is scoped by one query box at the top of
-  // the page, mirroring the Model Catalog page. The panel itself must stay
-  // card-free: every provider row is already a SettingsDisclosureRow.
+  // the page. Expanded providers group connection, authentication, and models.
   assert.ok(providerSource.includes('<SearchInput'))
   assert.ok(providerSource.includes('v-model="providerQuery"'))
   assert.ok(providerSource.includes('const filteredProviderRows = computed<ProviderRow[]>'))
@@ -46,7 +45,7 @@ test('provider studio searches provider CRUD from one box and keeps its rows car
   assert.ok(providerSource.includes('row.key === expandedProviderKey.value'))
   assert.ok(providerSource.includes('No providers match this search.'))
   assert.ok(providerSource.includes('{visible} of {total} providers'))
-  assert.ok(!providerSource.includes('<section class="grid gap-4 rounded-lg border border-border/60'))
+  assert.ok(providerSource.includes('<SettingsCard'))
 })
 
 test('adapter row headers own enable and destructive actions', () => {
@@ -92,7 +91,7 @@ test('provider studio uses the Input component model-value contract for editable
 })
 
 test('model editor is rendered inside the matching model row', () => {
-  const modelLoop = providerSource.indexOf('v-for="model in adapter.models"')
+  const modelLoop = providerSource.indexOf('v-for="model in visibleAdapterModels(adapter)"')
   const editor = providerSource.indexOf(
     'v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"',
   )
@@ -113,6 +112,6 @@ test('model editor can be collapsed without being immediately reopened', () => {
   assert.ok(openModelEditor.includes('editingModel.value?.adapterId === adapterId'))
   assert.ok(openModelEditor.includes('editingModel.value?.modelId === model.id'))
   assert.ok(openModelEditor.includes('closeModelEditor()'))
-  assert.ok(toggleAdapterRow.includes('if (editingModel.value?.adapterId === adapterId) closeModelEditor()'))
+  assert.ok(toggleAdapterRow.includes('if (editingModel.value?.adapterId === adapterId && !closeModelEditor()) return'))
   assert.ok(openProviderRow.includes('closeModelEditor()'))
 })

@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-test('the Settings sidebar refreshes active workbenches and preserves plugin drafts', () => {
+test('the Settings sidebar refreshes active workbenches and preserves plugin, permission, and model drafts', () => {
   const source = readFileSync(resolve(import.meta.dir, '../src/pages/SettingsPage.vue'), 'utf8')
   assert.ok(source.includes('settingsRefreshNonce.value += 1'))
   assert.ok(source.includes('await pluginsToolsPanel.value?.refresh()'))
+  assert.ok(source.includes('await permissionsPanel.value?.refresh()'))
+  assert.ok(source.includes('await modelsProvidersPanel.value?.refresh()'))
   for (const section of [
     'interface',
     'models-providers',

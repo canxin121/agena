@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
@@ -22,7 +23,7 @@ function activeRowLabel(html: string): string {
   return match ? String(match[1]).trim() : ''
 }
 
-test('the settings sidebar renders one row per layer and highlights the selected one', async () => {
+test('the settings sidebar highlights the page while scopes remain in the workbench', async () => {
   const { buildSettingsSidebarNodes } = await vite.ssrLoadModule(
     '/src/components/settings/settingsNavigationCatalog.ts',
   )
@@ -50,22 +51,15 @@ test('the settings sidebar renders one row per layer and highlights the selected
   }
 
   const workspace = await render({ activeTab: 'permissions', activeView: 'filesystem', activeScope: 'workspace' })
-  for (const label of [
-    'Effective Permission',
-    'Global Permission',
-    'Workspace Permission',
-    'Current Session Permission',
-  ]) {
-    assert.ok(workspace.includes(label), `missing layer row: ${label}`)
-  }
-  // Only the open page shows its layers, one indent step below the page row.
-  assert.equal(workspace.match(/padding-left:44px/g)?.length, 4)
+  for (const label of ['Filesystem', 'Network', 'Tools']) assert.ok(workspace.includes(label))
+  assert.equal(workspace.includes('Workspace Permission'), false)
+  assert.equal(workspace.match(/padding-left:44px/g), null)
   assert.equal(workspace.match(/aria-current="page"/g)?.length, 1)
-  assert.equal(activeRowLabel(workspace), 'Workspace Permission')
+  assert.equal(activeRowLabel(workspace), 'Filesystem')
 
   const session = await render({ activeTab: 'permissions', activeView: 'network', activeScope: 'session' })
-  assert.equal(activeRowLabel(session), 'Current Session Permission')
-  assert.ok(session.indexOf('Current Session Permission') > session.indexOf('Network'))
+  assert.equal(activeRowLabel(session), 'Network')
+  assert.equal(session.includes('Current Session Permission'), false)
 
   // A page without a layer choice renders no third level at all.
   const plain = await render({ activeTab: 'models-providers', activeView: 'provider-studio', activeScope: '' })
@@ -75,7 +69,7 @@ test('the settings sidebar renders one row per layer and highlights the selected
   assert.equal(activeRowLabel(plain), 'Provider Studio')
 })
 
-test('the section header names the active layer once for the open page', async () => {
+test('scope toolbar avoids duplicate navigation while sidebar layout remains available', async () => {
   const { buildSettingsSubpages } = await vite.ssrLoadModule('/src/components/settings/settingsNavigationCatalog.ts')
   const { i18n } = await vite.ssrLoadModule('/src/i18n/index.ts')
   const { settingsText } = await vite.ssrLoadModule('/src/i18n/settingsText.ts')
@@ -84,26 +78,39 @@ test('the section header names the active layer once for the open page', async (
   )
   i18n.global.locale.value = 'en-US'
 
-  async function render(section: string, activePage: string, activeScope: string) {
+  async function render(section: string, activePage: string, activeScope: string, scopeLayout = 'sidebar') {
     const pages = buildSettingsSubpages(section)
     const app = createSSRApp({
       render: () =>
         h(
           SettingsSectionWorkbench,
-          { section, pages, defaultPage: pages[0]?.id || '', activePage, activeScope },
+          { section, pages, defaultPage: pages[0]?.id || '', activePage, activeScope, scopeLayout },
           { default: () => 'page body' },
         ),
     })
     app.config.globalProperties.$st = settingsText
     app.use(i18n)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/settings/:section', component: { render: () => null } }],
+    })
+    app.use(router)
+    await router.push({ path: `/settings/${section}`, query: { view: activePage, scope: activeScope } })
+    await router.isReady()
     return renderToString(app)
   }
 
   const scoped = await render('models-providers', 'defaults', 'workspace')
   assert.ok(scoped.includes('Model defaults'))
   assert.ok(scoped.includes('· Workspace default'))
-  // The layer is named by the header, not by a second block of page text.
-  assert.equal(scoped.match(/Workspace default/g)?.length, 1)
+  assert.equal(scoped.match(/<h1[^>]*>[\s\S]*?<\/h1>/)?.[0].match(/Workspace default/g)?.length, 1)
+
+  const toolbar = await render('models-providers', 'defaults', 'workspace', 'toolbar')
+  assert.equal(toolbar.includes('<aside'), false)
+  assert.equal(toolbar.match(/aria-current="true"/g)?.length, 1)
+  assert.equal(toolbar.match(/Workspace default/g)?.length, 1)
+  assert.equal(toolbar.includes('· Workspace default'), false)
+  for (const label of ['Effective default', 'Global default', 'Workspace default']) assert.ok(toolbar.includes(label))
 
   const unscoped = await render('models-providers', 'provider-studio', '')
   assert.ok(unscoped.includes('Provider Studio'))

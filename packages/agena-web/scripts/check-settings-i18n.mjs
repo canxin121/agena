@@ -254,6 +254,11 @@ for (const file of overlayFiles) {
 }
 
 const sameAsEnglishAllowlist = new Set([
+  // These nouns also have this spelling in supported European languages.
+  'Audio',
+  'Image',
+  'Document',
+  'tokens',
   'Alpha',
   'Beta',
   'Bedrock SigV4',

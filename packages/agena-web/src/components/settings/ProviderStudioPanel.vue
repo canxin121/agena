@@ -1,7 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RiAddLine, RiCloudLine, RiDeleteBinLine, RiEditLine, RiPlugLine, RiRefreshLine } from '@remixicon/vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import {
+  RiAddLine,
+  RiCloudLine,
+  RiDeleteBinLine,
+  RiEditLine,
+  RiPlugLine,
+  RiRefreshLine,
+  RiKey2Line,
+  RiSettings3Line,
+} from '@remixicon/vue'
 
+import SettingsCard from './SettingsCard.vue'
 import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import ProviderModelCatalogPicker from '@/components/settings/ProviderModelCatalogPicker.vue'
@@ -103,6 +114,7 @@ const selectedModelKeys = ref<Set<string>>(new Set())
 const listingModels = ref(false)
 const newModelId = ref('')
 const providerQuery = ref('')
+const modelQuery = ref('')
 const manualModelAdapterId = ref('')
 const authMessage = ref('')
 
@@ -262,7 +274,7 @@ const modelFields = computed<ModelField[]>(() => [
     key: 'model_id',
     label: st('Model ID'),
     kind: 'readonly',
-    help: 'The provider model identifier is fixed by the route.',
+    help: st('The provider model identifier is fixed by the route.'),
   },
   { key: 'enabled', label: st('Enabled'), kind: 'boolean' },
   { key: 'native_compaction', label: st('Native compaction'), kind: 'boolean' },
@@ -320,6 +332,41 @@ const modelFields = computed<ModelField[]>(() => [
   },
   { key: 'description', label: st('Description'), kind: 'textarea', placeholder: st('Optional model description') },
 ])
+
+const modelFieldGroups = computed(() =>
+  [
+    { title: st('Model identity'), keys: ['model_id', 'display_name', 'lifecycle', 'description'] },
+    { title: st('Token limits'), keys: ['context_window_tokens', 'max_input_tokens', 'max_output_tokens'] },
+    {
+      title: st('Capabilities and behavior'),
+      keys: [
+        'enabled',
+        'native_compaction',
+        'supports_parallel_tool_calls',
+        'manual_overrides',
+        'agena_tools.mode',
+        'features',
+        'input',
+        'output_modalities',
+        'thinking_modes',
+        'speed_modes',
+      ],
+    },
+  ].map((group) => ({
+    ...group,
+    fields: group.keys.flatMap((key) => modelFields.value.filter((field) => field.key === key)),
+  })),
+)
+
+function visibleAdapterModels(adapter: AdapterModels) {
+  const query = modelQuery.value.trim().toLowerCase()
+  return adapter.models.filter(
+    (model) =>
+      !query ||
+      `${model.id} ${model.display_name || ''}`.toLowerCase().includes(query) ||
+      (editingModel.value?.adapterId === adapter.adapter_id && editingModel.value?.modelId === model.id),
+  )
+}
 
 const modelFeatureTokens = new Set(['tool_calling', 'streaming', 'reasoning', 'structured_output', 'temperature'])
 const modelInputTokens = new Set(['text', 'image', 'document', 'audio', 'video', 'file'])
@@ -544,7 +591,12 @@ const providerRows = computed<ProviderRow[]>(() => {
 const providerDirty = computed(() => {
   if (!draft.value) return false
   if (!String(draft.value.source_provider_id || '').trim()) return true
-  return Boolean(editorDirty.value || pendingDeletedAdapterIds.value.size || pendingDeletedModelKeys.value.size)
+  return Boolean(
+    editorDirty.value ||
+    modelJsonDirty.value ||
+    pendingDeletedAdapterIds.value.size ||
+    pendingDeletedModelKeys.value.size,
+  )
 })
 
 function markEditorDirty() {
@@ -574,7 +626,10 @@ function providerRowSummary(row: ProviderRow): string {
   if (row.isNew) return st('Not saved yet')
   const adapters = row.summary?.adapters || []
   const enabled = adapters.filter((adapter) => adapter.enabled).length
-  return st('{enabled} enabled · {total} adapters', { enabled: enabled, total: adapters.length })
+  return st('{models} models · {enabled} enabled adapters', {
+    models: adapters.reduce((total, adapter) => total + (adapter.configured_model_count || 0), 0),
+    enabled,
+  })
 }
 
 // Provider create/read/update/delete is scoped by one query box, mirroring the
@@ -621,8 +676,8 @@ function adapterRowSummary(adapter: AdapterModels): string {
 function toggleAdapterRow(adapterId: string) {
   const next = new Set(expandedAdapterIds.value)
   if (next.has(adapterId)) {
+    if (editingModel.value?.adapterId === adapterId && !closeModelEditor()) return
     next.delete(adapterId)
-    if (editingModel.value?.adapterId === adapterId) closeModelEditor()
   } else next.add(adapterId)
   expandedAdapterIds.value = next
 }
@@ -1118,6 +1173,7 @@ async function loadDraft(providerId?: string) {
   loading.value = true
   error.value = ''
   clearModelStudioState()
+  modelQuery.value = ''
   resetAuthUiState()
   try {
     const query = providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ''
@@ -1286,24 +1342,15 @@ function toggleModel(adapterId: string, modelId: string) {
 }
 
 function setAdapterModelSelection(adapter: AdapterModels, selected: boolean) {
-  if (
-    mutationBusy.value ||
-    listingModels.value ||
-    saving.value ||
-    !selectedAdapterIds.value.has(adapter.adapter_id)
-  )
+  if (mutationBusy.value || listingModels.value || saving.value || !selectedAdapterIds.value.has(adapter.adapter_id))
     return
   const next = new Set(selectedModelKeys.value)
-  for (const model of adapter.models) {
+  for (const model of visibleAdapterModels(adapter)) {
     const key = modelKey(adapter.adapter_id, model.id)
     if (selected) next.add(key)
     else next.delete(key)
   }
-  if (
-    next.size === selectedModelKeys.value.size &&
-    [...next].every((key) => selectedModelKeys.value.has(key))
-  )
-    return
+  if (next.size === selectedModelKeys.value.size && [...next].every((key) => selectedModelKeys.value.has(key))) return
   selectedModelKeys.value = next
   markEditorDirty()
 }
@@ -1345,6 +1392,13 @@ function setAuthSubtype(value: string) {
 
 async function saveDraft() {
   if (!draft.value || saving.value || mutationBusy.value || listingModels.value || catalogApplying.value) return
+  if (modelJsonDirty.value) {
+    applyModelJson()
+    if (modelJsonDirty.value) {
+      error.value = modelError.value
+      return
+    }
+  }
   const draftSnapshot = clone(draft.value)
   const submittedDraftJson = JSON.stringify(draftSnapshot)
   const submittedDraftGeneration = draftRequestGeneration
@@ -1596,6 +1650,7 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
     closeModelEditor()
     return
   }
+  if (editingModel.value && !closeModelEditor()) return
   const requestGeneration = ++modelEditorGeneration
   ++catalogApplyGeneration
   catalogApplying.value = false
@@ -1631,7 +1686,11 @@ async function openModelEditor(adapterId: string, model: ProviderModel) {
   }
 }
 
-function closeModelEditor() {
+function closeModelEditor(discardPending = false) {
+  if (modelJsonDirty.value && !discardPending) {
+    applyModelJson()
+    if (modelJsonDirty.value) return false
+  }
   ++modelEditorGeneration
   ++catalogApplyGeneration
   catalogApplying.value = false
@@ -1641,6 +1700,7 @@ function closeModelEditor() {
   modelValue.value = null
   setModelJsonText('')
   modelError.value = ''
+  return true
 }
 
 async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) {
@@ -1714,7 +1774,10 @@ function modelFieldValue(key: string): string {
     const value = modelPathValue(key)
     if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
     const object = record(value)
-    const names = key === 'thinking_modes' ? sortedThinkingModeNames(object) : Object.keys(object).filter((name) => name !== 'default')
+    const names =
+      key === 'thinking_modes'
+        ? sortedThinkingModeNames(object)
+        : Object.keys(object).filter((name) => name !== 'default')
     if (names.length > 0) return names.join(', ')
     return typeof object.default === 'string' ? object.default : ''
   }
@@ -1840,10 +1903,7 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   modelValue.value = next
   modelJsonDirty.value = false
   scheduleModelJsonSync()
-  stageCurrentModelValue(
-    next,
-    key === 'display_name' || key === 'native_compaction' || key === 'manual_overrides',
-  )
+  stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction' || key === 'manual_overrides')
   modelError.value = ''
 }
 
@@ -1905,7 +1965,7 @@ async function deleteModel(adapterId: string, modelId: string) {
   if (configuredModelKeys.value.has(key)) {
     pendingDeletedModelKeys.value = new Set([...pendingDeletedModelKeys.value, key])
   }
-  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) closeModelEditor()
+  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) closeModelEditor(true)
   const nextValues = { ...modelConfigValues.value }
   delete nextValues[key]
   modelConfigValues.value = nextValues
@@ -1933,7 +1993,7 @@ async function deleteAdapter(adapterId: string) {
   if (configuredAdapterIds.value.has(adapterId)) {
     pendingDeletedAdapterIds.value = new Set([...pendingDeletedAdapterIds.value, adapterId])
   }
-  if (editingModel.value?.adapterId === adapterId) closeModelEditor()
+  if (editingModel.value?.adapterId === adapterId) closeModelEditor(true)
   selectedAdapterIds.value = new Set([...selectedAdapterIds.value].filter((id) => id !== adapterId))
   if (manualModelAdapterId.value === adapterId) syncManualModelAdapter()
   adapterModels.value = adapterModels.value.filter((adapter) => adapter.adapter_id !== adapterId)
@@ -1953,11 +2013,11 @@ async function deleteAdapter(adapterId: string) {
 async function openProviderRow(row: ProviderRow) {
   if (mutationBusy.value || loading.value) return
   if (expandedProviderKey.value === row.key) {
-    closeModelEditor()
+    if (!closeModelEditor()) return
     expandedProviderKey.value = ''
     return
   }
-  const currentKey = expandedProviderKey.value
+  const currentKey = selectedProviderId.value || (draft.value ? NEW_PROVIDER_ROW_KEY : '')
   if (providerDirty.value && currentKey && currentKey !== row.key) {
     const discard = await confirmAction(st('Discard unsaved provider changes and open another provider?'))
     if (!discard) return
@@ -1985,14 +2045,40 @@ async function discardProviderChanges() {
 }
 
 async function refreshActiveProvider() {
-  if (
-    providerDirty.value &&
-    !(await confirmAction(st('Discard unsaved provider changes and refresh from the server?')))
-  )
-    return
-  const sourceProviderId = String(draft.value?.source_provider_id || selectedProviderId.value || '').trim()
-  await loadDraft(sourceProviderId || undefined)
+  if (mutationBusy.value || loading.value) return
+  try {
+    await loadProviders()
+    // Refresh the inventory while keeping the complete provider draft intact.
+    if (providerDirty.value) return
+    const sourceProviderId = String(
+      draft.value?.source_provider_id || selectedProviderId.value || providers.value[0]?.provider_id || '',
+    ).trim()
+    if (sourceProviderId) await loadDraft(sourceProviderId)
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : String(reason)
+  }
 }
+
+async function canLeaveProvider() {
+  if (mutationBusy.value) return false
+  if (!providerDirty.value) return true
+  return confirmAction({
+    title: st('Discard unsaved provider changes?'),
+    confirmText: st('Discard changes'),
+    cancelText: st('Keep editing'),
+  })
+}
+onBeforeRouteUpdate(async (to, from) => {
+  if (to.path === from.path && to.query.view === from.query.view) return true
+  return canLeaveProvider()
+})
+onBeforeRouteLeave(canLeaveProvider)
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (!providerDirty.value && !saving.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+defineExpose({ refresh: refreshActiveProvider })
 
 async function deleteProviderRow(row: ProviderRow) {
   if (row.isNew) {
@@ -2040,6 +2126,7 @@ async function createProvider() {
 }
 
 onMounted(async () => {
+  window.addEventListener('beforeunload', beforeUnload)
   try {
     await Promise.all([loadProviders(), loadAwsProfiles()])
     const firstProviderId = providers.value[0]?.provider_id
@@ -2050,6 +2137,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnload)
   resetAuthUiState()
   clearModelJsonSyncTimer()
   ++draftRequestGeneration
@@ -2067,10 +2155,10 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 
 <template>
   <section class="grid min-w-0 gap-4">
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card/30 p-3 sm:p-4">
       <SearchInput
         v-model="providerQuery"
-        class="min-w-[16rem] flex-1"
+        class="min-w-0 basis-full sm:basis-48 sm:flex-1"
         :placeholder="$st('Search providers by ID, adapter, or configured model')"
         :input-aria-label="$st('Search providers')"
         @search="applyProviderSearch"
@@ -2083,7 +2171,16 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
           })
         }}
       </span>
-      <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
+      <IconButton
+        variant="ghost"
+        size="sm"
+        :disabled="loading || mutationBusy"
+        :tooltip="$st('Refresh providers')"
+        :aria-label="$st('Refresh providers')"
+        @click="refreshActiveProvider"
+        ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
+      /></IconButton>
+      <Button size="sm" :disabled="loading || mutationBusy" @click="createProvider">
         <RiAddLine class="mr-2 h-4 w-4" />
         {{ $st('New provider') }}
       </Button>
@@ -2096,10 +2193,20 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
       {{ error }}
     </div>
 
-    <div class="grid gap-2">
+    <div
+      v-if="loading && !draft"
+      class="rounded-xl border border-border/60 p-5 text-sm text-muted-foreground"
+      role="status"
+    >
+      {{ $st('Loading provider draft…') }}
+    </div>
+    <div class="grid min-w-0 gap-3">
       <SettingsDisclosureRow
         v-for="row in filteredProviderRows"
         :key="row.key"
+        class="min-w-0 rounded-xl bg-card/30"
+        body-class="p-2 sm:p-4 lg:p-4"
+        :disabled="loading || mutationBusy"
         :open="expandedProviderKey === row.key"
         :label="providerRowLabel(row)"
         :summary="providerRowSummary(row)"
@@ -2107,11 +2214,14 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
         @toggle="openProviderRow(row)"
       >
         <template #leading>
-          <RiCloudLine class="h-4 w-4 shrink-0 text-primary" />
+          <span
+            class="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/30 sm:flex"
+            ><RiCloudLine class="h-4 w-4 text-muted-foreground"
+          /></span>
         </template>
         <template #badges>
           <span
-            v-if="expandedProviderKey === row.key && providerDirty"
+            v-if="(row.isNew || row.providerId === selectedProviderId) && providerDirty"
             class="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300"
             >{{ $st('Unsaved') }}</span
           >
@@ -2143,16 +2253,18 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
           </IconButton>
         </template>
 
-        <div v-if="draft && expandedProviderKey === row.key" class="grid min-w-0 gap-5">
-          <section class="grid gap-3">
-            <div>
-              <div class="text-sm font-medium">{{ $st('Provider configuration') }}</div>
-              <div class="mt-1 text-xs text-muted-foreground">
-                {{ $st('Edit provider identity, authentication, adapters, and models, then save them together.') }}
-              </div>
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label class="grid gap-1.5">
+        <fieldset
+          v-if="draft && expandedProviderKey === row.key"
+          :disabled="loading || mutationBusy"
+          class="grid min-w-0 gap-4"
+        >
+          <SettingsCard
+            :title="$st('Provider configuration')"
+            :description="$st('Set the provider identifier and connection time limits.')"
+            :icon="RiSettings3Line"
+          >
+            <div class="grid min-w-0 gap-4 md:grid-cols-3">
+              <label class="grid min-w-0 gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Provider ID') }}</span>
                 <Input
                   :model-value="draft.provider_id"
@@ -2161,27 +2273,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                   @update:model-value="setFieldValue('provider_id', $event)"
                 />
               </label>
-              <label class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Auth mode') }}</span>
-                <OptionPicker
-                  :model-value="authMode"
-                  :options="authModeOptions"
-                  :include-empty="false"
-                  :title="$st('Auth mode')"
-                  @update:model-value="setAuthMode"
-                />
-              </label>
-              <label v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Auth subtype') }}</span>
-                <OptionPicker
-                  :model-value="authSubtype"
-                  :options="authSubtypeOptions"
-                  :include-empty="false"
-                  :title="$st('Auth subtype')"
-                  @update:model-value="setAuthSubtype"
-                />
-              </label>
-              <label class="grid gap-1.5">
+              <label class="grid min-w-0 gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Request timeout (seconds)') }}</span>
                 <Input
                   :model-value="draft.request_timeout_secs"
@@ -2189,7 +2281,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                   @update:model-value="setFieldValue('request_timeout_secs', Number($event))"
                 />
               </label>
-              <label class="grid gap-1.5">
+              <label class="grid min-w-0 gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Connect timeout (seconds)') }}</span>
                 <Input
                   :model-value="draft.connect_timeout_secs"
@@ -2198,17 +2290,15 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                 />
               </label>
             </div>
-          </section>
+          </SettingsCard>
 
-          <section v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-3 border-t border-border/60 pt-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div class="text-sm font-medium">{{ $st('Authentication details') }}</div>
-                <div class="mt-1 text-xs text-muted-foreground">
-                  {{ $st('Secret values are sent only to the provider-studio endpoint and are masked in the form.') }}
-                </div>
-              </div>
-              <div v-if="interactiveAuthAvailable" class="flex gap-2">
+          <SettingsCard
+            :title="$st('Authentication')"
+            :description="$st('Choose how this provider authenticates. Secret values stay masked in the form.')"
+            :icon="RiKey2Line"
+          >
+            <template #actions>
+              <div v-if="interactiveAuthAvailable" class="flex flex-wrap gap-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -2224,107 +2314,139 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                   >{{ authPolling ? $st('Waiting…') : $st('Continue auth') }}</Button
                 >
               </div>
-            </div>
-            <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
-              {{ authMessage }}
-            </div>
-            <div
-              v-if="pendingDeviceAuth"
-              class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
-            >
-              <div class="font-medium">{{ $st('Device authorization is pending') }}</div>
-              <a
-                v-if="pendingDeviceAuth.verification_url"
-                class="break-all text-primary underline underline-offset-2"
-                :href="pendingDeviceAuth.verification_url"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {{ $st('Open verification page') }}
-              </a>
-              <div
-                v-if="pendingDeviceAuth.verification_url"
-                class="break-all font-mono text-[11px] text-muted-foreground"
-              >
-                {{ pendingDeviceAuth.verification_url }}
-              </div>
-              <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">
-                {{ $st('Code:') }} {{ pendingDeviceAuth.user_code }}
-              </div>
-              <div class="text-muted-foreground">
-                {{
-                  $st(
-                    'The Web client polls this device flow using the provider interval. You can also press Continue auth.',
-                  )
-                }}
-              </div>
-            </div>
-            <div
-              v-if="pendingBrowserAuth"
-              class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground"
-            >
-              <div class="font-medium text-foreground">{{ $st('Browser authorization is pending') }}</div>
-              <a
-                v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-                class="break-all text-primary underline underline-offset-2"
-                :href="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {{ $st('Open authorization page') }}
-              </a>
-              <div
-                v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
-                class="break-all font-mono text-[11px]"
-              >
-                {{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}
-              </div>
-              <div>
-                {{
-                  $st('Finish the browser flow, paste the callback URL into the field above, then press Continue auth.')
-                }}
-              </div>
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <label v-for="field in visibleAuthFields" :key="field.path" class="grid gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ field.label }}</span>
-                <div
-                  v-if="field.readOnly"
-                  class="flex h-9 items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground"
-                >
-                  {{ field.value || '—' }}
-                </div>
+            </template>
+            <div class="grid min-w-0 gap-4 sm:grid-cols-2">
+              <label class="grid min-w-0 gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Auth mode') }}</span>
                 <OptionPicker
-                  v-else-if="field.type === 'select'"
-                  :model-value="fieldValue(field.path)"
-                  :options="field.options || []"
-                  :title="field.label"
-                  :include-empty="field.includeEmpty ?? false"
-                  :empty-label="field.emptyLabel"
-                  :allow-custom="field.allowCustom ?? false"
-                  :monospace="field.path.includes('source_kind')"
-                  @update:model-value="setFieldValue(field.path, $event)"
+                  :model-value="authMode"
+                  :options="authModeOptions"
+                  :include-empty="false"
+                  :title="$st('Auth mode')"
+                  @update:model-value="setAuthMode"
                 />
-                <Input
-                  v-else
-                  :model-value="fieldValue(field.path)"
-                  :type="field.secret ? 'password' : field.type || 'text'"
-                  :placeholder="field.placeholder"
-                  :class="field.secret || field.path.includes('url') || field.path.includes('token') ? 'font-mono' : ''"
-                  @update:model-value="setFieldValue(field.path, $event)"
+              </label>
+              <label v-if="authMode !== 'none' && authMode !== 'unset'" class="grid min-w-0 gap-1.5">
+                <span class="text-xs text-muted-foreground">{{ $st('Auth subtype') }}</span>
+                <OptionPicker
+                  :model-value="authSubtype"
+                  :options="authSubtypeOptions"
+                  :include-empty="false"
+                  :title="$st('Auth subtype')"
+                  @update:model-value="setAuthSubtype"
                 />
               </label>
             </div>
-          </section>
-
-          <section class="grid gap-3 border-t border-border/60 pt-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div class="text-sm font-medium">{{ $st('Adapter model lists') }}</div>
-                <div class="mt-1 text-xs text-muted-foreground">
-                  {{ modelListingDescription }} {{ $st('Selected routes are persisted when you save the Provider.') }}
+            <div
+              v-if="authMode !== 'none' && authMode !== 'unset'"
+              class="mt-4 grid min-w-0 gap-3 border-t border-border/60 pt-4"
+            >
+              <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
+                {{ authMessage }}
+              </div>
+              <div
+                v-if="pendingDeviceAuth"
+                class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+              >
+                <div class="font-medium">{{ $st('Device authorization is pending') }}</div>
+                <a
+                  v-if="pendingDeviceAuth.verification_url"
+                  class="break-all text-primary underline underline-offset-2"
+                  :href="pendingDeviceAuth.verification_url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {{ $st('Open verification page') }}
+                </a>
+                <div
+                  v-if="pendingDeviceAuth.verification_url"
+                  class="break-all font-mono text-[11px] text-muted-foreground"
+                >
+                  {{ pendingDeviceAuth.verification_url }}
+                </div>
+                <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">
+                  {{ $st('Code:') }} {{ pendingDeviceAuth.user_code }}
+                </div>
+                <div class="text-muted-foreground">
+                  {{
+                    $st(
+                      'The Web client polls this device flow using the provider interval. You can also press Continue auth.',
+                    )
+                  }}
                 </div>
               </div>
+              <div
+                v-if="pendingBrowserAuth"
+                class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground"
+              >
+                <div class="font-medium text-foreground">{{ $st('Browser authorization is pending') }}</div>
+                <a
+                  v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                  class="break-all text-primary underline underline-offset-2"
+                  :href="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {{ $st('Open authorization page') }}
+                </a>
+                <div
+                  v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+                  class="break-all font-mono text-[11px]"
+                >
+                  {{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}
+                </div>
+                <div>
+                  {{
+                    $st(
+                      'Finish the browser flow, paste the callback URL into the field above, then press Continue auth.',
+                    )
+                  }}
+                </div>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label v-for="field in visibleAuthFields" :key="field.path" class="grid min-w-0 gap-1.5">
+                  <span class="text-xs text-muted-foreground">{{ field.label }}</span>
+                  <div
+                    v-if="field.readOnly"
+                    class="flex min-h-9 min-w-0 break-all items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground"
+                  >
+                    {{ field.value || '—' }}
+                  </div>
+                  <OptionPicker
+                    v-else-if="field.type === 'select'"
+                    :model-value="fieldValue(field.path)"
+                    :options="field.options || []"
+                    :title="field.label"
+                    :include-empty="field.includeEmpty ?? false"
+                    :empty-label="field.emptyLabel"
+                    :allow-custom="field.allowCustom ?? false"
+                    :monospace="field.path.includes('source_kind')"
+                    @update:model-value="setFieldValue(field.path, $event)"
+                  />
+                  <Input
+                    v-else
+                    :model-value="fieldValue(field.path)"
+                    :type="field.secret ? 'password' : field.type || 'text'"
+                    :placeholder="field.placeholder"
+                    :class="
+                      field.secret || field.path.includes('url') || field.path.includes('token') ? 'font-mono' : ''
+                    "
+                    @update:model-value="setFieldValue(field.path, $event)"
+                  />
+                </label>
+              </div>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard
+            :title="$st('Models and adapters')"
+            :description="
+              modelListingDescription + ' ' + $st('Selected routes are persisted when you save the Provider.')
+            "
+            :icon="RiPlugLine"
+            :count="selectedModelKeys.size"
+          >
+            <template #actions>
               <Button
                 variant="outline"
                 size="sm"
@@ -2334,417 +2456,446 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                 <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" />
                 {{ modelListingKind === 'saved' ? $st('Refresh saved models') : $st('List provider models') }}
               </Button>
-            </div>
-            <div v-if="adapterRows.length === 0 && !listingModels" class="text-xs text-muted-foreground">
-              {{ $st('No adapter models loaded. Select an adapter and list live models.') }}
-            </div>
-            <SettingsDisclosureRow
-              v-for="adapter in adapterRows"
-              :key="adapter.adapter_id"
-              :open="expandedAdapterIds.has(adapter.adapter_id)"
-              :label="adapter.adapter_id"
-              :summary="adapterRowSummary(adapter)"
-              :tone="
-                adapterFailure(adapter) ? 'error' : selectedAdapterIds.has(adapter.adapter_id) ? 'default' : 'disabled'
-              "
-              nested
-              @toggle="toggleAdapterRow(adapter.adapter_id)"
-            >
-              <template #leading>
-                <RiPlugLine class="h-4 w-4 shrink-0 text-muted-foreground" />
-              </template>
-              <template #badges>
-                <span
-                  v-if="!supportedAdapterIds.has(adapter.adapter_id)"
-                  class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                  >{{ $st('unsupported') }}</span
-                >
-                <span
-                  v-else-if="selectedAdapterIds.has(adapter.adapter_id)"
-                  class="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300"
-                  >{{ $st('Enabled') }}</span
-                >
-              </template>
-              <template #actions>
-                <label
-                  class="mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted/40"
-                  :title="selectedAdapterIds.has(adapter.adapter_id) ? $st('Disable adapter') : $st('Enable adapter')"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="selectedAdapterIds.has(adapter.adapter_id)"
-                    :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapter.adapter_id)"
-                    @change="toggleAdapter(adapter.adapter_id)"
-                  />
-                  <span>{{ selectedAdapterIds.has(adapter.adapter_id) ? $st('On') : $st('Off') }}</span>
-                </label>
-                <IconButton
-                  variant="ghost"
-                  size="sm"
-                  :tooltip="$st('Delete adapter')"
-                  :aria-label="$st('Delete adapter')"
-                  :disabled="mutationBusy"
-                  @click="deleteAdapter(adapter.adapter_id)"
-                >
-                  <RiDeleteBinLine class="h-4 w-4 text-destructive" />
-                </IconButton>
-              </template>
-
-              <div v-if="adapterFailure(adapter)" class="mb-2 text-xs text-destructive">
-                {{ adapterFailure(adapter) }}
+            </template>
+            <div class="grid min-w-0 gap-3">
+              <SearchInput
+                v-if="adapterRows.some((adapter) => adapter.models.length)"
+                v-model="modelQuery"
+                :placeholder="$st('Search models by name or ID')"
+                :input-aria-label="$st('Search provider models')"
+              />
+              <div v-if="adapterRows.length === 0 && !listingModels" class="text-xs text-muted-foreground">
+                {{ $st('No adapter models loaded. Select an adapter and list live models.') }}
               </div>
-              <div
-                v-if="adapter.models.length"
-                class="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-muted/20 px-2 py-1.5"
+              <SettingsDisclosureRow
+                v-for="adapter in adapterRows"
+                :key="adapter.adapter_id"
+                class="min-w-0 rounded-lg"
+                body-class="p-1.5 sm:p-3"
+                :disabled="mutationBusy || listingModels"
+                :open="expandedAdapterIds.has(adapter.adapter_id)"
+                :label="adapter.adapter_id"
+                :summary="adapterRowSummary(adapter)"
+                :tone="
+                  adapterFailure(adapter)
+                    ? 'error'
+                    : selectedAdapterIds.has(adapter.adapter_id)
+                      ? 'default'
+                      : 'disabled'
+                "
+                nested
+                @toggle="toggleAdapterRow(adapter.adapter_id)"
               >
-                <span class="text-[10px] text-muted-foreground">
-                  {{
-                    $st('{count} selected', {
-                      count: adapter.models.filter((model) => selectedModelKeys.has(modelKey(adapter.adapter_id, model.id)))
-                        .length,
-                    })
-                  }}
-                </span>
-                <div class="ml-auto flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-7 px-2 text-[10px]"
-                    :disabled="
-                      mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)
-                    "
-                    @click="setAdapterModelSelection(adapter, true)"
+                <template #leading>
+                  <RiPlugLine class="h-4 w-4 shrink-0 text-muted-foreground" />
+                </template>
+                <template #badges>
+                  <span
+                    v-if="!supportedAdapterIds.has(adapter.adapter_id)"
+                    class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                    >{{ $st('unsupported') }}</span
                   >
-                    {{ $st('Select all') }}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-7 px-2 text-[10px]"
-                    :disabled="
-                      mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)
-                    "
-                    @click="setAdapterModelSelection(adapter, false)"
+                  <span
+                    v-else-if="selectedAdapterIds.has(adapter.adapter_id)"
+                    class="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300"
+                    >{{ $st('Enabled') }}</span
                   >
-                    {{ $st('Select none') }}
-                  </Button>
-                </div>
-              </div>
-              <div class="grid gap-1">
-                <template v-for="model in adapter.models" :key="model.id">
-                  <div class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40">
+                </template>
+                <template #actions>
+                  <label
+                    class="mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted/40"
+                    :title="selectedAdapterIds.has(adapter.adapter_id) ? $st('Disable adapter') : $st('Enable adapter')"
+                  >
                     <input
                       type="checkbox"
-                      :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
-                      :disabled="mutationBusy || listingModels || !selectedAdapterIds.has(adapter.adapter_id)"
-                      @change="toggleModel(adapter.adapter_id, model.id)"
+                      :checked="selectedAdapterIds.has(adapter.adapter_id)"
+                      :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapter.adapter_id)"
+                      @change="toggleAdapter(adapter.adapter_id)"
                     />
-                    <button
-                      type="button"
-                      class="min-w-0 flex-1 text-left"
-                      :disabled="mutationBusy || listingModels"
-                      @click.stop="openModelEditor(adapter.adapter_id, model)"
-                    >
-                      <span class="block truncate">{{ model.display_name || model.id }}</span>
-                      <code
-                        v-if="model.display_name"
-                        class="block truncate font-mono text-[10px] text-muted-foreground"
-                        >{{ model.id }}</code
-                      >
-                      <span
-                        class="mt-0.5 block truncate text-[10px]"
-                        :class="
-                          catalogMatch(adapter.adapter_id, model.id)
-                            ? 'text-emerald-700 dark:text-emerald-300'
-                            : 'text-muted-foreground'
-                        "
-                      >
-                        <template v-if="catalogMatch(adapter.adapter_id, model.id)">
-                          {{
-                            catalogMatchIsManual(adapter.adapter_id, model.id)
-                              ? $st('Selected catalog')
-                              : $st('Suggested catalog')
-                          }}:
-                          {{
-                            catalogMatch(adapter.adapter_id, model.id)?.display_name ||
-                            catalogMatch(adapter.adapter_id, model.id)?.model_id
-                          }}
-                        </template>
-                        <template v-else-if="catalogMatchesLoading">{{ $st('Finding catalog match…') }}</template>
-                        <template v-else-if="!catalogMatchesLoaded">{{ $st('Catalog match unavailable') }}</template>
-                        <template v-else>{{ $st('No catalog match · choose in model settings') }}</template>
-                      </span>
-                    </button>
-                    <IconButton
-                      variant="ghost"
-                      size="sm"
-                      :tooltip="$st('Edit model')"
-                      :aria-label="$st('Edit model')"
-                      :disabled="mutationBusy || listingModels"
-                      @click.stop="openModelEditor(adapter.adapter_id, model)"
-                    >
-                      <RiEditLine class="h-3.5 w-3.5" />
-                    </IconButton>
-                    <IconButton
-                      variant="ghost"
-                      size="sm"
-                      :tooltip="$st('Delete model')"
-                      :aria-label="$st('Delete model')"
-                      :disabled="mutationBusy"
-                      @click.stop="deleteModel(adapter.adapter_id, model.id)"
-                    >
-                      <RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" />
-                    </IconButton>
-                  </div>
-                  <div
-                    v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"
-                    class="ml-6 mt-1 grid gap-3 rounded-md border border-border/60 bg-muted/10 p-3"
+                    <span>{{ selectedAdapterIds.has(adapter.adapter_id) ? $st('On') : $st('Off') }}</span>
+                  </label>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    :tooltip="$st('Delete adapter')"
+                    :aria-label="$st('Delete adapter')"
+                    :disabled="mutationBusy"
+                    @click="deleteAdapter(adapter.adapter_id)"
                   >
-                    <div class="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <div class="text-sm font-medium">
-                          {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
-                        </div>
-                        <div class="mt-1 text-xs text-muted-foreground">
-                          {{
-                            $st(
-                              'The TUI exposes these 15 model configuration fields through its persisted JSON editor.',
-                            )
-                          }}
-                        </div>
-                      </div>
-                      <Button variant="ghost" size="sm" @click.stop="closeModelEditor">{{ $st('Close') }}</Button>
-                    </div>
-                    <div v-if="modelLoading" class="text-sm text-muted-foreground">
-                      {{ $st('Loading model configuration…') }}
-                    </div>
-                    <div v-else-if="!modelValue" class="text-sm text-destructive">{{ modelError }}</div>
-                    <template v-else>
-                      <div class="rounded-lg border border-primary/20 bg-primary/5 p-3" :aria-busy="catalogApplying">
-                        <div class="flex flex-wrap items-center justify-between gap-3">
-                          <div class="min-w-0">
-                            <div class="text-[10px] font-semibold uppercase tracking-wide text-primary">
-                              {{ $st('Catalog template') }}
-                            </div>
-                            <div v-if="editingCatalogMatch()" class="mt-1 truncate text-sm font-medium">
-                              {{ editingCatalogMatch()?.display_name || editingCatalogMatch()?.model_id }}
-                              <code class="ml-1 font-mono text-[11px] text-muted-foreground">{{
-                                editingCatalogMatch()?.model_id
-                              }}</code>
-                            </div>
-                            <div v-else class="mt-1 text-sm text-muted-foreground">
-                              {{
-                                catalogMatchesLoading
-                                  ? $st('Finding catalog match…')
-                                  : catalogMatchesLoaded
-                                    ? $st('No catalog match yet')
-                                    : $st('Catalog match unavailable')
-                              }}
-                            </div>
-                            <p class="mt-1 text-xs text-muted-foreground">
-                              {{
-                                $st(
-                                  'Choose a catalog model to fill the fields below. The chosen catalog ID is not saved with this model.',
-                                )
-                              }}
-                            </p>
-                            <p v-if="catalogApplying" class="mt-1 text-xs font-medium text-primary" role="status">
-                              {{ $st('Applying catalog template…') }}
-                            </p>
-                          </div>
-                          <div class="flex shrink-0 flex-wrap gap-2">
-                            <Button
-                              v-if="
-                                catalogMatchIsManual(editingModel.adapterId, editingModel.modelId) &&
-                                editingAutomaticMatch()
-                              "
-                              variant="ghost"
-                              size="sm"
-                              :disabled="catalogApplying"
-                              @click.stop="applyCatalogTemplate(editingAutomaticMatch()!, false)"
-                              >{{ $st('Use suggested match') }}</Button
-                            >
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              :disabled="catalogApplying"
-                              @click.stop="catalogPickerOpen = !catalogPickerOpen"
-                            >
-                              {{ editingCatalogMatch() ? $st('Change catalog model') : $st('Choose catalog model') }}
-                            </Button>
-                          </div>
-                        </div>
-                        <div v-if="catalogMatchError" class="mt-2 text-xs text-destructive">
-                          {{ catalogMatchError }}
-                        </div>
-                      </div>
-                      <ProviderModelCatalogPicker
-                        v-if="catalogPickerOpen"
-                        :key="`${editingModel.adapterId}/${editingModel.modelId}`"
-                        :initial-query="catalogPickerQuery()"
-                        :selected-id="editingCatalogMatch()?.model_id"
-                        :suggested-id="editingAutomaticMatch()?.model_id"
-                        :disabled="catalogApplying"
-                        @select="applyCatalogTemplate($event)"
-                        @close="catalogPickerOpen = false"
-                      />
-                      <div class="grid gap-2 sm:grid-cols-2">
-                        <div
-                          v-for="field in modelFields"
-                          :key="field.key"
-                          class="rounded border border-border/50 px-3 py-2"
-                        >
-                          <div class="grid gap-1.5">
-                            <div class="flex items-center justify-between gap-2">
-                              <label
-                                :for="`provider-model-${field.key.replaceAll('.', '-')}`"
-                                class="text-[10px] uppercase tracking-wide text-muted-foreground"
-                                >{{ field.label }}</label
-                              >
-                              <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
-                                $st('read-only')
-                              }}</span>
-                            </div>
-                            <div
-                              v-if="field.kind === 'readonly'"
-                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              class="break-all font-mono text-xs"
-                            >
-                              {{ modelFieldValue(field.key) || '—' }}
-                            </div>
-                            <input
-                              v-else-if="field.kind === 'boolean'"
-                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              type="checkbox"
-                              class="h-4 w-4 justify-self-start accent-primary"
-                              :checked="modelFieldBooleanValue(field.key)"
-                              :disabled="catalogApplying"
-                              @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
-                            />
-                            <OptionPicker
-                              v-else-if="field.kind === 'select'"
-                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              :model-value="modelFieldValue(field.key)"
-                              :options="field.options || []"
-                              :include-empty="field.key === 'lifecycle'"
-                              :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
-                              :title="field.label"
-                              :disabled="catalogApplying"
-                              @update:model-value="setModelFieldValue(field.key, $event)"
-                            />
-                            <textarea
-                              v-else-if="field.kind === 'textarea'"
-                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              :value="modelFieldValue(field.key)"
-                              :placeholder="field.placeholder"
-                              :disabled="catalogApplying"
-                              rows="3"
-                              class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
-                              @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
-                            />
-                            <Input
-                              v-else
-                              :id="`provider-model-${field.key.replaceAll('.', '-')}`"
-                              :model-value="modelFieldValue(field.key)"
-                              :type="field.kind === 'number' ? 'number' : 'text'"
-                              :placeholder="field.placeholder"
-                              :disabled="catalogApplying"
-                              :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
-                              @update:model-value="
-                                field.kind === 'csv' ? undefined : setModelFieldValue(field.key, $event)
-                              "
-                              @change="
-                                field.kind === 'csv'
-                                  ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
-                                  : undefined
-                              "
-                            />
-                            <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
-                          </div>
-                        </div>
-                      </div>
-                      <label class="grid gap-1.5">
-                        <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
-                        <textarea
-                          v-model="modelJson"
-                          rows="16"
-                          spellcheck="false"
-                          :disabled="catalogApplying"
-                          class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
-                          @input="markModelJsonDirty"
-                        />
-                      </label>
-                      <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
-                      <div class="flex flex-wrap items-center gap-2">
-                        <Button
-                          variant="outline"
-                          :disabled="mutationBusy || catalogApplying"
-                          @click.stop="applyModelJson"
-                          >{{ $st('Apply JSON to provider draft') }}</Button
-                        >
-                        <span class="text-xs text-muted-foreground">{{
-                          $st('Model field changes are staged automatically and saved with the Provider.')
-                        }}</span>
-                      </div>
-                    </template>
-                  </div>
+                    <RiDeleteBinLine class="h-4 w-4 text-destructive" />
+                  </IconButton>
                 </template>
-                <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">
-                  {{ $st('No models listed.') }}
-                </div>
-              </div>
-            </SettingsDisclosureRow>
-            <div class="flex flex-wrap items-end gap-2">
-              <label class="grid min-w-[12rem] gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Adapter') }}</span>
-                <OptionPicker
-                  :model-value="manualModelAdapterId"
-                  :options="manualModelAdapterOptions"
-                  :include-empty="false"
-                  :placeholder="$st('Select adapter')"
-                  :title="$st('Adapter for manual model')"
-                  monospace
-                  :disabled="mutationBusy || listingModels || manualModelAdapterOptions.length === 0"
-                  @update:model-value="manualModelAdapterId = $event"
-                />
-              </label>
-              <label class="grid min-w-[14rem] gap-1.5">
-                <span class="text-xs text-muted-foreground">{{ $st('Add model id') }}</span>
-                <Input
-                  v-model="newModelId"
-                  class="font-mono"
-                  placeholder="model-name"
-                  @keydown.enter="addManualModel"
-                />
-              </label>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId"
-                @click="addManualModel"
-                ><RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Add model') }}</Button
-              >
-            </div>
-          </section>
 
-          <SettingsSaveBar
-            :dirty="providerDirty"
-            :saving="saving"
-            :disabled="mutationBusy || listingModels || catalogApplying || !draft.provider_id.trim()"
-            :error="error"
-            :save-label="$st('Save provider changes')"
-            sticky
-            @save="saveDraft"
-            @discard="discardProviderChanges"
-          />
-        </div>
+                <div v-if="adapterFailure(adapter)" class="mb-2 text-xs text-destructive">
+                  {{ adapterFailure(adapter) }}
+                </div>
+                <div
+                  v-if="adapter.models.length"
+                  class="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-muted/20 px-2 py-1.5"
+                >
+                  <span class="text-[10px] text-muted-foreground">
+                    {{
+                      $st('{count} selected', {
+                        count: adapter.models.filter((model) =>
+                          selectedModelKeys.has(modelKey(adapter.adapter_id, model.id)),
+                        ).length,
+                      })
+                    }}
+                  </span>
+                  <div class="ml-auto flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 px-2 text-[10px]"
+                      :disabled="mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)"
+                      @click="setAdapterModelSelection(adapter, true)"
+                    >
+                      {{ $st('Select all') }}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 px-2 text-[10px]"
+                      :disabled="mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)"
+                      @click="setAdapterModelSelection(adapter, false)"
+                    >
+                      {{ $st('Select none') }}
+                    </Button>
+                  </div>
+                </div>
+                <div class="grid min-w-0 gap-1">
+                  <template v-for="model in visibleAdapterModels(adapter)" :key="model.id">
+                    <div class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40">
+                      <input
+                        type="checkbox"
+                        :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
+                        :disabled="mutationBusy || listingModels || !selectedAdapterIds.has(adapter.adapter_id)"
+                        @change="toggleModel(adapter.adapter_id, model.id)"
+                      />
+                      <button
+                        type="button"
+                        class="min-w-0 flex-1 text-left"
+                        :disabled="mutationBusy || listingModels"
+                        @click.stop="openModelEditor(adapter.adapter_id, model)"
+                      >
+                        <span class="block truncate">{{ model.display_name || model.id }}</span>
+                        <code
+                          v-if="model.display_name"
+                          class="block truncate font-mono text-[10px] text-muted-foreground"
+                          >{{ model.id }}</code
+                        >
+                        <span
+                          class="mt-0.5 block truncate text-[10px]"
+                          :class="
+                            catalogMatch(adapter.adapter_id, model.id)
+                              ? 'text-emerald-700 dark:text-emerald-300'
+                              : 'text-muted-foreground'
+                          "
+                        >
+                          <template v-if="catalogMatch(adapter.adapter_id, model.id)">
+                            {{
+                              catalogMatchIsManual(adapter.adapter_id, model.id)
+                                ? $st('Selected catalog')
+                                : $st('Suggested catalog')
+                            }}:
+                            {{
+                              catalogMatch(adapter.adapter_id, model.id)?.display_name ||
+                              catalogMatch(adapter.adapter_id, model.id)?.model_id
+                            }}
+                          </template>
+                          <template v-else-if="catalogMatchesLoading">{{ $st('Finding catalog match…') }}</template>
+                          <template v-else-if="!catalogMatchesLoaded">{{ $st('Catalog match unavailable') }}</template>
+                          <template v-else>{{ $st('No catalog match · choose in model settings') }}</template>
+                        </span>
+                      </button>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        :tooltip="$st('Edit model')"
+                        :aria-label="$st('Edit model')"
+                        :disabled="mutationBusy || listingModels"
+                        @click.stop="openModelEditor(adapter.adapter_id, model)"
+                      >
+                        <RiEditLine class="h-3.5 w-3.5" />
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
+                        :tooltip="$st('Delete model')"
+                        :aria-label="$st('Delete model')"
+                        :disabled="mutationBusy"
+                        @click.stop="deleteModel(adapter.adapter_id, model.id)"
+                      >
+                        <RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" />
+                      </IconButton>
+                    </div>
+                    <div
+                      v-if="editingModel?.adapterId === adapter.adapter_id && editingModel?.modelId === model.id"
+                      class="my-2 grid min-w-0 gap-4 rounded-xl border border-border/70 bg-background/70 p-3 sm:p-4"
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <div class="break-all text-sm font-semibold">
+                            {{ $st('Model ·') }} {{ editingModel.adapterId }}/{{ editingModel.modelId }}
+                          </div>
+                          <div class="mt-1 text-xs text-muted-foreground">
+                            {{
+                              $st(
+                                'Customize this model’s name, limits, and capabilities. Changes are saved with the provider.',
+                              )
+                            }}
+                          </div>
+                        </div>
+                        <Button variant="ghost" size="sm" @click.stop="closeModelEditor()">{{ $st('Close') }}</Button>
+                      </div>
+                      <div v-if="modelLoading" class="text-sm text-muted-foreground">
+                        {{ $st('Loading model configuration…') }}
+                      </div>
+                      <div v-else-if="!modelValue" class="text-sm text-destructive">{{ modelError }}</div>
+                      <template v-else>
+                        <div
+                          class="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-3"
+                          :aria-busy="catalogApplying"
+                        >
+                          <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-xs font-medium text-muted-foreground">
+                                {{ $st('Catalog template') }}
+                              </div>
+                              <div v-if="editingCatalogMatch()" class="mt-1 truncate text-sm font-medium">
+                                {{ editingCatalogMatch()?.display_name || editingCatalogMatch()?.model_id }}
+                                <code class="ml-1 font-mono text-[11px] text-muted-foreground">{{
+                                  editingCatalogMatch()?.model_id
+                                }}</code>
+                              </div>
+                              <div v-else class="mt-1 text-sm text-muted-foreground">
+                                {{
+                                  catalogMatchesLoading
+                                    ? $st('Finding catalog match…')
+                                    : catalogMatchesLoaded
+                                      ? $st('No catalog match yet')
+                                      : $st('Catalog match unavailable')
+                                }}
+                              </div>
+                              <p class="mt-1 text-xs text-muted-foreground">
+                                {{ $st('Apply a catalog template, then adjust the model settings below.') }}
+                              </p>
+                              <p v-if="catalogApplying" class="mt-1 text-xs font-medium text-primary" role="status">
+                                {{ $st('Applying catalog template…') }}
+                              </p>
+                            </div>
+                            <div class="flex min-w-0 flex-wrap gap-2">
+                              <Button
+                                v-if="
+                                  catalogMatchIsManual(editingModel.adapterId, editingModel.modelId) &&
+                                  editingAutomaticMatch()
+                                "
+                                variant="ghost"
+                                size="sm"
+                                :disabled="catalogApplying"
+                                @click.stop="applyCatalogTemplate(editingAutomaticMatch()!, false)"
+                                >{{ $st('Use suggested match') }}</Button
+                              >
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                :disabled="catalogApplying"
+                                @click.stop="catalogPickerOpen = !catalogPickerOpen"
+                              >
+                                {{ editingCatalogMatch() ? $st('Change catalog model') : $st('Choose catalog model') }}
+                              </Button>
+                            </div>
+                          </div>
+                          <div v-if="catalogMatchError" class="mt-2 text-xs text-destructive">
+                            {{ catalogMatchError }}
+                          </div>
+                        </div>
+                        <ProviderModelCatalogPicker
+                          v-if="catalogPickerOpen"
+                          :key="`${editingModel.adapterId}/${editingModel.modelId}`"
+                          :initial-query="catalogPickerQuery()"
+                          :selected-id="editingCatalogMatch()?.model_id"
+                          :suggested-id="editingAutomaticMatch()?.model_id"
+                          :disabled="catalogApplying"
+                          @select="applyCatalogTemplate($event)"
+                          @close="catalogPickerOpen = false"
+                        />
+                        <section v-for="group in modelFieldGroups" :key="group.title" class="min-w-0">
+                          <h3 class="mb-3 border-b border-border/60 pb-2 text-sm font-medium">{{ group.title }}</h3>
+                          <div class="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                            <div
+                              v-for="field in group.fields"
+                              :key="field.key"
+                              class="min-w-0"
+                              :class="field.kind === 'textarea' ? 'sm:col-span-2 xl:col-span-3' : ''"
+                            >
+                              <div class="grid min-w-0 gap-1.5">
+                                <div class="flex items-center justify-between gap-2">
+                                  <label
+                                    :for="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                    class="text-xs text-muted-foreground"
+                                    >{{ field.label }}</label
+                                  >
+                                  <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">{{
+                                    $st('read-only')
+                                  }}</span>
+                                </div>
+                                <div
+                                  v-if="field.kind === 'readonly'"
+                                  :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                  class="break-all font-mono text-xs"
+                                >
+                                  {{ modelFieldValue(field.key) || '—' }}
+                                </div>
+                                <input
+                                  v-else-if="field.kind === 'boolean'"
+                                  :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                  type="checkbox"
+                                  class="h-4 w-4 justify-self-start accent-primary"
+                                  :checked="modelFieldBooleanValue(field.key)"
+                                  :disabled="catalogApplying"
+                                  @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
+                                />
+                                <OptionPicker
+                                  v-else-if="field.kind === 'select'"
+                                  :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                  :model-value="modelFieldValue(field.key)"
+                                  :options="field.options || []"
+                                  :include-empty="field.key === 'lifecycle'"
+                                  :empty-label="field.key === 'lifecycle' ? $st('Default / unset') : undefined"
+                                  :title="field.label"
+                                  :disabled="catalogApplying"
+                                  @update:model-value="setModelFieldValue(field.key, $event)"
+                                />
+                                <textarea
+                                  v-else-if="field.kind === 'textarea'"
+                                  :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                  :value="modelFieldValue(field.key)"
+                                  :placeholder="field.placeholder"
+                                  :disabled="catalogApplying"
+                                  rows="3"
+                                  class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
+                                  @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
+                                />
+                                <Input
+                                  v-else
+                                  :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                                  :model-value="modelFieldValue(field.key)"
+                                  :type="field.kind === 'number' ? 'number' : 'text'"
+                                  :placeholder="field.placeholder"
+                                  :disabled="catalogApplying"
+                                  :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
+                                  @update:model-value="
+                                    field.kind === 'csv' ? undefined : setModelFieldValue(field.key, $event)
+                                  "
+                                  @change="
+                                    field.kind === 'csv'
+                                      ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                                      : undefined
+                                  "
+                                />
+                                <div v-if="field.help" class="text-xs leading-relaxed text-muted-foreground">
+                                  {{ field.help }}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                        <details class="min-w-0 rounded-lg border border-border/60" :open="modelJsonDirty || undefined">
+                          <summary class="cursor-pointer px-3 py-2.5 text-xs font-medium">
+                            {{ $st('Advanced model JSON') }}
+                          </summary>
+                          <div class="grid min-w-0 gap-3 border-t border-border/60 p-3">
+                            <label class="grid min-w-0 gap-1.5">
+                              <span class="text-xs text-muted-foreground">{{ $st('Persisted model JSON') }}</span>
+                              <textarea
+                                v-model="modelJson"
+                                rows="16"
+                                spellcheck="false"
+                                :disabled="catalogApplying"
+                                class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
+                                @input="markModelJsonDirty"
+                              />
+                            </label>
+                            <div class="flex flex-wrap items-center gap-2">
+                              <Button
+                                variant="outline"
+                                :disabled="mutationBusy || catalogApplying"
+                                @click.stop="applyModelJson"
+                                >{{ $st('Apply JSON to provider draft') }}</Button
+                              >
+                            </div>
+                          </div>
+                        </details>
+                        <div
+                          v-if="modelError"
+                          class="rounded-lg bg-destructive/5 p-3 text-xs text-destructive"
+                          role="alert"
+                        >
+                          {{ modelError }}
+                        </div>
+                        <p class="text-xs leading-relaxed text-muted-foreground">
+                          {{ $st('Model field changes are staged automatically and saved with the Provider.') }}
+                        </p>
+                      </template>
+                    </div>
+                  </template>
+                  <div
+                    v-if="visibleAdapterModels(adapter).length === 0"
+                    class="px-2 py-3 text-xs text-muted-foreground"
+                  >
+                    {{ modelQuery ? $st('No models match this search.') : $st('No models listed.') }}
+                  </div>
+                </div>
+              </SettingsDisclosureRow>
+              <details class="min-w-0 rounded-lg border border-dashed border-border/70">
+                <summary class="cursor-pointer px-3 py-3 text-sm font-medium">
+                  {{ $st('Add a model manually') }}
+                </summary>
+                <div
+                  class="grid min-w-0 gap-3 border-t border-border/50 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+                >
+                  <label class="grid min-w-0 gap-1.5">
+                    <span class="text-xs text-muted-foreground">{{ $st('Adapter') }}</span>
+                    <OptionPicker
+                      :model-value="manualModelAdapterId"
+                      :options="manualModelAdapterOptions"
+                      :include-empty="false"
+                      :placeholder="$st('Select adapter')"
+                      :title="$st('Adapter for manual model')"
+                      monospace
+                      :disabled="mutationBusy || listingModels || manualModelAdapterOptions.length === 0"
+                      @update:model-value="manualModelAdapterId = $event"
+                    />
+                  </label>
+                  <label class="grid min-w-0 gap-1.5">
+                    <span class="text-xs text-muted-foreground">{{ $st('Add model id') }}</span>
+                    <Input
+                      v-model="newModelId"
+                      class="font-mono"
+                      placeholder="model-name"
+                      @keydown.enter="addManualModel"
+                    />
+                  </label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId"
+                    @click="addManualModel"
+                    ><RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Add model') }}</Button
+                  >
+                </div>
+              </details>
+            </div>
+          </SettingsCard>
+        </fieldset>
         <div v-else-if="loading" class="py-6 text-center text-sm text-muted-foreground">
           {{ $st('Loading provider draft…') }}
         </div>
       </SettingsDisclosureRow>
 
       <div
-        v-if="providerRows.length === 0"
+        v-if="providerRows.length === 0 && !loading"
         class="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
       >
         {{ $st('No providers configured. Create one to get started.') }}
@@ -2756,5 +2907,17 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
         {{ $st('No providers match this search.') }}
       </div>
     </div>
+    <SettingsSaveBar
+      v-if="draft && (providerDirty || saving)"
+      :dirty="providerDirty"
+      :saving="saving"
+      :disabled="mutationBusy || loading || listingModels || catalogApplying"
+      :save-disabled="!draft.provider_id.trim()"
+      :error="error"
+      :save-label="$st('Save provider changes')"
+      sticky
+      @save="saveDraft"
+      @discard="discardProviderChanges"
+    />
   </section>
 </template>

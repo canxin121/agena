@@ -56,7 +56,7 @@ test('Model Catalog fills the settings content area instead of scrolling inside 
   assert.ok(page.includes('contentFillsViewport'))
   assert.ok(source.includes('lg:grid-rows-[minmax(0,1fr)]'))
   assert.ok(source.includes('lg:min-h-0 lg:max-h-none lg:flex-1'))
-  assert.ok(source.includes('lg:min-h-0 lg:p-5'))
+  assert.ok(source.includes('lg:min-h-0 lg:overflow-y-auto'))
   assert.equal(source.includes('min-h-[38rem]'), false)
   assert.equal(source.includes('lg:max-h-[47rem]'), false)
 })

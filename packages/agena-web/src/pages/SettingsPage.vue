@@ -169,6 +169,8 @@ watch(
 )
 const settingsRefreshNonce = ref(0)
 const pluginsToolsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
+const modelsProvidersPanel = ref<{ refresh: () => Promise<void> } | null>(null)
+const permissionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 
 function goToSettingsDestination(destination: SettingsSidebarDestination) {
   const path = settingsPathForTab(destination.section)
@@ -201,10 +203,13 @@ const tabs = computed(() =>
 )
 
 async function refreshSettingsSidebar() {
-  // Plugins refresh in place so an unsaved configuration survives. Other
-  // server-backed workbenches remount, and browser preferences refresh below.
+  // Configuration editors refresh in place so unsaved drafts survive.
   if (activeSection.value === 'plugins-tools' && activeView.value === 'plugin-workbench') {
     await pluginsToolsPanel.value?.refresh()
+  } else if (activeSection.value === 'models-providers') {
+    await modelsProvidersPanel.value?.refresh()
+  } else if (activeSection.value === 'permissions') {
+    await permissionsPanel.value?.refresh()
   } else settingsRefreshNonce.value += 1
   await settings.refresh()
   await transcriptPreferences.refresh()
@@ -556,7 +561,9 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
               'w-full',
               contentFillsViewport
                 ? 'mx-auto flex max-w-6xl flex-col gap-4 p-4 lg:mx-0 lg:h-full lg:max-w-none lg:min-h-0 lg:gap-6 lg:p-6'
-                : 'mx-auto max-w-6xl space-y-8 p-4 lg:p-8',
+                : activeSection === 'permissions' || activeSection === 'models-providers'
+                  ? 'space-y-6 p-4 lg:p-6'
+                  : 'mx-auto max-w-6xl space-y-8 p-4 lg:p-8',
             )
           "
         >
@@ -876,6 +883,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <!-- Models & Providers -->
           <ModelsProvidersPanel
+            ref="modelsProvidersPanel"
             :active-page="activeView"
             :scope="activeScope"
             v-else-if="activeSection === 'models-providers'"
@@ -884,6 +892,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <!-- Permissions -->
           <PermissionsWorkbenchPanel
+            ref="permissionsPanel"
             :active-page="activeView"
             :scope="activeScope"
             v-else-if="activeSection === 'permissions'"

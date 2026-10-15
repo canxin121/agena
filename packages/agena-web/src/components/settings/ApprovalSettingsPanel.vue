@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 
 type ApprovalScope = 'effective' | 'global' | 'workspace'
 
-// The layer is chosen in the left navigation and named once in the section
-// header, so this page only forwards the scope to the editor.
+// The workbench owns the route-backed scope selector.
 const props = defineProps<{ scope: string }>()
 
 function normalizeApprovalScope(value: unknown): ApprovalScope {
@@ -13,8 +12,14 @@ function normalizeApprovalScope(value: unknown): ApprovalScope {
 }
 
 const scope = computed<ApprovalScope>(() => normalizeApprovalScope(props.scope))
+const editor = ref<{ refresh: () => Promise<void> } | null>(null)
+defineExpose({
+  refresh: async () => {
+    await editor.value?.refresh()
+  },
+})
 </script>
 
 <template>
-  <ApprovalModelPanel :scope="scope" />
+  <ApprovalModelPanel ref="editor" :scope="scope" />
 </template>

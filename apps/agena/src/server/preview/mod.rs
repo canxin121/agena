@@ -1,3 +1,4 @@
+pub(crate) mod apps;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;

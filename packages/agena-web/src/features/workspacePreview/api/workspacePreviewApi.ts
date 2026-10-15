@@ -46,8 +46,7 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
   const command = typeof record.command === 'string' && record.command.trim() ? record.command.trim() : ''
   if (!command) return null
 
-  const args = Array.isArray(record.args) ? record.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (args.length === 0) return null
+  const args = Array.isArray(record.args) ? record.args.map((v) => String(v ?? '')) : []
 
   const logsPath = typeof record.logsPath === 'string' && record.logsPath.trim() ? record.logsPath.trim() : ''
   if (!logsPath) return null

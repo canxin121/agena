@@ -90,6 +90,7 @@ fn workspace_git_reads_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
 fn server_api_router() -> Router<Arc<AppState>> {
     fs_router()
         .merge(workspace_git_reads_router())
+        .merge(crate::server::preview::apps::router())
         .route(
             "/api/v1/server/mcp",
             get(crate::server::mcp::get_mcp_server_control)
@@ -665,6 +666,11 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             workspace_preview_registry.clone(),
         ),
     );
+    let interactive_apps = Arc::new(crate::server::preview::apps::InteractiveApps::new(
+        server_state_db.clone(),
+        workspace_preview_registry.clone(),
+        workspace_preview_runtime.clone(),
+    ));
 
     let application = Application::from_composed_runtime_services(runtime.application_services())
         .map_err(|error| {
@@ -728,6 +734,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         terminal,
         workspace_preview_registry,
         workspace_preview_runtime,
+        interactive_apps,
         server_state_db,
         application: application.clone(),
     });

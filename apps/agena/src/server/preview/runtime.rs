@@ -142,6 +142,7 @@ fn augment_macos_path(base: &str) -> String {
 pub(crate) struct WorkspacePreviewRuntime {
     registry: Arc<WorkspacePreviewRegistry>,
     running_by_id: Arc<DashMap<String, u32>>,
+    operations: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl WorkspacePreviewRuntime {
@@ -149,10 +150,12 @@ impl WorkspacePreviewRuntime {
         Self {
             registry,
             running_by_id: Arc::new(DashMap::new()),
+            operations: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     pub(crate) async fn start_by_id(&self, id: &str) -> ApiResult<PreviewSessionRecord> {
+        let _operation = self.operations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -232,6 +235,10 @@ impl WorkspacePreviewRuntime {
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file))
             .kill_on_drop(true);
+        // Dev commands often spawn another server process (npm, Vite, Python
+        // reloaders). An owned process group lets Stop terminate the whole app.
+        #[cfg(unix)]
+        cmd.process_group(0);
 
         // See plugin_runtime for why this helps on macOS GUI launches.
         if cfg!(target_os = "macos") && !Path::new(&program).is_absolute() {
@@ -259,27 +266,24 @@ impl WorkspacePreviewRuntime {
         // Track first to ensure stop() can immediately see it.
         running_map.insert(trimmed.to_string(), pid);
 
-        let updated = self.registry.mark_running_by_id(trimmed, pid).await?;
-
-        // If a stop raced with our start (removed the entry), revert to stopped.
-        let still_running = running_map
-            .get(trimmed)
-            .map(|current| *current == pid)
-            .unwrap_or(false);
-        if !still_running && let Err(error) = self.registry.mark_stopped_by_id(trimmed, None).await
-        {
-            tracing::error!(
-                session_id = trimmed,
-                pid,
-                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                "failed to persist a preview session stop that raced with process startup"
-            );
-        }
+        let updated = match self.registry.mark_running_by_id(trimmed, pid).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                running_map.remove(trimmed);
+                if let Err(cleanup) = kill_pid(pid, true).await {
+                    tracing::error!(session_id = trimmed, pid, %cleanup, "failed to clean up preview after persistence error");
+                }
+                return Err(error);
+            }
+        };
 
         let registry = self.registry.clone();
+        let operations = self.operations.clone();
         let session_id = trimmed.to_string();
         tokio::spawn(async move {
             let status = child.wait().await;
+            // A prior process exiting must not erase a newer start's pid/state.
+            let _operation = operations.lock().await;
 
             // Only apply exit handling if this process is still the current one.
             let should_apply = match running_map.get(&session_id) {
@@ -289,6 +293,11 @@ impl WorkspacePreviewRuntime {
 
             if should_apply {
                 running_map.remove(&session_id);
+                // A launcher can exit while its server child is still alive.
+                #[cfg(unix)]
+                if let Err(error) = signal_unix_process(pid, true, libc::SIGKILL, "SIGKILL") {
+                    tracing::error!(session_id, pid, %error, "failed to stop exited preview's children");
+                }
             }
 
             let exit_detail = match status {
@@ -316,13 +325,16 @@ impl WorkspacePreviewRuntime {
     }
 
     pub(crate) async fn stop_by_id(&self, id: &str) -> ApiResult<PreviewSessionRecord> {
+        let _operation = self.operations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
         }
 
-        if let Some((_, pid)) = self.running_by_id.remove(trimmed) {
-            kill_pid(pid).await?;
+        let owned_pid = self.running_by_id.get(trimmed).map(|entry| *entry);
+        if let Some(pid) = owned_pid {
+            kill_pid(pid, true).await?;
+            self.running_by_id.remove(trimmed);
             return self.registry.mark_stopped_by_id(trimmed, None).await;
         }
 
@@ -334,24 +346,24 @@ impl WorkspacePreviewRuntime {
         if let Some(pid) = session.pid
             && pid > 0
         {
-            kill_pid(pid).await?;
+            kill_pid(pid, false).await?;
         }
 
         self.registry.mark_stopped_by_id(trimmed, None).await
     }
 }
 
-async fn kill_pid(pid: u32) -> ApiResult<()> {
+async fn kill_pid(pid: u32, owned_group: bool) -> ApiResult<()> {
     if pid == 0 {
         return Ok(());
     }
 
     #[cfg(unix)]
     {
-        signal_unix_process(pid, libc::SIGTERM, "SIGTERM")?;
+        signal_unix_process(pid, owned_group, libc::SIGTERM, "SIGTERM")?;
         tokio::time::sleep(Duration::from_millis(650)).await;
         // ESRCH after the grace period means SIGTERM already did its job.
-        signal_unix_process(pid, libc::SIGKILL, "SIGKILL")?;
+        signal_unix_process(pid, owned_group, libc::SIGKILL, "SIGKILL")?;
         return Ok(());
     }
 
@@ -386,10 +398,20 @@ async fn kill_pid(pid: u32) -> ApiResult<()> {
 }
 
 #[cfg(unix)]
-fn signal_unix_process(pid: u32, signal: i32, signal_name: &str) -> ApiResult<()> {
+fn signal_unix_process(
+    pid: u32,
+    owned_group: bool,
+    signal: i32,
+    signal_name: &str,
+) -> ApiResult<()> {
     // SAFETY: libc::kill does not dereference pointers; pid and signal are
     // validated scalar values supplied by this process registry.
-    if unsafe { libc::kill(pid as i32, signal) } == 0 {
+    let target = if owned_group {
+        -(pid as i32)
+    } else {
+        pid as i32
+    };
+    if unsafe { libc::kill(target, signal) } == 0 {
         return Ok(());
     }
 
@@ -403,4 +425,66 @@ fn signal_unix_process(pid: u32, signal: i32, signal_name: &str) -> ApiResult<()
         "failed to send {signal_name} to preview process {pid}: {}",
         agena_failure::diagnostic::format_error_chain(&error)
     )))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::server::{persistence::db::ServerStateDb, preview::PreviewSessionCreateRequest};
+
+    #[tokio::test]
+    async fn stop_terminates_server_children_even_when_they_ignore_sigterm() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            ServerStateDb::open_at_path(temp.path().join("state.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let registry = Arc::new(WorkspacePreviewRegistry::new(db));
+        let runtime = WorkspacePreviewRuntime::new(registry.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let child = format!(
+            "import signal,socket,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);s=socket.socket();s.bind(('127.0.0.1',{}));s.listen();time.sleep(60)",
+            address.port()
+        );
+        let launcher = format!(
+            "import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',{}]);time.sleep(60)",
+            serde_json::to_string(&child).unwrap()
+        );
+        registry
+            .create_server_session(PreviewSessionCreateRequest {
+                id: "children".into(),
+                directory: temp.path().to_string_lossy().into_owned(),
+                run_directory: temp.path().to_string_lossy().into_owned(),
+                agena_session_id: None,
+                command: "python3".into(),
+                args: vec!["-c".into(), launcher],
+                logs_path: String::new(),
+                target_url: url::Url::parse(&format!("http://{address}/")).unwrap(),
+            })
+            .await
+            .unwrap();
+        runtime.start_by_id("children").await.unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if tokio::net::TcpStream::connect(address).await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        runtime.stop_by_id("children").await.unwrap();
+        assert!(
+            ready.is_ok(),
+            "the child server must have started before Stop"
+        );
+        assert!(
+            tokio::net::TcpStream::connect(address).await.is_err(),
+            "Stop must close a child server that ignores SIGTERM"
+        );
+        assert!(registry.get_by_id("children").await.unwrap().pid.is_none());
+    }
 }

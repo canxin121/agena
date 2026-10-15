@@ -364,17 +364,21 @@ async fn proxy_preview_session_http(
 ) -> ApiResult<Response> {
     let client = preview_proxy_client()?;
     let upstream_url = build_proxy_target_url(&target, path.as_deref(), original_uri.query());
-    let upstream = client
+    let mut request = client
         .request(parts.method, upstream_url.clone())
         .headers(filtered_request_headers(&parts.headers))
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
-        .send()
-        .await
-        .map_err(|err| {
-            AppError::bad_gateway(format!(
-                "failed to reach preview target {upstream_url}: {err}"
-            ))
-        })?;
+        .body(reqwest::Body::wrap_stream(body.into_data_stream()));
+    // The body is forwarded byte-for-byte. Preserve its known length so
+    // servers without chunked-request support (including Python's stdlib)
+    // receive JSON/form bodies correctly. Hop-by-hop framing stays filtered.
+    if let Some(length) = parts.headers.get(header::CONTENT_LENGTH) {
+        request = request.header(header::CONTENT_LENGTH, length);
+    }
+    let upstream = request.send().await.map_err(|err| {
+        AppError::bad_gateway(format!(
+            "failed to reach preview target {upstream_url}: {err}"
+        ))
+    })?;
 
     response_from_upstream_for_session(upstream, proxy_base_path, &target).await
 }
@@ -981,6 +985,54 @@ fn should_strip_request_header(header_name: &HeaderName) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+#[cfg(test)]
+mod request_body_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn preview_proxy_preserves_json_and_known_length_without_forwarding_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let router = axum::Router::new().route("/tasks", axum::routing::post(|headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                Json(serde_json::json!({"title":body["title"], "length":headers.get(header::CONTENT_LENGTH).and_then(|s| s.to_str().ok()),
+                    "authorization":headers.contains_key(header::AUTHORIZATION), "cookie":headers.contains_key(header::COOKIE)}))
+            }));
+            axum::serve(listener, router).await.unwrap();
+        });
+        let body = r#"{"title":"real JSON mutation"}"#;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/workbench/preview/s/test/tasks")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, body.len())
+            .header(header::AUTHORIZATION, "Bearer host-only")
+            .header(header::COOKIE, "host=private")
+            .body(Body::from(body))
+            .unwrap();
+        let (parts, body) = request.into_parts();
+        let response = proxy_preview_session_http(
+            parts,
+            body,
+            Some("tasks".into()),
+            Url::parse(&format!("http://{address}/")).unwrap(),
+            "/api/v1/workbench/preview/s/test/tasks".parse().unwrap(),
+            "/api/v1/workbench/preview/s/test/",
+        )
+        .await
+        .unwrap();
+        let data = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        server.abort();
+        let data: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        assert_eq!(data["title"], "real JSON mutation");
+        assert!(data["length"].as_str().is_some());
+        assert_eq!(data["authorization"], false);
+        assert_eq!(data["cookie"], false);
+    }
 }
 
 fn should_strip_response_header(header_name: &HeaderName) -> bool {

@@ -136,6 +136,7 @@ pub(crate) struct WorkspacePreviewRegistry {
     epoch: uuid::Uuid,
     changes: tokio::sync::watch::Sender<u64>,
     events: tokio::sync::Mutex<Option<PreviewEventSnapshot>>,
+    mutations: tokio::sync::Mutex<()>,
 }
 
 impl WorkspacePreviewRegistry {
@@ -151,6 +152,7 @@ impl WorkspacePreviewRegistry {
             epoch: uuid::Uuid::new_v4(),
             changes: tokio::sync::watch::channel(0).0,
             events: tokio::sync::Mutex::new(None),
+            mutations: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -310,6 +312,7 @@ impl WorkspacePreviewRegistry {
         &self,
         request: PreviewSessionCreateRequest,
     ) -> ApiResult<PreviewSessionRecord> {
+        let _mutation = self.mutations.lock().await;
         let PreviewSessionCreateRequest {
             id,
             directory,
@@ -360,15 +363,6 @@ impl WorkspacePreviewRegistry {
             trimmed_logs_path.to_string()
         };
 
-        let args = args
-            .into_iter()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .collect::<Vec<_>>();
-        if args.is_empty() {
-            return Err(AppError::bad_request("args is required"));
-        }
-
         let agena_session_id = agena_session_id
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -399,6 +393,7 @@ impl WorkspacePreviewRegistry {
     }
 
     pub(crate) async fn delete_by_id(&self, id: &str) -> ApiResult<()> {
+        let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -424,6 +419,7 @@ impl WorkspacePreviewRegistry {
         id: &str,
         patch: PreviewSessionUpdatePatch,
     ) -> ApiResult<PreviewSessionRecord> {
+        let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -449,6 +445,7 @@ impl WorkspacePreviewRegistry {
         id: &str,
         new_id: &str,
     ) -> ApiResult<PreviewSessionRecord> {
+        let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -497,6 +494,7 @@ impl WorkspacePreviewRegistry {
         id: &str,
         pid: u32,
     ) -> ApiResult<PreviewSessionRecord> {
+        let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -522,6 +520,7 @@ impl WorkspacePreviewRegistry {
         id: &str,
         error: Option<String>,
     ) -> ApiResult<PreviewSessionRecord> {
+        let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
             return Err(AppError::bad_request("id is required"));
@@ -640,14 +639,6 @@ fn update_session_in_file(
     }
 
     if let Some(next) = patch.args {
-        let next = next
-            .into_iter()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .collect::<Vec<_>>();
-        if next.is_empty() {
-            return Err(AppError::bad_request("args is required"));
-        }
         record.args = next;
     }
 
@@ -775,9 +766,6 @@ fn parse_preview_sessions(file: PreviewSessionsFile) -> PreviewSessionsResponse 
             continue;
         }
         if session.command.trim().is_empty() {
-            continue;
-        }
-        if session.args.is_empty() {
             continue;
         }
         if session.logs_path.trim().is_empty() {
@@ -955,6 +943,48 @@ fn preview_session_delta(
 #[cfg(test)]
 mod preview_delta_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn concurrent_mutations_preserve_sessions_and_exact_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            db::ServerStateDb::open_at_path(directory.path().join("state.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let registry = WorkspacePreviewRegistry::new(db.clone());
+        let request = |id: &str, args: Vec<String>| PreviewSessionCreateRequest {
+            id: id.into(),
+            directory: directory.path().to_string_lossy().into_owned(),
+            run_directory: directory.path().to_string_lossy().into_owned(),
+            agena_session_id: None,
+            command: "python3".into(),
+            args,
+            logs_path: String::new(),
+            target_url: Url::parse("http://127.0.0.1:3000/").unwrap(),
+        };
+        let args = vec!["".into(), "  preserve spaces  ".into(), "多字节".into()];
+        let (first, second) = tokio::join!(
+            registry.create_server_session(request("one", args.clone())),
+            registry.create_server_session(request("two", vec![])),
+        );
+        assert_eq!(first.unwrap().args, args);
+        assert!(second.unwrap().args.is_empty());
+        let reloaded = WorkspacePreviewRegistry::new(db);
+        assert_eq!(reloaded.list_all().await.unwrap().sessions.len(), 2);
+        assert_eq!(reloaded.get_by_id("one").await.unwrap().args, args);
+        registry
+            .update_by_id(
+                "one",
+                PreviewSessionUpdatePatch {
+                    args: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(registry.get_by_id("one").await.unwrap().args.is_empty());
+    }
 
     fn record(id: &str, directory: &str) -> PreviewSessionRecord {
         serde_json::from_value(serde_json::json!({

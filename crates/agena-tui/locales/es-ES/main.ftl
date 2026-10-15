@@ -2955,3 +2955,6 @@ tool-detail-metadata = Metadatos
 tool-detail-output = Salida
 tool-presentation-data = Datos de presentación
 tool-technical-details = Detalles técnicos
+
+transcript-rich-fallback = Vista previa no disponible: {$reason}. Se muestra el código original.
+transcript-interactive-app = Abre esta aplicación en Agena Web para usar la interfaz y ejecutar sus servicios.

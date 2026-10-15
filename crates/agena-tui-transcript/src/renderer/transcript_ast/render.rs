@@ -919,6 +919,8 @@ pub(super) fn is_diagram_language(language: &str) -> bool {
             | "vega-lite"
             | "svgbob"
             | "svg"
+            | "agena-chart"
+            | "agena-ui"
     )
 }
 
@@ -930,6 +932,58 @@ fn render_diagram(
     width: u16,
     i18n: &I18n,
 ) {
+    let available = usize::from(width).saturating_sub(UnicodeWidthStr::width(prefix));
+    let rendered = match language {
+        "mermaid" => codex_mermaid::render_spans(literal, available)
+            .map(|lines| {
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        Line::from(
+                            line.into_iter()
+                                .map(|span| {
+                                    let style = Style::default().fg(match span.role {
+                                        codex_mermaid::Role::Node => {
+                                            agena_tui_components::theme::accent_color()
+                                        }
+                                        codex_mermaid::Role::Edge => {
+                                            agena_tui_components::theme::muted_color()
+                                        }
+                                        codex_mermaid::Role::Text => ratatui::style::Color::Reset,
+                                    });
+                                    Span::styled(span.text, style)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string()),
+        "agena-chart" => rich_output::chart(literal, available),
+        "agena-ui" => rich_output::app(literal, available, i18n),
+        _ => Err(String::new()),
+    };
+    match rendered {
+        Ok(lines) => {
+            for line in lines {
+                push_wrapped_rich_line(out, prefix, prefix, line, width);
+            }
+            return;
+        }
+        Err(reason) if !reason.is_empty() => {
+            push_single_line(
+                out,
+                prefix,
+                &i18n.text_args(
+                    "transcript-rich-fallback",
+                    &agena_tui::fl_args!("reason" => reason),
+                ),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+                width,
+            );
+        }
+        _ => {}
+    }
     if language == "svg"
         && layout_config().native_graphics
         && let Ok(artifact) = render_markdown_svg(literal)

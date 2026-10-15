@@ -2952,3 +2952,6 @@ btw-copy = Copier
 btw-copied = Réponse BTW copiée
 btw-leave = Retour à la conversation
 btw-stopped = Arrêtée · réponse partielle conservée
+
+transcript-rich-fallback = Aperçu indisponible : {$reason}. Le code source suit.
+transcript-interactive-app = Ouvrez cette application dans Agena Web pour utiliser son interface et ses services.

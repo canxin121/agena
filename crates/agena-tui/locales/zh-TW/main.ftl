@@ -3004,3 +3004,6 @@ btw-copy = 複制
 btw-copied = 已複制 BTW 回答
 btw-leave = 返回工作階段
 btw-stopped = 已停止 · 已保留部分回答
+
+transcript-rich-fallback = 無法預覽：{$reason}。下方保留原始原始碼。
+transcript-interactive-app = 在 Agena Web 中開啟此互動應用，即可操作介面和執行後端服務。

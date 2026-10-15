@@ -19,6 +19,7 @@ agena-tui-media = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 comrak = { workspace = true }
+codex-mermaid = { path = "../../third_party/codex-mermaid" }
 ratatui = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }

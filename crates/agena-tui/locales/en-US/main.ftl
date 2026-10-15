@@ -2584,3 +2584,6 @@ usage-sort-cost = Cost
 usage-sort-requests = Requests
 usage-filter-subagents-included = included
 usage-filter-subagents-excluded = excluded
+
+transcript-rich-fallback = Preview unavailable: {$reason}. Original source follows.
+transcript-interactive-app = Open this interactive app in Agena Web to use the UI and run its services.

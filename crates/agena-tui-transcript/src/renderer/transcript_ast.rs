@@ -33,6 +33,7 @@ mod render;
 pub use render::*;
 mod parse;
 pub use parse::*;
+mod rich_output;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A node of the markdown AST.
@@ -322,7 +323,7 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
                     literal: code.literal.trim_end_matches('\n').to_string(),
                     display: true,
                 })
-            } else if is_diagram_language(&language) {
+            } else if code.closed && is_diagram_language(&language) {
                 Some(MarkdownNode::Diagram {
                     language,
                     literal: code.literal,
@@ -1830,14 +1831,12 @@ mod tests {
         let mut rendered = Vec::new();
         let i18n = I18n::english();
         render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80, &i18n);
-        let expected_header = i18n.text_args(
-            "transcript-diagram-title",
-            &agena_tui::fl_args!("label" => "mermaid"),
-        );
-        assert!(rendered.iter().any(|line| {
-            line.text
-                .contains(sanitize_terminal_text(&expected_header).as_str())
-        }));
-        assert!(rendered.iter().any(|line| line.text.contains("A-->B")));
+        assert!(rendered.iter().any(|line| line.text.contains('─')));
+        assert!(rendered.iter().any(|line| line.text.contains('A')));
+        // Unsupported syntax keeps the author's original source visible.
+        let unsupported = parse_markdown_document("```mermaid\ngantt\n title Timeline\n```");
+        rendered.clear();
+        render_parsed_markdown_block(&mut rendered, "", &unsupported[0], 80, &i18n);
+        assert!(rendered.iter().any(|line| line.text.contains("gantt")));
     }
 }

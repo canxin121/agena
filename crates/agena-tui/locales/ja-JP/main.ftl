@@ -2953,3 +2953,6 @@ btw-copy = コピー
 btw-copied = BTW の回答をコピーしました
 btw-leave = チャットに戻る
 btw-stopped = 停止しました · 途中までの回答は保持されています
+
+transcript-rich-fallback = プレビューできません: {$reason}。元のソースを表示します。
+transcript-interactive-app = Agena Web でこのアプリを開くと、UI とバックエンドを操作できます。

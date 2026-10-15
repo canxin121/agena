@@ -2949,3 +2949,6 @@ session-work-operation-history = 세션 전체 diff가 아닌 작업 기록입�
 session-work-operation-diff = 전체 패치 작업 diff (다른 파일을 포함할 수 있음).
 session-work-recorded-truncated = diff가 잘렸습니다. 저장된 콘텐츠만 불러올 수 있습니다.
 session-work-no-recorded-diff = 기록된 텍스트 diff가 없습니다.
+
+transcript-rich-fallback = 미리보기 불가: {$reason}. 원본 소스를 표시합니다.
+transcript-interactive-app = Agena Web에서 이 앱을 열어 UI와 백엔드를 실행하세요.

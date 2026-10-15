@@ -2584,3 +2584,6 @@ usage-sort-cost = 费用
 usage-sort-requests = 请求
 usage-filter-subagents-included = 包含
 usage-filter-subagents-excluded = 排除
+
+transcript-rich-fallback = 无法预览：{$reason}。下方保留原始源码。
+transcript-interactive-app = 在 Agena Web 中打开此交互应用，即可操作界面和运行后端服务。

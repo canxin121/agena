@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 use agena_domain::SessionRelationKind;
 use agena_storage::WorkspaceRepository;
 use agena_storage::store::{
-    NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility, RunOutcome, SessionFacade,
-    SessionStore, UsageQuery, UsageRecord,
+    NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility, RunOutcome, SessionStore,
+    UsageQuery, UsageRecord,
 };
-use agena_storage_sqlite::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
+use agena_storage_sqlite::{SeaWorkspaceRepository, initialize_schema, session_store};
 use sea_orm::Database;
 use serde_json::json;
 
@@ -43,7 +43,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let workspace_id = SeaWorkspaceRepository::new(Arc::clone(&db))
         .ensure_id("/bench/workspace")
         .await?;
-    let facade = SessionFacade::new(SqliteEngine::new(db), 32);
+    let facade = session_store(db, 32);
     let session_id = facade
         .create_session(NewSession {
             workspace_id,
@@ -58,16 +58,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .await?
         .id;
 
-    seed_read_session(&facade, session_id).await?;
-    benchmark_warm_read(&facade, session_id).await?;
-    seed_usage(&facade, workspace_id, session_id).await?;
-    benchmark_indexed_usage(&facade, workspace_id).await?;
-    benchmark_streaming(&facade, session_id).await?;
+    seed_read_session(facade.as_ref(), session_id).await?;
+    benchmark_warm_read(facade.as_ref(), session_id).await?;
+    seed_usage(facade.as_ref(), workspace_id, session_id).await?;
+    benchmark_indexed_usage(facade.as_ref(), workspace_id).await?;
+    benchmark_streaming(facade.as_ref(), session_id).await?;
     Ok(())
 }
 
 async fn seed_read_session(
-    facade: &SessionFacade<SqliteEngine>,
+    facade: &dyn SessionStore,
     session_id: i64,
 ) -> Result<(), Box<dyn Error>> {
     let parts = (0..256)
@@ -103,7 +103,7 @@ async fn seed_read_session(
 }
 
 async fn benchmark_warm_read(
-    facade: &SessionFacade<SqliteEngine>,
+    facade: &dyn SessionStore,
     session_id: i64,
 ) -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
@@ -115,7 +115,7 @@ async fn benchmark_warm_read(
 }
 
 async fn seed_usage(
-    facade: &SessionFacade<SqliteEngine>,
+    facade: &dyn SessionStore,
     workspace_id: i64,
     session_id: i64,
 ) -> Result<(), Box<dyn Error>> {
@@ -154,7 +154,7 @@ async fn seed_usage(
 }
 
 async fn benchmark_indexed_usage(
-    facade: &SessionFacade<SqliteEngine>,
+    facade: &dyn SessionStore,
     workspace_id: i64,
 ) -> Result<(), Box<dyn Error>> {
     let query = UsageQuery {
@@ -179,7 +179,7 @@ async fn benchmark_indexed_usage(
 }
 
 async fn benchmark_streaming(
-    facade: &SessionFacade<SqliteEngine>,
+    facade: &dyn SessionStore,
     session_id: i64,
 ) -> Result<(), Box<dyn Error>> {
     let mut measured = Duration::ZERO;

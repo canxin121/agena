@@ -27,7 +27,8 @@ mod workspace_repository;
 
 pub use content_backend::{FileContentBackend, FileContentConfig};
 pub use database_content::DatabaseContentBackend;
-pub use engine::SqliteEngine;
+#[cfg(test)]
+use engine::SqliteEngine;
 pub use model_catalog_repository::SeaModelCatalogRepository;
 pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
@@ -39,6 +40,33 @@ pub use transaction::{
     run_transaction_app_effects, run_transaction_effects,
 };
 pub use workspace_repository::SeaWorkspaceRepository;
+
+/// Assemble the only public Part storage boundary. Runtime code never holds a
+/// raw SQLite engine or decides how its cache is maintained.
+pub fn session_store(
+    database: std::sync::Arc<sea_orm::DatabaseConnection>,
+    max_cached_sessions: usize,
+) -> std::sync::Arc<dyn agena_storage::store::SessionStore> {
+    let contents = agena_storage::content::ContentHub::new(
+        std::sync::Arc::new(DatabaseContentBackend::new(database.clone())),
+        Default::default(),
+    );
+    session_store_with_contents(database, max_cached_sessions, contents)
+}
+
+/// Infrastructure composition may inject a content backend (for example a
+/// measured stream sink) while preserving the same sealed Part facade.
+pub fn session_store_with_contents(
+    database: std::sync::Arc<sea_orm::DatabaseConnection>,
+    max_cached_sessions: usize,
+    contents: agena_storage::content::ContentHub,
+) -> std::sync::Arc<dyn agena_storage::store::SessionStore> {
+    agena_storage::backend::session_store(
+        engine::SqliteEngine::new(database),
+        max_cached_sessions,
+        contents,
+    )
+}
 
 #[cfg(test)]
 mod concurrency_tests;

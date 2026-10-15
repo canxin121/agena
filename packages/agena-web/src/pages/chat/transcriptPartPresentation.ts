@@ -425,13 +425,15 @@ export function operationPresentation(
 
   const startMs = numericValue(jsonRecord(operation.lifecycle).start_ms) ?? part.source.time?.start ?? null
   const endMs = numericValue(jsonRecord(operation.lifecycle).end_ms) ?? part.source.time?.end ?? null
+  const terminal = partStatusPresentation(part.status).terminal
   const userInput = jsonRecord(operation.user_input)
   const userInputs = jsonArray(userInput.requests)
     .map((raw) => {
       const record = jsonRecord(raw)
       const request = jsonRecord(record.request)
       if (!Object.keys(request).length) return null
-      return userInputPresentationFromRequest(request, record.reply ?? null, part.title)
+      const presentation = userInputPresentationFromRequest(request, record.reply ?? null, part.title)
+      return { ...presentation, pending: !terminal && presentation.pending }
     })
     .filter((item): item is InteractionPresentation => Boolean(item))
   const authorization = jsonRecord(operation.authorization)
@@ -455,10 +457,12 @@ export function operationPresentation(
                 ? 'Denied persistently'
                 : replyKind
                   ? `Replied (${replyKind})`
-                  : 'Awaiting user approval'
+                  : terminal
+                    ? partStatusPresentation(part.status).label
+                    : 'Awaiting user approval'
     return {
       requestId: firstString(request, ['request_id']),
-      pending: !hasReply,
+      pending: !terminal && !hasReply,
       status,
       action: permissionActionLabel(action),
       reason: firstString(request, ['reason']),

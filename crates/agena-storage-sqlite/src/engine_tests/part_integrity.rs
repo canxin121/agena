@@ -1,6 +1,5 @@
-use agena_storage::store::{
-    InMemoryEngine, NewPart, PartDelta, PartRole, PartState, PersistenceEngine, SessionRunPage,
-};
+use agena_storage::backend::{InMemoryEngine, PersistenceEngine};
+use agena_storage::store::{NewPart, PartDelta, PartRole, PartState, SessionRunPage};
 use serde_json::json;
 
 async fn engine(memory: bool) -> (Box<dyn PersistenceEngine>, i64) {

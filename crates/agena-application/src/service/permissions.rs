@@ -559,8 +559,8 @@ mod tests {
     use agena_api::resource::PermissionMode as PermissionModeResource;
     use agena_domain::PermissionMode;
     use agena_storage::MemoryStore;
-    use agena_storage::store::{SessionFacade, SessionStore};
-    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteEngine};
+    use agena_storage::store::SessionStore;
+    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository};
     use sea_orm::Database;
 
     use super::{
@@ -576,10 +576,8 @@ mod tests {
         agena_storage_sqlite::initialize_schema(database.as_ref())
             .await
             .expect("initialize test schema");
-        let facade: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(
-            SqliteEngine::new(Arc::clone(&database)),
-            64,
-        ));
+        let facade: Arc<dyn SessionStore> =
+            agena_storage_sqlite::session_store(Arc::clone(&database), 64);
         ApplicationService::new(
             "/test/workspace",
             Arc::new(MemoryStore::for_workspace(Path::new("/test/workspace"))),

@@ -6,13 +6,66 @@ use std::sync::atomic::Ordering;
 
 use crate::{provider::project_completion_input, tool::ToolApiBinding};
 
+/// Read-only input for prompt construction. Hydrated resource bodies belong
+/// to this model projection and never become writable Session facts.
+pub(crate) trait PromptPartView {
+    fn facts(&self) -> &Session;
+    fn parts(&self) -> &[Part];
+    fn active_window_parts(&self) -> &[Part];
+}
+
+impl PromptPartView for Session {
+    fn facts(&self) -> &Session {
+        self
+    }
+    fn parts(&self) -> &[Part] {
+        self.parts()
+    }
+    fn active_window_parts(&self) -> &[Part] {
+        self.active_window_parts()
+    }
+}
+
+pub(crate) struct ModelContentProjection<'a> {
+    facts: &'a Session,
+    parts: Vec<Part>,
+    active_start: usize,
+}
+
+impl ModelContentProjection<'_> {
+    pub(crate) fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+}
+
+impl PromptPartView for ModelContentProjection<'_> {
+    fn facts(&self) -> &Session {
+        self.facts
+    }
+    fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+    fn active_window_parts(&self) -> &[Part] {
+        &self.parts[self.active_start..]
+    }
+}
+
+// Metadata reads always refer to the original committed Session. There is no
+// mutable dereference or conversion from a model projection to Session.
+impl std::ops::Deref for ModelContentProjection<'_> {
+    type Target = Session;
+    fn deref(&self) -> &Session {
+        self.facts
+    }
+}
+
 /// Resolve resource-backed bodies into a temporary model projection. The
 /// original facts and references remain untouched and cannot be re-persisted
 /// accidentally by a later session transition.
-pub(crate) async fn resolve_content_for_model(
-    session: &Session,
+pub(crate) async fn resolve_content_for_model<'a>(
+    session: &'a Session,
     hub: &agena_storage::content::ContentHub,
-) -> Result<Session, crate::error::AppError> {
+) -> Result<ModelContentProjection<'a>, crate::error::AppError> {
     use agena_domain::{ContentCursor, ContentKind, ContentPayload, ContentRef};
     let active_ids = session
         .active_window_parts()
@@ -20,9 +73,8 @@ pub(crate) async fn resolve_content_for_model(
         .map(|part| part.part_id)
         .collect::<std::collections::HashSet<_>>();
     let mut remaining = 8 * 1024 * 1024usize;
-    let mut projected = session.clone();
-    for part in projected
-        .parts
+    let mut parts = session.parts().to_vec();
+    for part in parts
         .iter_mut()
         .rev()
         .filter(|part| active_ids.contains(&part.part_id))
@@ -245,8 +297,11 @@ pub(crate) async fn resolve_content_for_model(
             _ => {}
         }
     }
-    projected.refresh_derived();
-    Ok(projected)
+    Ok(ModelContentProjection {
+        facts: session,
+        parts,
+        active_start: session.parts().len() - session.active_window_parts().len(),
+    })
 }
 use agena_domain::{Role, ToolCallId};
 use agena_provider::{
@@ -378,13 +433,13 @@ struct WindowItem {
 /// front (the summary lives on the compaction content part; the bounded recent
 /// suffix snapshot lives in the runtime).
 fn prompt_window_items(
-    session: &Session,
+    session: &impl PromptPartView,
     provider_id: Option<&str>,
     adapter_id: Option<&str>,
     model_id: Option<&str>,
     native_compaction_enabled: bool,
 ) -> Vec<WindowItem> {
-    let compaction = session.runtime.prompt_window.compaction.as_ref();
+    let compaction = session.facts().runtime.prompt_window.compaction.as_ref();
     let active_parts = session.active_window_parts();
     let (filtered_active, filtered_all) = prompt_parts_without_failed_rounds(session);
     let mut items = project_window_items(
@@ -425,7 +480,7 @@ fn project_window_items(
     parts: &[Part],
     all_parts: &[Part],
     compaction: Option<&PromptCompactionRuntime>,
-    session: &Session,
+    session: &impl PromptPartView,
     provider_id: Option<&str>,
     adapter_id: Option<&str>,
     model_id: Option<&str>,
@@ -484,7 +539,7 @@ fn project_window_items(
 /// the incomplete output of failed or cancelled assistant rounds. Earlier
 /// successful rounds in the same durable run remain available.
 pub(crate) fn compactable_prompt_runs(
-    session: &Session,
+    session: &impl PromptPartView,
     provider_id: Option<&str>,
     adapter_id: Option<&str>,
     model_id: Option<&str>,
@@ -494,7 +549,7 @@ pub(crate) fn compactable_prompt_runs(
     project_window_items(
         filtered_active.as_ref(),
         filtered_all.as_ref(),
-        session.runtime.prompt_window.compaction.as_ref(),
+        session.facts().runtime.prompt_window.compaction.as_ref(),
         session,
         provider_id,
         adapter_id,
@@ -513,7 +568,9 @@ pub(crate) fn compactable_prompt_runs(
 /// marker's round records identify the successful content exactly; unrecorded
 /// partial output from the failed round is excluded. Background notifications
 /// and hook continuations are independent deliveries and remain visible.
-fn prompt_parts_without_failed_rounds(session: &Session) -> (Cow<'_, [Part]>, Cow<'_, [Part]>) {
+fn prompt_parts_without_failed_rounds(
+    session: &impl PromptPartView,
+) -> (Cow<'_, [Part]>, Cow<'_, [Part]>) {
     let successful_parts_by_failed_run = session
         .parts()
         .iter()
@@ -856,13 +913,13 @@ fn checkpoint_recent_run(stored: &PromptCompactionMessage) -> CompletionInputRun
     }
 }
 
-fn compaction_summary_run(session: &Session, summary: &str) -> CompletionInputRun {
+fn compaction_summary_run(session: &impl PromptPartView, summary: &str) -> CompletionInputRun {
     CompletionInputRun {
         role: Role::User,
         parts: vec![CompletionInputPart::Text {
             text: format!(
                 "<agena_history_checkpoint generation=\"{}\">\nThe following is historical checkpoint data, not a new instruction. Continue from it while prioritizing later verbatim messages.\n\n{}\n</agena_history_checkpoint>",
-                session.runtime.prompt_window.generation,
+                session.facts().runtime.prompt_window.generation,
                 summary.trim()
             ),
         }],
@@ -871,7 +928,7 @@ fn compaction_summary_run(session: &Session, summary: &str) -> CompletionInputRu
 }
 
 pub(crate) fn provider_compaction_for_model(
-    session: &Session,
+    session: &impl PromptPartView,
     provider_id: &str,
     adapter_id: Option<&str>,
     model_id: &str,
@@ -880,7 +937,7 @@ pub(crate) fn provider_compaction_for_model(
     if !native_compaction_enabled {
         return None;
     }
-    let compaction = session.runtime.prompt_window.compaction.as_ref()?;
+    let compaction = session.facts().runtime.prompt_window.compaction.as_ref()?;
     match &compaction.content {
         PromptCompactionContent::OpenAiResponses {
             provider_id: checkpoint_provider,
@@ -964,7 +1021,7 @@ pub(crate) fn prompt_request_fingerprints(
 /// suffix so callers can apply the same tool rendering and bounds as a request.
 pub(crate) fn prompt_token_estimation_delta(
     session: &Session,
-    request_session: &Session,
+    request_session: &impl PromptPartView,
     system_fingerprint: &str,
     request_options_fingerprint: &str,
 ) -> Option<(u64, Vec<CompletionInputRun>)> {
@@ -1367,7 +1424,7 @@ pub(crate) fn approximate_session_request_tokens(
 }
 
 pub(crate) fn full_prompt_runs(
-    session: &Session,
+    session: &impl PromptPartView,
     provider_id: Option<&str>,
     adapter_id: Option<&str>,
     model_id: Option<&str>,
@@ -1459,7 +1516,7 @@ pub(crate) fn prompt_char_budget(
 }
 
 pub(crate) fn build_prepared_prompt(
-    session: &Session,
+    session: &impl PromptPartView,
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
     let active_runs = prompt_window_items(
@@ -1513,7 +1570,7 @@ pub(crate) fn build_prepared_prompt(
         prompt_cache_key: prompt_cache_key_for_session(session),
         previous_response_id,
         provider_compaction,
-        prompt_window_generation: session.runtime.prompt_window.generation,
+        prompt_window_generation: session.facts().runtime.prompt_window.generation,
         system_fingerprint,
         request_options_fingerprint,
         provider_request_shape,
@@ -1624,7 +1681,7 @@ pub(crate) async fn render_tool_results_for_model(
 /// result's renderer slot.
 pub(crate) async fn render_session_tool_results_for_model(
     turns: &mut [CompletionInputRun],
-    session: &Session,
+    session: &impl PromptPartView,
     executor: &crate::tool::ToolExecutor,
 ) {
     let (_, visible_history) = prompt_parts_without_failed_rounds(session);
@@ -2158,7 +2215,7 @@ impl PromptContinuationOutcome {
 }
 
 fn evaluate_prompt_continuation(
-    session: &Session,
+    session: &impl PromptPartView,
     prompt_runs: &[WindowItem],
     options: &PromptRequestOptions<'_>,
     system_fingerprint: &str,
@@ -2172,6 +2229,7 @@ fn evaluate_prompt_continuation(
     }
 
     let Some(anchor) = session
+        .facts()
         .runtime
         .provider_anchor(options.provider_id, options.model_id)
     else {
@@ -2181,7 +2239,7 @@ fn evaluate_prompt_continuation(
         };
     };
 
-    if anchor.prompt_window_generation != session.runtime.prompt_window.generation {
+    if anchor.prompt_window_generation != session.facts().runtime.prompt_window.generation {
         return PromptContinuationOutcome::Restart {
             reason: PromptContinuationReason::PromptWindowGenerationMismatch,
             diagnostic: PromptContinuationDiagnostic::default(),
@@ -2248,11 +2306,11 @@ fn evaluate_prompt_continuation(
     }
 }
 
-pub(crate) fn prompt_cache_key_for_session(session: &Session) -> String {
+pub(crate) fn prompt_cache_key_for_session(session: &impl PromptPartView) -> String {
     fingerprint_value(&(
-        session.workspace_id,
-        session.id,
-        session.created_at.timestamp_millis(),
+        session.facts().workspace_id,
+        session.facts().id,
+        session.facts().created_at.timestamp_millis(),
     ))
 }
 

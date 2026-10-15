@@ -173,11 +173,8 @@ use super::{
 mod tests {
     use std::{path::Path, sync::Arc};
 
-    use agena_storage::{
-        MemoryStore,
-        store::{SessionFacade, SessionStore},
-    };
-    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteEngine};
+    use agena_storage::{MemoryStore, store::SessionStore};
+    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository};
     use sea_orm::Database;
 
     use super::{ApplicationService, MemoryWriteRequest, validate_memory_name};
@@ -191,10 +188,8 @@ mod tests {
         agena_storage_sqlite::initialize_schema(database.as_ref())
             .await
             .expect("initialize test schema");
-        let sessions: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(
-            SqliteEngine::new(Arc::clone(&database)),
-            16,
-        ));
+        let sessions: Arc<dyn SessionStore> =
+            agena_storage_sqlite::session_store(Arc::clone(&database), 16);
         ApplicationService::new(
             workspace.display().to_string(),
             Arc::new(MemoryStore::for_workspace(workspace)),

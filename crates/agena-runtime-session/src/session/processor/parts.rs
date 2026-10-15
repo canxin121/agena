@@ -204,6 +204,7 @@ impl SessionProcessor {
                     state: Some(part.state),
                     content: Some(content),
                     summary: part.summary.clone(),
+                    clear_summary: part.summary.is_none(),
                     provider_state: None,
                     finished_at_ms: part
                         .state
@@ -275,7 +276,7 @@ impl SessionProcessor {
     ) -> Result<Part, AppError> {
         let view = store
             .facade
-            .load(session_id)
+            .load_part_ids(session_id, &[run_id])
             .await
             .map_err(|error| AppError::Internal(format!("load run {run_id} parts: {error}")))?;
         view.parts

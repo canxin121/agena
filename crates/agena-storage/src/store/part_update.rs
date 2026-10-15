@@ -52,7 +52,9 @@ pub fn prepare_part_update(
     if let Some(content) = delta.content {
         part.content = content;
     }
-    if let Some(summary) = delta.summary {
+    if delta.clear_summary {
+        part.summary = None;
+    } else if let Some(summary) = delta.summary {
         part.summary = Some(summary);
     }
     if let Some(provider_state) = delta.provider_state {

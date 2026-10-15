@@ -397,7 +397,7 @@ fn activity_run_plans(
             matches!(
                 &part.content,
                 TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
-                    if tool.has_pending_interaction()
+                    if !part.status.is_terminal() && tool.has_pending_interaction()
             )
         }) {
             visible_count = visible_count.max(foldable_count - index);

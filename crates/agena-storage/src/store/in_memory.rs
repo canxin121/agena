@@ -95,6 +95,7 @@ impl InMemoryEngine {
     }
 
     /// Override the engine clock (tests).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_now(&self, now_ms: i64) {
         *self.now_ms.write().expect("now lock") = now_ms;
     }
@@ -225,8 +226,8 @@ impl InMemoryEngine {
 
         let mut created = vec![marker.clone()];
         {
-            let mut parts = self.parts.write().expect("parts lock");
             let mut membership = self.membership.write().expect("membership lock");
+            let mut parts = self.parts.write().expect("parts lock");
             parts.insert(marker_id, marker);
             membership.entry(session_id).or_default().insert(marker_id);
 
@@ -406,6 +407,90 @@ fn user_send_marker_content(execution_id: Option<&str>) -> Value {
 
 #[async_trait]
 impl PersistenceEngine for InMemoryEngine {
+    async fn update_parts(
+        &self,
+        session_id: i64,
+        updates: Vec<super::PartUpdate>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        let _write = self.background_write.lock().expect("aggregate write lock");
+        // Match readers' lock order and keep metadata, membership and rows
+        // stable until the entire batch has passed validation.
+        let mut sessions = self.sessions.write().expect("sessions lock");
+        if !sessions.contains_key(&session_id) {
+            return Err(StoreError::not_found(format!("session {session_id}")));
+        }
+        let membership = self.membership.read().expect("membership lock");
+        let mut all_parts = self.parts.write().expect("parts lock");
+        let mut prepared = Vec::with_capacity(updates.len());
+        let mut changed_ids = Vec::new();
+        let mut message_ended = None;
+        for update in updates {
+            if !membership
+                .get(&session_id)
+                .is_some_and(|ids| ids.contains(&update.part_id))
+            {
+                return Err(StoreError::not_found(format!(
+                    "part {} in session {session_id}",
+                    update.part_id
+                )));
+            }
+            let part = all_parts
+                .get(&update.part_id)
+                .ok_or_else(|| StoreError::not_found(format!("part {}", update.part_id)))?;
+            if part.origin_session_id != session_id {
+                return Err(StoreError::InvalidState(
+                    "only the origin session can update a Part".into(),
+                ));
+            }
+            if part.revision != update.expected_revision {
+                return Err(StoreError::Conflict(format!(
+                    "part {} changed since it was read",
+                    update.part_id
+                )));
+            }
+            let updated = prepare_part_update(part.clone(), update.delta, now_ms)?;
+            if updated.revision != part.revision {
+                changed_ids.push(part.part_id);
+                if !part.state.is_terminal() && updated.is_terminal_message() {
+                    message_ended = Some((session_id, updated.updated_at_ms));
+                }
+            }
+            prepared.push(updated);
+        }
+        let affected_sessions = membership
+            .iter()
+            .filter(|(_, ids)| changed_ids.iter().any(|id| ids.contains(id)))
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let mut meta_updates = Vec::with_capacity(affected_sessions.len());
+        for id in affected_sessions {
+            let meta = sessions
+                .get(&id)
+                .ok_or_else(|| StoreError::not_found(format!("session {id}")))?;
+            let version = meta
+                .version
+                .checked_add(1)
+                .ok_or_else(|| StoreError::InvalidState("session version is exhausted".into()))?;
+            let updated_at_ms = match message_ended {
+                Some((origin, at)) if origin == id => at.max(meta.updated_at_ms.saturating_add(1)),
+                _ => meta.updated_at_ms,
+            };
+            meta_updates.push((id, version, updated_at_ms));
+        }
+        // All remaining operations are infallible. An invalid row or missing
+        // session cannot leave half of the batch committed in memory.
+        for updated in &prepared {
+            all_parts.insert(updated.part_id, updated.clone());
+        }
+        for (id, version, updated_at_ms) in meta_updates {
+            let meta = sessions.get_mut(&id).expect("validated session");
+            meta.version = version;
+            meta.updated_at_ms = updated_at_ms;
+        }
+        Ok(prepared)
+    }
+
     async fn referenced_content_ids(
         &self,
     ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {
@@ -2052,8 +2137,8 @@ impl PersistenceEngine for InMemoryEngine {
         // new run marker.
         let mut created = Vec::with_capacity(new_parts.len());
         {
-            let mut all_parts = self.parts.write().expect("parts lock");
             let mut membership = self.membership.write().expect("membership lock");
+            let mut all_parts = self.parts.write().expect("parts lock");
             for new_part in new_parts {
                 let id = self.next_part_id();
                 let part = Part {
@@ -2147,8 +2232,8 @@ impl PersistenceEngine for InMemoryEngine {
         }
         let mut created = Vec::with_capacity(parts.len());
         {
-            let mut all_parts = self.parts.write().expect("parts lock");
             let mut membership = self.membership.write().expect("membership lock");
+            let mut all_parts = self.parts.write().expect("parts lock");
             for new_part in parts {
                 let id = self.next_part_id();
                 let part = Part {

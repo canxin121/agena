@@ -355,3 +355,64 @@ bun audit
 7. 将来多进程/分布式部署，应保持一资源一写入归属、epoch/sequence、提交范围、权限撤销与局部补读不变量；可替换 backend 和订阅运输。不要因此把 Web/TUI 维度带回 Server，也不需要现在添加未使用的分布式双写层。
 
 本次设计长期保留的是稳定事实与资源协议。客户端视觉可以持续演进，资源 backend 也可替换，生产者都通过同一小型契约接入。
+
+## 14. Part 操作边界收口（2026-10-15）
+
+本轮将“业务约定通过 facade 写入”收紧为代码边界：业务代码不能持有具体 Part 引擎、操作缓存/通知总线，或先改写 Session 内部 Part 再补存储。所有生产写入都经过同一个封装后的 `SessionStore`；运行时只接收存储签发的提交结果与快照。
+
+### 14.1 工厂与存储实现
+
+| 边界 | 公开能力 | 留在内部的实现 |
+| --- | --- | --- |
+| 业务调用 | sealed `SessionStore`、查询、命令、订阅、不可变快照 | facade、缓存、Part gate、通知总线 |
+| 内存组合 | `memory_session_store(max_cached_sessions)` | 内存引擎、ContentHub 与 facade 的组合 |
+| SQLite 组合 | `agena_storage_sqlite::session_store(database, max_cached_sessions)` | SQLite 引擎、内容后端与 facade 的组合 |
+| 基础设施扩展 | `agena_storage::backend::PersistenceEngine` 与包装工厂 | 具体引擎不能作为业务 SessionStore 的替代实现 |
+
+内存与 SQLite 的选择发生在基础设施组装处。业务读取/写入不判断某个 Part 在内存还是数据库，也不自行更新缓存或发送“已保存”的通知。`session_store_with_contents` 允许基础设施注入内容后端，仍会完整包装相同的 Part 存储边界。底层内存引擎与时钟注入仅通过明确的 `test-support` 特性供后端一致性 fixture 使用。
+
+### 14.2 命令、事务与提交回执
+
+- `PartCommand` 表达用户提交、追加、后台收尾、结束 run，以及显式 Part 更新；现有 `start_run`、`update_part`、`complete_run` 等存储操作也属于同一个 sealed facade，不形成第二条写入通道。
+- 从运行时投影准备的 `PartUpdate` 带 `expected_revision`。提交会校验持久 ID、批内唯一性、session membership、origin 所有权、revision、生命周期和时间戳。过期写入返回冲突，不覆盖已提交的新事实。
+- 多 Part 更新在 SQLite 中使用一个写事务；内存实现先准备并校验所有 Part 和相关 session 版本，再统一修改。失败不会留下半批 Part；共享历史的各成员会话版本一起推进。
+- 写入成功后，由 facade 维护缓存并发布变更，再签发 `PartCommit`。运行时 `StoreAdapter::commit_parts` 成功拿到回执之后，才应用其中的快照。调用方没有“先改内部行，稍后 flush”的能力。
+- `PartDelta::clear_summary` 明确表达清除已过期摘要；省略字段表示保持原值，避免本地清除了摘要、持久化层却继续保留旧值。
+
+revision 检查用于本轮迁移的显式更新命令；不将原有单项 facade 操作描述成全部要求调用方提供 revision。Part 生命周期与 ContentWriter 的高频内容流仍各有职责，没有引入逐 token 写 Part/SQL 的行为。
+
+### 14.3 Session 投影与模型读取
+
+`Session.parts` 为私有字段，生产构建没有 `part_mut` 或任意 `Vec<Part>` 安装入口。`Session` 不再支持反序列化，避免通过 JSON 注入未经存储确认的内部行。fixture 注入单独受 `test-support` 限制。
+
+`PartSnapshot` 的字段与构造器不公开，也不支持反序列化。只有 sealed facade 能签发它。`Session::apply_part_snapshot` 统一校验会话身份、合并行版本、保持顺序并重建派生索引；bounded 快照不会因缺少其他行而清空已加载数据，过期行不能覆盖更新 revision。只有足够新的完整快照可以替换成员集合。命令回执是 bounded 补充，不将一次命令误当成完整历史；它也不承诺回执 metadata 和所有行拥有额外的跨查询事务隔离。
+
+大结果正文与资源还原进入独立的只读 `ModelContentProjection`，prompt、工具结果渲染与 compact 消费同一读取接口。还原后的正文不进入可写 Session，不能被下一次执行状态提交误写回 Part 事实。processor 的解析工作集可在本地组装未完成的调用；它最终返回存储签发的快照，工作集本身不能被装入 Session 或当成客户端事实。
+
+### 14.4 运行时与两端行为
+
+用户提交、steer、hook 注入、工具调用预处理、资源绑定、开始/完成/失败/取消、权限答复和“已展示”确认都已接入上述边界。compact 也通过存储操作与快照刷新更新投影。用户消息仍在提交成功并发布变更之后立即确认，独立于第一条 AI 回复。
+
+普通用户输入答复先校验，再将答案与工具终态一起提交；host 提问先校验并持久化答复，再唤醒等待中的插件。归属到工具的 usage 与工具完成事实可在同一批更新中提交。
+
+工具终态不再删除未回答的真实提问记录。Web 与 TUI 都根据 Part/operation 的终态关闭交互入口，保留提问与已有答复作为可查看历史，避免保存了数据却不使用，或给已结束的工具继续展示待回答状态。TUI 不再只渲染操作的第一条提问：当前待回答请求使用正常交互位置，其他真实提问和答复在其后作为历史展示。Web 的历史答案只从已提交 reply 派生，不把本地未提交草稿显示成真实答案；草稿独立保留，没有 reply 的终态提问显示“尚未回答”。
+
+### 14.5 本轮检查范围
+
+本轮检查独立于第 12 节的历史实测；没有重新运行或新增单元、集成、E2E、浏览器交互测试。`--all-targets` 编译包含既有 fixture、benchmark 和 example，不能等同于执行这些测试。
+
+本轮以下静态检查均已通过：
+
+```sh
+cargo check --workspace --all-targets
+cargo check -p agena-runtime-session --lib
+cargo clippy --workspace --all-targets -- -D warnings
+# 对本轮改动的 Rust 文件运行 rustfmt --check（skip_children=true）
+git diff --check
+cd packages/agena-web
+bun run typecheck
+bun run check:imports
+bun ./node_modules/prettier/bin/prettier.cjs -c src/pages/chat/transcriptPartPresentation.ts src/pages/chat/transcriptProjection.ts src/components/chat/AgenaInteractionPart.vue
+```
+
+同时完成生产代码定向引用排查：存储基础设施之外没有直接操作 Part 表或具体 Part 引擎/缓存/通知总线的引用。已有数据库完整性 fixture 和重启场景中的 SQL 检查保留在测试范围。全仓编译发现的旧探针 API 漏项及 Clippy 的机械性提示同步修正；不改变探针的工具并行策略。

@@ -83,8 +83,43 @@ pub type SessionObserver = Arc<dyn Fn(SessionChange) + Send + Sync + 'static>;
 /// [`PersistenceEngine`](super::PersistenceEngine), so the same code composes
 /// with `SqliteEngine` (production) or `InMemoryEngine` (tests / small
 /// deployments).
+mod sealed {
+    pub trait Sealed {}
+    impl<E: super::PersistenceEngine> Sealed for super::SessionFacade<E> {}
+}
+
 #[async_trait]
-pub trait SessionStore: Send + Sync {
+pub trait SessionStore: sealed::Sealed + Send + Sync {
+    /// Read an immutable projection receipt. None selects the full session;
+    /// ids select a bounded supplement and never imply removal by omission.
+    async fn part_snapshot(
+        &self,
+        session_id: i64,
+        ids: Option<&[i64]>,
+    ) -> Result<super::PartSnapshot, StoreError> {
+        let view = match ids {
+            Some(ids) => self.load_part_ids(session_id, ids).await?,
+            None => self.load(session_id).await?,
+        };
+        Ok(super::PartSnapshot::new(view, ids.is_none()))
+    }
+
+    async fn apply_part_command(
+        &self,
+        session_id: i64,
+        command: super::PartCommand,
+    ) -> Result<super::PartCommit, StoreError>;
+
+    /// A bounded snapshot for rebuilding interaction and execution controls.
+    async fn control_part_snapshot(
+        &self,
+        session_id: i64,
+    ) -> Result<super::PartSnapshot, StoreError> {
+        Ok(super::PartSnapshot::new(
+            self.load_control_parts(session_id).await?,
+            false,
+        ))
+    }
     async fn load_run_window(
         &self,
         session_id: i64,
@@ -694,7 +729,7 @@ struct CacheSlot {
 /// The internal memory layer (15.3): a per-session LRU cache of
 /// [`SessionView`]s validated against the persisted position.
 #[derive(Debug)]
-pub struct MemoryLayer {
+pub(crate) struct MemoryLayer {
     /// session_id -> cached view (LRU, capped by `max_cached_sessions`).
     cache: Mutex<HashMap<i64, CacheSlot>>,
     /// Monotonic recency stamp.
@@ -899,7 +934,7 @@ impl MemoryLayer {
 /// commit and never persisted; this is observer notification, not an event
 /// log (14.3).
 #[derive(Default)]
-pub struct NotificationBus {
+pub(crate) struct NotificationBus {
     next_observer_id: AtomicU64,
     observers: Mutex<HashMap<i64, HashMap<u64, SessionObserver>>>,
     global_observers: Mutex<HashMap<u64, SessionObserver>>,
@@ -1029,7 +1064,7 @@ impl SessionChange {
 /// Concrete facade implementation, composed with any [`PersistenceEngine`]
 /// backend (15.4). `now_ms` is a clock function so tests can drive time; it
 /// defaults to the wall clock.
-pub struct SessionFacade<E> {
+pub(crate) struct SessionFacade<E> {
     engine: E,
     memory: Arc<MemoryLayer>,
     bus: Arc<NotificationBus>,
@@ -1250,6 +1285,106 @@ impl<E> SessionStore for SessionFacade<E>
 where
     E: PersistenceEngine,
 {
+    async fn apply_part_command(
+        &self,
+        session_id: i64,
+        command: super::PartCommand,
+    ) -> Result<super::PartCommit, StoreError> {
+        use super::PartCommand;
+        let mut run_id = None;
+        let mut created = false;
+        let parts = match command {
+            PartCommand::Update(updates) => {
+                let mut ids = updates
+                    .iter()
+                    .map(|update| update.part_id)
+                    .collect::<Vec<_>>();
+                ids.sort_unstable();
+                if ids.iter().any(|id| *id <= 0) || ids.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err(StoreError::InvalidState(
+                        "Part updates require unique durable ids".into(),
+                    ));
+                }
+                let mut guards = Vec::with_capacity(ids.len());
+                for id in ids {
+                    guards.push(self.memory.part_gate((session_id, id)).lock_owned().await);
+                }
+                let updated = self
+                    .engine
+                    .update_parts(session_id, updates, self.now())
+                    .await?;
+                let meta = self.engine.session_meta(session_id).await?;
+                let updated = self
+                    .publish_parts(session_id, meta, updated, Vec::as_slice, false)
+                    .await?;
+                drop(guards);
+                updated
+            }
+            PartCommand::SubmitUser {
+                parts,
+                idempotency_key,
+                execution_id,
+            } => {
+                let outcome = match execution_id {
+                    Some(id) => {
+                        self.submit_user_run_for_execution(session_id, parts, idempotency_key, &id)
+                            .await?
+                    }
+                    None => {
+                        self.submit_user_run(session_id, parts, idempotency_key)
+                            .await?
+                    }
+                };
+                run_id = Some(outcome.run_id);
+                created = outcome.created;
+                outcome.parts
+            }
+            PartCommand::Append {
+                run_id: owner,
+                parts,
+            } => {
+                run_id = Some(owner);
+                self.append_parts(session_id, owner, parts).await?
+            }
+            PartCommand::SettleBackground {
+                run_id: owner,
+                tool_part,
+                parts,
+            } => {
+                run_id = Some(owner);
+                let tool_id = tool_part.as_ref().map(|(id, _, _)| *id);
+                let created = self
+                    .settle_background_run(session_id, owner, tool_part, parts)
+                    .await?;
+                let mut ids = created.iter().map(|part| part.part_id).collect::<Vec<_>>();
+                ids.push(owner);
+                ids.extend(tool_id);
+                // Settlement also changes its launching marker/tool. Include
+                // these authoritative rows in the receipt, not just new rows.
+                let mut loaded = self.load_part_ids(session_id, &ids).await?.parts;
+                for part in created {
+                    if !loaded.iter().any(|row| row.part_id == part.part_id) {
+                        loaded.push(part);
+                    }
+                }
+                loaded
+            }
+            PartCommand::CompleteRun {
+                run_id: owner,
+                outcome,
+            } => {
+                run_id = Some(owner);
+                vec![self.complete_run(session_id, owner, outcome).await?]
+            }
+        };
+        let meta = self.engine.session_meta(session_id).await?;
+        Ok(super::PartCommit {
+            snapshot: super::PartSnapshot::new(SessionView { meta, parts }, false),
+            run_id,
+            created,
+        })
+    }
+
     async fn load_run_window(
         &self,
         session_id: i64,
@@ -3573,6 +3708,14 @@ mod tests {
 
     #[async_trait]
     impl PersistenceEngine for CountingEngine {
+        async fn update_parts(
+            &self,
+            session_id: i64,
+            updates: Vec<super::super::PartUpdate>,
+            now_ms: i64,
+        ) -> Result<Vec<Part>, StoreError> {
+            self.inner.update_parts(session_id, updates, now_ms).await
+        }
         async fn referenced_content_ids(
             &self,
         ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {

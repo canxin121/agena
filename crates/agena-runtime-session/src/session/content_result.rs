@@ -386,16 +386,16 @@ mod tests {
         let projected = crate::session::prompt_window::resolve_content_for_model(&session, &hub)
             .await
             .unwrap();
-        assert_eq!(session.parts[0].content, content);
+        assert_eq!(session.parts()[0].content, content);
         assert_eq!(
-            projected.parts[0].content["output"]["payload"]["diff"],
+            projected.parts()[0].content["output"]["payload"]["diff"],
             diff
         );
         assert_eq!(
-            projected.parts[0].content["output"]["payload"]["exit_code"],
+            projected.parts()[0].content["output"]["payload"]["exit_code"],
             0
         );
-        let stream = projected.parts[0].content["output"]["payload"]["streamed_content"]
+        let stream = projected.parts()[0].content["output"]["payload"]["streamed_content"]
             .as_str()
             .unwrap();
         assert!(stream.contains("\"completed\":2"));
@@ -404,7 +404,7 @@ mod tests {
             "the model receives the current document rather than the event log"
         );
         assert_eq!(
-            projected.parts[0].content["resources"],
+            projected.parts()[0].content["resources"],
             content["resources"]
         );
     }

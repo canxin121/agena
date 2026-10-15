@@ -17,13 +17,13 @@ use crate::context_governor::ContextGovernor;
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
 use crate::provider::ProviderRegistry;
 use crate::tool::{ToolError, ToolExecutor, ToolInvocationExecution};
+use agena_domain::ProcessStatus;
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::{
     DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
-use agena_domain::{ExecutionStatus, ProcessStatus};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
 use agena_domain::{UserInputReply, UserInputSource};
 use agena_failure::Failure;
@@ -1478,24 +1478,8 @@ impl SessionManager {
         config: RuntimeSessionManagerConfig,
     ) -> Self {
         let db_arc = Arc::new(db.clone());
-        let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db_arc));
-        // One facade owns the notification lifecycle for this process; the
-        // manager talks to it exclusively through `StoreAdapter` (14.2, 15.6).
-        // This process is the only writer for the data directory, so no write
-        // carries an ownership handshake.
-        let contents = agena_storage::content::ContentHub::new(
-            Arc::new(agena_storage_sqlite::DatabaseContentBackend::new(
-                Arc::clone(&db_arc),
-            )),
-            Default::default(),
-        );
-        let facade: Arc<dyn agena_storage::store::SessionStore> = Arc::new(
-            agena_storage::store::SessionFacade::<agena_storage_sqlite::SqliteEngine>::new(
-                engine,
-                config.max_cached_sessions,
-            )
-            .with_contents(contents),
-        );
+        let facade =
+            agena_storage_sqlite::session_store(Arc::clone(&db_arc), config.max_cached_sessions);
         let store = Arc::new(StoreAdapter::new(
             facade,
             Arc::new(|| Utc::now().timestamp_millis()),
@@ -1729,15 +1713,6 @@ impl SessionManager {
             pending.invocation = invocation.clone();
             self.prepare_tool_content(&mut session, &mut pending, &scoped_executor)
                 .await?;
-            if pending.content_writer.is_some() {
-                self.persist_session_changes(
-                    session,
-                    vec![pending.pending.part.part_id],
-                    None,
-                    state,
-                )
-                .await?;
-            }
             pending.content_writer
         } else {
             None
@@ -2340,12 +2315,12 @@ impl SessionManager {
             let view = self
                 .store
                 .facade
-                .load_part_ids(child_id, &[])
+                .part_snapshot(child_id, Some(&[]))
                 .await
                 .map_err(crate::session::store::store_error)?;
-            if view.meta.parent_id != Some(operation.session_id)
-                || view.meta.task_id.as_deref() != Some(task_id)
-                || view.meta.subtask_started_at_ms != Some(started_at_ms)
+            if view.meta().parent_id != Some(operation.session_id)
+                || view.meta().task_id.as_deref() != Some(task_id)
+                || view.meta().subtask_started_at_ms != Some(started_at_ms)
             {
                 return Ok(None);
             }
@@ -3258,10 +3233,10 @@ impl SessionManager {
                 }
                 continue;
             };
-            let mut child = crate::session::store::session_from_view_async(
+            let mut child = crate::session::store::session_from_snapshot_async(
                 self.store
                     .facade
-                    .load_part_ids(child_id, &[])
+                    .part_snapshot(child_id, Some(&[]))
                     .await
                     .map_err(crate::session::store::store_error)?,
             )
@@ -3275,10 +3250,10 @@ impl SessionManager {
                     continue;
                 }
                 self.reconcile_interrupted_session(child_id).await?;
-                child = crate::session::store::session_from_view_async(
+                child = crate::session::store::session_from_snapshot_async(
                     self.store
                         .facade
-                        .load_part_ids(child_id, &[])
+                        .part_snapshot(child_id, Some(&[]))
                         .await
                         .map_err(crate::session::store::store_error)?,
                 )

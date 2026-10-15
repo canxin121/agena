@@ -1,11 +1,9 @@
 use super::{
-    AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
-    SessionManagerState, SessionPendingTool, completed_lifecycle, inherit_operation_context,
-    operation_authorization, operation_content_value, operation_from_part, resolve_pending_tool,
-    update_resolved_tool_message,
+    AppError, Arc, OperationPart, PersistedPermissionRule, SessionManager, SessionManagerState,
+    SessionPendingTool, completed_lifecycle, inherit_operation_context, operation_authorization,
+    required_operation, resolve_pending_tool,
 };
 use crate::session::Session;
-use crate::session::store::part_state_from_execution_status;
 use agena_domain::{
     CapabilityUnavailableResult, PolicyDeniedResult, ToolOutput, ToolUnavailableResult,
     UserDeclinedResult,
@@ -14,10 +12,10 @@ use agena_domain::{
 impl SessionManager {
     pub(in crate::session::manager) async fn apply_tool_capability_unavailable(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         unavailable: CapabilityUnavailableResult,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -33,39 +31,33 @@ impl SessionManager {
             "unavailable": unavailable,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::capability_unavailable(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    agena_domain::RawOutput::from_parts(
-                        details.to_json_payload(),
-                        output_text.clone(),
-                        Vec::new(),
-                        details.managed_outputs.clone(),
-                        details.truncated,
-                    ),
-                    lifecycle.clone(),
-                );
-                operation.authorization = authorization.clone();
-                if let Some(existing) = operation_from_part(tool_part) {
-                    inherit_operation_context(&mut operation, existing);
-                }
-                tool_part.content = operation_content_value(&operation)?;
-                tool_part.state =
-                    part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
-                Ok(())
-            })?;
-        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+        let mut operation = OperationPart::capability_unavailable(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            agena_domain::RawOutput::from_parts(
+                details.to_json_payload(),
+                output_text.clone(),
+                Vec::new(),
+                details.managed_outputs.clone(),
+                details.truncated,
+            ),
+            lifecycle.clone(),
+        );
+        operation.authorization = authorization.clone();
+        inherit_operation_context(
+            &mut operation,
+            required_operation(&session, &resolved.pending.part)?,
+        );
+        self.persist_tool_completion(session, &resolved, operation, Vec::new(), Vec::new())
             .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_unavailable(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         unavailable: ToolUnavailableResult,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -81,39 +73,33 @@ impl SessionManager {
             "unavailable": unavailable,
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::tool_unavailable(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    agena_domain::RawOutput::from_parts(
-                        details.to_json_payload(),
-                        output_text.clone(),
-                        Vec::new(),
-                        details.managed_outputs.clone(),
-                        details.truncated,
-                    ),
-                    lifecycle.clone(),
-                );
-                operation.authorization = authorization.clone();
-                if let Some(existing) = operation_from_part(tool_part) {
-                    inherit_operation_context(&mut operation, existing);
-                }
-                tool_part.content = operation_content_value(&operation)?;
-                tool_part.state =
-                    part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
-                Ok(())
-            })?;
-        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+        let mut operation = OperationPart::tool_unavailable(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            agena_domain::RawOutput::from_parts(
+                details.to_json_payload(),
+                output_text.clone(),
+                Vec::new(),
+                details.managed_outputs.clone(),
+                details.truncated,
+            ),
+            lifecycle.clone(),
+        );
+        operation.authorization = authorization.clone();
+        inherit_operation_context(
+            &mut operation,
+            required_operation(&session, &resolved.pending.part)?,
+        );
+        self.persist_tool_completion(session, &resolved, operation, Vec::new(), Vec::new())
             .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_policy_denied(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         denial: PolicyDeniedResult,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -130,40 +116,35 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
 
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::policy_denied(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    agena_domain::RawOutput::from_parts(
-                        details.to_json_payload(),
-                        output_text.clone(),
-                        Vec::new(),
-                        details.managed_outputs.clone(),
-                        details.truncated,
-                    ),
-                    lifecycle.clone(),
-                );
-                operation.authorization = authorization.clone();
-                if let Some(existing) = operation_from_part(tool_part) {
-                    inherit_operation_context(&mut operation, existing);
-                }
-                tool_part.content = operation_content_value(&operation)?;
-                tool_part.state = part_state_from_execution_status(ExecutionStatus::PolicyDenied);
-                Ok(())
-            })?;
+        let mut operation = OperationPart::policy_denied(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            agena_domain::RawOutput::from_parts(
+                details.to_json_payload(),
+                output_text.clone(),
+                Vec::new(),
+                details.managed_outputs.clone(),
+                details.truncated,
+            ),
+            lifecycle.clone(),
+        );
+        operation.authorization = authorization.clone();
+        inherit_operation_context(
+            &mut operation,
+            required_operation(&session, &resolved.pending.part)?,
+        );
 
-        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+        self.persist_tool_completion(session, &resolved, operation, Vec::new(), Vec::new())
             .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_user_declined(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         decline: UserDeclinedResult,
         persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -185,30 +166,25 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
 
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::user_declined(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    agena_domain::RawOutput::from_parts(
-                        details.to_json_payload(),
-                        output_text.clone(),
-                        Vec::new(),
-                        details.managed_outputs.clone(),
-                        details.truncated,
-                    ),
-                    lifecycle.clone(),
-                );
-                operation.authorization = authorization.clone();
-                if let Some(existing) = operation_from_part(tool_part) {
-                    inherit_operation_context(&mut operation, existing);
-                }
-                tool_part.content = operation_content_value(&operation)?;
-                tool_part.state = part_state_from_execution_status(ExecutionStatus::UserDeclined);
-                Ok(())
-            })?;
+        let mut operation = OperationPart::user_declined(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            agena_domain::RawOutput::from_parts(
+                details.to_json_payload(),
+                output_text.clone(),
+                Vec::new(),
+                details.managed_outputs.clone(),
+                details.truncated,
+            ),
+            lifecycle.clone(),
+        );
+        operation.authorization = authorization.clone();
+        inherit_operation_context(
+            &mut operation,
+            required_operation(&session, &resolved.pending.part)?,
+        );
 
-        self.persist_tool_completion(session, &resolved, persisted_rules, state)
+        self.persist_tool_completion(session, &resolved, operation, persisted_rules, Vec::new())
             .await
     }
 }

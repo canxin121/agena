@@ -1857,9 +1857,9 @@ fn render_pending_interaction_body(
 }
 
 /// Renders the canonical single-activity user-input surface on a `tool_call`
-/// operation part: the pending interaction body while a request is awaiting a
-/// reply (live view), or the read-only plan + questions + answers once
-/// answered. Returns `false` (rendering nothing) when the operation carries no
+/// operation part: the current pending interaction body followed by retained
+/// request history, or read-only plans, questions and answers once terminal.
+/// Returns `false` (rendering nothing) when the operation carries no
 /// user-input record, so the caller falls through to the plain tool execution
 /// renderer.
 #[allow(clippy::too_many_arguments)]
@@ -1875,7 +1875,16 @@ fn render_operation_user_input(
         crate::interaction_view::PendingInteractionView,
     >,
 ) -> bool {
-    let Some(record) = tool.operation.user_input.requests.first() else {
+    let records = &tool.operation.user_input.requests;
+    let pending_id = crate::interaction_view::interaction_request_id_for_part(part);
+    let primary_index = pending_id
+        .and_then(|id| {
+            records
+                .iter()
+                .position(|record| record.request.request_id == id)
+        })
+        .unwrap_or(0);
+    let Some(record) = records.get(primary_index) else {
         return false;
     };
     let request = crate::parts::user_input_request_resource(record.request.clone());
@@ -1915,7 +1924,7 @@ fn render_operation_user_input(
     if !expanded {
         return true;
     }
-    if record.reply.is_none()
+    if pending_id == Some(request.request_id.as_str())
         && let Some(view) = interactions.get(&request.request_id)
     {
         render_pending_interaction_body(out, &request, view, width, i18n);
@@ -1924,17 +1933,41 @@ fn render_operation_user_input(
             .reply
             .clone()
             .map(crate::parts::user_input_reply_resource);
-        render_answered_user_input_body(out, &request, reply.as_ref(), width, i18n);
+        render_user_input_history_body(out, &request, reply.as_ref(), width, i18n);
+    }
+    // Keep the actionable request at the normal body offset so key routing
+    // stays aligned. Earlier records remain visible after the live controls;
+    // an operation may ask more than once during a single tool invocation.
+    for (index, record) in records.iter().enumerate() {
+        if index == primary_index {
+            continue;
+        }
+        let request = crate::parts::user_input_request_resource(record.request.clone());
+        push_markdown_rule(out, "    ", width);
+        if !request.title.trim().is_empty() {
+            push_expanded_tool_text(
+                out,
+                "    ",
+                request.title.as_str(),
+                Style::default().add_modifier(Modifier::BOLD),
+                width,
+            );
+        }
+        let reply = record
+            .reply
+            .clone()
+            .map(crate::parts::user_input_reply_resource);
+        render_user_input_history_body(out, &request, reply.as_ref(), width, i18n);
     }
     true
 }
 
-/// Read-only body for an answered user-input request on a tool_call operation:
+/// Read-only history for a user-input request on a tool_call operation:
 /// the plan body + separator, then each question with its committed answer
 /// marked, and the custom feedback when provided. No interactive controls or
 /// key hints — the activity stays expandable but is no longer an interaction
 /// surface.
-fn render_answered_user_input_body(
+fn render_user_input_history_body(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
     reply: Option<&agena_api::resource::UserInputReply>,

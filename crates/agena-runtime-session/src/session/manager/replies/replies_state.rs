@@ -6,91 +6,33 @@ use super::{
 use crate::session::Session;
 use crate::session::store::new_part_from_content;
 use agena_runtime_contracts::part_content::TypedContent;
-use agena_storage::store::{PartDelta, PartRole, PartState};
+use agena_storage::store::{PartRole, PartState};
 
 impl SessionManager {
-    pub(in crate::session::manager) async fn persist_session_changes(
-        &self,
-        session: Session,
-        changed_part_ids: Vec<i64>,
-        persisted_rule: Option<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        self.persist_session_changes_with_rules(
-            session,
-            changed_part_ids,
-            persisted_rule.into_iter().collect(),
-            state,
-        )
-        .await
-    }
-
-    /// Flush in-memory part mutations to their durable rows and merge the
-    /// authoritative engine rows back into the projection. there is no message
-    /// checkpoints: each changed part id becomes one `update_part` facade call
-    /// carrying the part's current content/state/summary. Run terminalization
-    /// (complete_run/cancel_run) is owned by the turn/tool paths, never here.
-    pub(in crate::session::manager) async fn persist_session_changes_with_rules(
+    /// Submit explicit, revision-checked changes as one storage transaction.
+    /// Only a successful store receipt updates the Session projection.
+    pub(in crate::session::manager) async fn persist_part_updates(
         &self,
         mut session: Session,
-        changed_part_ids: Vec<i64>,
+        updates: Vec<agena_storage::store::PartUpdate>,
         persisted_rules: Vec<PersistedPermissionRule>,
-        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        // Rules may target any scope (session, workspace, or global). Persist
-        // them through the kept permission-rule repository (design 19.1) and
-        // invalidate every cached snapshot so no session keeps applying stale
-        // rules. The session data itself flows through the sealed facade.
-        self.invalidate_rule_snapshots();
-        for rule in &persisted_rules {
-            self.permission_rules
-                .upsert(rule)
-                .await
-                .map_err(|error| AppError::Internal(format!("persist permission rule: {error}")))?;
-        }
-        if changed_part_ids.is_empty() {
-            return Ok(session);
-        }
-        let session_id = session.id;
-        let mut updated_parts = Vec::with_capacity(changed_part_ids.len());
-        for part_id in changed_part_ids {
-            let part = session
-                .parts()
-                .iter()
-                .find(|part| part.part_id == part_id)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "part {part_id} missing from the session {session_id} projection while persisting"
-                    ))
+        if !persisted_rules.is_empty() {
+            self.invalidate_rule_snapshots();
+            for rule in &persisted_rules {
+                self.permission_rules.upsert(rule).await.map_err(|error| {
+                    AppError::Internal(format!("persist permission rule: {error}"))
                 })?;
-            let updated = self
-                .store
-                .update_part(
-                    session_id,
-                    part_id,
-                    PartDelta {
-                        state: Some(part.state),
-                        content: Some(part.content.clone()),
-                        summary: part.summary.clone(),
-                        provider_state: part.provider_state.clone(),
-                        finished_at_ms: part.finished_at_ms,
-                    },
-                )
-                .await?;
-            updated_parts.push(updated);
-        }
-        let mut parts = session.parts().to_vec();
-        for updated in updated_parts {
-            if let Some(existing) = parts
-                .iter_mut()
-                .find(|part| part.part_id == updated.part_id)
-            {
-                *existing = updated;
-            } else {
-                parts.push(updated);
             }
         }
-        session.install_projected_parts(parts);
+        if !updates.is_empty() {
+            self.store
+                .commit_parts(
+                    &mut session,
+                    agena_storage::store::PartCommand::Update(updates),
+                )
+                .await?;
+        }
         Ok(session)
     }
 
@@ -506,15 +448,16 @@ impl SessionManager {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if !user_parts.is_empty() {
-                let outcome = self
-                    .store
-                    .submit_user_run(session.id, user_parts, None)
+                self.store
+                    .commit_parts(
+                        &mut session,
+                        agena_storage::store::PartCommand::SubmitUser {
+                            parts: user_parts,
+                            idempotency_key: None,
+                            execution_id: None,
+                        },
+                    )
                     .await?;
-                if outcome.created {
-                    let mut projected = session.parts().to_vec();
-                    projected.extend(outcome.parts);
-                    session.install_projected_parts(projected);
-                }
             }
             if parts
                 .iter()

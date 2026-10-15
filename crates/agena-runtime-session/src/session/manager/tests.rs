@@ -31,8 +31,8 @@ use agena_storage::store::{
 use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
 
 use super::{
-    ExecutionConversationTarget, SessionManager, SessionRunRequest, SessionRunTermination,
-    SessionSubtaskRequest, SessionUserRunRequest, merge_system_prompts,
+    ExecutionAdmission, ExecutionConversationTarget, SessionManager, SessionRunRequest,
+    SessionRunTermination, SessionSubtaskRequest, SessionUserRunRequest, merge_system_prompts,
 };
 use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::replies::{operation_from_part, operation_id_from_part};
@@ -1330,36 +1330,29 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
         .collect::<Vec<_>>();
     assert_eq!(content_parts.len(), 2);
 
-    let mut aggregate = manager
+    let aggregate = manager
         .get_session(session.id)
         .await
         .expect("load aggregate");
-    let text_indices = aggregate
+    let changed = aggregate
         .parts()
         .iter()
-        .enumerate()
-        .filter(|(_, part)| part.kind == "text")
-        .map(|(index, part)| (index, part.part_id))
-        .collect::<Vec<_>>();
-    let (changed_index, changed_part_id) = text_indices[1];
-    {
-        let changed = aggregate
-            .part_mut(&crate::session::model::SessionPartRef {
-                part_index: changed_index,
-                part_id: changed_part_id,
-            })
-            .expect("changed part");
-        changed.content =
-            typed_content_to_value(&TypedContent::Text(text_content("right updated")))
-                .expect("part content is JSON serializable");
-    }
+        .filter(|part| part.kind == "text")
+        .nth(1)
+        .expect("changed part");
+    let changed_part_id = changed.part_id;
+    let update = agena_storage::store::PartUpdate::new(
+        changed,
+        agena_storage::store::PartDelta {
+            content: Some(
+                typed_content_to_value(&TypedContent::Text(text_content("right updated")))
+                    .expect("part content is JSON serializable"),
+            ),
+            ..Default::default()
+        },
+    );
     manager
-        .persist_session_changes(
-            aggregate,
-            vec![changed_part_id],
-            None,
-            manager.execution_state(),
-        )
+        .persist_part_updates(aggregate, vec![update], Vec::new())
         .await
         .expect("persist exact checkpoint");
 
@@ -3335,13 +3328,20 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         result.termination,
         SessionRunTermination::Completed
     ));
-    assert_eq!(result.run_marker.part_id, run_id);
-    assert_eq!(result.run_marker.kind, "run");
-    assert_eq!(result.run_marker.state, PartState::Completed);
+    let run_marker = result
+        .part_snapshot
+        .parts()
+        .iter()
+        .find(|part| part.part_id == run_id)
+        .expect("committed run marker");
+    assert_eq!(run_marker.part_id, run_id);
+    assert_eq!(run_marker.kind, "run");
+    assert_eq!(run_marker.state, PartState::Completed);
 
     // Exactly one text part and one think part under the marker.
     let text_parts: Vec<_> = result
-        .parts
+        .part_snapshot
+        .parts()
         .iter()
         .filter(|part| part.kind == "text")
         .collect();
@@ -3387,7 +3387,8 @@ async fn processor_run_turn_streams_parts_through_the_facade_once() {
         text_parts[0].revision
     );
     let think_parts: Vec<_> = result
-        .parts
+        .part_snapshot
+        .parts()
         .iter()
         .filter(|part| part.kind == "think")
         .collect();
@@ -3870,13 +3871,20 @@ async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visi
         first_operation.status(),
         agena_domain::ExecutionStatus::Cancelled
     );
+    assert_eq!(first_operation.user_input.requests.len(), 1);
+    assert_eq!(
+        first_operation.user_input.requests[0].request.request_id,
+        first_request_id
+    );
     assert!(
-        first_operation.user_input.requests.is_empty(),
-        "the cancelled tool must not retain an unanswerable pending request"
+        !session
+            .pending_interactions()
+            .any(|part| part.part_id == first_part_id),
+        "the retained request on a terminal tool must not remain actionable"
     );
     assert!(
         super::replies::has_finished_operation(&session, first_request_id.as_str()),
-        "a late retry of the removed id-less ask must still resolve as a duplicate of the terminal operation"
+        "a late retry of the retained id-less ask must still resolve as a duplicate of the terminal operation"
     );
     assert!(
         crate::provider::project_operation_output(first_operation.status(), &first_operation)

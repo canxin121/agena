@@ -245,13 +245,16 @@ impl SessionManager {
         // own role so the reloaded projection preserves the System/User
         // distinction.
         if !injected_new_parts.is_empty() || !hook_runs.is_empty() {
-            let outcome = self
-                .store
-                .submit_user_run(session.id, injected_new_parts, None)
+            self.store
+                .commit_parts(
+                    &mut session,
+                    agena_storage::store::PartCommand::SubmitUser {
+                        parts: injected_new_parts,
+                        idempotency_key: None,
+                        execution_id: None,
+                    },
+                )
                 .await?;
-            let mut projected = session.parts().to_vec();
-            projected.extend(outcome.parts);
-            session.install_projected_parts(projected);
         }
         // Record the session.start hook runs observed during creation (plus
         // any unattributed runs, such as config/provider.list, that happened
@@ -308,10 +311,10 @@ impl SessionManager {
         let view = self
             .store
             .facade
-            .load_control_parts(session_id)
+            .control_part_snapshot(session_id)
             .await
             .map_err(crate::session::store::store_error)?;
-        let mut session = crate::session::store::session_from_view_async(view).await?;
+        let mut session = crate::session::store::session_from_snapshot_async(view).await?;
         self.bind_session_workspace_root(&mut session).await?;
         self.refresh_execution_policy(&mut session, &self.execution_state());
         Ok(session)
@@ -357,9 +360,8 @@ impl SessionManager {
         if !self.apply_run_selection_to_session(&mut session, &options) {
             return Ok(session);
         }
-        // Persist the selection to `sessions.config_json`. `persist_session_changes`
-        // is a no-op without changed parts, which would leave the override
-        // in-memory only — invisible to `selected_model()` and the TUI's
+        // Persist the selection to `sessions.config_json` so it is available
+        // to `selected_model()` and the TUI's
         // post-send sync after the next store load.
         let persisted = self.store.persist_execution_config(session).await?;
         recover_write(

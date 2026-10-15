@@ -328,10 +328,7 @@ impl SessionManager {
                 },
             )
             .await?;
-        let persisted = self.store.load_session(session.id).await?;
-        session.version = persisted.version;
-        session.updated_at = persisted.updated_at;
-        session.install_projected_parts(persisted.parts().to_vec());
+        self.store.refresh_parts(&mut session, None).await?;
         if status == PartState::Failed {
             session.runtime.prompt_window.record_compaction_failure();
         } else if status == PartState::Completed {

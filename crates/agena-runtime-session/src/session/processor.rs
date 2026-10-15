@@ -15,7 +15,6 @@ use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
 use super::store::{ProcessorPartIdAllocator, StoreAdapter};
-use agena_storage::store::Part;
 
 const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 
@@ -59,14 +58,8 @@ pub(crate) struct SessionRunRequest {
 pub(crate) struct SessionRunResult {
     /// The run marker part id — the durable identity of this assistant message.
     pub assistant_message_id: i64,
-    /// The run marker part after terminalization. On a successful text-only
-    /// turn this is `Completed`; when the turn ended with in-flight tool calls
-    /// the marker stays `Pending`/`InProgress` (the session remains Running).
-    pub run_marker: Part,
-    /// Every content part created under this run, in creation order, with the
-    /// latest engine row applied (state/content after streaming and
-    /// terminalization).
-    pub parts: Vec<Part>,
+    /// Store-issued rows for this turn, including its marker and children.
+    pub part_snapshot: agena_storage::store::PartSnapshot,
     pub provider_metadata: Option<serde_json::Value>,
     pub termination: SessionRunTermination,
     /// True when the provider terminal event carried an explicit

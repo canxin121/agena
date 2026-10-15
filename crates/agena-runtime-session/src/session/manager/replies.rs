@@ -11,7 +11,7 @@ use crate::session::store::{
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_runtime_contracts::part_content::operation_from_tool_call;
-use agena_storage::store::{Part, PartRole};
+use agena_storage::store::{Part, PartCommand, PartDelta, PartRole, PartState, PartUpdate};
 use agena_tool::ToolPermissionCheck;
 
 mod replies_execution;
@@ -187,18 +187,35 @@ pub(super) fn run_marker_externally_initiated_tool(
     })
 }
 
-pub(super) fn update_resolved_tool_message(
-    session: &mut Session,
-    resolved: &ResolvedPendingTool,
-    update: impl FnOnce(&mut Part) -> Result<(), AppError>,
-) -> Result<i64, AppError> {
-    {
-        let tool_part = session
-            .part_mut(&resolved.pending.part)
-            .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
-        update(tool_part)?;
-    }
-    assistant_message_id(session, &resolved.pending.part)
+/// Decode a detached working value. Malformed durable content must fail the
+/// operation instead of silently discarding its requested change.
+pub(super) fn required_operation(
+    session: &Session,
+    part_ref: &SessionPartRef,
+) -> Result<OperationPart, AppError> {
+    let part = session
+        .part(part_ref)
+        .ok_or_else(|| pending_tool_part_not_found_error(part_ref))?;
+    operation_from_part(part).ok_or_else(|| {
+        AppError::Internal(format!(
+            "tool part {} has malformed operation content",
+            part.part_id,
+        ))
+    })
+}
+
+/// Build a revision-checked change from an immutable Part projection.
+pub(super) fn operation_update(
+    session: &Session,
+    part_ref: &SessionPartRef,
+    operation: &OperationPart,
+    mut delta: PartDelta,
+) -> Result<PartUpdate, AppError> {
+    let part = session
+        .part(part_ref)
+        .ok_or_else(|| pending_tool_part_not_found_error(part_ref))?;
+    delta.content = Some(operation_content_value(operation)?);
+    Ok(PartUpdate::new(part, delta))
 }
 
 pub(super) fn operation_content_value(
@@ -212,27 +229,6 @@ pub(super) fn operation_content_value(
     .map_err(|error| {
         AppError::Internal(format!("serialize durable tool operation content: {error}"))
     })
-}
-
-fn pending_operation_for_resolved(
-    resolved: &ResolvedPendingTool,
-    invocation: ToolInvocation,
-    lifecycle: TimeRange,
-    authorization: agena_domain::OperationAuthorization,
-) -> OperationPart {
-    let mut operation = OperationPart::pending(resolved.call_id, invocation, lifecycle);
-    operation.authorization = authorization;
-    let operation_id = resolved.operation_id.trim();
-    if !operation_id.is_empty() {
-        operation.metadata.insert(
-            OPERATION_ID_METADATA_KEY.to_owned(),
-            serde_json::Value::String(operation_id.to_owned()),
-        );
-    }
-    if let Some(identity) = resolved.advertised_tool_identity.as_deref() {
-        operation.set_advertised_tool_identity(identity.to_string());
-    }
-    operation
 }
 
 /// Carry protocol/runtime metadata across an Operation lifecycle replacement.
@@ -303,20 +299,6 @@ pub(super) fn operation_id_from_part(part: &Part) -> Option<String> {
     })
 }
 
-/// Re-encode a mutated [`OperationPart`] back onto the tool part's content.
-///
-/// The durable tool_call content is the flat single-source shape; a mutation
-/// is written back through [`tool_call_from_operation`] so the invocation
-/// identity, payload, user-input records and metadata stay in their canonical
-/// slots (there is no `operation` bucket to patch).
-pub(super) fn apply_operation_mutation(part: &mut Part, mutation: impl FnOnce(&mut OperationPart)) {
-    let Some(mut operation) = operation_from_part(part) else {
-        return;
-    };
-    mutation(&mut operation);
-    part.content = tool_call_from_operation(&operation).as_value();
-}
-
 /// Read the user-input request/reply pairs carried by a canonical `tool_call`
 /// part. User input is part of the operation facts; there is no companion
 /// interaction row to inspect.
@@ -363,52 +345,6 @@ fn matching_request_part_refs(
             })
         })
         .collect()
-}
-
-/// An operation's user-input asks live inside the operation activity itself,
-/// so once that operation reaches any terminal state, leaving an unanswered
-/// record pending would create an unanswerable request: the UI can still
-/// submit it, but there is no pending tool left to resume. Drop the awaiting
-/// records (keeping answered ones) in the same message checkpoint as the
-/// operation's terminal result.
-pub(super) fn cancel_unanswered_request_parts_for_operation(
-    session: &mut Session,
-    tool_part_id: i64,
-) -> Result<Vec<i64>, AppError> {
-    let (part_index, part_id) = session
-        .parts()
-        .iter()
-        .enumerate()
-        .find(|(_, part)| part.part_id == tool_part_id && part.kind == "tool_call")
-        .map(|(index, part)| (index, part.part_id))
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "pending tool part not found while closing tool part {tool_part_id}"
-            ))
-        })?;
-    let part_ref = SessionPartRef {
-        part_index,
-        part_id,
-    };
-    let part = session.part_mut(&part_ref).ok_or_else(|| {
-        AppError::Internal(format!(
-            "pending tool part not found while closing tool part {tool_part_id}"
-        ))
-    })?;
-    let mut cleared = false;
-    apply_operation_mutation(part, |operation| {
-        let before = operation.user_input.requests.len();
-        operation
-            .user_input
-            .requests
-            .retain(|record| record.reply.is_some());
-        cleared = before != operation.user_input.requests.len();
-    });
-    if cleared {
-        part.summary = None;
-        return Ok(vec![part_ref.part_id]);
-    }
-    Ok(Vec::new())
 }
 
 fn push_unique_permission_action(actions: &mut Vec<PermissionAction>, action: PermissionAction) {
@@ -581,12 +517,8 @@ pub(super) fn has_finished_operation(session: &Session, operation_id: &str) -> b
     if operation_id.is_empty() {
         return false;
     }
-    // An unanswered plugin ask is removed when its owning operation becomes
-    // terminal, otherwise the UI would retain an impossible-to-answer prompt.
-    // For id-less provider calls the stable request id still encodes the
-    // session-local call id, so retain a tombstone-equivalent lookup without
-    // keeping the request payload itself. This makes a very late client retry
-    // idempotent after cancellation/failure instead of reporting "not found".
+    // Stable operation/call identities also recognize very late client retries.
+    // Actual request records remain available as history after terminalization.
     let idless_plugin_call_id = operation_id
         .strip_prefix(format!("tool-input:{}:", session.id).as_str())
         .filter(|suffix| !suffix.is_empty() && !suffix.contains(':'))
@@ -751,31 +683,6 @@ impl SessionManager {
             .ok_or_else(|| pending_reply_payload_missing_error(request_kind, request_id))
     }
 
-    /// Record `reply` on the matching user-input record inside the canonical
-    /// `tool_call` part. The operation activity that asked owns the answer.
-    fn record_user_input_reply(
-        &self,
-        session: &mut Session,
-        request_id: &str,
-        reply: agena_domain::UserInputReply,
-    ) -> Result<i64, AppError> {
-        let request_part = matching_request_part_refs(session, request_id, true)
-            .into_iter()
-            .next()
-            .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
-        let replied_at_ms = Utc::now().timestamp_millis();
-        let part = session
-            .part_mut(&request_part)
-            .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
-        if part.kind != "tool_call" {
-            return Err(pending_reply_part_missing_error("user input", request_id));
-        }
-        apply_operation_mutation(part, |operation| {
-            operation.user_input.record_reply(reply, replied_at_ms);
-        });
-        Ok(request_part.part_id)
-    }
-
     async fn load_reply_session(
         &self,
         session_id: i64,
@@ -831,8 +738,7 @@ impl SessionManager {
             .await?;
         let continuation_model_turn_id = matching_model_turn_id(&session, model_turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
-            // Persist the selection durably (`persist_session_changes` with
-            // no changed parts is a no-op) so a later reload keeps it.
+            // Persist execution selection so later reloads retain the chosen model.
             session = self.store.persist_execution_config(session).await?;
         }
 
@@ -905,8 +811,7 @@ impl SessionManager {
             None
         };
         if continue_model && self.apply_run_selection_to_session(&mut session, &options) {
-            // Persist the selection durably (`persist_session_changes` with
-            // no changed parts is a no-op) so a later reload keeps it.
+            // Persist execution selection so later reloads retain the chosen model.
             self.store.persist_execution_config(session).await?;
         }
 
@@ -932,16 +837,6 @@ impl SessionManager {
             manager
                 .prepare_tool_content(&mut latest, &mut execution_tool, &scoped_executor)
                 .await?;
-            if execution_tool.content_writer.is_some() {
-                manager
-                    .persist_session_changes(
-                        latest,
-                        vec![execution_tool.pending.part.part_id],
-                        None,
-                        execution_state.clone(),
-                    )
-                    .await?;
-            }
             let host_user_input_sequence = execution_manager
                 .host_user_input_sequence_guard(session_id, execution_tool.call_id);
             let execution = scoped_executor
@@ -1007,23 +902,43 @@ impl SessionManager {
 
     async fn persist_tool_completion(
         &self,
-        mut session: Session,
+        session: Session,
         resolved: &ResolvedPendingTool,
+        operation: OperationPart,
         persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
+        mut additional_updates: Vec<PartUpdate>,
     ) -> Result<Session, AppError> {
-        let mut changed_part_ids = cancel_unanswered_request_parts_for_operation(
-            &mut session,
-            resolved.pending.part.part_id,
+        use agena_domain::ToolResultState;
+        let state = match operation.state {
+            ToolResultState::Completed
+            | ToolResultState::PolicyDenied
+            | ToolResultState::UserDeclined
+            | ToolResultState::CapabilityUnavailable
+            | ToolResultState::ToolUnavailable => PartState::Completed,
+            ToolResultState::Failed => PartState::Failed,
+            ToolResultState::Cancelled => PartState::Cancelled,
+            ToolResultState::Pending | ToolResultState::Running => {
+                return Err(AppError::Internal(
+                    "tool completion requires a terminal operation".into(),
+                ));
+            }
+        };
+        // Preserve requests and answers as durable history. The terminal Part
+        // state closes actionability; no request payload needs to be deleted.
+        let update = operation_update(
+            &session,
+            &resolved.pending.part,
+            &operation,
+            PartDelta {
+                state: Some(state),
+                clear_summary: true,
+                finished_at_ms: operation.lifecycle.end_ms,
+                ..PartDelta::default()
+            },
         )?;
-        changed_part_ids.push(resolved.pending.part.part_id);
-        self.persist_session_changes_with_rules(
-            session,
-            changed_part_ids,
-            persisted_rules,
-            state.clone(),
-        )
-        .await
+        additional_updates.push(update);
+        self.persist_part_updates(session, additional_updates, persisted_rules)
+            .await
     }
 
     async fn reply_permission_dispatch(
@@ -1136,30 +1051,25 @@ impl SessionManager {
                 // leaves the durable pending permission untouched.
                 let replied_at_ms = Utc::now().timestamp_millis();
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-                let _operation_id = resolved_tool.operation_id.clone();
-                let _call_id = resolved_tool.call_id;
+                let mut operation = required_operation(&session, &pending.tool.part)?;
+                if !operation
+                    .authorization
+                    .record_reply(request.request.reply.clone(), replied_at_ms)
                 {
-                    let tool_part = session
-                        .part_mut(&pending.tool.part)
-                        .ok_or_else(|| pending_tool_part_not_found_error(&pending.tool.part))?;
-                    let Some(mut operation) = operation_from_part(tool_part) else {
-                        return Err(pending_reply_payload_missing_error(
-                            "permission",
-                            request_id.as_str(),
-                        ));
-                    };
-                    if !operation
-                        .authorization
-                        .record_reply(request.request.reply.clone(), replied_at_ms)
-                    {
-                        return Err(pending_reply_payload_missing_error(
-                            "permission",
-                            request_id.as_str(),
-                        ));
-                    }
-                    apply_operation_mutation(tool_part, |op| *op = operation);
-                    tool_part.summary = None;
+                    return Err(pending_reply_payload_missing_error(
+                        "permission",
+                        request_id.as_str(),
+                    ));
                 }
+                let update = operation_update(
+                    &session,
+                    &pending.tool.part,
+                    &operation,
+                    PartDelta {
+                        clear_summary: true,
+                        ..PartDelta::default()
+                    },
+                )?;
                 let reply_message_id = assistant_message_id(&session, &pending.tool.part)?;
                 let conversation_identity = self
                     .conversation_identity_for_message(request.request.session_id, reply_message_id)
@@ -1168,10 +1078,7 @@ impl SessionManager {
                 // Only a genuine provider Tool API call may resume the model.
                 let continue_model =
                     !run_marker_externally_initiated_tool(&session, &pending.tool.part)?
-                        && resolve_pending_tool(&session, &pending.tool)?
-                            .invocation
-                            .tool_api_call
-                            .is_some();
+                        && resolved_tool.invocation.tool_api_call.is_some();
                 let persisted_actions = if permission_request.requested_actions.is_empty() {
                     vec![permission_request.action.clone()]
                 } else {
@@ -1186,12 +1093,7 @@ impl SessionManager {
                 )
                 .await?;
                 session = self
-                    .persist_session_changes_with_rules(
-                        session,
-                        vec![pending.tool.part.part_id],
-                        persisted_rules,
-                        state.clone(),
-                    )
+                    .persist_part_updates(session, vec![update], persisted_rules)
                     .await?;
                 session.refresh_derived();
 
@@ -1356,7 +1258,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         self.session_mutations
             .run(session_id, async {
-                let (state, mut session) = self.load_reply_session(session_id).await?;
+                let (_state, session) = self.load_reply_session(session_id).await?;
                 let request_parts =
                     matching_request_part_refs(&session, request_id.as_str(), false);
                 if request_parts.is_empty() {
@@ -1366,37 +1268,29 @@ impl SessionManager {
                     ));
                 }
 
-                let mut changed_part_ids = Vec::new();
-                let mut presented = false;
-                for request_part in &request_parts {
-                    let part = session.part_mut(request_part).ok_or_else(|| {
+                let mut updates = Vec::new();
+                for part_ref in &request_parts {
+                    let part = session.part(part_ref).ok_or_else(|| {
                         pending_reply_part_missing_error("user input", request_id.as_str())
                     })?;
                     if !part.state.is_in_flight() || part.kind != "tool_call" {
                         continue;
                     }
-                    let mut touched = false;
-                    apply_operation_mutation(part, |operation| {
-                        if let Some(record) = operation.user_input.find_mut(request_id.as_str())
-                            && record.reply.is_none()
-                            && record.request.presented_at.is_none()
-                        {
-                            record.request.presented_at = Some(Utc::now());
-                            touched = true;
-                        }
-                    });
-                    if touched {
-                        presented = true;
-                        changed_part_ids.push(request_part.part_id);
+                    let mut operation = required_operation(&session, part_ref)?;
+                    if let Some(record) = operation.user_input.find_mut(request_id.as_str())
+                        && record.reply.is_none()
+                        && record.request.presented_at.is_none()
+                    {
+                        record.request.presented_at = Some(Utc::now());
+                        updates.push(operation_update(
+                            &session,
+                            part_ref,
+                            &operation,
+                            PartDelta::default(),
+                        )?);
                     }
                 }
-
-                if !presented {
-                    // Already presented (idempotent replay) or already resolved
-                    // (presentation is moot): nothing to persist.
-                    return Ok(session);
-                }
-                self.persist_session_changes(session, changed_part_ids, None, state)
+                self.persist_part_updates(session, updates, Vec::new())
                     .await
             })
             .await
@@ -1459,27 +1353,32 @@ impl SessionManager {
                         pending_user_input_request(session, pending, request_id.as_str())
                     },
                 )?;
-                // Record the reply into the operation's `user_input` bucket
-                // before terminalizing the tool, so the answered record stays
-                // attached to the activity that asked.
-                let changed_part_id = self.record_user_input_reply(
-                    &mut session,
-                    request_id.as_str(),
-                    request.reply.clone(),
-                )?;
+                // Prepare a detached operation. Validation and terminalization
+                // must succeed before the answer becomes a committed fact.
+                let mut replied_operation = required_operation(&session, &pending.request)?;
+                if !replied_operation
+                    .user_input
+                    .record_reply(request.reply.clone(), Utc::now().timestamp_millis())
+                {
+                    return Err(pending_reply_payload_missing_error(
+                        "user input",
+                        request_id.as_str(),
+                    ));
+                }
 
                 // Origin is typed: host `ask_user` requests are persisted and
                 // returned to the waiting plugin instead of resuming the model.
                 let is_host = user_input_request.source == agena_domain::UserInputSource::Host;
                 let host_response = if is_host {
                     let response = host_user_input_response(&user_input_request, &request.reply)?;
-                    session = self
-                        .persist_session_changes(
-                            session,
-                            vec![changed_part_id],
-                            None,
-                            state.clone(),
-                        )
+                    let update = operation_update(
+                        &session,
+                        &pending.request,
+                        &replied_operation,
+                        PartDelta::default(),
+                    )?;
+                    self.store
+                        .commit_parts(&mut session, PartCommand::Update(vec![update]))
                         .await?;
                     Some(response)
                 } else {
@@ -1493,7 +1392,7 @@ impl SessionManager {
                                     &pending.tool,
                                     execution,
                                     Vec::new(),
-                                    state.clone(),
+                                    Some(replied_operation),
                                 )
                                 .await?;
                         }
@@ -1502,7 +1401,13 @@ impl SessionManager {
                                 "user declined to answer requested questions".to_string()
                             });
                             session = self
-                                .apply_user_declined(session, &pending.tool, reason, state.clone())
+                                .apply_user_declined(
+                                    session,
+                                    &pending.tool,
+                                    reason,
+                                    replied_operation,
+                                    state.clone(),
+                                )
                                 .await?;
                         }
                         UserInputReplyKind::Timeout => {
@@ -1521,7 +1426,7 @@ impl SessionManager {
                                     &pending.tool,
                                     execution.into(),
                                     Vec::new(),
-                                    state.clone(),
+                                    Some(replied_operation),
                                 )
                                 .await?;
                         }
@@ -1764,14 +1669,14 @@ mod tests {
     }
 }
 use super::{
-    AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus, ModelRef,
+    AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ModelRef,
     ModelSpeedModeRequestOverride, OperationPart, PermissionAction, PermissionReplyKind,
     PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest, SessionManager,
     SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
-    SessionRunTermination, TimeRange, ToolError, ToolInvocation, ToolInvocationExecution,
-    UserInputReplyKind, Utc, background_operation_from_execution, background_operation_id,
-    completed_lifecycle, execution_control_to_app_error, host_user_input_response, mpsc,
-    permission_action_key, persisted_rules_for_reply, requested_background_kind,
-    reserve_background_external_id, resolve_pending_tool, run_abort_reason, user_input_execution,
+    SessionRunTermination, ToolError, ToolInvocationExecution, UserInputReplyKind, Utc,
+    background_operation_from_execution, background_operation_id, completed_lifecycle,
+    execution_control_to_app_error, host_user_input_response, mpsc, permission_action_key,
+    persisted_rules_for_reply, requested_background_kind, reserve_background_external_id,
+    resolve_pending_tool, run_abort_reason, user_input_execution,
 };

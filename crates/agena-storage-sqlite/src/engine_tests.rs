@@ -8,13 +8,14 @@
 use std::sync::Arc;
 
 use agena_domain::SessionRelationKind;
+use agena_storage::backend::PersistenceEngine;
 use agena_storage::{
     WorkspaceRepository,
     store::{
         BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperationKind,
         BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, NewPart,
-        NewSession, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, RunOutcome,
-        SessionFacade, SessionListQuery, SessionMetadataPatch, SessionStore, SessionView,
+        NewSession, PartDelta, PartRole, PartState, PartVisibility, RunOutcome, SessionListQuery,
+        SessionMetadataPatch, SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -24,11 +25,19 @@ use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
 
 mod part_integrity;
 
+fn test_facade(engine: SqliteEngine, max_cached_sessions: usize) -> Arc<dyn SessionStore> {
+    agena_storage::backend::session_store(
+        engine,
+        max_cached_sessions,
+        agena_storage::content::ContentHub::in_memory(),
+    )
+}
+
 #[tokio::test]
 async fn revision_projection_observes_external_writes_without_loading_part_tables() {
     let db = in_memory_db().await;
     let (engine, id) = setup(db.clone()).await;
-    let facade = SessionFacade::new(engine, 8);
+    let facade = test_facade(engine, 8);
     let before = facade.session_revision_rows().await.unwrap();
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].0, id);
@@ -248,7 +257,7 @@ async fn fork_renumbers_user_messages_contiguously() {
     let (engine, session_id) = setup(db).await;
     // Fork is a facade-level lineage operation, so exercise the numbering
     // through the `SessionStore` boundary the API server actually uses.
-    let store = SessionFacade::new(engine, 8);
+    let store = test_facade(engine, 8);
 
     store
         .submit_user_run(session_id, vec![text_part("one")], None)
@@ -443,7 +452,7 @@ async fn semantic_checkpoint_commits_part_before_companion_append() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let durable_probe = engine.clone();
-    let facade = SessionFacade::new(engine, 16);
+    let facade = test_facade(engine, 16);
 
     let mut tool = NewPart::pending(
         "tool_call",
@@ -970,7 +979,7 @@ async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
 async fn forked_history_does_not_inherit_parent_execution_or_interaction() {
     let db = in_memory_db().await;
     let (engine, source_id) = setup(db.clone()).await;
-    let facade = SessionFacade::new(engine, 8);
+    let facade = test_facade(engine, 8);
     let run = facade
         .start_run(source_id, "execution", json!({}), None)
         .await
@@ -1418,12 +1427,7 @@ async fn gc_deletes_only_refcount_orphans() {
 async fn resume_mid_stream_reconciles_to_ready() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
-    let facade = SessionFacade::with_clock(
-        engine.clone(),
-        agena_storage::store::MemoryLayer::new(8),
-        agena_storage::store::NotificationBus::new(),
-        || 1_000_000,
-    );
+    let facade = agena_storage::backend::session_store_with_clock(engine.clone(), 8, || 1_000_000);
     let run_id = engine
         .submit_user_run(
             session_id,
@@ -1504,12 +1508,7 @@ async fn resume_mid_stream_reconciles_to_ready() {
 async fn resume_mid_ask_remains_awaiting_interaction() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
-    let facade = SessionFacade::with_clock(
-        engine.clone(),
-        agena_storage::store::MemoryLayer::new(8),
-        agena_storage::store::NotificationBus::new(),
-        || 1_000_000,
-    );
+    let facade = agena_storage::backend::session_store_with_clock(engine.clone(), 8, || 1_000_000);
     let outcome = engine
         .submit_user_run(
             session_id,
@@ -1563,12 +1562,7 @@ async fn resume_mid_ask_remains_awaiting_interaction() {
 async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
-    let facade = SessionFacade::with_clock(
-        engine.clone(),
-        agena_storage::store::MemoryLayer::new(8),
-        agena_storage::store::NotificationBus::new(),
-        || 1_000_000,
-    );
+    let facade = agena_storage::backend::session_store_with_clock(engine.clone(), 8, || 1_000_000);
     let outcome = engine
         .submit_user_run(
             session_id,
@@ -2018,7 +2012,7 @@ async fn facade_cross_process_cache_invalidation() {
     let db_a = connect_file(&directory, "facade.db").await;
     initialize_schema(&db_a).await.expect("schema");
     let engine_a = SqliteEngine::new(db_a.clone());
-    let facade_a = SessionFacade::new(engine_a, 16);
+    let facade_a = test_facade(engine_a, 16);
 
     let workspace_id = SeaWorkspaceRepository::new(db_a.clone())
         .ensure_id("/f/ws")
@@ -2057,7 +2051,7 @@ async fn facade_cross_process_cache_invalidation() {
 
     // Process B (fresh connection) appends a part through its own facade.
     let db_b = connect_file(&directory, "facade.db").await;
-    let facade_b = SessionFacade::new(SqliteEngine::new(db_b), 16);
+    let facade_b = test_facade(SqliteEngine::new(db_b), 16);
     let run_id = cached.parts[0].part_id;
     facade_b
         .append_parts(

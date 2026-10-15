@@ -524,12 +524,15 @@ pub struct PartDelta {
     /// Replace the whole content JSON document.
     pub content: Option<Value>,
     pub summary: Option<String>,
+    /// Explicitly clear a cached summary. Omission leaves the value unchanged.
+    #[serde(default)]
+    pub clear_summary: bool,
     pub provider_state: Option<Value>,
     /// Explicit terminal timestamp (used on completion); defaults to "now".
     pub finished_at_ms: Option<i64>,
 }
 
-/// Outcome of [`crate::store::PersistenceEngine::complete_run`] — how a run marker ends.
+/// Outcome of [`crate::store::SessionStore::complete_run`] — how a run marker ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {
     /// `completed` | `failed` | `cancelled` (never a non-terminal state).
@@ -542,7 +545,7 @@ pub struct RunOutcome {
     pub provider_state: Option<Value>,
 }
 
-/// Result of [`crate::store::PersistenceEngine::submit_user_run`].
+/// Result of [`crate::store::SessionStore::submit_user_run`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubmitOutcome {
     /// The run marker part id (the run identity).
@@ -721,7 +724,7 @@ pub struct SessionCursor {
     pub id: i64,
 }
 
-/// Query for [`crate::store::PersistenceEngine::list_session_summaries`].
+/// Query for [`crate::store::SessionStore::list_session_summaries`].
 ///
 /// The listing surface (13.1 / 14.1) filters by workspace, optional parent,
 /// optional roots-only, optional title search, and pages newest-first by the
@@ -751,7 +754,7 @@ pub struct SessionListQuery {
     pub states: Vec<SessionState>,
 }
 
-/// Result of [`crate::store::PersistenceEngine::reconcile`] (17.4).
+/// Result of [`crate::store::SessionStore::reconcile`] (17.4).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileOutcome {
     /// Run markers marked `failed` (abort_reason = `process_restart`).
@@ -786,7 +789,7 @@ pub struct UsageRecord {
     pub detail_json: Option<Value>,
 }
 
-/// Query for [`crate::store::PersistenceEngine::usage_stats`]. All shapes are pure SQL over
+/// Query for [`crate::store::SessionStore::usage_stats`]. All shapes are pure SQL over
 /// index ranges (16.3).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageQuery {

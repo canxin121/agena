@@ -13,11 +13,9 @@ use agena_domain::{
 };
 use agena_storage::WorkspaceRepository;
 use agena_storage::content::{ContentArchive, ContentBackend};
-use agena_storage::store::{
-    NewPart, NewSession, PartDelta, PartRole, PartState, SessionFacade, SessionStore, StoreError,
-};
+use agena_storage::store::{NewPart, NewSession, PartDelta, PartRole, PartState, StoreError};
 use agena_storage_sqlite::{
-    DatabaseContentBackend, SeaWorkspaceRepository, SqliteEngine, initialize_schema,
+    DatabaseContentBackend, SeaWorkspaceRepository, initialize_schema, session_store_with_contents,
 };
 use sea_orm::Database;
 use serde_json::json;
@@ -98,7 +96,7 @@ async fn measure(observers: usize) -> Result<(), Box<dyn Error>> {
         records: AtomicUsize::new(0),
     });
     let contents = agena_storage::content::ContentHub::new(backend.clone(), Default::default());
-    let store = SessionFacade::new(SqliteEngine::new(db), 32).with_contents(contents);
+    let store = session_store_with_contents(db, 32, contents);
     let session_id = store
         .create_session(NewSession {
             workspace_id,

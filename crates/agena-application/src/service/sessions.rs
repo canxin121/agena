@@ -396,7 +396,7 @@ mod tests {
 
     use agena_domain::SessionRelationKind;
     use agena_storage::WorkspaceRepository;
-    use agena_storage::store::{NewPart, NewSession, PartRole, SessionFacade, SessionStore};
+    use agena_storage::store::{NewPart, NewSession, PartRole, SessionStore};
     use sea_orm::Database;
     use serde_json::json;
 
@@ -415,8 +415,7 @@ mod tests {
             .ensure_id("/test/workspace")
             .await
             .expect("create test workspace");
-        let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db));
-        let facade: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(engine.clone(), 64));
+        let facade = agena_storage_sqlite::session_store(Arc::clone(&db), 64);
         let service = ApplicationService::new(
             "/test/workspace",
             Arc::new(agena_storage::MemoryStore::for_workspace(

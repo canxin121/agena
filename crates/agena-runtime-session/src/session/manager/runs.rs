@@ -558,8 +558,8 @@ impl SessionManager {
         self.apply_run_selection_to_session(&mut session, &options);
         // Make the run's model selection durable so a reload (post-send
         // refresh, next turn, new session first submit) resolves the same
-        // model instead of the default. `persist_session_changes` is a no-op
-        // without changed parts, so write the execution config directly.
+        // model instead of the default. Execution configuration has its own
+        // storage operation, independent of Part changes.
         session = self.store.persist_execution_config(session).await?;
         let input_parts = self
             .materialize_user_media(&session, &options.model, request.parts)
@@ -593,23 +593,27 @@ impl SessionManager {
         }
         let submit_outcome = self
             .store
-            .submit_user_run_for_execution(
-                session.id,
-                user_parts,
-                request.idempotency_key.clone(),
-                &control.execution_id().to_string(),
+            .commit_parts(
+                &mut session,
+                agena_storage::store::PartCommand::SubmitUser {
+                    parts: user_parts,
+                    idempotency_key: request.idempotency_key.clone(),
+                    execution_id: Some(control.execution_id().to_string()),
+                },
             )
             .await?;
-        control.set_user_run(submit_outcome.run_id, submit_outcome.created);
+        control.set_user_run(
+            submit_outcome
+                .run_id
+                .ok_or_else(|| AppError::Internal("user submission returned no run id".into()))?,
+            submit_outcome.created,
+        );
         if let Some(submitted) = submitted {
             // The store has committed every user part and published the
             // corresponding changes. Clients can now read the real message,
             // independently of hook recording and the first provider response.
             let _ = submitted.send(());
         }
-        let mut projected = session.parts().to_vec();
-        projected.extend(submit_outcome.parts);
-        session.install_projected_parts(projected);
 
         // Record the user.prompt.submit hook runs observed during this
         // submission (plus any unattributed runs claimed by this session)
@@ -631,7 +635,7 @@ impl SessionManager {
                 &options,
                 StableRunContext {
                     base_run_source: ExecutionSource::User,
-                    active_model_turn_id: Some(submit_outcome.run_id),
+                    active_model_turn_id: submit_outcome.run_id,
                     state,
                     control,
                     steer_rx,
@@ -771,8 +775,7 @@ impl SessionManager {
             .apply_execution_context_to_run_options_async(&session, request.options)
             .await?;
         if self.apply_run_selection_to_session(&mut session, &options) {
-            // Persist the selection durably (`persist_session_changes` with
-            // no changed parts is a no-op) so a later reload keeps it.
+            // Persist execution selection so later reloads retain the chosen model.
             session = self.store.persist_execution_config(session).await?;
         }
         self.run_until_stable(

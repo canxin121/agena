@@ -116,6 +116,9 @@ impl ToolCallView {
     }
 
     pub fn has_pending_interaction(&self) -> bool {
+        if self.operation.status().is_terminal() {
+            return false;
+        }
         self.operation
             .user_input
             .requests

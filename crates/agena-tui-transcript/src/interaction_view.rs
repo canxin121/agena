@@ -27,8 +27,13 @@ use crate::{
 /// interactive in the transcript, so the key router and inline renderer share
 /// the same boundary.
 pub fn interaction_request_id_for_part<'a>(part: &'a TranscriptEntryPart<'a>) -> Option<&'a str> {
+    if part.status.is_terminal() {
+        return None;
+    }
     match &part.content {
-        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation)) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation))
+            if !operation.operation.status().is_terminal() =>
+        {
             operation
                 .operation
                 .user_input
@@ -44,7 +49,8 @@ pub fn interaction_request_id_for_part<'a>(part: &'a TranscriptEntryPart<'a>) ->
 /// reply. This is the canonical "pending interaction part" predicate for the
 /// single-activity shape (a tool_call activity IS the ask).
 pub fn operation_has_awaiting_user_input(operation: &ToolCallView) -> bool {
-    operation.operation.user_input.awaiting().next().is_some()
+    !operation.operation.status().is_terminal()
+        && operation.operation.user_input.awaiting().next().is_some()
 }
 
 /// The minimal request facts the layout helpers need. Implemented for both the

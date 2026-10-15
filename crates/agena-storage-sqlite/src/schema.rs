@@ -398,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn reopening_repairs_subagent_lifecycles_without_changing_tasks_or_transcripts() {
         use agena_domain::SessionLifecycleState;
-        use agena_storage::store::PersistenceEngine;
+        use agena_storage::backend::PersistenceEngine;
         use sea_orm::Value;
         use std::sync::Arc;
 

@@ -781,10 +781,18 @@ impl SessionProcessor {
                     "provider stream failed"
                 );
             }
+            let ids = std::iter::once(marker.part_id)
+                .chain(parts.iter().map(|part| part.part_id))
+                .collect::<Vec<_>>();
+            let part_snapshot = run
+                .store
+                .facade
+                .part_snapshot(run.session_id, Some(&ids))
+                .await
+                .map_err(crate::session::store::store_error)?;
             return Ok(SessionRunResult {
                 assistant_message_id,
-                run_marker: marker,
-                parts,
+                part_snapshot,
                 provider_metadata,
                 termination: if cancelled {
                     SessionRunTermination::Cancelled
@@ -893,10 +901,18 @@ impl SessionProcessor {
                 .await?
         };
 
+        let ids = std::iter::once(run_marker.part_id)
+            .chain(parts.iter().map(|part| part.part_id))
+            .collect::<Vec<_>>();
+        let part_snapshot = run
+            .store
+            .facade
+            .part_snapshot(run.session_id, Some(&ids))
+            .await
+            .map_err(crate::session::store::store_error)?;
         Ok(SessionRunResult {
             assistant_message_id,
-            run_marker,
-            parts,
+            part_snapshot,
             provider_metadata,
             termination: SessionRunTermination::Completed,
             follow_up_requested,

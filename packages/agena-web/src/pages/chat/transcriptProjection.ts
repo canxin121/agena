@@ -12,6 +12,7 @@ import {
   isRunCancelled,
   isRunFailureState,
   isRunInFlight,
+  isRunTerminal,
   normalizeRunState,
 } from '../../lib/chatRunState'
 import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
@@ -256,6 +257,7 @@ function noticeSummary(part: MessagePartLike): string {
 }
 
 export function partHasPendingInteraction(part: MessagePartLike): boolean {
+  if (isRunTerminal(part.partState)) return false
   const operation = toolCallView(part)
   const userInput = record(operation.user_input)
   const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
@@ -272,7 +274,7 @@ export function partHasPendingInteraction(part: MessagePartLike): boolean {
 }
 
 export function partPendingInteractionRequestIds(part: MessagePartLike): string[] {
-  if (durablePartKind(part) !== 'tool_call') return []
+  if (durablePartKind(part) !== 'tool_call' || isRunTerminal(part.partState)) return []
   const operation = toolCallView(part)
   const requests = record(operation.user_input).requests
   const permissions = record(operation.authorization).permissions

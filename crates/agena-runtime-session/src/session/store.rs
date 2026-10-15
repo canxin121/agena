@@ -6,7 +6,7 @@
 //!
 //! This module is the manager's thin adapter over that facade. It:
 //!
-//! - converts a [`SessionView`] (metadata + parts) back into the
+//! - converts a store-issued [`PartSnapshot`] (metadata + parts) into the
 //!   [`Session`] aggregate the execution engine operates on
 //!   (parts are grouped into runs by their `run` marker);
 //! - converts [`TypedContent`] payloads to and from the JSON stored on
@@ -29,11 +29,13 @@ use agena_domain::{ExecutionSelection, ExecutionStatus, Role};
 use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
 use agena_runtime_contracts::part_content;
 use agena_runtime_contracts::part_content::TypedContent;
+#[cfg(test)]
+use agena_storage::store::SubmitOutcome;
 use agena_storage::store::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
     BackgroundOperationTransition, BackgroundSettleOutcome, NewBackgroundOperation, NewPart, Part,
-    PartDelta, PartRole, PartState, PartVisibility, SessionMeta, SessionStore, SessionView,
-    StoreError, SubmitOutcome, UsageQuery,
+    PartCommand, PartDelta, PartRole, PartSnapshot, PartState, PartVisibility, SessionMeta,
+    SessionStore, StoreError, UsageQuery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,15 +46,20 @@ use crate::session::Session;
 
 static SESSION_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
+pub(crate) struct PartCommandOutcome {
+    pub run_id: Option<i64>,
+    pub created: bool,
+}
+
 /// The facade-backed store adapter used by [`crate::SessionManager`].
 ///
 /// The facade is the only writer: this process owns the data directory, so a
 /// manager write needs no ownership handshake at all.
 ///
-/// The engine is the only id source, so freshly built in-memory parts carry a
-/// negative placeholder until the facade returns the real id. The adapter
-/// remaps placeholders to engine ids on every write and rewrites the
-/// in-memory aggregate so part references stay consistent.
+/// Session projections accept only storage-issued snapshots. The processor's
+/// detached parameter accumulator may reserve local ids while parsing an
+/// incomplete tool invocation; those entries never become Session or client
+/// facts. Appending the validated invocation returns its real durable identity.
 #[derive(Clone)]
 pub(crate) struct StoreAdapter {
     pub(crate) facade: Arc<dyn SessionStore>,
@@ -79,8 +86,47 @@ impl StoreAdapter {
     /// Load a session's transcript and metadata and rebuild the in-memory
     /// aggregate the execution engine operates on.
     pub(crate) async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
-        let view = self.facade.load(session_id).await.map_err(store_error)?;
-        session_from_view_async(view).await
+        let snapshot = self
+            .facade
+            .part_snapshot(session_id, None)
+            .await
+            .map_err(store_error)?;
+        session_from_snapshot_async(snapshot).await
+    }
+
+    /// Submit changes before touching the runtime projection. The opaque
+    /// receipt is the only production path that installs committed rows.
+    pub(crate) async fn commit_parts(
+        &self,
+        session: &mut Session,
+        command: PartCommand,
+    ) -> Result<PartCommandOutcome, AppError> {
+        let commit = self
+            .facade
+            .apply_part_command(session.id, command)
+            .await
+            .map_err(store_error)?;
+        let outcome = PartCommandOutcome {
+            run_id: commit.run_id(),
+            created: commit.created(),
+        };
+        session
+            .apply_part_snapshot(commit.into_snapshot())
+            .map_err(store_error)?;
+        Ok(outcome)
+    }
+
+    pub(crate) async fn refresh_parts(
+        &self,
+        session: &mut Session,
+        ids: Option<&[i64]>,
+    ) -> Result<(), AppError> {
+        let snapshot = self
+            .facade
+            .part_snapshot(session.id, ids)
+            .await
+            .map_err(store_error)?;
+        session.apply_part_snapshot(snapshot).map_err(store_error)
     }
 
     /// Create a new session row and return the rebuilt aggregate.
@@ -204,9 +250,9 @@ impl StoreAdapter {
     }
 
     /// Submit a user message: creates the `run` marker and its content parts
-    /// in one transaction. The facade returns the full outcome — the run
-    /// marker plus the committed, engine-id'd parts — so callers remap
-    /// placeholders without reloading.
+    /// in one transaction. The facade returns the run marker and committed
+    /// Parts with durable ids.
+    #[cfg(test)]
     pub(crate) async fn submit_user_run(
         &self,
         session_id: i64,
@@ -219,6 +265,7 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    #[cfg(test)]
     pub(crate) async fn submit_user_run_for_execution(
         &self,
         session_id: i64,
@@ -378,6 +425,7 @@ impl StoreAdapter {
     /// durable correlation marker) together with the invisible guard result;
     /// settle terminalizes that part and appends notification parts. Both
     /// phases use the same transaction so a crash cannot leave only one half.
+    #[cfg(test)]
     pub(crate) async fn settle_background_run(
         &self,
         session_id: i64,
@@ -687,11 +735,7 @@ impl StoreAdapter {
     }
 
     fn session_from_meta(&self, meta: SessionMeta) -> Result<Session, AppError> {
-        let view = SessionView {
-            meta,
-            parts: Vec::new(),
-        };
-        session_from_view(view)
+        session_from_meta(&meta)
     }
 }
 
@@ -728,16 +772,9 @@ pub(crate) fn store_error(error: StoreError) -> AppError {
     }
 }
 
-/// Rebuild the execution-engine [`Session`] aggregate from a [`SessionView`]
-/// (metadata + ordered parts).
-///
-/// The engine operates on the flat parts projection ([`Session::parts`],
-/// design 14-15): this installs the ordered part list and recomputes the
-/// derived state (pending operations, workflow, approx bytes) from it.
-/// Consumers rebuild logical runs on demand through [`parts_into_runs`] and
-/// the provider projectors.
-pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> {
-    let SessionView { meta, parts } = view;
+/// Build execution metadata independently of Part snapshot installation.
+/// The caller then installs store-issued rows and restores prompt state.
+fn session_from_meta(meta: &SessionMeta) -> Result<Session, AppError> {
     let mut session = Session::new(
         meta.id,
         meta.workspace_id,
@@ -753,10 +790,24 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.source_cutoff_seq_global = meta.cutoff_part_id;
     session.task_id = meta.task_id.clone();
     session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
-    apply_meta_runtime(&mut session.runtime, &meta)?;
+    apply_meta_runtime(&mut session.runtime, meta)?;
     session.bind_runtime_scope();
-    restore_prompt_window_from_parts(&mut session.runtime, &parts, session.id)?;
-    session.install_projected_parts(parts);
+    Ok(session)
+}
+
+fn session_from_snapshot(snapshot: PartSnapshot) -> Result<Session, AppError> {
+    let mut session = session_from_meta(snapshot.meta())?;
+    restore_prompt_window_from_parts(&mut session.runtime, snapshot.parts(), session.id)?;
+    session.apply_part_snapshot(snapshot).map_err(store_error)?;
+    restore_prompt_tokens_from_parts(&mut session)?;
+    Ok(session)
+}
+
+#[cfg(test)]
+fn session_from_view(view: agena_storage::store::SessionView) -> Result<Session, AppError> {
+    let mut session = session_from_meta(&view.meta)?;
+    restore_prompt_window_from_parts(&mut session.runtime, &view.parts, session.id)?;
+    session.install_projected_parts(view.parts);
     restore_prompt_tokens_from_parts(&mut session)?;
     Ok(session)
 }
@@ -797,9 +848,11 @@ fn restore_prompt_tokens_from_parts(session: &mut Session) -> Result<(), AppErro
 }
 
 /// Rebuild both full and narrow projections on the same admitted worker pool.
-pub(crate) async fn session_from_view_async(view: SessionView) -> Result<Session, AppError> {
+pub(crate) async fn session_from_snapshot_async(
+    snapshot: PartSnapshot,
+) -> Result<Session, AppError> {
     SESSION_PROJECTIONS
-        .run(move || session_from_view(view))
+        .run(move || session_from_snapshot(snapshot))
         .await
         .map_err(|error| AppError::Internal(format!("session projection worker failed: {error}")))?
 }
@@ -1213,23 +1266,6 @@ pub(crate) fn execution_status_from_part_state(state: PartState) -> ExecutionSta
         PartState::Completed => ExecutionStatus::Completed,
         PartState::Failed => ExecutionStatus::Failed,
         PartState::Cancelled => ExecutionStatus::Cancelled,
-    }
-}
-
-pub(crate) fn part_state_from_execution_status(status: ExecutionStatus) -> PartState {
-    match status {
-        ExecutionStatus::Pending => PartState::Pending,
-        ExecutionStatus::InProgress => PartState::InProgress,
-        ExecutionStatus::Completed => PartState::Completed,
-        // The persisted part state vocabulary is coarse (schema CHECK); the
-        // precise non-execution reason rides in the part content, matching the
-        // transcript's coarse mapping (history.rs `activity_state_from_execution`).
-        ExecutionStatus::PolicyDenied
-        | ExecutionStatus::UserDeclined
-        | ExecutionStatus::CapabilityUnavailable
-        | ExecutionStatus::ToolUnavailable => PartState::Completed,
-        ExecutionStatus::Failed => PartState::Failed,
-        ExecutionStatus::Cancelled => PartState::Cancelled,
     }
 }
 

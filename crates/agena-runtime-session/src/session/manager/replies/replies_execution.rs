@@ -6,17 +6,17 @@ use super::{
     ToolInvocationExecution, ToolPermissionCheck, Utc, assistant_message_id,
     background_operation_from_execution, background_operation_id, completed_lifecycle,
     execution_control_to_app_error, inherit_operation_context, operation_authorization,
-    operation_content_value, operation_from_part, operation_permission_approved_actions,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
-    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
-    responses_api_request_metadata, run_abort_reason, update_resolved_tool_message,
+    operation_from_part, operation_permission_approved_actions, operation_update,
+    pending_tool_part_not_found_error, permission_action_key, permission_request_id,
+    plugin_user_input_request_id, push_unique_permission_action, requested_background_kind,
+    required_operation, reserve_background_external_id, resolve_pending_tool,
+    responses_api_request_metadata, run_abort_reason,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
-    new_part_from_content, run_marker_content, text_content, tool_call_from_operation,
-    typed_content_from_value, typed_content_to_value,
+    new_part_from_content, run_marker_content, text_content, typed_content_from_value,
+    typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
 use agena_domain::{
@@ -27,7 +27,8 @@ use agena_domain::{
 use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{
-    BackgroundOperationPhase, NewBackgroundOperation, Part, PartDelta, PartRole, PartState,
+    BackgroundOperationPhase, NewBackgroundOperation, Part, PartCommand, PartDelta, PartRole,
+    PartState, PartUpdate,
 };
 use tracing::Instrument;
 
@@ -187,7 +188,6 @@ struct PreparedPendingToolExecution {
     resolved: ResolvedPendingTool,
     scoped_executor: ToolExecutor,
     permission_checks: Vec<ToolPermissionCheck>,
-    session_changed: bool,
 }
 
 enum PendingToolPreparationError {
@@ -205,7 +205,6 @@ impl From<ToolError> for PendingToolPreparationError {
 struct PreparedToolPreflight {
     resolved: ResolvedPendingTool,
     permission_checks: Vec<ToolPermissionCheck>,
-    session_changed: bool,
 }
 
 /// Error split so callers keep their own preflight semantics: batch defers
@@ -1228,25 +1227,16 @@ impl SessionManager {
                         part.part_id
                     ))
                 })?;
-            let updated = self
-                .store
-                .update_part(
-                    session.id,
-                    part.part_id,
-                    PartDelta {
-                        content: Some(content),
-                        ..PartDelta::default()
-                    },
-                )
+            let update = PartUpdate::new(
+                &part,
+                PartDelta {
+                    content: Some(content),
+                    ..PartDelta::default()
+                },
+            );
+            self.store
+                .commit_parts(&mut session, PartCommand::Update(vec![update]))
                 .await?;
-            let mut projected = session.parts().to_vec();
-            if let Some(existing) = projected
-                .iter_mut()
-                .find(|projected| projected.part_id == updated.part_id)
-            {
-                *existing = updated;
-            }
-            session.install_projected_parts(projected);
             return Ok((session, None));
         }
 
@@ -1336,22 +1326,23 @@ impl SessionManager {
             .iter()
             .rev()
             .find(|part| part.is_run_marker());
-        let created = match launching {
+        let command = match launching {
             // In-flight assistant run (mid-turn continue marker): the guarded
             // append accepts it.
             Some(marker) if marker.role == PartRole::Assistant && marker.state.is_in_flight() => {
-                self.store
-                    .append_parts(session.id, marker.part_id, new_parts)
-                    .await?
+                PartCommand::Append {
+                    run_id: marker.part_id,
+                    parts: new_parts,
+                }
             }
             // Terminal assistant run (Completed/Failed/Cancelled final reply):
             // settle appends under terminal markers without touching their
             // state; the in-flight-only terminalize branch is skipped.
-            Some(marker) if marker.role == PartRole::Assistant => {
-                self.store
-                    .settle_background_run(session.id, marker.part_id, None, new_parts)
-                    .await?
-            }
+            Some(marker) if marker.role == PartRole::Assistant => PartCommand::SettleBackground {
+                run_id: marker.part_id,
+                tool_part: None,
+                parts: new_parts,
+            },
             // No assistant run yet (session.start / pre-turn). A user input is
             // committed terminal, so append hook observations through the
             // settle path without reopening its immutable receipt.
@@ -1363,9 +1354,11 @@ impl SessionManager {
                         .and_then(serde_json::Value::as_str)
                         == Some("user_send") =>
             {
-                self.store
-                    .settle_background_run(session.id, marker.part_id, None, new_parts)
-                    .await?
+                PartCommand::SettleBackground {
+                    run_id: marker.part_id,
+                    tool_part: None,
+                    parts: new_parts,
+                }
             }
             _ => {
                 return Err(AppError::Internal(format!(
@@ -1374,9 +1367,7 @@ impl SessionManager {
                 )));
             }
         };
-        let mut projected = session.parts().to_vec();
-        projected.extend(created);
-        session.install_projected_parts(projected);
+        self.store.commit_parts(&mut session, command).await?;
         Ok(session)
     }
 
@@ -1617,17 +1608,16 @@ impl SessionManager {
                             .await?;
                     }
                     let termination = result.termination;
+                    session
+                        .apply_part_snapshot(result.part_snapshot)
+                        .map_err(crate::session::store::store_error)?;
                     // R2/T6: the processor persisted this turn entirely through
                     // parts. The transcript digest covers the active window plus
                     // this turn's freshly persisted run (marker + child parts).
                     // Nothing here re-persists the turn — parts are the only
                     // durable write source.
-                    let transcript_digest = {
-                        let mut transcript_parts = session.active_window_parts().to_vec();
-                        transcript_parts.push(result.run_marker.clone());
-                        transcript_parts.extend(result.parts.iter().cloned());
-                        prompt_window::prompt_transcript_digest(transcript_parts.as_slice())
-                    };
+                    let transcript_digest =
+                        prompt_window::prompt_transcript_digest(session.active_window_parts());
                     let anchored_provider_request_shape = match state
                         .provider_registry
                         .prompt_cache_shape_async(&options.model)
@@ -1660,10 +1650,11 @@ impl SessionManager {
                     let anchored_fingerprints = prompt_window::prompt_request_fingerprints(
                         &anchored_prompt_request_options,
                     );
-                    if let Some(measurement) = result
-                        .run_marker
-                        .content
-                        .get("rounds")
+                    if let Some(measurement) = session
+                        .parts()
+                        .iter()
+                        .find(|part| part.part_id == result.assistant_message_id)
+                        .and_then(|part| part.content.get("rounds"))
                         .and_then(serde_json::Value::as_array)
                         .and_then(|rounds| rounds.last())
                         .and_then(|round| round.get("prompt_usage"))
@@ -1696,31 +1687,6 @@ impl SessionManager {
                     }
                     drop(request_tool_api_functions);
                     drop(prepared);
-
-                    // R2: the processor already persisted this turn through
-                    // parts, so this is projection installation only — never
-                    // a second write. The stable-run loop operates on this
-                    // in-memory Session immediately after `run_model_turn`;
-                    // omitting the freshly persisted marker/children makes it
-                    // believe a tool-calling turn has no pending tools and
-                    // finish the execution while the database is left with a
-                    // pending `tool_call`. Upsert the authoritative engine
-                    // rows returned by the processor, preserving hook parts
-                    // that may have been recorded above, then restore the same
-                    // ordering used by the facade load path.
-                    let mut projected = session.parts().to_vec();
-                    for updated in std::iter::once(&result.run_marker).chain(result.parts.iter()) {
-                        if let Some(existing) = projected
-                            .iter_mut()
-                            .find(|part| part.part_id == updated.part_id)
-                        {
-                            *existing = updated.clone();
-                        } else {
-                            projected.push(updated.clone());
-                        }
-                    }
-                    projected.sort_by_key(|part| (part.created_at_ms, part.part_id));
-                    session.install_projected_parts(projected);
 
                     match termination {
                         SessionRunTermination::Completed => Ok((
@@ -1946,31 +1912,25 @@ impl SessionManager {
                     .pending,
             );
         } else if !ready_tools.is_empty() {
-            // Mark every ready tool InProgress before fanning out so the live
-            // transcript shows in-flight tools during the (potentially long)
-            // parallel execution instead of pending placeholders. Each changed
-            // part id is one `update_part` in the batch transition checkpoint.
-            let mut changed_part_ids = Vec::new();
+            let mut updates = Vec::new();
             for resolved in &mut ready_tools {
                 self.prepare_tool_content(&mut session, resolved, &batch_executor)
                     .await?;
-                let Some(part) = session.part_mut(&resolved.pending.part) else {
-                    continue;
-                };
-                if matches!(part.state, PartState::Pending | PartState::InProgress) {
-                    part.state = PartState::InProgress;
-                    changed_part_ids.push(part.part_id);
-                }
+                let mut operation = required_operation(&session, &resolved.pending.part)?;
+                operation.state = agena_domain::ToolResultState::Running;
+                updates.push(operation_update(
+                    &session,
+                    &resolved.pending.part,
+                    &operation,
+                    PartDelta {
+                        state: Some(PartState::InProgress),
+                        ..PartDelta::default()
+                    },
+                )?);
             }
-            if !changed_part_ids.is_empty() {
-                session = Box::pin(self.persist_session_changes(
-                    session,
-                    changed_part_ids,
-                    None,
-                    state.clone(),
-                ))
+            self.store
+                .commit_parts(&mut session, PartCommand::Update(updates))
                 .await?;
-            }
             let executions = Box::pin(self.execute_pending_tools_concurrently(
                 state.clone(),
                 session.id,
@@ -2036,13 +1996,23 @@ impl SessionManager {
             .await
             .map_err(|error| AppError::Internal(format!("open tool content: {error}")))?;
         let reference = writer.resource().reference();
-        update_resolved_tool_message(session, resolved, |part| {
-            let mut operation = operation_from_part(part)
-                .ok_or_else(|| AppError::Internal("tool content is malformed".into()))?;
+        let mut operation = required_operation(session, &resolved.pending.part)?;
+        if !operation
+            .resources
+            .iter()
+            .any(|existing| existing == &reference)
+        {
             operation.resources.push(reference);
-            part.content = operation_content_value(&operation)?;
-            Ok(())
-        })?;
+        }
+        let update = operation_update(
+            session,
+            &resolved.pending.part,
+            &operation,
+            PartDelta::default(),
+        )?;
+        self.store
+            .commit_parts(session, PartCommand::Update(vec![update]))
+            .await?;
         resolved.content_writer = Some(writer);
         Ok(())
     }
@@ -2106,33 +2076,25 @@ impl SessionManager {
         // pre-rewrite form once — the shell-rewritten value would otherwise be
         // overwritten inside the block below.
         resolved.invocation = prepared.invocation.clone();
-        let mut session_changed = false;
         if invocation_changed || prepared.title_override.is_some() {
-            let authorization = operation_authorization(session, &resolved);
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                PendingToolPreflightError::Session(AppError::Internal(format!(
-                    "pending tool part not found: part={}",
-                    resolved.pending.part.part_id
-                )))
-            })?;
-            let existing = operation_from_part(tool_part);
-            let mut operation = pending_operation_for_resolved(
-                &resolved,
-                prepared.invocation,
-                resolved.lifecycle.clone(),
-                authorization,
-            );
-            if let Some(existing) = existing {
-                inherit_operation_context(&mut operation, existing);
-            }
-            tool_part.content =
-                operation_content_value(&operation).map_err(PendingToolPreflightError::Session)?;
-            session_changed = true;
+            let mut operation = required_operation(session, &resolved.pending.part)
+                .map_err(PendingToolPreflightError::Session)?;
+            operation.invocation = prepared.invocation;
+            let update = operation_update(
+                session,
+                &resolved.pending.part,
+                &operation,
+                PartDelta::default(),
+            )
+            .map_err(PendingToolPreflightError::Session)?;
+            self.store
+                .commit_parts(session, PartCommand::Update(vec![update]))
+                .await
+                .map_err(PendingToolPreflightError::Session)?;
         }
         Ok(PreparedToolPreflight {
             resolved,
             permission_checks,
-            session_changed,
         })
     }
 
@@ -2144,7 +2106,6 @@ impl SessionManager {
         batch_executor: &ToolExecutor,
     ) -> Result<PendingToolBatchMember, AppError> {
         self.refresh_execution_policy(session, state);
-        let before_prepare = session.clone();
         let resolved = resolve_pending_tool(session, pending_tool)?;
         let cancellation = self.execution_registry.cancellation_token(session.id).await;
         let session_id = session.id;
@@ -2165,7 +2126,6 @@ impl SessionManager {
         let PreparedToolPreflight {
             resolved,
             permission_checks,
-            session_changed: _,
         } = match self
             .prepare_pending_tool_preflight(session, resolved, &scoped_executor)
             .await
@@ -2182,7 +2142,6 @@ impl SessionManager {
                     error = %err,
                     "deferring tool preflight error to sequential failure handling"
                 );
-                *session = before_prepare;
                 return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
             Err(PendingToolPreflightError::Session(error)) => return Err(error),
@@ -2210,7 +2169,6 @@ impl SessionManager {
                 return Ok(PendingToolBatchMember::AwaitingPermission { resolved, request });
             }
             AggregatedPermissionOutcome::Deny(_) => {
-                *session = before_prepare;
                 return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
             AggregatedPermissionOutcome::Allow => {}
@@ -2219,7 +2177,6 @@ impl SessionManager {
         // Background launches retain their durable handoff. Foreground tools
         // all use the same execution and content lifecycle in parallel.
         if requested_background_kind(&resolved.invocation).is_some() {
-            *session = before_prepare;
             return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
 
@@ -2357,7 +2314,6 @@ impl SessionManager {
         let PreparedToolPreflight {
             resolved,
             permission_checks,
-            session_changed,
         } = self
             .prepare_pending_tool_preflight(session, resolved, &scoped_executor)
             .await
@@ -2372,7 +2328,6 @@ impl SessionManager {
             resolved,
             scoped_executor,
             permission_checks,
-            session_changed,
         })
     }
 
@@ -2454,7 +2409,6 @@ impl SessionManager {
             mut resolved,
             scoped_executor,
             permission_checks,
-            mut session_changed,
         } = match self
             .prepare_pending_tool_execution(
                 &mut session,
@@ -2545,68 +2499,25 @@ impl SessionManager {
         } else {
             None
         };
-        if resolved.invocation != invocation_before_identity {
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found while reserving background identity: part={}",
-                    resolved.pending.part.part_id
-                ))
-            })?;
-            let mut operation = operation_from_part(tool_part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool payload missing while reserving background identity: part={}",
-                    resolved.pending.part.part_id
-                ))
-            })?;
+        let part = session
+            .part(&resolved.pending.part)
+            .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+        if resolved.invocation != invocation_before_identity || part.state == PartState::Pending {
+            let mut operation = required_operation(&session, &resolved.pending.part)?;
             operation.invocation = resolved.invocation.clone();
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                tool_call_from_operation(&operation),
-            )))
-            .map_err(|error| {
-                AppError::Internal(format!(
-                    "serialize background launch identity for part {}: {error}",
-                    resolved.pending.part.part_id
-                ))
-            })?;
-            session_changed = true;
-        }
-
-        if session_changed {
-            session = Box::pin(self.persist_session_changes(
-                session,
-                vec![resolved.pending.part.part_id],
-                None,
-                state.clone(),
-            ))
-            .await?;
-        }
-
-        // The tool is now authorized and about to execute. Move the Activity
-        // from Pending to InProgress and checkpoint immediately so the live
-        // transcript shows an in-flight tool instead of leaving a pending
-        // placeholder while execution runs. The checkpoint carries the
-        // resolved turn/reply owner (resolved by `SessionStore::persist`), so
-        // the terminal sees an incremental update rather than a full refresh.
-        // The title itself is produced by the tool during execution; at this
-        // point the prepared invocation title is already in place.
-        let part_was_pending = session
-            .part_mut(&resolved.pending.part)
-            .map(|tool_part| {
-                let was_pending = matches!(tool_part.state, PartState::Pending);
-                if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
-                    tool_part.state = PartState::InProgress;
-                }
-                was_pending
-            })
-            .unwrap_or(false);
-        if part_was_pending {
-            session = Box::pin(self.persist_session_changes(
-                session,
-                vec![resolved.pending.part.part_id],
-                None,
-                state.clone(),
-            ))
-            .await?;
+            operation.state = agena_domain::ToolResultState::Running;
+            let update = operation_update(
+                &session,
+                &resolved.pending.part,
+                &operation,
+                PartDelta {
+                    state: Some(PartState::InProgress),
+                    ..PartDelta::default()
+                },
+            )?;
+            self.store
+                .commit_parts(&mut session, PartCommand::Update(vec![update]))
+                .await?;
         }
 
         // Persist the single authoritative background-operation intent before
@@ -2656,17 +2567,6 @@ impl SessionManager {
 
         self.prepare_tool_content(&mut session, &mut resolved, &scoped_executor)
             .await?;
-        if resolved.content_writer.is_some() {
-            session = self
-                .persist_session_changes(
-                    session,
-                    vec![resolved.pending.part.part_id],
-                    None,
-                    state.clone(),
-                )
-                .await?;
-        }
-
         let manager = self.background_handle();
         let execution_resolved = resolved.clone();
         let execution_session_id = session.id;
@@ -2777,7 +2677,7 @@ impl SessionManager {
                     pending_tool,
                     execution,
                     Vec::new(),
-                    state,
+                    None,
                 ))
                 .await
             }
@@ -3008,7 +2908,7 @@ impl SessionManager {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::session::manager) async fn apply_permission_request(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         action: PermissionAction,
         related_actions: Vec<PermissionAction>,
@@ -3062,40 +2962,25 @@ impl SessionManager {
             created_at: Utc::now(),
         };
 
-        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-            permission_operation
-                .authorization
-                .push_pending(request.clone());
-            tool_part.content = operation_content_value(&permission_operation)?;
-            // The part lifecycle is forward-only (17.2): a tool that has
-            // already started executing is InProgress and must stay that way
-            // while it waits on the host — the store rejects `in_progress ->
-            // pending`. The awaiting state is carried by the operation summary
-            // (and any interaction part), not by the tool part's lifecycle
-            // state, so a not-yet-started Pending tool is left Pending and an
-            // executing InProgress tool is not downgraded.
-            if !matches!(tool_part.state, PartState::InProgress) {
-                tool_part.state = PartState::Pending;
-            }
-            Ok(())
-        })?;
-        self.persist_session_changes(
-            session,
-            vec![resolved.pending.part.part_id],
-            None,
-            state.clone(),
-        )
-        .await
+        permission_operation.authorization.push_pending(request);
+        let update = operation_update(
+            &session,
+            &resolved.pending.part,
+            &permission_operation,
+            PartDelta::default(),
+        )?;
+        self.persist_part_updates(session, vec![update], Vec::new())
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_user_input_request_with_id(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         input: crate::part::AskUserToolInput,
         request_id: String,
         source: UserInputSource,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = UserInputRequest {
@@ -3112,79 +2997,42 @@ impl SessionManager {
             questions: input.questions,
             created_at: Utc::now(),
         };
-        let authorization = operation_authorization(&session, &resolved);
-
-        // The ask lives inside the operation activity (like permission): the
-        // request record is pushed onto the tool_call part's operation
-        // `user_input` bucket, so one host ask produces exactly one transcript
-        // activity — the operation itself.
-        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-            let mut operation = pending_operation_for_resolved(
-                &resolved,
-                resolved.invocation.clone(),
-                resolved.lifecycle.clone(),
-                authorization.clone(),
-            );
-            // Preserve the operation's protocol/runtime context, including
-            // any earlier asks (a tool may ask more than once), then add this
-            // request. `push_pending` is a no-op on a duplicate request id,
-            // mirroring the re-request dedup.
-            if let Some(existing) = operation_from_part(tool_part) {
-                inherit_operation_context(&mut operation, existing);
-            }
-            operation.user_input.push_pending(request.clone());
-            tool_part.content = operation_content_value(&operation)?;
-            // Same forward-only lifecycle rule as permission requests: an
-            // executing tool (InProgress) that suspends on a host ask_user
-            // stays InProgress — the store rejects `in_progress -> pending`.
-            if !matches!(tool_part.state, PartState::InProgress) {
-                tool_part.state = PartState::Pending;
-            }
-            tool_part.summary = None;
-            Ok(())
-        })?;
-        self.persist_session_changes(
-            session,
-            vec![resolved.pending.part.part_id],
-            None,
-            state.clone(),
-        )
-        .await
+        let mut operation = required_operation(&session, &resolved.pending.part)?;
+        operation.user_input.push_pending(request);
+        let update = operation_update(
+            &session,
+            &resolved.pending.part,
+            &operation,
+            PartDelta {
+                clear_summary: true,
+                ..PartDelta::default()
+            },
+        )?;
+        self.persist_part_updates(session, vec![update], Vec::new())
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_cancellation(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let _run_marker_id = update_resolved_tool_message(&mut session, &resolved, |part| {
-            let mut operation = operation_from_part(part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "cancel tool operation {}: persisted tool-call content is malformed",
-                    resolved.operation_id
-                ))
-            })?;
-            operation.state = agena_domain::ToolResultState::Cancelled;
-            operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
-            part.content = operation_content_value(&operation)?;
-            part.state = PartState::Cancelled;
-            part.summary = None;
-            Ok(())
-        })?;
-
-        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+        let mut operation = required_operation(&session, &resolved.pending.part)?;
+        operation.state = agena_domain::ToolResultState::Cancelled;
+        operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
+        self.persist_tool_completion(session, &resolved, operation, Vec::new(), Vec::new())
             .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         mut execution: ToolInvocationExecution,
         persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
+        context: Option<OperationPart>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let authorization = operation_authorization(&session, &resolved);
@@ -3259,36 +3107,27 @@ impl SessionManager {
             output,
         )
         .await?;
-        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-            let mut operation = OperationPart::completed(
-                resolved.call_id,
-                resolved.invocation.clone(),
-                output,
-                lifecycle.clone(),
-            );
-            operation.authorization = authorization.clone();
-            if let Some(background) = background.as_ref() {
-                operation.set_background_operation(background);
-            }
-            // The completion payload replaces the operation, but provider
-            // correlation metadata and answered asks belong to its identity.
-            if let Some(existing) = operation_from_part(tool_part) {
-                inherit_operation_context(&mut operation, existing);
-            }
-            if let Some(output) = &operation.output {
-                operation
-                    .resources
-                    .extend(output.fields.iter().map(|field| field.resource.clone()));
-            }
-            tool_part.content = operation_content_value(&operation)?;
-            tool_part.summary = None;
-            tool_part.state = PartState::Completed;
-            Ok(())
-        })?;
-        // Mirror message usage attribution into the owning run marker's
-        // `content["usage"]` (the projection `aggregate_usage()` sums it).
-        // Flush the marker content directly: `persist_tool_completion` only
-        // persists the tool part and the cancelled request parts.
+        let mut operation = OperationPart::completed(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            output,
+            lifecycle,
+        );
+        operation.authorization = authorization;
+        if let Some(background) = background.as_ref() {
+            operation.set_background_operation(background);
+        }
+        let existing = match context {
+            Some(context) => context,
+            None => required_operation(&session, &resolved.pending.part)?,
+        };
+        inherit_operation_context(&mut operation, existing);
+        if let Some(output) = &operation.output {
+            operation
+                .resources
+                .extend(output.fields.iter().map(|field| field.resource.clone()));
+        }
+        let mut additional_updates = Vec::new();
         if let Some(attributed_usage) = attributed_usage {
             let run_marker_id = assistant_message_id(&session, &resolved.pending.part)?;
             let marker_index = session
@@ -3326,19 +3165,23 @@ impl SessionManager {
                     &error,
                 ))
             })?;
-            self.store
-                .update_part(
-                    session.id,
-                    run_marker_id,
-                    agena_storage::store::PartDelta {
-                        content: Some(marker_content),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+            additional_updates.push(PartUpdate::new(
+                marker,
+                PartDelta {
+                    content: Some(marker_content),
+                    ..PartDelta::default()
+                },
+            ));
         }
 
-        Box::pin(self.persist_tool_completion(session, &resolved, persisted_rules, state)).await
+        Box::pin(self.persist_tool_completion(
+            session,
+            &resolved,
+            operation,
+            persisted_rules,
+            additional_updates,
+        ))
+        .await
     }
 }
 

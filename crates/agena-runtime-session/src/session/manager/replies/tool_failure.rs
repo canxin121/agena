@@ -1,11 +1,9 @@
 use super::{
-    AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
-    SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
-    inherit_operation_context, operation_authorization, operation_content_value,
-    operation_from_part, resolve_pending_tool, update_resolved_tool_message,
+    AppError, Arc, OperationPart, PersistedPermissionRule, SessionManager, SessionManagerState,
+    SessionPendingTool, ToolError, completed_lifecycle, inherit_operation_context,
+    operation_authorization, required_operation, resolve_pending_tool,
 };
 use crate::session::Session;
-use crate::session::store::part_state_from_execution_status;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
@@ -310,6 +308,7 @@ impl SessionManager {
             failure,
             persisted_rule.into_iter().collect(),
             state,
+            None,
         )
         .await
     }
@@ -319,6 +318,7 @@ impl SessionManager {
         session: Session,
         pending_tool: &SessionPendingTool,
         diagnostic: String,
+        context: OperationPart,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let failure = user_declined_failure();
@@ -328,17 +328,25 @@ impl SessionManager {
             diagnostic = %diagnostic,
             "user declined tool interaction"
         );
-        self.persist_tool_failure(session, pending_tool, failure, Vec::new(), state)
-            .await
+        self.persist_tool_failure(
+            session,
+            pending_tool,
+            failure,
+            Vec::new(),
+            state,
+            Some(context),
+        )
+        .await
     }
 
     async fn persist_tool_failure(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         failure: Failure,
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
+        context: Option<OperationPart>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
@@ -351,27 +359,23 @@ impl SessionManager {
             .broadcast_tool_failure(&resolved.invocation, session.id, resolved.call_id, &failure)
             .await;
 
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::failed(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    failure.clone(),
-                    agena_domain::RawOutput::default(),
-                    lifecycle.clone(),
-                );
-                operation.authorization = authorization.clone();
-                // The failure payload replaces the operation, but provider
-                // correlation metadata and asks belong to its identity.
-                if let Some(existing) = operation_from_part(tool_part) {
-                    inherit_operation_context(&mut operation, existing);
-                }
-                tool_part.content = operation_content_value(&operation)?;
-                tool_part.state = part_state_from_execution_status(ExecutionStatus::Failed);
-                Ok(())
-            })?;
+        let mut operation = OperationPart::failed(
+            resolved.call_id,
+            resolved.invocation.clone(),
+            failure.clone(),
+            agena_domain::RawOutput::default(),
+            lifecycle.clone(),
+        );
+        operation.authorization = authorization.clone();
+        // The failure payload replaces the operation, but provider
+        // correlation metadata and asks belong to its identity.
+        let existing = match context {
+            Some(context) => context,
+            None => required_operation(&session, &resolved.pending.part)?,
+        };
+        inherit_operation_context(&mut operation, existing);
 
-        self.persist_tool_completion(session, &resolved, persisted_rules, state)
+        self.persist_tool_completion(session, &resolved, operation, persisted_rules, Vec::new())
             .await
     }
 }

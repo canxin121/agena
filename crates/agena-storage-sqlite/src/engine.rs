@@ -1,10 +1,9 @@
 //! SQLite implementation of the persistence engine.
 //!
 //! `SqliteEngine` is the production backend behind the sealed `SessionStore`
-//! facade (design sections 14-15). It is the ONLY component that imports
-//! SeaORM or holds a `DatabaseConnection`; every raw SQL statement in the
-//! codebase lives in this module. The in-memory engine
-//! (`agena_storage::store::InMemoryEngine`) shares the exact same contract,
+//! facade (design sections 14-15). SQL access to Part rows belongs to this
+//! backend; application consumers use the facade's storage contract. The
+//! in-memory engine shares the exact same contract,
 //! invariants, and state derivation, so callers cannot distinguish the two.
 //!
 //! Write operations run in a transaction that acquires the SQLite write lock
@@ -19,15 +18,17 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
+use agena_storage::backend::{
+    PersistenceEngine, prepare_part_update, prepare_run_completion, validate_run_content,
+};
 use agena_storage::store::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationKind, BackgroundOperationPhase, BackgroundOperationTransition,
     BackgroundSettleOutcome, InFlightRun, MaintenanceOutcome, NewBackgroundOperation, NewPart,
-    NewSession, Part, PartCursor, PartDelta, PartRole, PartState, PartVisibility,
-    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
-    SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, prepare_part_update,
-    prepare_run_completion, validate_run_content,
+    NewSession, Part, PartCursor, PartDelta, PartRole, PartState, PartVisibility, ReconcileOutcome,
+    RunOutcome, SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
+    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord,
+    UsageStats,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -71,7 +72,7 @@ const BACKGROUND_DELIVERY_COLS: &str = "\
 
 /// The production [`PersistenceEngine`]: raw SQL over the current schema.
 #[derive(Clone)]
-pub struct SqliteEngine {
+pub(crate) struct SqliteEngine {
     db: Arc<DatabaseConnection>,
     gc_cursor: Arc<std::sync::atomic::AtomicI64>,
 }
@@ -1195,6 +1196,107 @@ fn user_send_marker_content(execution_id: Option<&str>) -> serde_json::Value {
 
 #[async_trait]
 impl PersistenceEngine for SqliteEngine {
+    async fn update_parts(
+        &self,
+        session_id: i64,
+        updates: Vec<agena_storage::store::PartUpdate>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        run_write(self.db(), move |txn| {
+            Box::pin(async move {
+                let mut result = Vec::with_capacity(updates.len());
+                let mut changed_ids = Vec::new();
+                let mut message_ended = None;
+                for update in updates {
+                    let row = txn
+                        .query_one(Statement::from_sql_and_values(
+                            DatabaseBackend::Sqlite,
+                            format!(
+                                "SELECT {PART_COLS} FROM agena_parts p \
+                                 JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                                 WHERE sp.session_id = ? AND p.part_id = ?"
+                            ),
+                            [session_id.into(), update.part_id.into()],
+                        ))
+                        .await
+                        .map_err(map_db_err)?
+                        .ok_or_else(|| {
+                            StoreError::not_found(format!(
+                                "part {} in session {session_id}",
+                                update.part_id
+                            ))
+                        })?;
+                    let previous = decode_part_rows_in(&TRANSACTION_CODECS, vec![row])
+                        .await?
+                        .pop()
+                        .expect("selected one Part row");
+                    if previous.origin_session_id != session_id {
+                        return Err(StoreError::InvalidState(
+                            "only the origin session can update a Part".into(),
+                        ));
+                    }
+                    if previous.revision != update.expected_revision {
+                        return Err(StoreError::Conflict(format!(
+                            "part {} changed since it was read",
+                            update.part_id
+                        )));
+                    }
+                    let previous_revision = previous.revision;
+                    let previous_state = previous.state;
+                    let (updated, payload) = TRANSACTION_CODECS
+                        .run(move || {
+                            let updated = prepare_part_update(previous, update.delta, now_ms)?;
+                            let payload = (updated.revision != previous_revision)
+                                .then(|| encode_part_payload(&updated))
+                                .transpose()?;
+                            Ok::<_, StoreError>((updated, payload))
+                        })
+                        .await
+                        .map_err(|error| {
+                            StoreError::Database(format!("Part batch codec worker failed: {error}"))
+                        })??;
+                    if let Some((content, provider_state)) = payload {
+                        let statement = Statement::from_sql_and_values(
+                            DatabaseBackend::Sqlite,
+                            "UPDATE agena_parts SET state = ?, content = ?, summary = ?, \
+                             provider_state = ?, finished_at_ms = ?, revision = ?, updated_at_ms = ? \
+                             WHERE part_id = ? AND revision = ?",
+                            [
+                                updated.state.as_str().into(),
+                                text_value(Some(content)),
+                                text_value(updated.summary.clone()),
+                                text_value(provider_state),
+                                Value::BigInt(updated.finished_at_ms),
+                                updated.revision.into(),
+                                updated.updated_at_ms.into(),
+                                updated.part_id.into(),
+                                previous_revision.into(),
+                            ],
+                        );
+                        let written = txn.execute(statement).await.map_err(map_db_err)?;
+                        if written.rows_affected() != 1 {
+                            return Err(StoreError::Conflict(format!(
+                                "part {} changed during batch commit",
+                                updated.part_id
+                            )));
+                        }
+                        if !previous_state.is_terminal() && updated.is_terminal_message() {
+                            message_ended = Some((session_id, updated.updated_at_ms));
+                        }
+                        changed_ids.push(updated.part_id);
+                    }
+                    result.push(updated);
+                }
+                if !changed_ids.is_empty() {
+                    bump_member_session_versions_for_parts_tx(txn, &changed_ids, message_ended)
+                        .await?;
+                }
+                Ok(result)
+            })
+        })
+        .await
+    }
+
     async fn referenced_content_ids(
         &self,
     ) -> Result<std::collections::HashSet<agena_domain::ContentId>, StoreError> {

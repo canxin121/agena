@@ -38,19 +38,19 @@ const requestId = computed(() => interaction.value?.requestId || permission.valu
 const draft = computed(() => chat.getInteractionDraft(props.sessionId || '', requestId.value))
 const busy = computed(() => draft.value.busy)
 const selected = computed({
-  get: () => draft.value.selected,
+  get: () => (interaction.value?.pending ? draft.value.selected : replyState.value.selected),
   set: (value) => {
     draft.value.selected = value
   },
 })
 const customDrafts = computed({
-  get: () => draft.value.customDrafts,
+  get: () => (interaction.value?.pending ? draft.value.customDrafts : replyState.value.customDrafts),
   set: (value) => {
     draft.value.customDrafts = value
   },
 })
 const customOpen = computed({
-  get: () => draft.value.customOpen,
+  get: () => (interaction.value?.pending ? draft.value.customOpen : replyState.value.customOpen),
   set: (value) => {
     draft.value.customOpen = value
   },
@@ -136,40 +136,32 @@ function ensureSlots() {
     customOpen.value = questions.value.map((_, index) => customOpen.value[index] || false)
 }
 
-function syncReplyState() {
-  ensureSlots()
+// History is a read-only projection of the committed reply. Keep local drafts
+// separate so terminalizing an unanswered request neither displays a draft as
+// an answer nor destroys the user's unsubmitted work.
+const replyState = computed(() => {
   const reply = interaction.value?.reply || null
-  selected.value = questions.value.map((question, index) => {
+  const selected = questions.value.map((question, index) => {
     const values = answersFromReply(reply, index, question.questionId || String(index))
     return values.filter(
       (value) => !hasExplicitCustomOption(value) && question.options.some((option) => option.label === value),
     )
   })
-  customDrafts.value = questions.value.map((question, index) => {
+  const customDrafts = questions.value.map((question, index) => {
     const values = answersFromReply(reply, index, question.questionId || String(index))
     return values
       .filter((value) => hasExplicitCustomOption(value) || !question.options.some((option) => option.label === value))
       .join(', ')
   })
-  customOpen.value = customDrafts.value.map((value) => Boolean(value))
-}
+  return { selected, customDrafts, customOpen: customDrafts.map(Boolean) }
+})
 
 watch(
-  () => requestId.value,
+  () => [requestId.value, questions.value.length, interaction.value?.pending],
   () => {
     if (interaction.value?.pending) ensureSlots()
-    else syncReplyState()
   },
   { immediate: true },
-)
-
-watch(
-  () => [questions.value.length, interaction.value?.reply],
-  () => {
-    if (!interaction.value?.pending) syncReplyState()
-    else ensureSlots()
-  },
-  { deep: true },
 )
 
 function isOptionChecked(index: number, label: string): boolean {
@@ -1032,7 +1024,7 @@ onMounted(focusPendingInteraction)
         </span>
       </div>
       <div v-else-if="!interaction.pending" class="mt-1.5 font-mono text-[10px] text-muted-foreground">
-        {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.awaitingUserInput') }}
+        {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.unanswered') }}
       </div>
     </template>
   </section>

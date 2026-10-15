@@ -1,10 +1,9 @@
 //! The persistence engine contract — the internal data boundary behind the
 //! sealed `SessionStore` facade.
 //!
-//! Two backends implement this trait behind one engine type: `SqliteEngine`
-//! (production, sole owner of the `DatabaseConnection` and every raw SQL
-//! statement) and `InMemoryEngine` (tests / small deployments). Callers cannot
-//! distinguish memory from DB. See `crates/agena-storage-sqlite/src/engine.rs`
+//! SQLite and memory backends implement this contract. Business callers use
+//! the sealed facade and do not distinguish memory from DB. See
+//! `crates/agena-storage-sqlite/src/engine.rs`
 //! and `crates/agena-storage/src/store/in_memory.rs`.
 
 use std::collections::HashMap;
@@ -58,10 +57,17 @@ pub struct MaintenanceOutcome {
     pub gc_deleted_parts: usize,
 }
 
-/// The internal persistence boundary. The facade composes with either backend
-/// at runtime; external code never talks to this trait directly.
+/// The infrastructure persistence boundary, exposed through `backend` for
+/// adapter implementors. Business code uses the sealed facade.
 #[async_trait]
 pub trait PersistenceEngine: Send + Sync {
+    /// Validate every expected revision and apply the whole batch atomically.
+    async fn update_parts(
+        &self,
+        session_id: i64,
+        updates: Vec<super::PartUpdate>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError>;
     /// Distinct resource references from Parts with at least one membership.
     /// Used only for maintenance, never on the per-chunk path.
     async fn referenced_content_ids(

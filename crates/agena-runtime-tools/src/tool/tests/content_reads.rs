@@ -1,8 +1,7 @@
 use super::*;
 use agena_domain::{ContentKind, ContentTextPage, SessionRelationKind};
 use agena_storage::store::{
-    InMemoryEngine, NewPart, NewSession, PartDelta, PartRole, PartVisibility, SessionFacade,
-    SessionStore,
+    NewPart, NewSession, PartDelta, PartRole, PartVisibility, SessionStore,
 };
 
 struct ContentFixture;
@@ -73,7 +72,7 @@ async fn content_read_executes_through_the_registry_and_enforces_membership_and_
     })
     .await
     .unwrap();
-    let store = Arc::new(SessionFacade::new(InMemoryEngine::default(), 16));
+    let store = agena_storage::store::memory_session_store(16);
     let executor = ToolExecutor::new(
         root,
         ExecutionPrincipal::new(

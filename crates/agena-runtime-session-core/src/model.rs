@@ -718,7 +718,6 @@ impl SessionRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A session with its runtime state.
 ///
 /// The transcript is carried as a **parts projection cache**
@@ -727,7 +726,10 @@ impl SessionRuntimeState {
 /// aggregate only reads this projection for execution; every write goes
 /// through the storage facade. Derived state (pending operations, workflow
 /// snapshot, approx bytes) is recomputed from the parts on
-/// [`Session::install_projected_parts`] / [`Session::refresh_derived`].
+/// [`Session::apply_part_snapshot`] / [`Session::refresh_derived`].
+/// Deserialization is deliberately unavailable: persisted rows enter this
+/// projection only through storage-issued snapshots.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Session {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -750,7 +752,7 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     /// Parts projection cache, in `(created_at_ms, part_id)` order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parts: Vec<Part>,
+    parts: Vec<Part>,
     #[serde(skip, default)]
     pub runtime: SessionRuntimeState,
     #[serde(skip, default)]
@@ -828,11 +830,58 @@ impl Session {
         self.runtime.execution.scope_session_id = Some(self.id);
     }
 
-    /// Install a fresh parts projection (the ordered transcript as loaded
-    /// from the facade) and recompute all derived state from it.
+    /// Fixture injection is absent from production builds. Runtime consumers
+    /// can only install snapshots issued by the storage facade.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn install_projected_parts(&mut self, parts: Vec<Part>) {
         self.parts = parts;
         self.refresh_derived();
+    }
+
+    /// Apply a store-issued snapshot and maintain ordering, freshness, metadata
+    /// and all derived indexes together. A bounded supplement cannot delete.
+    pub fn apply_part_snapshot(
+        &mut self,
+        snapshot: agena_storage::store::PartSnapshot,
+    ) -> Result<(), agena_storage::store::StoreError> {
+        if snapshot.meta().id != self.id {
+            return Err(agena_storage::store::StoreError::InvalidState(
+                "Part snapshot belongs to another session".into(),
+            ));
+        }
+        let (meta, incoming, complete) = snapshot.into_rows();
+        let updated_at = DateTime::from_timestamp_millis(meta.updated_at_ms).ok_or_else(|| {
+            agena_storage::store::StoreError::InvalidState("invalid Part snapshot timestamp".into())
+        })?;
+        let mut parts = std::mem::take(&mut self.parts)
+            .into_iter()
+            .map(|part| (part.part_id, part))
+            .collect::<BTreeMap<_, _>>();
+        if complete && meta.version >= self.version {
+            let members = incoming
+                .iter()
+                .map(|part| part.part_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            parts.retain(|id, _| members.contains(id));
+        }
+        for part in incoming {
+            // Out-of-order receipts never replace a newer committed row.
+            if parts.get(&part.part_id).is_some_and(|current| {
+                (current.revision, current.updated_at_ms) > (part.revision, part.updated_at_ms)
+            }) {
+                continue;
+            }
+            parts.insert(part.part_id, part);
+        }
+        self.parts = parts.into_values().collect();
+        self.parts
+            .sort_by_key(|part| (part.created_at_ms, part.part_id));
+        if meta.version >= self.version {
+            self.version = meta.version;
+            self.updated_at = updated_at;
+        }
+        self.refresh_derived();
+        Ok(())
     }
 
     pub fn refresh_derived(&mut self) {
@@ -1142,8 +1191,7 @@ impl Session {
         self.parts.get(resolved.part_index)
     }
 
-    /// Mutable access to a projected part. Call [`Session::refresh_derived`]
-    /// after mutating so derived state stays consistent.
+    #[cfg(test)]
     pub fn part_mut(&mut self, part_ref: &SessionPartRef) -> Option<&mut Part> {
         let resolved = self.resolve_part_ref(part_ref)?;
         self.parts.get_mut(resolved.part_index)

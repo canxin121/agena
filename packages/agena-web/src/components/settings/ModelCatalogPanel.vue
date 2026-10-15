@@ -12,6 +12,7 @@ import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { orderedThinkingModeMap } from '@/lib/thinkingModeOrdering'
 
 type UserProblem = {
   message?: string
@@ -526,7 +527,7 @@ onMounted(() => void load())
           <details class="rounded-md border border-border/60">
             <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Thinking modes') }}</summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
-              pretty(selectedModel.thinking_modes)
+              pretty(orderedThinkingModeMap(selectedModel.thinking_modes) as JsonValue)
             }}</pre>
           </details>
           <details class="rounded-md border border-border/60">

@@ -1663,7 +1663,8 @@ export default {
           },
           "sections": {
             "closedRepos": "Repositórios fechados",
-            "parentRepos": "Repositórios em pastas superiores"
+            "parentRepos": "Repositórios em pastas superiores",
+            "discoveryLimited": "A busca atingiu o limite de segurança; alguns repositórios aninhados podem não aparecer."
           }
         },
         "remotes": {

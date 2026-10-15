@@ -23,6 +23,7 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tempfile = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 walkdir = { workspace = true }
 urlencoding = "2.1.3"
 

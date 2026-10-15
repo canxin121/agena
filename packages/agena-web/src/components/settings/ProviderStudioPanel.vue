@@ -18,6 +18,7 @@ import { confirmAction } from '@/lib/appConfirm'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { sortedThinkingModeNames } from '@/lib/thinkingModeOrdering'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import {
   normalizeProviderAdapterModels,
@@ -1284,6 +1285,29 @@ function toggleModel(adapterId: string, modelId: string) {
   markEditorDirty()
 }
 
+function setAdapterModelSelection(adapter: AdapterModels, selected: boolean) {
+  if (
+    mutationBusy.value ||
+    listingModels.value ||
+    saving.value ||
+    !selectedAdapterIds.value.has(adapter.adapter_id)
+  )
+    return
+  const next = new Set(selectedModelKeys.value)
+  for (const model of adapter.models) {
+    const key = modelKey(adapter.adapter_id, model.id)
+    if (selected) next.add(key)
+    else next.delete(key)
+  }
+  if (
+    next.size === selectedModelKeys.value.size &&
+    [...next].every((key) => selectedModelKeys.value.has(key))
+  )
+    return
+  selectedModelKeys.value = next
+  markEditorDirty()
+}
+
 function setAuthMode(value: string) {
   if (!draft.value) return
   const previouslySelected = selectedAdapterIds.value
@@ -1690,7 +1714,7 @@ function modelFieldValue(key: string): string {
     const value = modelPathValue(key)
     if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
     const object = record(value)
-    const names = Object.keys(object).filter((name) => name !== 'default')
+    const names = key === 'thinking_modes' ? sortedThinkingModeNames(object) : Object.keys(object).filter((name) => name !== 'default')
     if (names.length > 0) return names.join(', ')
     return typeof object.default === 'string' ? object.default : ''
   }
@@ -2368,6 +2392,43 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 
               <div v-if="adapterFailure(adapter)" class="mb-2 text-xs text-destructive">
                 {{ adapterFailure(adapter) }}
+              </div>
+              <div
+                v-if="adapter.models.length"
+                class="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-muted/20 px-2 py-1.5"
+              >
+                <span class="text-[10px] text-muted-foreground">
+                  {{
+                    $st('{count} selected', {
+                      count: adapter.models.filter((model) => selectedModelKeys.has(modelKey(adapter.adapter_id, model.id)))
+                        .length,
+                    })
+                  }}
+                </span>
+                <div class="ml-auto flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 px-2 text-[10px]"
+                    :disabled="
+                      mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)
+                    "
+                    @click="setAdapterModelSelection(adapter, true)"
+                  >
+                    {{ $st('Select all') }}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 px-2 text-[10px]"
+                    :disabled="
+                      mutationBusy || listingModels || saving || !selectedAdapterIds.has(adapter.adapter_id)
+                    "
+                    @click="setAdapterModelSelection(adapter, false)"
+                  >
+                    {{ $st('Select none') }}
+                  </Button>
+                </div>
               </div>
               <div class="grid gap-1">
                 <template v-for="model in adapter.models" :key="model.id">

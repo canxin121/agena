@@ -292,7 +292,7 @@ const {
   hasMoreUnstaged,
   hasMoreUntracked,
   loadMore,
-  reloadScopeFirstPage,
+  applyFirstPages: applyStatusFirstPages,
   cancelRequests: cancelStatusRequests,
   clearScope: clearStatusScope,
   resetAll: resetStatusPages,
@@ -300,12 +300,12 @@ const {
   gitReady,
   status,
   pageSize: FILE_LIST_PAGE_SIZE,
-  loadStatusPage: async ({ directory, scope, offset, limit, signal }) => {
+  loadStatusPage: async ({ directory, scope, offset, limit, snapshotId, signal }) => {
     if (root.value === directory) dirtyWatchScopes.delete(scope)
     return await readRepoJson<GitStatusResponse>(
       'status',
       directory,
-      { scope, offset, limit, includeDiffStats: true },
+      { scope, offset, limit, snapshotId, includeDiffStats: true },
       signal,
     )
   },
@@ -803,16 +803,21 @@ const watchRefreshQueue = createRevalidator(
     watchReadController = controller
     try {
       await refreshOpenDiffFromWatch(directory, owner, controller.signal)
+      const scopesToRefresh: WatchScope[] = []
       for (const [scope, expanded, count] of visibleWatchScopes()) {
         controller.signal.throwIfAborted()
         if (owner !== watchGeneration || root.value !== directory || !isGitVisible()) return
         if (!dirtyWatchScopes.has(scope) || !expanded) continue
         dirtyWatchScopes.delete(scope)
+        if (count === 0) clearStatusScope(scope)
+        else scopesToRefresh.push(scope)
+      }
+      if (scopesToRefresh.length) {
         try {
-          if (count === 0) clearStatusScope(scope)
-          else await reloadScopeFirstPage(directory, scope)
+          await loadStatusSummary(directory, scopesToRefresh, controller.signal)
         } catch (error) {
-          if (owner === watchGeneration && root.value === directory) dirtyWatchScopes.add(scope)
+          if (owner === watchGeneration && root.value === directory)
+            scopesToRefresh.forEach((scope) => dirtyWatchScopes.add(scope))
           throw error
         }
       }
@@ -861,7 +866,10 @@ async function refreshAfterWorkingTreeChange() {
   if (!directory || !gitReady.value) return
   gitStatusGeneration++
   conflictGeneration++
-  await loadStatusSummary(directory)
+  const expandedScopes = visibleWatchScopes()
+    .filter(([, expanded]) => expanded)
+    .map(([scope]) => scope)
+  await loadStatusSummary(directory, expandedScopes)
   if (root.value !== directory) return
   await Promise.all([
     loadGitState(directory).catch((error) => {
@@ -879,8 +887,7 @@ async function refreshAfterWorkingTreeChange() {
     }),
     ...visibleWatchScopes().map(([scope, expanded, count]) => {
       if (count === 0) clearStatusScope(scope)
-      else if (expanded) return reloadScopeFirstPage(directory, scope)
-      else dirtyWatchScopes.add(scope)
+      else if (!expanded) dirtyWatchScopes.add(scope)
       return Promise.resolve()
     }),
   ])
@@ -1005,16 +1012,30 @@ const beginRemoteRead = createLatestRequestGuard(() => root.value, remoteInfo)
 const beginSigningRead = createLatestRequestGuard(() => root.value, signingInfo)
 const beginStateRead = createLatestRequestGuard(() => root.value, gitState)
 
-async function loadStatusSummary(directory: string) {
-  // summary=true keeps the payload small even for huge repos.
+async function loadStatusSummary(directory: string, scopes: WatchScope[] = [], signal?: AbortSignal) {
+  // Counts and the visible first pages share one repository status snapshot.
   const generation = gitStatusGeneration
   const isCurrent = beginStatusRead()
   try {
     const response = await limitBackgroundReads(
-      () => readRepoJson<GitStatusResponse>('status', directory, { summary: true }),
-      repoReadController.signal,
+      () =>
+        readRepoJson<GitStatusResponse>(
+          'status',
+          directory,
+          {
+            summary: true,
+            scopes: scopes.length ? scopes.join(',') : undefined,
+            includeDiffStats: scopes.length > 0,
+            limit: FILE_LIST_PAGE_SIZE,
+          },
+          signal,
+        ),
+      signal || repoReadController.signal,
     )
-    if (isCurrent() && generation === gitStatusGeneration) status.value = response
+    if (isCurrent() && generation === gitStatusGeneration) {
+      status.value = response
+      applyStatusFirstPages(response.scopePages, response.snapshotId)
+    }
   } catch (error) {
     if (isCurrent() && generation === gitStatusGeneration) throw error
   }
@@ -1162,7 +1183,10 @@ async function load() {
 
     // Reset the cursor as well as the rows before loading this repository.
     resetStatusPages()
-    await loadStatusSummary(dir)
+    const initialScopes = visibleWatchScopes()
+      .filter(([, expanded]) => expanded)
+      .map(([scope]) => scope)
+    await loadStatusSummary(dir, initialScopes)
     if (seq !== loadSeq || dir !== root.value) return
     const applyFallback = (error: unknown, fallback: () => void) => {
       if (seq === loadSeq && dir === root.value && !(error instanceof DOMException && error.name === 'AbortError'))
@@ -1195,9 +1219,8 @@ async function load() {
         }),
       ),
       ...visibleWatchScopes().map(([scope, expanded, count]) => {
-        if (expanded && count > 0) return reloadScopeFirstPage(dir, scope)
         if (count === 0) clearStatusScope(scope)
-        else dirtyWatchScopes.add(scope)
+        else if (!expanded) dirtyWatchScopes.add(scope)
         return Promise.resolve()
       }),
     ])
@@ -1226,6 +1249,16 @@ async function load() {
   } finally {
     if (seq === loadSeq) loading.value = false
   }
+}
+
+let scheduledLoad = false
+function scheduleLoad() {
+  if (scheduledLoad) return
+  scheduledLoad = true
+  queueMicrotask(() => {
+    scheduledLoad = false
+    void load()
+  })
 }
 
 async function copyCommitHash(hash: string) {
@@ -1334,7 +1367,11 @@ watch(
     untrackedList.value = []
     repoSelection.repos.value = []
     repoSelection.reposError.value = null
-    void repoSelection.loadRepos().then(() => load())
+    // Start repository discovery and the currently selected repository read
+    // together. Discovery can later change the selection; the selection
+    // watcher schedules the follow-up read in that case.
+    void repoSelection.loadRepos()
+    scheduleLoad()
   },
 )
 
@@ -1351,7 +1388,7 @@ watch(
     stagedList.value = []
     changesList.value = []
     untrackedList.value = []
-    void load()
+    scheduleLoad()
   },
 )
 
@@ -1612,7 +1649,7 @@ defineExpose({
 })
 
 onMounted(() => {
-  void repoSelection.loadRepos().then(() => load())
+  void Promise.all([repoSelection.loadRepos(), load()])
   document.addEventListener('visibilitychange', syncWatch)
 })
 

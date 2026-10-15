@@ -253,15 +253,17 @@ mod preview_tests {
         }
         std::fs::write(root.join("binary.bin"), b"\0binary\0").unwrap();
         let directory = root.to_string_lossy().to_string();
-        let status = |offset, summary| GitStatusQuery {
+        let status = |offset, summary, snapshot_id| GitStatusQuery {
             directory: Some(directory.clone()),
             offset: Some(offset),
             limit: Some(40),
             scope: None,
+            snapshot_id,
+            scopes: None,
             summary,
             include_diff_stats: false,
         };
-        let first = json(git_status(Query(status(0, false))).await).await;
+        let first = json(git_status(Query(status(0, false, None))).await).await;
         assert_eq!(first["files"].as_array().unwrap().len(), 40);
         assert_eq!(first["hasMore"], true);
         let renamed = first["files"]
@@ -271,9 +273,17 @@ mod preview_tests {
             .find(|f| f["path"] == "after 文.txt")
             .unwrap();
         assert_eq!(renamed["indexOldPath"], "before 文.txt");
-        let second = json(git_status(Query(status(40, false))).await).await;
+        let second = json(
+            git_status(Query(status(
+                40,
+                false,
+                first["snapshotId"].as_str().map(str::to_owned),
+            )))
+            .await,
+        )
+        .await;
         assert_eq!(second["hasMore"], false);
-        let summary = json(git_status(Query(status(0, true))).await).await;
+        let summary = json(git_status(Query(status(0, true, None))).await).await;
         assert_eq!(summary["files"].as_array().unwrap().len(), 0);
         assert_eq!(summary["totalFiles"], first["totalFiles"]);
         let query = |path: &str, staged: bool, old_path: Option<&str>| GitDiffQuery {

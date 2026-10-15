@@ -16,8 +16,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena_storage::{
-    MemoryError, MemoryRecord, NewMemory, PermissionRuleRepository, PersistedPermissionRule,
-    WorkspaceRepository,
+    MemoryError, MemoryRecord, NewMemory, PermissionRuleBatchScope, PermissionRuleRepository,
+    PersistedPermissionRule, WorkspaceRepository,
 };
 
 use crate::{
@@ -25,7 +25,8 @@ use crate::{
     dto::{
         ActiveExecutionResource, GitCommitRequest, GitCommitResource, GitPullRequestCreateRequest,
         GitPullRequestResource, GitStageRequest, GitStatusResource, MemoryResource,
-        MemoryWriteRequest, PendingInteractiveRequestResource, PermissionRuleResource,
+        MemoryWriteRequest, PendingInteractiveRequestResource, PermissionRuleBatchOperation,
+        PermissionRuleBatchRequest, PermissionRuleBatchResponse, PermissionRuleResource,
         PermissionRuleWriteRequest, ScheduledJobResource, ScheduledJobRunResource,
         SearchPaginationQuery, SessionAutomationResource, SessionCreateRequest,
         SessionExecutionContextResource, SessionExecutionResource, SessionResource,

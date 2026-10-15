@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RiDownloadCloud2Line, RiRefreshLine, RiSearchLine, RiUploadCloud2Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -72,6 +72,8 @@ type BackgroundTaskStart = {
   task: BackgroundTask
 }
 
+const MAX_UPGRADE_BATCH_SIZE = 200
+
 const toasts = useToastsStore()
 const loading = ref(false)
 const actionKey = ref('')
@@ -84,6 +86,7 @@ const allowUnverified = ref(false)
 const searchResponse = ref<MarketplaceSearchResponse | null>(null)
 const installed = ref<InstalledPlugin[]>([])
 const outdated = ref<OutdatedPlugin[]>([])
+const selectedUpgradeIds = ref<Set<string>>(new Set())
 const responseQuery = ref('')
 const responseSource = ref('')
 const taskWaitController = new AbortController()
@@ -128,6 +131,41 @@ const renamedQuery = computed(() => {
 })
 const installedById = computed(() => new Map(installed.value.map((entry) => [entry.plugin_id, entry])))
 const outdatedById = computed(() => new Map(outdated.value.map((entry) => [entry.plugin_id, entry])))
+const upgradeableInstalled = computed(() => installed.value.filter((entry) => outdatedById.value.has(entry.plugin_id)))
+const selectedUpgradeablePlugins = computed(() =>
+  upgradeableInstalled.value.filter((entry) => selectedUpgradeIds.value.has(entry.plugin_id)),
+)
+const allUpgradeableSelected = computed(
+  () =>
+    upgradeableInstalled.value.length > 0 &&
+    upgradeableInstalled.value.every((entry) => selectedUpgradeIds.value.has(entry.plugin_id)),
+)
+
+watch(upgradeableInstalled, (available) => {
+  const allowed = new Set(available.map((entry) => entry.plugin_id))
+  selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value].filter((pluginId) => allowed.has(pluginId)))
+})
+
+function toggleUpgradeSelection(pluginId: string, event: Event) {
+  const next = new Set(selectedUpgradeIds.value)
+  if ((event.target as HTMLInputElement).checked) next.add(pluginId)
+  else next.delete(pluginId)
+  selectedUpgradeIds.value = next
+}
+
+function toggleAllUpgrades() {
+  const ids = upgradeableInstalled.value.map((entry) => entry.plugin_id)
+  if (allUpgradeableSelected.value) {
+    const removing = new Set(ids)
+    selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value].filter((pluginId) => !removing.has(pluginId)))
+  } else {
+    selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value, ...ids])
+  }
+}
+
+function clearUpgradeSelection() {
+  selectedUpgradeIds.value = new Set()
+}
 
 function marketplaceRegistryBody(): { registry_id?: string; registry_url?: string } {
   const value = source.value.trim()
@@ -156,24 +194,26 @@ async function waitForTask(start: BackgroundTaskStart): Promise<BackgroundTask> 
   }
 }
 
-async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
-  if (actionKey.value) return
+async function runTask(key: string, request: () => Promise<BackgroundTaskStart>): Promise<boolean> {
+  if (actionKey.value) return false
   actionKey.value = key
   error.value = ''
   try {
-    const task = await waitForTask(await request)
-    if (disposed) return
+    const task = await waitForTask(await request())
+    if (disposed) return false
     if (task.status === 'succeeded') {
       toasts.push('success', task.message || st('Marketplace operation completed'))
     } else {
       throw new Error(taskFailure(task) || st('Marketplace operation failed'))
     }
     await refresh(false)
+    return true
   } catch (reason) {
-    if (disposed) return
+    if (disposed) return false
     const message = reason instanceof Error ? reason.message : String(reason)
     error.value = message
     toasts.push('error', message)
+    return false
   } finally {
     actionKey.value = ''
   }
@@ -224,7 +264,7 @@ async function search(refresh = false) {
 async function syncRegistry() {
   await runTask(
     'sync',
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(marketplaceRegistryBody()),
@@ -237,7 +277,7 @@ async function installPlugin(spec: string, dryRun = false) {
   if (!trimmed) return
   await runTask(
     `${dryRun ? 'dry-run' : 'install'}:${trimmed}`,
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -255,7 +295,7 @@ async function installPlugin(spec: string, dryRun = false) {
 async function uninstallPlugin(pluginId: string) {
   await runTask(
     `uninstall:${pluginId}`,
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ plugin_id: pluginId, cascade: false }),
@@ -264,18 +304,51 @@ async function uninstallPlugin(pluginId: string) {
 }
 
 async function upgradePlugin(pluginId?: string) {
-  await runTask(
-    pluginId ? `upgrade:${pluginId}` : 'upgrade:all',
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        plugin_id: pluginId || null,
-        all: !pluginId,
-        ...marketplaceRegistryBody(),
+  await upgradePlugins(pluginId ? [pluginId] : undefined)
+}
+
+async function upgradePlugins(pluginIds?: string[]) {
+  const selectedIds = pluginIds ? [...new Set(pluginIds.map((id) => id.trim()).filter(Boolean))].sort() : null
+  if (selectedIds && !selectedIds.length) return
+  if (actionKey.value) return
+  const registryBody = marketplaceRegistryBody()
+  const batches: Array<string[] | null> = selectedIds
+    ? Array.from({ length: Math.ceil(selectedIds.length / MAX_UPGRADE_BATCH_SIZE) }, (_, index) =>
+        selectedIds.slice(index * MAX_UPGRADE_BATCH_SIZE, (index + 1) * MAX_UPGRADE_BATCH_SIZE),
+      )
+    : [null]
+
+  for (let index = 0; index < batches.length; index++) {
+    const batch = batches[index]
+    if (!batch) {
+      await runTask('upgrade:all', () =>
+        apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plugin_id: null, plugin_ids: [], all: true, ...registryBody }),
+        }),
+      )
+      return
+    }
+
+    const completed = await runTask(`upgrade:selected:${index + 1}`, () =>
+      apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          plugin_id: batch.length === 1 ? batch[0] : null,
+          plugin_ids: batch.length > 1 ? batch : [],
+          all: false,
+          ...registryBody,
+        }),
       }),
-    }),
-  )
+    )
+    if (!completed) return
+  }
+}
+
+function upgradeSelectedPlugins() {
+  return upgradePlugins(selectedUpgradeablePlugins.value.map((plugin) => plugin.plugin_id))
 }
 
 async function refresh(forceSearch = true) {
@@ -575,6 +648,36 @@ onMounted(() => void refresh(false))
           {{ $st('Upgrade all outdated plugins') }}
         </Button>
       </div>
+      <div
+        v-if="upgradeableInstalled.length"
+        class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+      >
+        <label class="flex items-center gap-2 text-xs font-medium">
+          <input type="checkbox" :checked="allUpgradeableSelected" @change="toggleAllUpgrades" />
+          {{ $st('Select all') }} ({{ upgradeableInstalled.length }})
+        </label>
+        <span class="text-xs text-muted-foreground">{{
+          $st('{count} selected', { count: selectedUpgradeablePlugins.length })
+        }}</span>
+        <div class="ml-auto flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            :disabled="!selectedUpgradeablePlugins.length || Boolean(actionKey)"
+            @click="clearUpgradeSelection"
+          >
+            {{ $st('Select none') }}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            :disabled="!selectedUpgradeablePlugins.length || Boolean(actionKey)"
+            @click="upgradeSelectedPlugins"
+          >
+            {{ $st('Upgrade selected plugins ({count})', { count: selectedUpgradeablePlugins.length }) }}
+          </Button>
+        </div>
+      </div>
       <div v-if="installed.length === 0" class="text-sm text-muted-foreground">
         {{ $st('No marketplace plugins are installed.') }}
       </div>
@@ -582,8 +685,18 @@ onMounted(() => void refresh(false))
         <div
           v-for="plugin in installed"
           :key="plugin.plugin_id"
-          class="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+          class="grid gap-2 px-4 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
+          <label v-if="outdatedById.has(plugin.plugin_id)" class="flex items-start justify-center pt-1">
+            <input
+              type="checkbox"
+              :checked="selectedUpgradeIds.has(plugin.plugin_id)"
+              :disabled="Boolean(actionKey)"
+              @change="toggleUpgradeSelection(plugin.plugin_id, $event)"
+            />
+            <span class="sr-only">{{ plugin.plugin_id }}</span>
+          </label>
+          <span v-else class="w-4" />
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <span class="font-mono text-xs font-semibold">{{ plugin.plugin_id }}</span>

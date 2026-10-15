@@ -6,8 +6,7 @@ import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/se
 const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/settings/PermissionStudioPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
-// The permission source belongs to the shared left navigation now, so this
-// workbench only forwards the layer the user selected there.
+// The permission workbench owns the scope selector and forwards its route-backed value.
 defineProps<{ activePage: string; scope: string }>()
 </script>
 

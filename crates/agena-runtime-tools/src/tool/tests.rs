@@ -620,7 +620,6 @@ impl ToolApiFixture {
     async fn help(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
     }
-
 }
 
 #[agena_plugin_host::sdk::agena_plugin(

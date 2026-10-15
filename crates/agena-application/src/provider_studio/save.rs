@@ -539,9 +539,9 @@ pub(crate) fn provider_model_draft_value(
             // A route that follows the catalog (the default) is edited against
             // the refreshed catalog values; only the route's own policy fields
             // come from the stored value.
-            if let Ok(parsed) =
-                serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(configured.clone())
-                && !parsed.definition.manual_overrides
+            if let Ok(parsed) = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
+                configured.clone(),
+            ) && !parsed.definition.manual_overrides
                 && let Some(catalog_model) =
                     preferred_catalog_model_for_lookup_ids(&catalog_entries, &catalog_lookup_ids)
             {

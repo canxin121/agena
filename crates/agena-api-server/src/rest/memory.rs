@@ -1,3 +1,8 @@
+#[derive(serde::Deserialize)]
+pub struct MemoryBatchDeleteRequest {
+    pub names: Vec<String>,
+}
+
 pub async fn list_memories(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -83,6 +88,20 @@ pub async fn delete_memory(
         state
             .application()
             .run_blocking(move |app| app.service().delete_memory(&name))
+            .await?
+    })
+    .await
+}
+
+pub async fn delete_memories(
+    State(state): State<AppState>,
+    Json(request): Json<MemoryBatchDeleteRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let names = request.names;
+    json_http(async move {
+        state
+            .application()
+            .run_blocking(move |app| app.service().delete_memories(&names))
             .await?
     })
     .await

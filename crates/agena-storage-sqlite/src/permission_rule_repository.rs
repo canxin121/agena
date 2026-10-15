@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use agena_domain::{PermissionMode, PermissionScope};
 use agena_storage::{
-    PermissionRuleListQuery, PermissionRuleRecord, PermissionRuleRepository,
-    PermissionRuleRepositoryError, PermissionRuleTransactionWriter, PersistedPermissionRule,
+    PermissionRuleBatchScope, PermissionRuleListQuery, PermissionRuleRecord,
+    PermissionRuleRepository, PermissionRuleRepositoryError, PermissionRuleTransactionWriter,
+    PersistedPermissionRule,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -162,6 +163,73 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
             .transpose()
     }
 
+    async fn delete_many(
+        &self,
+        rule_ids: &[i64],
+        scope: PermissionRuleBatchScope,
+    ) -> Result<Vec<PermissionRuleRecord>, PermissionRuleRepositoryError> {
+        if rule_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        let placeholders = vec!["?"; rule_ids.len()].join(", ");
+        let (scope_clause, scope_values) = batch_scope_predicate(scope);
+        let mut values = rule_ids
+            .iter()
+            .copied()
+            .map(Value::from)
+            .collect::<Vec<_>>();
+        values.extend(scope_values);
+        self.db
+            .query_all(statement(
+                format!(
+                    "DELETE FROM {TABLE} WHERE id IN ({placeholders}) AND {scope_clause} RETURNING {COLUMNS}"
+                ),
+                values,
+            ))
+            .await
+            .map_err(map_error)?
+            .into_iter()
+            .map(record_from_row)
+            .collect()
+    }
+
+    async fn set_mode_many(
+        &self,
+        rule_ids: &[i64],
+        mode: PermissionMode,
+        scope: PermissionRuleBatchScope,
+    ) -> Result<Vec<PermissionRuleRecord>, PermissionRuleRepositoryError> {
+        if rule_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let _permit = crate::acquire_write_permit(&self.db)
+            .await
+            .map_err(map_error)?;
+        let placeholders = vec!["?"; rule_ids.len()].join(", ");
+        let (scope_clause, scope_values) = batch_scope_predicate(scope);
+        let mut values = vec![
+            mode_to_string(mode).into(),
+            Utc::now().timestamp_millis().into(),
+        ];
+        values.extend(rule_ids.iter().copied().map(Value::from));
+        values.extend(scope_values);
+        self.db
+            .query_all(statement(
+                format!(
+                    "UPDATE {TABLE} SET mode = ?, updated_at_ms = ? WHERE id IN ({placeholders}) AND {scope_clause} RETURNING {COLUMNS}"
+                ),
+                values,
+            ))
+            .await
+            .map_err(map_error)?
+            .into_iter()
+            .map(record_from_row)
+            .collect()
+    }
+
     async fn resolve(
         &self,
         action_key: &str,
@@ -208,6 +276,23 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
             rules.push(persisted_rule_from_row(row)?);
         }
         Ok(rules)
+    }
+}
+
+fn batch_scope_predicate(scope: PermissionRuleBatchScope) -> (&'static str, Vec<Value>) {
+    match scope.scope {
+        PermissionScope::Global => (
+            "scope = 'global' AND workspace_id IS NULL AND session_id IS NULL",
+            vec![],
+        ),
+        PermissionScope::Workspace => (
+            "scope = 'workspace' AND workspace_id = ? AND session_id IS NULL",
+            vec![scope.workspace_id.into()],
+        ),
+        PermissionScope::Session => (
+            "scope = 'session' AND session_id = ? AND workspace_id IS NULL",
+            vec![scope.session_id.into()],
+        ),
     }
 }
 

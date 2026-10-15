@@ -99,7 +99,6 @@ impl CatalogedModelsProvider {
             model
         }
     }
-
 }
 
 #[async_trait]
@@ -517,7 +516,11 @@ mod tests {
             },
         );
 
-        assert!(provider.model_thinking_modes_for_adapter(None, &model).is_empty());
+        assert!(
+            provider
+                .model_thinking_modes_for_adapter(None, &model)
+                .is_empty()
+        );
         assert!(provider.model_thinking_modes(&model).is_empty());
     }
 

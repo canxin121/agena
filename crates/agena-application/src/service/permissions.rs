@@ -2,13 +2,99 @@ use agena_storage::PermissionRuleListQuery;
 
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
-    PermissionAction, PermissionRuleCursor, PermissionRuleResource, PermissionRuleWriteCommand,
-    PermissionRuleWriteRequest, PermissionScope, PersistedPermissionRule, SearchPaginationQuery,
-    api_error_from_app, build_page, decode_cursor, non_empty, normalize_limit,
-    timestamp_millis_to_utc, trim_page,
+    PermissionAction, PermissionRuleBatchOperation, PermissionRuleBatchRequest,
+    PermissionRuleBatchResponse, PermissionRuleBatchScope, PermissionRuleCursor,
+    PermissionRuleResource, PermissionRuleWriteCommand, PermissionRuleWriteRequest,
+    PermissionScope, PersistedPermissionRule, SearchPaginationQuery, api_error_from_app,
+    build_page, decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
 };
+use std::collections::HashSet;
 
 impl ApplicationService {
+    pub async fn batch_permission_rules(
+        &self,
+        request: PermissionRuleBatchRequest,
+    ) -> ApplicationResult<PermissionRuleBatchResponse> {
+        if request.rule_ids.is_empty() || request.rule_ids.len() > 200 {
+            return Err(ApplicationError::bad_request(
+                "select between 1 and 200 permission rules",
+            ));
+        }
+        if request.rule_ids.iter().any(|id| *id <= 0) {
+            return Err(ApplicationError::bad_request(
+                "permission rule IDs must be positive",
+            ));
+        }
+        let unique_ids = request.rule_ids.iter().copied().collect::<HashSet<_>>();
+        if unique_ids.len() != request.rule_ids.len() {
+            return Err(ApplicationError::bad_request(
+                "permission rule IDs must not contain duplicates",
+            ));
+        }
+
+        let permission_scope = match request.scope.as_str() {
+            "global" => PermissionScope::Global,
+            "workspace" => PermissionScope::Workspace,
+            "session" => PermissionScope::Session,
+            _ => {
+                return Err(ApplicationError::bad_request(
+                    "unsupported permission scope",
+                ));
+            }
+        };
+        if permission_scope == PermissionScope::Session
+            && !request.session_id.is_some_and(|session_id| session_id > 0)
+        {
+            return Err(ApplicationError::bad_request(
+                "session scope requires a positive session_id",
+            ));
+        }
+        let workspace_id = if permission_scope == PermissionScope::Workspace {
+            Some(
+                self.workspace_repository
+                    .ensure_id(self.workspace_root.as_str())
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?,
+            )
+        } else {
+            None
+        };
+        let scope = PermissionRuleBatchScope {
+            scope: permission_scope,
+            workspace_id,
+            session_id: (permission_scope == PermissionScope::Session)
+                .then_some(request.session_id)
+                .flatten(),
+        };
+
+        let affected_rows = match request.operation {
+            PermissionRuleBatchOperation::Delete => self
+                .permission_rule_repository
+                .delete_many(&request.rule_ids, scope)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?,
+            PermissionRuleBatchOperation::SetMode { mode } => self
+                .permission_rule_repository
+                .set_mode_many(&request.rule_ids, permission_mode_to_domain(mode), scope)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?,
+        };
+        let affected = affected_rows
+            .iter()
+            .map(permission_rule_record_resource)
+            .collect::<ApplicationResult<Vec<_>>>()?;
+        let affected_ids = affected.iter().map(|rule| rule.id).collect::<HashSet<_>>();
+        let missing_ids = request
+            .rule_ids
+            .into_iter()
+            .filter(|id| !affected_ids.contains(id))
+            .collect();
+        Ok(PermissionRuleBatchResponse {
+            affected,
+            missing_ids,
+        })
+    }
+
     pub async fn list_permission_rules(
         &self,
         query: SearchPaginationQuery,

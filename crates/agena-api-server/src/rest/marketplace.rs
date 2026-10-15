@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 static MARKETPLACE_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
 static MARKETPLACE_MUTATIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
@@ -373,9 +375,37 @@ pub async fn upgrade_marketplace_plugins(
     State(state): State<AppState>,
     Json(request): Json<MarketplaceUpgradeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if !request.all && request.plugin_id.as_deref().unwrap_or("").trim().is_empty() {
+    let single_plugin_id = request
+        .plugin_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let has_single_plugin = !single_plugin_id.is_empty();
+    let mut plugin_ids = request
+        .plugin_ids
+        .into_iter()
+        .map(|plugin_id| plugin_id.trim().to_string())
+        .filter(|plugin_id| !plugin_id.is_empty())
+        .collect::<Vec<_>>();
+    plugin_ids.sort();
+    plugin_ids.dedup();
+
+    if (request.all && (has_single_plugin || !plugin_ids.is_empty()))
+        || (has_single_plugin && !plugin_ids.is_empty())
+    {
         return Err(ServerError::bad_request(
-            "A plugin ID is required unless all plugins are selected.",
+            "Choose all plugins, one plugin ID, or a list of plugin IDs.",
+        ));
+    }
+    if plugin_ids.len() > 200 {
+        return Err(ServerError::bad_request(
+            "select no more than 200 marketplace plugins to upgrade",
+        ));
+    }
+    if !request.all && !has_single_plugin && plugin_ids.is_empty() {
+        return Err(ServerError::bad_request(
+            "A plugin ID or plugin ID list is required unless all plugins are selected.",
         ));
     }
     let override_spec = match request.registry.registry_url.as_deref() {
@@ -386,22 +416,27 @@ pub async fn upgrade_marketplace_plugins(
         )?),
         None => None,
     };
-    let plugin_id = request
-        .plugin_id
-        .clone()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let selected_ids = if has_single_plugin {
+        vec![single_plugin_id]
+    } else {
+        plugin_ids
+    };
     let config_path = state.config_path().map_err(ServerError::from)?;
     let title = if request.all {
         "Upgrade marketplace plugins".to_owned()
+    } else if selected_ids.len() > 1 {
+        format!("Upgrade {} marketplace plugins", selected_ids.len())
     } else {
-        format!("Upgrade marketplace plugin {plugin_id}")
+        format!("Upgrade marketplace plugin {}", selected_ids[0])
     };
     let dedupe_key = if request.all {
         "marketplace_plugin_upgrade:all".to_owned()
+    } else if selected_ids.len() > 1 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        selected_ids.hash(&mut hasher);
+        format!("marketplace_plugin_upgrade:batch:{:016x}", hasher.finish())
     } else {
-        format!("marketplace_plugin_upgrade:{plugin_id}")
+        format!("marketplace_plugin_upgrade:{}", selected_ids[0])
     };
     let all = request.all;
     spawn_marketplace_background_task(
@@ -419,7 +454,7 @@ pub async fn upgrade_marketplace_plugins(
                     .map(|record| record.plugin_id)
                     .collect::<Vec<_>>()
             } else {
-                vec![plugin_id.clone()]
+                selected_ids.clone()
             };
 
             let mut upgraded = Vec::new();

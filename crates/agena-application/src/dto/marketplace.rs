@@ -172,6 +172,8 @@ pub struct MarketplaceUpgradeRequest {
     #[serde(default)]
     pub plugin_id: Option<String>,
     #[serde(default)]
+    pub plugin_ids: Vec<String>,
+    #[serde(default)]
     pub all: bool,
     #[serde(flatten)]
     pub registry: MarketplaceRegistryOverrideRequest,

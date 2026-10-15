@@ -2364,7 +2364,8 @@ export default {
           },
           "sections": {
             "closedRepos": "Repositorios cerrados",
-            "parentRepos": "Repositorios en carpetas superiores"
+            "parentRepos": "Repositorios en carpetas superiores",
+            "discoveryLimited": "La búsqueda alcanzó su límite de seguridad; es posible que falten repositorios anidados."
           }
         },
         "submodules": {

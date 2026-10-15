@@ -140,6 +140,7 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/project/git/init", post(rest::init_git_repository))
             .route("/api/v1/vcs/diff/raw", get(rest::get_vcs_diff_raw))
             .route("/api/v1/memories", get(rest::list_memories))
+            .route("/api/v1/memories/batch-delete", post(rest::delete_memories))
             .route("/api/v1/operator/tools", get(rest::list_operator_tools))
             .route(
                 "/api/v1/operator/tools/invoke",
@@ -475,6 +476,10 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/permission-rules",
                 get(rest::list_permission_rules).post(rest::create_permission_rule),
+            )
+            .route(
+                "/api/v1/permission-rules/batch",
+                post(rest::batch_permission_rules),
             )
             .route(
                 "/api/v1/permission-rules/{rule_id}",

@@ -112,9 +112,8 @@ const activeView = computed(() => {
   return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
 })
 
-// The scope is the page's second dimension: every scoped page inside a section
-// resolves the same configuration layers, and the left navigation owns the
-// choice, so the content only reports which layer it is showing.
+// Every scoped page resolves the same configuration layers; its workbench owns
+// the visible selector while the route keeps the choice shareable.
 const activeScopes = computed(() => buildSettingsScopes(activeSection.value, activeView.value))
 const activeScope = computed(() => {
   let remembered = ''

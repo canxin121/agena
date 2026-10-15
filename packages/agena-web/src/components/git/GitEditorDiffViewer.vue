@@ -15,7 +15,7 @@ import type { GitCommitDiffResponse, GitCommitFileContentResponse, GitDiffMeta, 
 const { t } = useI18n()
 const ui = useUiStore()
 const MonacoDiffEditor = defineAsyncComponent(() => import('@/components/MonacoDiffEditor.vue'))
-const visible = usePaneVisibility()
+const paneVisibility = usePaneVisibility()
 
 type DiffHunkView = {
   id: string
@@ -52,6 +52,7 @@ type HunkActionMode = 'stage' | 'unstage' | 'discard'
 const props = defineProps<{
   directory: string | null
   path: string | null
+  visible: boolean
   staged?: boolean
   commit?: string | null
   parentCommit?: string | null
@@ -90,6 +91,7 @@ function isDataImageUrl(value: string): boolean {
 
 const normalizedPath = computed(() => (props.path || '').trim())
 const normalizedDirectory = computed(() => (props.directory || '').trim())
+const canReadDiff = computed(() => props.visible && paneVisibility.value)
 const diffScope = computed(() => (props.staged ? 'staged' : 'working'))
 const commitScope = computed(() => {
   const commit = (props.commit || '').trim()
@@ -360,7 +362,7 @@ function revealFile() {
 }
 
 async function readDiff() {
-  if (!visible.value) return
+  if (!canReadDiff.value) return
   const directory = (props.directory || '').trim()
   const path = normalizedPath.value
   if (!directory || !path) return
@@ -386,7 +388,7 @@ async function readDiff() {
     if (activeAbort === ac) {
       activeAbort = null
       loading.value = false
-      if (ac.signal.aborted && seq === loadSeq && visible.value) {
+      if (ac.signal.aborted && seq === loadSeq && canReadDiff.value) {
         error.value = 'Diff request timed out'
         throw new Error(error.value)
       }
@@ -398,7 +400,7 @@ const makeRefreshQueue = () =>
   createRevalidator(readDiff, {
     intervalMs: 750,
     retryMs: 5000,
-    enabled: () => visible.value && Boolean(normalizedDirectory.value && normalizedPath.value),
+    enabled: () => canReadDiff.value && Boolean(normalizedDirectory.value && normalizedPath.value),
   })
 let refreshQueue = makeRefreshQueue()
 function refresh() {
@@ -430,7 +432,7 @@ watch(
   { immediate: true },
 )
 const visibility = () => {
-  if (visible.value) {
+  if (canReadDiff.value) {
     refreshQueue.resume()
   } else {
     refreshQueue.pause()
@@ -442,7 +444,7 @@ const visibility = () => {
     if (interrupted) refreshQueue.invalidate(0)
   }
 }
-watch(visible, visibility, { flush: 'sync' })
+watch(canReadDiff, visibility, { flush: 'sync' })
 onBeforeUnmount(() => {
   refreshQueue.dispose()
   activeAbort?.abort()

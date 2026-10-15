@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 impl ApplicationService {
     pub fn memory_directory(&self) -> std::path::PathBuf {
         self.memory_repository.directory()
@@ -78,6 +80,43 @@ impl ApplicationService {
             .map_err(memory_api_error)?;
         Ok(memory_resource(existing))
     }
+
+    pub fn delete_memories(&self, names: &[String]) -> ApplicationResult<Vec<String>> {
+        if names.is_empty() || names.len() > 1_000 {
+            return Err(ApplicationError::bad_request(
+                "select between 1 and 1000 memory entries",
+            ));
+        }
+        let mut seen = HashSet::new();
+        let mut normalized = Vec::with_capacity(names.len());
+        for name in names {
+            let name = validate_memory_name(name)?.to_string();
+            if seen.insert(name.clone()) {
+                normalized.push(name);
+            }
+        }
+
+        // Read every record before deleting any of them, so a stale or invalid
+        // name cannot leave the requested batch only partly applied.
+        let mut records = Vec::with_capacity(normalized.len());
+        for name in &normalized {
+            records.push(self.memory_repository.get(name).map_err(memory_api_error)?);
+        }
+
+        let mut deleted = Vec::with_capacity(normalized.len());
+        for (name, record) in normalized.iter().zip(records) {
+            self.memory_repository
+                .forget(name)
+                .map_err(memory_api_error)?;
+            let display_name = record.frontmatter.name.trim();
+            deleted.push(if display_name.is_empty() {
+                record.file_name.trim_end_matches(".md").to_string()
+            } else {
+                display_name.to_string()
+            });
+        }
+        Ok(deleted)
+    }
 }
 
 fn validate_memory_name(name: &str) -> ApplicationResult<&str> {
@@ -132,7 +171,38 @@ use super::{
 
 #[cfg(test)]
 mod tests {
-    use super::validate_memory_name;
+    use std::{path::Path, sync::Arc};
+
+    use agena_storage::{
+        MemoryStore,
+        store::{SessionFacade, SessionStore},
+    };
+    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteEngine};
+    use sea_orm::Database;
+
+    use super::{ApplicationService, MemoryWriteRequest, validate_memory_name};
+
+    async fn service(workspace: &Path) -> ApplicationService {
+        let database = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("open in-memory SQLite database"),
+        );
+        agena_storage_sqlite::initialize_schema(database.as_ref())
+            .await
+            .expect("initialize test schema");
+        let sessions: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(
+            SqliteEngine::new(Arc::clone(&database)),
+            16,
+        ));
+        ApplicationService::new(
+            workspace.display().to_string(),
+            Arc::new(MemoryStore::for_workspace(workspace)),
+            Arc::new(SeaWorkspaceRepository::new(Arc::clone(&database))),
+            Arc::new(SeaPermissionRuleRepository::new(database)),
+            sessions,
+        )
+    }
 
     #[test]
     fn validates_memory_names_without_allowing_path_traversal() {
@@ -143,5 +213,38 @@ mod tests {
         assert!(validate_memory_name("../secret").is_err());
         assert!(validate_memory_name("nested/secret").is_err());
         assert!(validate_memory_name("MEMORY.md").is_err());
+    }
+
+    #[tokio::test]
+    async fn batch_memory_delete_validates_the_whole_batch_and_deduplicates_names() {
+        let workspace = tempfile::tempdir().unwrap();
+        let service = service(workspace.path()).await;
+        for name in ["first", "second"] {
+            service
+                .save_memory(
+                    name,
+                    MemoryWriteRequest {
+                        description: String::new(),
+                        memory_type: None,
+                        body: format!("Memory body for {name}."),
+                    },
+                )
+                .unwrap();
+        }
+
+        let invalid_batch = vec!["first".to_owned(), "missing".to_owned()];
+        assert!(service.delete_memories(&invalid_batch).is_err());
+        assert!(service.get_memory("first").is_ok());
+
+        let deleted = service
+            .delete_memories(&[
+                "first".to_owned(),
+                "first.md".to_owned(),
+                "second".to_owned(),
+            ])
+            .unwrap();
+        assert_eq!(deleted, vec!["first", "second"]);
+        assert!(service.get_memory("first").is_err());
+        assert!(service.get_memory("second").is_err());
     }
 }

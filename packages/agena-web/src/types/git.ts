@@ -29,6 +29,17 @@ export interface GitStatusResponse {
   limit: number
   hasMore: boolean
   scope: string
+  snapshotId?: string
+  scopePages?: Partial<Record<'merge' | 'staged' | 'unstaged' | 'untracked', GitStatusScopePage>>
+}
+
+export interface GitStatusScopePage {
+  files: GitStatusFile[]
+  totalFiles: number
+  offset: number
+  limit: number
+  hasMore: boolean
+  diffStats?: Record<string, GitDiffStat>
 }
 
 export interface GitWatchStatusPayload {
@@ -81,6 +92,7 @@ export interface GitRepoListResponse {
   totalPages?: number
   hasMore?: boolean
   search?: string
+  discoveryTruncated?: boolean
 }
 
 export interface GitRemoteInfo {

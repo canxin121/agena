@@ -41,7 +41,7 @@ test('thinking and speed modes follow Agena model resource selectors', () => {
   const speed = speedModeOptionsForModel(model)
   assert.deepEqual(
     thinking.map((option) => option.value),
-    ['off', 'high', 'deep'],
+    ['off', 'deep', 'high'],
   )
   assert.equal(defaultModeValue(thinking), 'high')
   assert.deepEqual(

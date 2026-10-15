@@ -199,11 +199,13 @@ impl Model {
 
     pub fn using_thinking_modes(mut self, thinking_modes: Vec<ModelThinkingMode>) -> Self {
         self.thinking_modes = thinking_modes;
+        self.thinking_modes.sort_by(compare_thinking_mode_strength);
         self
     }
 
     pub fn using_thinking_mode(mut self, thinking_mode: ModelThinkingMode) -> Self {
         self.thinking_modes.push(thinking_mode);
+        self.thinking_modes.sort_by(compare_thinking_mode_strength);
         self
     }
 }

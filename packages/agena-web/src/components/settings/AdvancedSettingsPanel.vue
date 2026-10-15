@@ -57,7 +57,7 @@ const COMMON_PATHS = computed(() => [
 ])
 
 const toasts = useToastsStore()
-// The write target is chosen in the left navigation and named in the section
+// The write target is chosen in the workbench and named in the section
 // header and the draft below, so this editor only follows the forwarded layer.
 const props = defineProps<{ scope: string }>()
 const targetLayer = computed<RuntimeSettingsLayer>(() => (props.scope === 'workspace' ? 'workspace' : 'global'))

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -28,7 +28,7 @@ type ConflictFileResponse = {
   isUnmerged: boolean
 }
 
-const props = defineProps<{ directory: string; path: string; conflictPaths?: string[] }>()
+const props = defineProps<{ directory: string; path: string; visible: boolean; conflictPaths?: string[] }>()
 const emit = defineEmits<{
   (e: 'resolved'): void
   (e: 'fallbackDiff'): void
@@ -40,6 +40,8 @@ const error = ref<string | null>(null)
 const file = ref<ConflictFileResponse | null>(null)
 
 const choices = ref<Record<number, 'ours' | 'theirs' | 'base' | 'both'>>({})
+let activeRead: AbortController | null = null
+let readSeq = 0
 
 function resetChoices(blocks: ConflictBlock[]) {
   const next: Record<number, 'ours' | 'theirs' | 'base' | 'both'> = {}
@@ -50,20 +52,30 @@ function resetChoices(blocks: ConflictBlock[]) {
 async function load() {
   const dir = (props.directory || '').trim()
   const path = (props.path || '').trim()
-  if (!dir || !path) return
+  if (!props.visible || !dir || !path) return
+  activeRead?.abort()
+  const controller = new AbortController()
+  activeRead = controller
+  const seq = ++readSeq
   loading.value = true
   error.value = null
   try {
     const resp = await apiJson<ConflictFileResponse>(
       `/api/v1/workbench/git/conflicts/file?directory=${encodeURIComponent(dir)}&path=${encodeURIComponent(path)}`,
+      { signal: controller.signal },
     )
+    if (controller.signal.aborted || seq !== readSeq) return
     file.value = resp
     resetChoices(resp.blocks || [])
   } catch (e) {
+    if (controller.signal.aborted || seq !== readSeq) return
     file.value = null
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (activeRead === controller) {
+      activeRead = null
+      loading.value = false
+    }
   }
 }
 
@@ -143,11 +155,24 @@ function selectRelativeConflict(offset: number) {
 }
 
 watch(
-  () => [props.directory, props.path] as const,
-  () => void load(),
+  () => [props.directory, props.path, props.visible] as const,
+  ([, , visible]) => {
+    if (visible) {
+      void load()
+      return
+    }
+    activeRead?.abort()
+    activeRead = null
+    readSeq++
+    loading.value = false
+  },
+  { immediate: true, flush: 'sync' },
 )
 
-onMounted(() => void load())
+onBeforeUnmount(() => {
+  activeRead?.abort()
+  readSeq++
+})
 </script>
 
 <template>

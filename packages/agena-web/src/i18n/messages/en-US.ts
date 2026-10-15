@@ -2128,6 +2128,7 @@ export default {
           sections: {
             closedRepos: 'Closed repositories',
             parentRepos: 'Repositories in parent folders',
+            discoveryLimited: 'Repository discovery reached its safety limit; some nested repositories may be missing.',
           },
         },
 

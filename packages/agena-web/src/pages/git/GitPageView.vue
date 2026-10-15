@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
 import {
@@ -106,6 +106,7 @@ const {
   parentRepos,
   reposLoading,
   repoPickerLoading,
+  repoDiscoveryTruncated,
   reposError,
   repoPickerPage,
   repoPickerTotalPages,
@@ -1080,6 +1081,7 @@ const REPO_MENU_PAGE_SIZE = 30
 const repoMenuOpen = ref(false)
 const repoMenuQuery = ref('')
 const repoMenuAnchorEl = ref<HTMLElement | null>(null)
+let repoMenuSearchTimer: ReturnType<typeof setTimeout> | undefined
 
 const repoMenuGroups = computed<OptionMenuGroup[]>(() => {
   const selected = String(selectedRepoRelative.value || '.').trim() || '.'
@@ -1125,18 +1127,22 @@ const repoMenuGroups = computed<OptionMenuGroup[]>(() => {
   return groups
 })
 
-async function requestRepoMenuPage(page: number, query = repoMenuQuery.value) {
-  await loadRepoPickerPage({ page, pageSize: REPO_MENU_PAGE_SIZE, search: query })
+async function requestRepoMenuPage(page: number, query = repoMenuQuery.value, refresh = false) {
+  if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+  repoMenuSearchTimer = undefined
+  await loadRepoPickerPage({ page, pageSize: REPO_MENU_PAGE_SIZE, search: query, refresh })
 }
 
 function refreshRepoMenuOptions() {
-  void requestRepoMenuPage(1, repoMenuQuery.value)
+  void requestRepoMenuPage(1, repoMenuQuery.value, true)
 }
 
 function toggleRepoMenu() {
   const nextOpen = !repoMenuOpen.value
   repoMenuOpen.value = nextOpen
   if (!nextOpen) {
+    if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+    repoMenuSearchTimer = undefined
     repoMenuQuery.value = ''
     return
   }
@@ -1146,6 +1152,8 @@ function toggleRepoMenu() {
 function setRepoMenuOpen(open: boolean) {
   repoMenuOpen.value = open
   if (!open) {
+    if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+    repoMenuSearchTimer = undefined
     repoMenuQuery.value = ''
     return
   }
@@ -1154,8 +1162,16 @@ function setRepoMenuOpen(open: boolean) {
 
 function onRepoMenuQueryChange(value: string) {
   repoMenuQuery.value = value
-  void requestRepoMenuPage(1, value)
+  if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+  repoMenuSearchTimer = setTimeout(() => {
+    repoMenuSearchTimer = undefined
+    void requestRepoMenuPage(1, value)
+  }, 180)
 }
+
+onBeforeUnmount(() => {
+  if (repoMenuSearchTimer) clearTimeout(repoMenuSearchTimer)
+})
 
 function onRepoMenuSelect(item: OptionMenuItem) {
   const id = String(item.id || '')
@@ -1542,6 +1558,9 @@ void diffPaneRef
             />
           </div>
 
+          <div v-if="repoDiscoveryTruncated" class="mt-1.5 text-xs text-amber-700 dark:text-amber-300">
+            {{ t('git.ui.dialogs.repoPicker.sections.discoveryLimited') }}
+          </div>
           <div v-if="reposError" class="mt-1.5 text-xs text-destructive/90">
             {{ reposError }}
           </div>
@@ -2255,6 +2274,7 @@ void diffPaneRef
       <div v-else-if="sourceControlView === 'historyCommit'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <GitDiffPane
           :directory="root || ''"
+          :visible="showDiffPane"
           :selected-file="historyFileSelected?.path || null"
           :diff-source="'working'"
           :commit="historySelected?.hash || ''"
@@ -2281,6 +2301,7 @@ void diffPaneRef
           v-else
           ref="diffPaneRef"
           :directory="root || ''"
+          :visible="showDiffPane"
           v-model:selectedFile="selectedFile"
           :diff-source="diffSource"
           :is-compact-layout="ui.isCompactLayout"

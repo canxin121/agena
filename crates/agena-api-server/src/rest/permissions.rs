@@ -5,6 +5,13 @@ pub async fn list_permission_rules(
     json_http(state.service().list_permission_rules(query)).await
 }
 
+pub async fn batch_permission_rules(
+    State(state): State<AppState>,
+    Json(request): Json<PermissionRuleBatchRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(state.service().batch_permission_rules(request)).await
+}
+
 pub async fn get_permission_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<i64>,
@@ -50,7 +57,7 @@ pub async fn delete_permission_rule(
     json_http(state.service().delete_permission_rule(rule_id)).await
 }
 use super::{
-    AppState, AxumQuery, IntoResponse, Json, Path, PermissionRuleRevokeRequest,
-    PermissionRuleWriteRequest, SearchPaginationQuery, ServerError, State, json_http,
-    json_http_found,
+    AppState, AxumQuery, IntoResponse, Json, Path, PermissionRuleBatchRequest,
+    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, SearchPaginationQuery, ServerError,
+    State, json_http, json_http_found,
 };

@@ -11,6 +11,8 @@ import { captureResourceObservation } from '../../lib/resourceSync'
 import { createRevalidator } from '../../lib/revalidation'
 import { isDocumentVisible } from '../../lib/backgroundReads'
 import type { JsonValue } from '../../types/json'
+import { compareThinkingModes, thinkingModeSelector } from '../../lib/thinkingModeOrdering'
+export { thinkingModeSelector } from '../../lib/thinkingModeOrdering'
 
 export type ThinkingRequest = {
   type?: string
@@ -144,22 +146,14 @@ export function modelIdsFromProviderModels(models: ProviderModel[] | null | unde
   return Array.isArray(models) ? models.map((model) => readString(model.id)).filter(Boolean) : []
 }
 
-export function thinkingModeSelector(mode: ProviderModelThinkingMode | null | undefined): string {
-  if (!mode) return ''
-  const preset = readString(mode.preset)
-  if (preset) return preset
-  const thinking = mode.thinking
-  const type = readString(thinking?.type).toLowerCase()
-  if (type === 'disabled') return 'off'
-  if (type === 'effort' || type === 'adaptive') return readString(thinking?.effort)
-  return ''
-}
-
 export function thinkingModeOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
   const out: ModelModeOption[] = []
   const seen = new Set<string>()
-  for (const mode of Array.isArray(model?.thinking_modes) ? model.thinking_modes : []) {
-    const value = thinkingModeSelector(mode)
+  const modes = (Array.isArray(model?.thinking_modes) ? model.thinking_modes : [])
+    .map((mode) => ({ mode, selector: thinkingModeSelector(mode) }))
+    .filter((item) => Boolean(item.selector))
+    .sort(compareThinkingModes)
+  for (const { mode, selector: value } of modes) {
     if (!value || seen.has(value)) continue
     seen.add(value)
     out.push({

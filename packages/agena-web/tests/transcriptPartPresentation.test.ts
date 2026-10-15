@@ -195,19 +195,28 @@ describe('TUI-parity part presentation', () => {
       { pending: false, status: 'Replied (custom_decision)', replyReason: '' },
     ])
 
-    const pending = operationPresentation(
-      operationPart({
-        authorization: {
-          permissions: [
-            {
-              request: { request_id: 'permission-pending', action: { kind: 'path_access', target_path: 'notes.md' } },
-              reply: null,
-            },
-          ],
-        },
-      }),
-    )
+    const waiting = operationPart({
+      authorization: {
+        permissions: [
+          {
+            request: { request_id: 'permission-pending', action: { kind: 'path_access', target_path: 'notes.md' } },
+            reply: null,
+          },
+        ],
+      },
+    })
+    waiting.status = 'in_progress'
+    waiting.source.partState = 'in_progress'
+    const pending = operationPresentation(waiting)
     expect(pending.permissions[0]).toMatchObject({ pending: true, status: 'Awaiting user approval' })
+    for (const status of ['completed', 'cancelled', 'failed', 'policy_denied', 'user_declined']) {
+      waiting.status = status
+      waiting.source.partState = status
+      expect(operationPresentation(waiting).permissions[0]).toMatchObject({
+        pending: false,
+        status: partStatusPresentation(status).label,
+      })
+    }
   })
 
   test('projects operation-owned user input as the interaction part', () => {

@@ -2,7 +2,7 @@
 
 本次工作已补齐首轮审查列出的 14 类应用侧缺口，并修复帮助弹窗不能滚动的问题。普通模式具有完整的消息导航入口，布局、文件移动和图片平移具有等价键盘操作；菜单、树、列表、标签、分隔条和弹窗采用一致的焦点约定。
 
-修改位于独立分支 `fix/web-keyboard-accessibility`，worktree 为 `/Volumes/Rc20/Projects/agena-wt/web-keyboard-accessibility`，初始代码基线为 `efaac47c9e0075e0b1a636fdc281bc13cbb7c4f7`。修复已 rebase 至最新主分支 `7506556c3084bdaac66150b05350ae7a1eaac2d2`，保留期间主分支增加的 5 个提交，并重新完成下述集成验证。本报告的“已验证”指明下述组件与浏览器范围；涉及真实后端写入、外部页面或操作系统快捷键时，见文末边界说明。
+键盘修改在独立分支 `fix/web-keyboard-accessibility`、worktree `/Volumes/Rc20/Projects/agena-wt/web-keyboard-accessibility` 完成，初始代码基线为 `efaac47c9e0075e0b1a636fdc281bc13cbb7c4f7`。合入前 rebase 至当时的主分支 `7506556c3084bdaac66150b05350ae7a1eaac2d2`，保留期间主分支增加的 5 个提交，并重新完成集成验证。随后直接在主仓库的 `master` 修复集成时发现的 6 个既有测试失败，结果见下文。本报告的“已验证”指明下述组件与浏览器范围；涉及真实后端写入、外部页面或操作系统快捷键时，见文末边界说明。
 
 ## 帮助弹窗滚动
 
@@ -81,20 +81,22 @@ git diff --check
 
 最终浏览器检查为基础导航 39 项、功能与异常路径 65 项，共 104 项断言，通过后没有未捕获组件错误，也没有后端写请求。39 项中包括 9 次 Tab 圈定检查，104 项不能解读为 104 条真实业务端到端流程。检查使用隔离的 headless Chrome，加载真实生产 Vue 组件、UI store 和快捷键运行时；服务端业务回调使用内存数据，预览网络请求被截获。
 
-最新主分支集成后的 `bun run build` 通过，包含导入规则、国际化完整性、TypeScript 与生产打包；`git diff --check` 通过。完整前端测试为 **863 通过、6 失败，共 869 项、235 个文件**。快捷键解析与偏好/预览尺寸的两个新增测试文件共 8 项通过。上述 104 项浏览器断言也已在 rebase 后重新全部通过。
+在主分支完成后续失败修复后，`bun run build` 通过，包含导入规则、国际化完整性、TypeScript 与生产打包；`git diff --check` 通过。完整前端测试为 **870 通过、0 失败，共 870 项、235 个文件**。快捷键解析与偏好/预览尺寸的两个测试文件共 8 项通过。上述 104 项浏览器断言是在键盘修复 rebase 后全部重新通过的结果。
 
-6 个失败都已在未修改的最新 `master`（`7506556c3`）上独立复现；对应 6 个文件的基线结果为 **52 通过、6 失败，共 58 项**，与集成后的失败用例一致。本次键盘修复没有新增测试失败，完整测试也不能描述为全部通过。
+首次集成时的完整测试为 863 通过、6 失败；这 6 个失败均已在未修改的 `master`（`7506556c3`）上独立复现，对应 6 个文件的基线结果为 52 通过、6 失败。后续修复包含 1 个真实消息合并缺陷和 5 项测试夹具或过时断言，现已全部通过：
 
-| 失败文件 | 已复现的主分支问题 |
+| 原失败文件 | 修复及回归验证 |
 | --- | --- |
-| `performanceFollowupRendering.test.ts` | Git diff 请求队列用例的 `requests[index].pending` 为 undefined |
-| `attachmentRowVocabularyContract.test.ts` | 附件标题源码契约断言不匹配 |
-| `messageListRuntimePartContract.test.ts` | 消息列表源码契约仍要求已移除的临时 part 状态 |
-| `workspaceChanges.test.ts` | 刷新失败用例期望清空列表，与保留已加载数据的行为不匹配 |
-| `transcriptPartPresentation.test.ts` | 权限投影用例期望 pending 状态，实际为 completed |
-| `realtimeConsistency.test.ts` | 相同 revision 的重新读取未保留用例期望的 live part 对象 |
+| `performanceFollowupRendering.test.ts` | 补齐 Git diff 夹具必需的 `visible` 属性，验证隐藏时无请求、显示后读取 patch 和文件内容，并保留仓库切换、空结果及失败重试覆盖 |
+| `attachmentRowVocabularyContract.test.ts` | 验证实际中英文词条参与资源投影、附件默认折叠及运行时标题优先，移除对已不存在的 `attachmentTitle` 参数的断言 |
+| `messageListRuntimePartContract.test.ts` | 用真实 MessageList 渲染验证重试文案、倒计时、无障碍状态和加载提示，确保运行态不会制造临时消息或 part |
+| `workspaceChanges.test.ts` | 验证刷新失败时保留已加载行、选中项和 diff；切换分页清理选择，缩页恢复后清除错误 |
+| `transcriptPartPresentation.test.ts` | 等待权限的夹具使用真实运行中状态，同时验证已完成、取消、失败和拒绝状态不会继续显示待批准 |
+| `realtimeConsistency.test.ts` | 修复普通历史刷新及执行状态快照在版本相同时覆盖实时内容的问题，并验证重叠的更早分页也保留当前实时消息对象 |
 
-最新集成结果、日志和截图保存在 `.tmp-artifacts/keyboard-navigation/integration/`：`verification.json`、`workflow-verification.json`、`frontend-tests.log`、`build.log`、`baseline-tests.log`，以及桌面、小屏、横屏帮助和快捷键编辑器截图。原始分支的验证记录仍保留在其上级目录。
+新增的消息索引回归验证同版本历史页仍可补齐缺失的工具详情，同时保留已加载的输入与展示信息；既有测试继续验证实时事件可原位更新同版本快照。
+
+后续失败修复的完整测试和构建日志保存在主仓库 `.tmp-artifacts/frontend-test-repair/`。键盘集成的结果、日志和截图保存在原 worktree 的 `.tmp-artifacts/keyboard-navigation/integration/`：`verification.json`、`workflow-verification.json`、`frontend-tests.log`、`build.log`、`baseline-tests.log`，以及桌面、小屏、横屏帮助和快捷键编辑器截图。
 
 ## 验证边界
 

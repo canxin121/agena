@@ -537,7 +537,7 @@ test('Git diffs preserve loaded model identity through repository switches, empt
     requests.push({ input: String(input), pending })
     return pending.promise
   }) as typeof fetch
-  const props = reactive({ directory: '/repo/one', path: 'src/a.ts', onStageHunk() {} })
+  const props = reactive({ directory: '/repo/one', path: 'src/a.ts', visible: true, onStageHunk() {} })
   const pane = await mount('/src/components/git/GitEditorDiffViewer.vue', props, ref(false))
   const reply = (index: number, diff: string, original: string, modified: string) => {
     requests[index]!.pending.resolve(Response.json({ diff }))
@@ -549,6 +549,7 @@ test('Git diffs preserve loaded model identity through repository switches, empt
     pane.shown.value = true
     const initial = pane.state.refresh()
     await flush()
+    assert.equal(requests.length, 2, 'the visible diff reads both its patch and file contents')
     const diff = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-before\n+after\n'
     reply(0, diff, 'before', 'after')
     await initial

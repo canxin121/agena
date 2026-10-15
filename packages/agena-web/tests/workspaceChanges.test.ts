@@ -274,7 +274,7 @@ test('operation history and rename facts stay raw; expanding diff cancels older 
     expect(state.visibleDiff.value?.files[0]?.operations[0]?.from_path).toBe('old.ts')
   }))
 
-test('refresh failures hide stale rows and shrinking pages recover', async () =>
+test('refresh failures retain loaded rows and diffs while shrinking pages recover', async () =>
   withPanel(async ({ state, calls, advance, settle }) => {
     calls[0]!.resolve(snapshot([], 83))
     await settle()
@@ -285,14 +285,21 @@ test('refresh failures hide stale rows and shrinking pages recover', async () =>
     state.select(file('a.ts'))
     calls.at(-1)!.resolve(snapshot([file('a.ts')]))
     await settle()
+    const loadedFiles = state.files.value
+    const loadedDiff = state.diff.data.value
     await advance(750)
     void state.status.refresh()
     calls.at(-1)!.reject(new Error('connection unavailable'))
     await settle()
     expect(state.status.error.value).toBe('connection unavailable')
-    expect(state.files.value).toEqual([])
-    expect(state.diff.data.value).toBe(null)
+    expect(state.files.value).toBe(loadedFiles)
+    expect(state.files.value.map((f) => f.path)).toEqual(['a.ts'])
+    expect(state.diff.data.value).toBe(loadedDiff)
+    expect(state.visibleDiff.value).toBe(loadedDiff)
+    expect(state.selected.value?.path).toBe('a.ts')
     state.page.value = 2
+    expect(state.selected.value).toBe(null)
+    expect(state.visibleDiff.value).toBe(null)
     await advance(750)
     calls.at(-1)!.resolve(snapshot([], 41, 80))
     await settle()
@@ -302,4 +309,5 @@ test('refresh failures hide stale rows and shrinking pages recover', async () =>
     calls.at(-1)!.resolve(snapshot([file('last.ts')], 41, 40))
     await settle()
     expect(state.files.value.map((f) => f.path)).toEqual(['last.ts'])
+    expect(state.status.error.value).toBe('')
   }))

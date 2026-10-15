@@ -106,7 +106,7 @@ pub(crate) async fn run_tool_api_meta_suite(
             .parts
             .len();
         let mut options = harness.options.clone();
-        options.request_override.set_parallel_tool_calls(Some(true));
+        options.model_supports_parallel_tool_calls = Some(true);
         let prompt = format!(
             "This is an automated Tool API batch test. In one assistant response, call the native function tools_call exactly twice, with these exact argument objects: {} and {}. Do not call tools_help or any other function. Both calls are independent and every supplied value is mandatory. After both tool results arrive, reply exactly DSV4F_TOOLS_CALL_BATCH_OK.",
             serde_json::to_string(&first)?,

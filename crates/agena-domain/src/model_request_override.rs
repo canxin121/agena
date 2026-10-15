@@ -109,6 +109,6 @@ mod tests {
             merged.body_patch["options"],
             serde_json::json!({"a": 1, "b": true})
         );
-        assert!(merged.body_patch.get("parallel_tool_calls").is_none());
+        assert!(!merged.body_patch.contains_key("parallel_tool_calls"));
     }
 }

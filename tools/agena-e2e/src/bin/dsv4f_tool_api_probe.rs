@@ -104,6 +104,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     let options = SessionRunOptions {
         model,
+        model_supports_parallel_tool_calls: None,
         thinking_mode: None,
         speed_mode: None,
         verbosity: None,

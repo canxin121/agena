@@ -88,6 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         verbosity: None,
         thinking: None,
         request_override: Default::default(),
+        model_supports_parallel_tool_calls: None,
         system: None,
         temperature,
         max_output_tokens: None,

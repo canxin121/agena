@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
                 verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
+                model_supports_parallel_tool_calls: None,
                 system: Some("do not run any tools; just reply OK".to_owned()),
                 temperature: Some(0.0),
                 max_output_tokens: Some(64),

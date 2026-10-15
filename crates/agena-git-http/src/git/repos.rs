@@ -103,14 +103,13 @@ fn repo_discovery_entry(base: &Path) -> RepoDiscoveryEntry {
     if let Some(entry) = entries.get(base) {
         return entry.clone();
     }
-    if entries.len() >= MAX_REPO_DISCOVERY_CACHE_ENTRIES {
-        if let Some(oldest_unused) = entries
+    if entries.len() >= MAX_REPO_DISCOVERY_CACHE_ENTRIES
+        && let Some(oldest_unused) = entries
             .iter()
             .find(|(_, entry)| Arc::strong_count(entry) == 1)
             .map(|(path, _)| path.clone())
-        {
-            entries.remove(&oldest_unused);
-        }
+    {
+        entries.remove(&oldest_unused);
     }
     let entry = Arc::new(tokio::sync::Mutex::new(None));
     entries.insert(base.to_path_buf(), entry.clone());

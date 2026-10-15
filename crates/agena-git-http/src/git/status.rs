@@ -528,7 +528,7 @@ fn status_scope_page(
     } else {
         let start = offset.min(snapshot.files.len());
         let end = start.saturating_add(limit).min(snapshot.files.len());
-        snapshot.files[start..end].iter().cloned().collect()
+        snapshot.files[start..end].to_vec()
     }
 }
 

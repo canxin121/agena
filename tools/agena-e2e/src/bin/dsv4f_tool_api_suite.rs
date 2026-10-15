@@ -178,18 +178,17 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 fn run_options(model: ModelRef) -> SessionRunOptions {
-    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
     // The suite exercises one Tool API operation at a time. Explicitly disable
     // parallel native calls so a provider cannot fan out duplicate retries for
     // a single strict probe instruction.
-    request_override.set_parallel_tool_calls(Some(false));
     SessionRunOptions {
         model,
+        model_supports_parallel_tool_calls: Some(false),
         thinking_mode: None,
         speed_mode: None,
         verbosity: None,
         thinking: None,
-        request_override,
+        request_override: Default::default(),
         system: Some(
             "You are a deterministic integration-test driver. When a user gives an exact provider tool invocation JSON, copy every key and value exactly, including optional fields. Never make a preliminary/default tool call, never omit supplied fields, and never retry a completed tool call unless the user explicitly asks for a retry."
                 .to_string(),

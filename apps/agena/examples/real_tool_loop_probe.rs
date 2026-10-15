@@ -62,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
                 verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
+                model_supports_parallel_tool_calls: None,
                 system: Some(
                     "Execute this exact 3-round tool sequence using the Tool API.\n\
                      ROUND 1: call tools_list once for plugin \"agena.session\" (limit 20).\n\

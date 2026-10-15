@@ -100,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
                 verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
+                model_supports_parallel_tool_calls: None,
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(4096),

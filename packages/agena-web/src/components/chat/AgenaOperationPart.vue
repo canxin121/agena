@@ -123,7 +123,9 @@ function sectionLoaded(section: ToolDetailSection): boolean {
 }
 
 function sectionHasValue(section: ToolDetailSection): boolean {
-  return Object.prototype.hasOwnProperty.call(sectionValues.value, section)
+  if (Object.prototype.hasOwnProperty.call(sectionValues.value, section)) return true
+  if (section === 'presentation') return props.part.source.agenaPresentation !== undefined
+  return Object.prototype.hasOwnProperty.call(jsonRecord(props.part.source.agenaContent), section)
 }
 
 function sectionLoading(section: ToolDetailSection): boolean {
@@ -135,7 +137,11 @@ function sectionError(section: ToolDetailSection): string {
 }
 
 function sectionPending(section: ToolDetailSection): boolean {
-  return sectionLoading(section) || (queuedSections.has(section) && !sectionError(section))
+  return (
+    !sectionHasValue(section) &&
+    !sectionError(section) &&
+    (sectionLoading(section) || queuedSections.has(section) || sectionExpanded(section))
+  )
 }
 
 function sectionExpanded(section: ToolDetailSection): boolean {

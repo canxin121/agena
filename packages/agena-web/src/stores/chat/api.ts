@@ -206,6 +206,7 @@ export type SessionExecutionStatus = {
   state: SessionState
   execution?: AgenaExecutionState['execution']
   usage?: AgenaExecutionState['usage']
+  parts: AgenaPart[]
   /** Server-projected background activity kinds (lowercased, id-free). */
   backgroundActivityKinds: string[]
   backgroundActivities: SessionActivity[]
@@ -233,7 +234,7 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
-function toSession(s: unknown, scope = sessionRoutingScope()): Session | null {
+export function toSession(s: unknown, scope = sessionRoutingScope()): Session | null {
   const rec = asRecord(s as JsonValue)
   if (!rec || typeof rec.id !== 'number') return null
   const id = String(rec.id)
@@ -1192,28 +1193,45 @@ export async function sendMessage(sessionId: string, payload: SendMessagePayload
   return state
 }
 
+/** PUT /api/v1/sessions/{id}/permission — update the session policy. */
+export async function setSessionPermission(sessionId: string, permission: JsonValue): Promise<AgenaExecutionState> {
+  const scope = sessionRoutingScope()
+  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/permission`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ permission }),
+  })
+  toSession(state.session, scope)
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
+}
+
 /** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
-export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
+  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+  toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
 }
 
 /** POST /api/v1/sessions/{id}/compact — context compaction. */
-export async function compactSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+export async function compactSession(sessionId: string, options?: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
+  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
+  toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
 }
 
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
@@ -1251,7 +1269,7 @@ export async function cancelSession(sessionId: string, executionId?: string | nu
 }
 
 /** POST /api/v1/sessions/{id}/rewind — create a branch before a user message. */
-export async function rewindSession(sessionId: string, atMessageId: number): Promise<Session> {
+export async function rewindSession(sessionId: string, atMessageId: number): Promise<AgenaExecutionState> {
   if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
     throw new Error(i18n.global.t('chat.errors.userMessageIdRequired'))
   const scope = sessionRoutingScope()
@@ -1263,14 +1281,14 @@ export async function rewindSession(sessionId: string, atMessageId: number): Pro
   const session = toSession(created.session, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.rewoundSessionMissing'))
   reconcileSessionMutation(session.id, 'created', scope)
-  return session
+  return created
 }
 
 /** POST /api/v1/sessions/{id}/fork — clone history into a child session. */
 export async function forkSession(
   sessionId: string,
   opts?: { at_message_id?: number; title?: string; conversation_mode?: 'side' },
-): Promise<Session> {
+): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const body: JsonValue = {}
   if (opts?.at_message_id !== undefined) {
@@ -1282,15 +1300,15 @@ export async function forkSession(
   if (opts?.conversation_mode) (body as JsonObject).conversation_mode = opts.conversation_mode
   const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
   if (title) (body as JsonObject).title = title
-  const created = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
+  const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const session = toSession(asRecord(created).session, scope)
+  const session = toSession(created.session, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
   reconcileSessionMutation(session.id, 'created', scope)
-  return session
+  return created
 }
 
 // --- interactive replies ---------------------------------------------------
@@ -1301,7 +1319,7 @@ export async function replyPermission(
   requestId: string,
   reply: 'once' | 'always' | 'reject' | 'reject_always',
   message?: string,
-): Promise<boolean> {
+): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const kind =
     reply === 'once'
@@ -1315,13 +1333,17 @@ export async function replyPermission(
   if (typeof message === 'string' && message.trim()) {
     ;(replyBody as JsonObject).reason = message.trim()
   }
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/permission-replies`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ reply: replyBody }),
-  })
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/permission-replies`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reply: replyBody }),
+    },
+  )
+  toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
-  return true
+  return state
 }
 
 /** POST /api/v1/sessions/{id}/user-input-replies */
@@ -1329,29 +1351,37 @@ export async function replyQuestion(
   sessionId: string,
   requestId: string,
   answers: Record<string, string[]>,
-): Promise<boolean> {
+): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'submit', answers }
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ reply: replyBody }),
-  })
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reply: replyBody }),
+    },
+  )
+  toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
-  return true
+  return state
 }
 
 /** POST /api/v1/sessions/{id}/user-input-replies — cancel a question. */
-export async function rejectQuestion(sessionId: string, requestId: string): Promise<boolean> {
+export async function rejectQuestion(sessionId: string, requestId: string): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'cancel' }
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ reply: replyBody }),
-  })
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reply: replyBody }),
+    },
+  )
+  toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
-  return true
+  return state
 }
 
 /** POST /api/v1/sessions/{id}/interactive/{request_id}/present — presentation ack. */
@@ -1359,11 +1389,21 @@ export function interactivePresentationPath(sessionId: string, requestId: string
   return `/api/v1/sessions/${encodeURIComponent(sessionId)}/interactive/${encodeURIComponent(requestId)}/present`
 }
 
-export async function presentInteractiveRequest(sessionId: string, requestId: string): Promise<void> {
+export async function presentInteractiveRequest(
+  sessionId: string,
+  requestId: string,
+): Promise<AgenaExecutionState | null> {
+  const scope = sessionRoutingScope()
   try {
-    await apiJson(interactivePresentationPath(sessionId, requestId), { method: 'POST' })
+    const state = await apiJson<AgenaExecutionState>(interactivePresentationPath(sessionId, requestId), {
+      method: 'POST',
+    })
+    toSession(state.session, scope)
+    reconcileSessionMutation(sessionId, 'execution', scope)
+    return state
   } catch {
     // Best-effort; presentation ack is advisory.
+    return null
   }
 }
 
@@ -1394,6 +1434,7 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
     state: s,
     execution: state.execution,
     usage: state.usage,
+    parts: state.parts || [],
     backgroundActivityKinds,
     backgroundActivities: raw.background_activities || [],
     observation,

@@ -71,15 +71,13 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
     },
   })
   const current = status.data
-  const files = computed(() => (status.error.value ? [] : (current.value?.files ?? [])))
+  const files = computed(() => current.value?.files ?? [])
   const total = computed(() => snapshot.value?.total_files ?? null)
   const recordingIncomplete = computed(() => snapshot.value?.recording_incomplete ?? false)
   // Only a recorded file edit opens the panel: a shell write declaration on its
   // own is not evidence that any file changed.
   const hasChanges = computed(() => (total.value ?? 0) > 0)
-  const statusPending = computed(
-    () => Boolean(options.sessionId.value) && (status.loading.value || (!current.value && !status.error.value)),
-  )
+  const statusPending = computed(() => Boolean(options.sessionId.value) && !current.value && !status.error.value)
   watch(
     status.data,
     (value) => {
@@ -102,9 +100,7 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
   )
 
   const diffIdentity = computed(() =>
-    expanded.value && selected.value && !status.error.value
-      ? JSON.stringify([options.sessionId.value, selected.value.path])
-      : '',
+    expanded.value && selected.value ? JSON.stringify([options.sessionId.value, selected.value.path]) : '',
   )
   const diffKey = computed(() =>
     diffIdentity.value
@@ -155,9 +151,7 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
     },
     { flush: 'sync' },
   )
-  const diffPending = computed(
-    () => Boolean(diffKey.value) && (diff.loading.value || (!diff.data.value && !diff.error.value)),
-  )
+  const diffPending = computed(() => Boolean(diffKey.value) && !visibleDiff.value && !diff.error.value)
   function select(file: SessionFileChange) {
     selected.value = selected.value?.path === file.path ? null : file
   }

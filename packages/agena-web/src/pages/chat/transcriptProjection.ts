@@ -432,9 +432,7 @@ function displayFields(
   return { title: durablePartKind(part), summary: body, copyText: body }
 }
 
-/// Project a client-local status or pending interaction
-/// through the same part projection the durable transcript uses, so a local
-/// element can never drift from the server-rendered one.
+/** Project a standalone part through the shared transcript projection. */
 export function projectLocalPart(
   source: MessagePartLike,
   role: string,

@@ -7,7 +7,8 @@ import Button from '@/components/ui/Button.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
-import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
+import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
+import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import type {
   MessageLike,
   RenderBlock,
@@ -17,8 +18,11 @@ import type {
 } from '@/components/chat/messageList.types'
 import type { AttentionEvent, MessageFold } from '@/types/chat'
 import { formatTimeHMS } from '@/i18n/intl'
-import { partInteractionRequestIds, pendingInteractionPartSource } from '@/pages/chat/transcriptPartPresentation'
-import { projectLocalPart } from '@/pages/chat/transcriptProjection'
+import {
+  errorPresentation,
+  partInteractionRequestIds,
+  pendingInteractionPresentationFromAttention,
+} from '@/pages/chat/transcriptPartPresentation'
 import type { ActivityVisibility } from '@/pages/chat/transcriptActivityFolding'
 
 const props = defineProps<{
@@ -39,7 +43,7 @@ const props = defineProps<{
   copiedMessageId: string
   revertBusyMessageId: string
   isStreamingAssistantMessage: (message: MessageLike) => boolean
-  showAssistantPlaceholder: boolean
+  showRunLoading: boolean
   sessionEnded: boolean
   retryStatus: RetryStatusLike
   retryCountdown?: string
@@ -89,87 +93,19 @@ const durableInteractionRequestIds = computed(() => {
   return ids
 })
 
-const pendingInteractionFallback = computed(() =>
-  pendingInteractionPartSource(props.pendingAttention, durableInteractionRequestIds.value),
+const pendingInteraction = computed(() =>
+  pendingInteractionPresentationFromAttention(props.pendingAttention, durableInteractionRequestIds.value),
 )
 
-// The outstanding-request row is a part projection too: it carries the
-// durable tool_call shape, so the persistent part that replaces it renders
-// through exactly the same path (and the same label vocabulary).
-const pendingInteractionPart = computed<TranscriptDisplayPart | null>(() => {
-  const source = pendingInteractionFallback.value
-  if (!source) return null
-  return projectLocalPart(
-    {
-      id: `interaction:${source.requestId}`,
-      type: 'tool',
-      partState: 'pending',
-      agenaKind: 'tool_call',
-      agenaRole: 'assistant',
-      agenaContent: { call_id: 0, name: 'interaction', metadata: {}, ...source.content },
-    },
-    'assistant',
-  )
-})
-
-const assistantPlaceholderPart = computed<TranscriptDisplayPart>(() => {
-  // The in-flight assistant row is a part projection like every other row:
-  // the lifecycle part the durable projection uses, in its running state,
-  // so this element shares one label vocabulary with the server-rendered one.
-  return projectLocalPart(
-    {
-      id: 'lifecycle:pending',
-      type: 'tool',
-      partState: 'in_progress',
-      agenaKind: 'assistant_reply_lifecycle',
-      agenaRole: 'assistant',
-      agenaContent: { state: 'in_progress' },
-    },
-    'assistant',
-  )
-})
-
-const retryPart = computed<TranscriptDisplayPart | null>(() => {
-  const retry = props.retryStatus
-  if (!retry) return null
-  const attempt = Number(retry.attempt || 0)
-  const body = [String(retry.message || '').trim(), props.retryCountdown || ''].filter(Boolean).join(' · ')
-  return projectLocalPart(
-    {
-      id: `provider-retry:${attempt}:${Number(retry.next || 0)}`,
-      type: 'tool',
-      partState: 'in_progress',
-      agenaKind: 'notice',
-      agenaRole: 'runtime',
-      agenaContent: { category: 'provider_retry', attempt, next_at_ms: retry.next || null },
-      agenaPresentation: { title: String(t('chat.sessionWork.retry', { attempt })), summary: body },
-    },
-    'runtime',
-  )
-})
-
-const sessionErrorPart = computed<TranscriptDisplayPart | null>(() => {
-  const error = props.sessionError
-  if (!error) return null
-  // The session error row is a part projection as well: one runtime error
-  // element, with its classification carried as presentation metadata so the
-  // label vocabulary lives in the projection instead of the template.
+const retryBody = computed(() =>
+  [String(props.retryStatus?.message || '').trim(), props.retryCountdown || ''].filter(Boolean).join(' · '),
+)
+const showSessionError = computed(() => {
+  if (!props.sessionError) return false
   const body = sessionErrorBody()
-  return projectLocalPart(
-    {
-      id: 'session-error',
-      type: 'tool',
-      partState: 'failed',
-      agenaKind: 'error',
-      agenaRole: 'runtime',
-      agenaContent: {
-        message: body,
-        classification: String(error.error?.classification || '') || null,
-      },
-      agenaPresentation: { title: sessionErrorClassificationLabel(), summary: body },
-    },
-    'runtime',
-  )
+  return !props.renderBlocks
+    .at(-1)
+    ?.displayParts.some((part) => part.kind === 'error' && errorPresentation(part).message.trim() === body)
 })
 
 function sessionErrorClassificationLabel(): string {
@@ -220,7 +156,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
     </template>
   </div>
 
-  <div v-else-if="messagesLoading" class="space-y-6 py-8 animate-pulse">
+  <div v-else-if="messagesLoading && !renderBlocks.length && !pendingInteraction" class="space-y-6 py-8 animate-pulse">
     <div v-for="index in 3" :key="index" class="space-y-2">
       <div class="ml-2 h-3 w-28 bg-muted/35" />
       <div class="ml-4 h-3 bg-muted/25" :class="index === 2 ? 'w-2/3' : 'w-5/6'" />
@@ -228,13 +164,14 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
     </div>
   </div>
 
-  <div v-else-if="messagesError" class="px-2">
+  <div v-else-if="messagesError && !renderBlocks.length && !pendingInteraction" class="px-2">
     <div class="transcript-content border-rose-500/60 py-2 text-sm text-rose-700 dark:text-rose-300">
       {{ messagesError }}
     </div>
   </div>
 
   <template v-else>
+    <p v-if="messagesError" role="alert" class="px-2 py-1 text-sm text-destructive">{{ messagesError }}</p>
     <div
       :key="selectedSessionId || 'none'"
       class="space-y-1 transition-opacity duration-150 ease-out"
@@ -272,85 +209,34 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
         />
       </template>
 
-      <!--
-        Pending requests are state-driven and can briefly exist before the
-        durable tool_call part reaches the transcript stream. Render the same
-        interaction component from that canonical attention state so a page
-        refresh is never required. Once the part arrives, request-id de-duping
-        above removes this temporary projection.
-      -->
-      <article
-        v-if="pendingInteractionFallback"
-        :key="`pending-interaction:${pendingInteractionFallback.requestId}`"
-        class="min-w-0 px-1 py-1"
-        data-transcript-node="part"
-        :data-transcript-key="pendingInteractionPart!.key"
-        data-part-kind="operation"
-        :data-interaction-request-id="pendingInteractionFallback.requestId"
-        tabindex="-1"
-        @pointerdown="$emit('nodeSelect', pendingInteractionPart!.key)"
-        @focus="$emit('nodeSelect', pendingInteractionPart!.key)"
-      >
-        <div class="min-w-0 rounded-md px-1">
-          <AgenaTranscriptPart
-            :part="pendingInteractionPart!"
-            :expanded="isPartExpanded(pendingInteractionPart!)"
-            :collapse-signal="activityCollapseSignal"
-            :session-id="selectedSessionId"
-            @toggle="forwardPartToggle(pendingInteractionPart!, !isPartExpanded(pendingInteractionPart!))"
-            @select="$emit('nodeSelect', pendingInteractionPart!.key)"
-          />
-        </div>
-      </article>
-
-      <article v-if="showAssistantPlaceholder" key="assistant-placeholder" class="px-1 py-1">
-        <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-          <span class="font-semibold text-emerald-700 dark:text-emerald-300">assistant</span>
-          <RiLoader4Line class="h-3.5 w-3.5 animate-spin text-primary" />
-        </header>
-        <div class="min-w-0 px-1">
-          <AgenaTranscriptPart
-            :part="assistantPlaceholderPart"
-            :expanded="true"
-            :collapse-signal="activityCollapseSignal"
-            :session-id="selectedSessionId"
-          />
-        </div>
-      </article>
+      <aside v-if="pendingInteraction" :key="pendingInteraction.requestId" class="px-2 py-1">
+        <AgenaInteractionPart
+          :session-id="selectedSessionId"
+          :interaction="pendingInteraction.interaction"
+          :permission="pendingInteraction.permission"
+        />
+      </aside>
+      <PartLoadingIndicator v-if="showRunLoading" role="status" class="min-h-8 px-2 py-1" />
     </div>
 
-    <article
-      v-if="retryPart"
-      class="mt-3 px-1 py-2"
-      data-transcript-node="part"
-      :data-transcript-key="retryPart.key"
-      data-part-kind="notice"
-    >
-      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-        <span class="font-semibold">system</span>
-      </header>
-      <div class="min-w-0 px-1 text-sm">
-        <AgenaTranscriptPart
-          :part="retryPart"
-          :expanded="true"
-          :collapse-signal="activityCollapseSignal"
-          :session-id="selectedSessionId"
-        />
+    <div v-if="retryStatus" role="status" class="mt-3 flex items-start gap-2 px-2 py-2 text-sm text-muted-foreground">
+      <RiLoader4Line class="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+      <div>
+        <div class="font-semibold">{{ t('chat.sessionWork.retry', { attempt: retryStatus.attempt || 0 }) }}</div>
+        <div v-if="retryBody">{{ retryBody }}</div>
       </div>
-    </article>
+    </div>
 
-    <article v-if="sessionError" class="mt-3 px-1 py-2">
+    <article v-if="showSessionError" class="mt-3 px-1 py-2">
       <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
         <span class="font-semibold text-rose-700 dark:text-rose-300">system</span>
         <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
       </header>
       <div class="min-w-0 px-1 text-sm text-rose-800 dark:text-rose-200">
-        <AgenaTranscriptPart
-          :part="sessionErrorPart!"
-          :expanded="true"
-          :collapse-signal="activityCollapseSignal"
-          :session-id="selectedSessionId"
-        />
+        <div role="alert" class="transcript-content border-rose-500/60">
+          <div class="font-semibold">{{ sessionErrorClassificationLabel() }}</div>
+          <div class="whitespace-pre-wrap break-words">{{ sessionErrorBody() }}</div>
+        </div>
         <div class="transcript-content mt-2 flex items-center gap-2 border-rose-500/60" data-transcript-chrome="true">
           <ToolbarChipButton
             :tooltip="t('chat.sessionError.actions.copyDetails')"

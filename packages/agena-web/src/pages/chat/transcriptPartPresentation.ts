@@ -669,28 +669,8 @@ export function permissionPresentationFromAttention(
 }
 
 /**
- * Durable `tool_call` content for an outstanding interaction attention.
- * The pending row is then projected by the same part render as the durable
- * part that replaces it (request-id dedup keeps them from doubling up).
- */
-export function pendingInteractionPartSource(
-  attention: AttentionPresentationSource | null | undefined,
-  durableRequestIds: ReadonlySet<string>,
-): { requestId: string; content: JsonRecord } | null {
-  if (!attention) return null
-  const requestId = attentionRequestId(attention.payload)
-  if (!requestId || durableRequestIds.has(requestId)) return null
-  const request = { ...attentionRequest(attention), request_id: requestId }
-  const entry = { request, reply: null, replied_at_ms: null }
-  if (attention.kind === 'question') return { requestId, content: { user_input: { requests: [entry] } } }
-  if (attention.kind === 'permission') return { requestId, content: { authorization: { permissions: [entry] } } }
-  return null
-}
-
-/**
- * Return the temporary transcript projection for a pending request. Durable
- * operation parts own the same request once they arrive; the id set prevents
- * the state-driven fallback from rendering a second copy during that handoff.
+ * Present a pending request from authoritative attention data when its owner
+ * is outside the loaded transcript. A loaded owner suppresses this panel.
  */
 export function pendingInteractionPresentationFromAttention(
   attention: AttentionPresentationSource | null | undefined,

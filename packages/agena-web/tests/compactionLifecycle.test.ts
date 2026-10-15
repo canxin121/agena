@@ -195,7 +195,7 @@ test('the real message list nests compaction beside the answer with identical pa
       copiedMessageId: '',
       revertBusyMessageId: '',
       isStreamingAssistantMessage: () => false,
-      showAssistantPlaceholder: false,
+      showRunLoading: false,
       sessionEnded: true,
       retryStatus: null,
       currentPhase: '',

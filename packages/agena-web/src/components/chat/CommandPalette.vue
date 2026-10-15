@@ -74,7 +74,7 @@ function setIndex(i: number) {
       />
     </div>
     <div class="max-h-64 overflow-auto px-2 py-2">
-      <div v-if="loading" class="flex items-center justify-center py-4 text-muted-foreground">
+      <div v-if="loading && !commands.length" class="flex items-center justify-center py-4 text-muted-foreground">
         <RiRefreshLine class="h-4 w-4 animate-spin" />
       </div>
       <div v-else-if="commands.length === 0" class="px-3 py-2 text-sm text-muted-foreground">

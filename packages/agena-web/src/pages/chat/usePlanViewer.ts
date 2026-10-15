@@ -86,10 +86,13 @@ export function usePlanViewer(
     error.value = ''
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
-      await invoke(sessionId, 'phase', { autorun: !autorun.value }, controller.signal)
+      const response = await invoke(sessionId, 'phase', { autorun: !autorun.value }, controller.signal)
       if (owner !== generation || controller.signal.aborted) return
+      snapshot.value = readPlanSnapshot(response)
+      markdown.value = snapshot.value ? planDocument(response) : ''
+      autorun.value = snapshot.value?.autorun ?? null
+      observed = undefined
       toggling.value = false
-      await refresh()
     } catch (reason) {
       if (owner === generation) error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {

@@ -122,6 +122,53 @@ function samePartSnapshot(cached: MessagePart, incoming: MessagePart): boolean {
   return true
 }
 
+/** A sparse transcript snapshot must retain detail sections already received. */
+export function mergePartSnapshot(cached: MessagePart, incoming: MessagePart): MessagePart {
+  const older = isOlderPart(incoming, cached)
+  const base = older ? cached : incoming
+  const supplement = older ? incoming : cached
+  let merged = base
+  if (base.agenaKind === 'tool_call' && supplement.agenaKind === 'tool_call') {
+    const content = base.agenaContent
+    const previous = supplement.agenaContent
+    if (
+      content &&
+      typeof content === 'object' &&
+      !Array.isArray(content) &&
+      previous &&
+      typeof previous === 'object' &&
+      !Array.isArray(previous)
+    ) {
+      const nextContent = { ...content }
+      const sections = new Map((base.agenaSections || []).map((loaded) => [loaded.section, loaded]))
+      let presentation = base.agenaPresentation
+      for (const loaded of supplement.agenaSections || []) {
+        if ((loaded.section === 'output' || loaded.section === 'metadata') && supplement.partState !== base.partState)
+          continue
+        const current = sections.get(loaded.section)
+        if (current && current.revision >= loaded.revision) continue
+        if (
+          !current &&
+          loaded.section !== 'presentation' &&
+          Object.prototype.hasOwnProperty.call(content, loaded.section)
+        )
+          continue
+        if (loaded.section === 'presentation') presentation = supplement.agenaPresentation
+        else if (Object.prototype.hasOwnProperty.call(previous, loaded.section))
+          nextContent[loaded.section] = previous[loaded.section]!
+        sections.set(loaded.section, loaded)
+      }
+      merged = {
+        ...base,
+        agenaContent: nextContent,
+        agenaSections: [...sections.values()],
+        agenaPresentation: presentation,
+      }
+    }
+  }
+  return samePartSnapshot(cached, merged) ? cached : merged
+}
+
 /**
  * Apply a live part snapshot to the cached object instead of replacing the
  * array element. Part objects key the transcript projection caches, so a
@@ -168,11 +215,11 @@ export function upsertPart(entry: MessageEntry, part: MessagePart, delta: string
     return
   }
   const base = typeof prev.text === 'string' ? String(prev.text) : ''
-  if (isOlderPart(part, prev)) return
   if (part.revision !== undefined && !delta) {
-    applyPartSnapshot(prev, part)
+    applyPartSnapshot(prev, mergePartSnapshot(prev, part))
     return
   }
+  if (isOlderPart(part, prev)) return
 
   // Prefer authoritative part snapshots when present, but fall back to delta when
   // the snapshot isn't advancing (some emitters stream delta-only).

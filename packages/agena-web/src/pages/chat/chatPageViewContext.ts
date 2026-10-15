@@ -108,7 +108,7 @@ export type ChatPageViewContext = {
   sessionEnded: MaybeRef<boolean>
   retryStatus: MaybeRef<RetryStatusLike>
   currentPhase: MaybeRef<string>
-  showAssistantPlaceholder: MaybeRef<boolean>
+  showRunLoading: MaybeRef<boolean>
 
   activityInitiallyExpandedForPart: (part: TranscriptDisplayPart) => boolean
   activityCollapseSignal: MaybeRef<number>

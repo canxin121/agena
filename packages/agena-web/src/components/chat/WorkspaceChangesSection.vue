@@ -83,9 +83,11 @@ watch(
       <p v-if="status.error.value" role="alert" class="text-xs text-destructive [overflow-wrap:anywhere]">
         {{ status.error.value }}
       </p>
-      <p v-else-if="!current" class="text-xs text-muted-foreground">{{ t('chat.sessionWork.loading') }}</p>
+      <p v-if="!current && !status.error.value" class="text-xs text-muted-foreground">
+        {{ t('chat.sessionWork.loading') }}
+      </p>
       <p v-else-if="total === 0" class="text-xs text-muted-foreground">{{ t('chat.sessionWork.clean') }}</p>
-      <template v-else>
+      <template v-else-if="current">
         <template v-if="!selected">
           <div class="flex flex-col items-stretch gap-0.5">
             <button
@@ -129,10 +131,10 @@ watch(
           <p v-if="diff.error.value" role="alert" class="text-xs text-destructive [overflow-wrap:anywhere]">
             {{ diff.error.value }}
           </p>
-          <p v-else-if="!detail" class="text-xs text-muted-foreground">
+          <p v-if="!detail && !diff.error.value" class="text-xs text-muted-foreground">
             {{ t(diffPending ? 'chat.sessionWork.loading' : 'chat.sessionWork.noDiff') }}
           </p>
-          <template v-else>
+          <template v-else-if="detail">
             <p v-if="detail.operation_history" class="mb-2 text-xs text-muted-foreground">
               {{ t('chat.sessionWork.operationHistory') }}
             </p>

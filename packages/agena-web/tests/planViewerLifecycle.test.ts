@@ -85,7 +85,7 @@ describe('plan viewer request ownership', () => {
     expect(f.state.markdown.value).toBe('')
   })
 
-  test('successful autorun mutation refreshes the same session exactly once', async () => {
+  test('successful autorun mutation immediately applies the returned plan', async () => {
     const f = fixture()
     f.calls[0]!.response.resolve(plan('first'))
     await settle()
@@ -96,10 +96,8 @@ describe('plan viewer request ownership', () => {
     expect(f.calls.map((c) => [c.sessionId, c.tool])).toEqual([
       ['1', 'get'],
       ['1', 'phase'],
-      ['1', 'get'],
     ])
-    f.calls[2]!.response.resolve(plan('updated', true))
-    await settle()
+    expect(f.state.markdown.value).toBe('toggled')
     expect(f.state.autorun.value).toBe(true)
     expect(f.state.loading.value).toBe(false)
     f.scope.stop()

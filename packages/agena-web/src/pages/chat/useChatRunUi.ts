@@ -340,7 +340,7 @@ export function useChatRunUi(opts: {
 
   const hasTailActivity = computed(() => {
     // If we already have visible activity rows at the end of the timeline, they are
-    // a better "working" indicator than a separate assistant placeholder bubble.
+    // a better "working" indicator than a separate loading indicator.
     const blocks = renderBlocks.value
     for (let i = blocks.length - 1; i >= 0; i -= 1) {
       const b = blocks[i]
@@ -350,7 +350,7 @@ export function useChatRunUi(opts: {
     return false
   })
 
-  const showAssistantPlaceholder = computed(() => {
+  const showRunLoading = computed(() => {
     if (!chat.selectedSessionId) return false
     if (chat.selectedAttention) return false
     // Retry already has a dedicated banner near the composer.
@@ -438,7 +438,7 @@ export function useChatRunUi(opts: {
     retryCountdownLabel,
     retryNextLabel,
     sessionUsage,
-    showAssistantPlaceholder,
+    showRunLoading,
     sessionEnded,
     aborting,
     canAbort,

@@ -10,8 +10,8 @@ import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
 import {
   binarySearchById,
   compareChatIds,
-  isNewerPart,
   isOlderPart,
+  mergePartSnapshot,
   upsertMessageEntryIn,
   upsertPart,
 } from './chat/messageIndex'
@@ -171,6 +171,25 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   const attentionBySession = ref<Record<string, AttentionEvent>>({})
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
+  const interactionDrafts = ref<
+    Record<
+      string,
+      Record<
+        string,
+        {
+          selected: string[][]
+          customDrafts: string[]
+          customOpen: boolean[]
+          questionPage: number
+          busy: boolean
+        }
+      >
+    >
+  >({})
+  function getInteractionDraft(sessionId: string, requestId: string) {
+    const drafts = (interactionDrafts.value[sessionId] ??= {})
+    return (drafts[requestId] ??= { selected: [], customDrafts: [], customOpen: [], questionPage: 0, busy: false })
+  }
   const sessionRunConfigBySession = ref<Record<string, SessionRunConfig>>({})
   const sessionUsageBySession = ref<Record<string, SessionUsage>>({})
   // Keep the server execution projection separate from the compact run
@@ -221,6 +240,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const transcriptObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
   const executionRecovery = new Set<string>()
   const executionObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
+  const executionWriteEpoch = new Map<string, number>()
   const sessionRecoveryResources = () =>
     [...visibleSessions.keys()].flatMap((sid) => [`session:${sid}:state`, `session:${sid}:parts`])
   const visibleSessions = new Map<string, number>()
@@ -610,10 +630,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const partMap = new Map<string, MessagePart>()
         for (const p of [...merged.parts, ...(m.parts || [])]) {
           const pid = String(p?.id ?? '')
-          // Only a strictly advancing snapshot replaces the cached part
-          // object. A revision/updatedAt tie keeps the identity the transcript
-          // already rendered instead of churning it on every refetch.
-          if (pid && (!partMap.has(pid) || isNewerPart(p, partMap.get(pid)!))) partMap.set(pid, p)
+          // Equal revisions may add a previously omitted detail section.
+          // Keep cached identities when the factual snapshot is unchanged.
+          if (pid) partMap.set(pid, partMap.has(pid) ? mergePartSnapshot(partMap.get(pid)!, p) : p)
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
         // A fold-free second message can be the result of a local expansion,
@@ -1078,6 +1097,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     transcriptCacheGeneration += 1
     transcriptObservations.clear()
     transcriptRecovery.clear()
+    executionWriteEpoch.clear()
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
     refreshMessagesFailuresBySession.clear()
@@ -1154,6 +1174,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const writeEpoch = executionWriteEpoch.get(sid) ?? 0
     const st = await chatApi.getSessionExecutionStatus(sid).catch((error) => {
       if (error instanceof ApiError && error.status === 404) {
         forgetSession(sid)
@@ -1163,11 +1184,37 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
     if (!st) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
+    if (writeEpoch !== (executionWriteEpoch.get(sid) ?? 0)) {
+      mergeExecutionParts(sid, st.parts)
+      scheduleSessionStatusRefresh(sid, 0)
+      return
+    }
     if (st.observation) executionObservations.set(sid, st.observation)
+    applyExecutionStatus(st, activityGeneration)
+  }
+
+  function mergeExecutionParts(sid: string, parts: chatApi.AgenaPart[] | undefined) {
+    if (!parts?.length) return
+    const current = ensureSessionMessages(sid)
+    const entries = chatApi.entriesFromParts(
+      sid,
+      parts,
+      [],
+      current.map((entry) => Number(entry.info.id)),
+    )
+    setSessionMessages(sid, mergeMessageLists(current, entries))
+  }
+
+  function applyExecutionStatus(st: chatApi.SessionExecutionStatus, activityGeneration?: number) {
+    const sid = st.session.id
+    // Shells may carry the real pending-operation parts. Merge them before
+    // attention so the request is rendered on its durable owner immediately.
+    mergeExecutionParts(sid, st.parts)
     if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
     upsertSessionCache(st.session)
     applyAttention(sid, st.state)
-    if (activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
+    if (activityGeneration === undefined || activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
+      backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
       backgroundActivityKindsBySession.value = {
         ...backgroundActivityKindsBySession.value,
         [sid]: [...st.backgroundActivityKinds],
@@ -1203,6 +1250,32 @@ const useChatStoreDefinition = defineStore('chat', () => {
         [sid]: { ...st.usage },
       }
     }
+  }
+
+  function applyExecutionResource(
+    state: chatApi.AgenaExecutionState | null,
+    generation: number,
+    activityGeneration?: number,
+  ): Session | null {
+    if (!state || generation !== transcriptCacheGeneration) return null
+    const session = chatApi.toSession(state.session)
+    if (!session || deletedSessions.has(session.id)) return null
+    executionWriteEpoch.set(session.id, (executionWriteEpoch.get(session.id) ?? 0) + 1)
+    executionObservations.delete(session.id)
+    const activities = state.background_activities || []
+    applyExecutionStatus(
+      {
+        session,
+        state: normalizeSessionState(session.state),
+        parts: state.parts || [],
+        execution: state.execution,
+        usage: state.usage,
+        backgroundActivities: activities,
+        backgroundActivityKinds: activities.map((activity) => activity.kind.toLowerCase()),
+      },
+      activityGeneration,
+    )
+    return getSessionById(session.id)
   }
 
   async function refreshExecutionStatus(sessionId: string) {
@@ -1336,9 +1409,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
       const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
-      if (requestId && presentedInteractiveRequestBySession.get(sid) !== requestId) {
+      if (next.kind === 'question' && requestId && presentedInteractiveRequestBySession.get(sid) !== requestId) {
         presentedInteractiveRequestBySession.set(sid, requestId)
-        void chatApi.presentInteractiveRequest(sid, requestId)
+        const generation = transcriptCacheGeneration
+        const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+        void chatApi.presentInteractiveRequest(sid, requestId).then((resource) => {
+          applyExecutionResource(resource, generation, activityGeneration)
+        })
       }
     } else {
       if (attentionBySession.value[sid]) {
@@ -1523,6 +1600,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     transcriptRecovery.delete(sid)
     executionRecovery.delete(sid)
     executionObservations.delete(sid)
+    executionWriteEpoch.delete(sid)
+    delete interactionDrafts.value[sid]
     backgroundActivityGeneration.delete(sid)
     for (const key of backgroundActivityTimes.keys()) if (key.startsWith(`${sid}:`)) backgroundActivityTimes.delete(key)
     useBtwStore().clear(sid)
@@ -1710,27 +1789,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const document = buildDocument(opts)
     if (document.length === 0) return null
     const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
     if (generation !== transcriptCacheGeneration || sessionWasDeleted(sid)) return state
-    // A successful send now includes committed user parts. Render those exact
-    // identities immediately; SSE and trailing reads merge into the same rows.
-    // Preserve newer live revisions and any older pages the user has loaded.
-    if (state?.parts?.length) {
-      const entries = chatApi.entriesFromParts(sid, state.parts)
-      setSessionMessages(sid, mergeMessageLists(ensureSessionMessages(sid), entries))
-    }
-    if (state?.session) {
-      const session = {
-        ...state.session,
-        id: String(state.session.id),
-        state: normalizeSessionState(state.session.state),
-      } as Session
-      if (Number(getSessionById(sid)?.version || 0) <= Number(session.version || 0)) {
-        upsertSessionCache(session)
-        applyAttention(sid, normalizeSessionState(session.state))
-      }
-    }
+    applyExecutionResource(state, generation, activityGeneration)
     // The acknowledgement is durable even if the SSE patch was lost.
     reconcileExecutionAfterWrite(sid)
     return state
@@ -1743,8 +1806,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function continueSession(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
-    await chatApi.continueSession(sid, buildRunOptions({}))
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const state = await chatApi.continueSession(sid, buildRunOptions({}))
+    if (!applyExecutionResource(state, generation, activityGeneration)) return
     reconcileExecutionAfterWrite(sid)
+  }
+
+  async function setSessionPermission(sessionId: string, permission: JsonValue) {
+    const sid = sessionId.trim()
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const state = await chatApi.setSessionPermission(sid, permission)
+    if (applyExecutionResource(state, generation, activityGeneration)) reconcileExecutionAfterWrite(sid)
+    return state
   }
 
   async function uploadWorkspaceAttachment(
@@ -1819,8 +1894,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function abortSession(sessionId: string): Promise<chatApi.CancellationOutcome | null> {
     const sid = (sessionId || '').trim()
     if (!sid) return null
+    const generation = transcriptCacheGeneration
     try {
       const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
+      if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return null
+      if (st) applyExecutionStatus(st)
       const executionId = sessionStateExecution(st?.state)?.execution_id
       let outcome: chatApi.CancellationOutcome
       if (!executionId) {
@@ -1828,7 +1906,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
         // There may be no execution in this short window even though the next
         // delivery would otherwise start one immediately.
         outcome = await chatApi.cancelSession(sid, null)
-        clearAttention(sid)
       } else {
         outcome = await chatApi.cancelSession(sid, executionId)
         // If the short-lived execution changed between the snapshot and the
@@ -1836,15 +1913,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
         // session. The session-scoped fallback also suppresses queued delivery
         // wakes that could otherwise create the next execution immediately.
         const after = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
+        if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return outcome
+        if (after) applyExecutionStatus(after)
         const afterExecutionId = sessionStateExecution(after?.state)?.execution_id
         if (outcome.result === 'execution_mismatch' || (afterExecutionId && afterExecutionId !== executionId)) {
           outcome = await chatApi.cancelSession(sid, null)
         }
       }
+      if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return outcome
       if (typeof outcome.restored_user_run_id === 'number') {
         removeMessageForRun(sid, outcome.restored_user_run_id)
       }
-      clearAttention(sid)
       reconcileExecutionAfterWrite(sid)
       return outcome
     } catch {
@@ -1860,19 +1939,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
     reply: 'once' | 'always' | 'reject' | 'reject_always',
     message?: string,
   ) {
-    const ok = await chatApi.replyPermission(sessionId, requestId, reply, message)
-    if (ok) {
-      clearAttention((sessionId || '').trim())
-      reconcileExecutionAfterWrite((sessionId || '').trim())
-    }
-    return ok
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
+    const state = await chatApi.replyPermission(sessionId, requestId, reply, message)
+    if (!applyExecutionResource(state, generation, activityGeneration)) return false
+    reconcileExecutionAfterWrite((sessionId || '').trim())
+    return true
   }
 
   async function replyQuestion(sessionId: string, requestId: string, answers: string[][]) {
-    const questions = ensureSessionMessages(sessionId)
-    void questions
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
     const answersMap: Record<string, string[]> = {}
     const state = await chatApi.getSessionExecution(sessionId).catch(() => null)
+    applyExecutionResource(state, generation, activityGeneration)
     const requests = sessionStateRequests(state?.session?.state) as JsonValue[]
     const request = (Array.isArray(requests) ? requests : []).find((r) => {
       const rec = asRecord(r)
@@ -1889,21 +1969,21 @@ const useChatStoreDefinition = defineStore('chat', () => {
         answersMap[String(index)] = Array.isArray(a) ? a : []
       })
     }
-    const ok = await chatApi.replyQuestion(sessionId, requestId, answersMap)
-    if (ok) {
-      clearAttention((sessionId || '').trim())
-      reconcileExecutionAfterWrite((sessionId || '').trim())
-    }
-    return ok
+    if (generation !== transcriptCacheGeneration || deletedSessions.has(sessionId)) return false
+    const replyActivityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
+    const updated = await chatApi.replyQuestion(sessionId, requestId, answersMap)
+    if (!applyExecutionResource(updated, generation, replyActivityGeneration)) return false
+    reconcileExecutionAfterWrite((sessionId || '').trim())
+    return true
   }
 
   async function rejectQuestion(sessionId: string, requestId: string) {
-    const ok = await chatApi.rejectQuestion(sessionId, requestId)
-    if (ok) {
-      clearAttention((sessionId || '').trim())
-      reconcileExecutionAfterWrite((sessionId || '').trim())
-    }
-    return ok
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
+    const state = await chatApi.rejectQuestion(sessionId, requestId)
+    if (!applyExecutionResource(state, generation, activityGeneration)) return false
+    reconcileExecutionAfterWrite((sessionId || '').trim())
+    return true
   }
 
   // ─── compact ──────────────────────────────────────────────────────────────
@@ -1911,7 +1991,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function compactSession(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return null
-    await chatApi.compactSession(sid, buildRunOptions({}))
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const state = await chatApi.compactSession(sid, buildRunOptions({}))
+    if (!applyExecutionResource(state, generation, activityGeneration)) return null
     reconcileExecutionAfterWrite(sid)
   }
 
@@ -1920,9 +2003,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function forkSession(sessionId: string, opts?: { at_message_id?: number; conversation_mode?: 'side' }) {
     const sid = (sessionId || '').trim()
     if (!sid) return null
-    const created = await chatApi.forkSession(sid, opts)
-    upsertSessionCache(created)
-    return created
+    const generation = transcriptCacheGeneration
+    const state = await chatApi.forkSession(sid, opts)
+    return applyExecutionResource(state, generation)
   }
 
   // ─── rewind (revert) ──────────────────────────────────────────────────────
@@ -1942,8 +2025,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
       throw new Error(i18n.global.t('chat.errors.rewindRequiresUserMessage'))
     }
 
-    const created = await chatApi.rewindSession(sid, atMessageId)
-    upsertSessionCache(created)
+    const generation = transcriptCacheGeneration
+    const state = await chatApi.rewindSession(sid, atMessageId)
+    const created = applyExecutionResource(state, generation)
+    if (!created) return null
     return { session: created, message: target }
   }
 
@@ -2057,10 +2142,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
               const adapterID = readString(content.adapter_id as JsonValue)
               const modelID = readString(content.model_id as JsonValue)
               const turnId = readString(content.turn_id as JsonValue)
+              const replyId = readString(content.reply_id as JsonValue)
               if (providerID) info.providerID = providerID
               if (adapterID) info.adapterID = adapterID
               if (modelID) info.modelID = modelID
               if (turnId) info.turnId = turnId
+              if (replyId) info.replyId = replyId
               const ordinalRaw = readNumber(part.user_message_ordinal)
               if (ordinalRaw != null && ordinalRaw > 0) info.userMessageOrdinal = Math.floor(ordinalRaw)
               upsertMessageEntryIn(list, info)
@@ -2267,6 +2354,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     sendText,
     sendMessage,
     continueSession,
+    setSessionPermission,
     uploadWorkspaceAttachment,
     resolveSessionWorkspace,
     compactSession,
@@ -2280,6 +2368,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionState,
     getSessionHistory,
     getSessionAttention,
+    getInteractionDraft,
     getSessionError,
     getSessionRunConfig,
     getSessionUsage,

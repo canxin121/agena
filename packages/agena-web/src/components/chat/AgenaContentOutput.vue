@@ -306,7 +306,7 @@ function connect() {
     gap.value = buffer.gap
     windowed.value = buffer.windowed
     error.value = frame.error
-    loading.value = !buffer.resource && !frame.error
+    loading.value = !buffer.resource && !buffer.chunks.length && !buffer.document && !frame.error
     needsReplay ||= frame.reset
     for (const { payload } of frame.appended) {
       if (payload.type === 'log') hasStderr.value ||= payload.stream === 'stderr'

@@ -584,7 +584,7 @@ describe('TUI-parity part presentation', () => {
     const messageListSource = readFileSync(new URL('../src/components/chat/MessageList.vue', import.meta.url), 'utf8')
     expect(chatPageViewSource).not.toContain('AttentionPanel')
     expect(messageListSource).not.toContain('AttentionPanel')
-    expect(messageListSource).toContain('pendingInteractionFallback')
+    expect(messageListSource).toContain('pendingInteractionPresentationFromAttention')
     expect(messageListSource).toContain('partInteractionRequestIds')
 
     const attachmentSource = readFileSync(

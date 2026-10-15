@@ -146,7 +146,7 @@ async function messageHarness(query = {}) {
   return { chat, drafts, draft, files, notices, navigations, actions, segments: () => segments }
 }
 
-test('fork and rewind parse the nested session in an execution response', async () => {
+test('fork and rewind retain the complete execution response', async () => {
   const requests: Array<{ path: string; body: unknown }> = []
   await withFetch(
     (async (url, init) => {
@@ -154,8 +154,8 @@ test('fork and rewind parse the nested session in an execution response', async 
       return response({ session: { id: 2, title: 'Branch', state: { kind: 'ready' }, parent_id: 1 }, parts: [] })
     }) as typeof fetch,
     async () => {
-      assert.equal((await forkSession('1', { at_message_id: 10 })).id, '2')
-      assert.equal((await rewindSession('1', 10)).id, '2')
+      assert.equal((await forkSession('1', { at_message_id: 10 })).session.id, 2)
+      assert.equal((await rewindSession('1', 10)).session.id, 2)
       assert.deepEqual(
         requests.map((request) => request.body),
         [{ at_message_id: 10 }, { at_message_id: 10 }],

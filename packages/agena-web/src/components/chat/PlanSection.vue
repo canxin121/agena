@@ -27,7 +27,7 @@ const hint = computed(() => {
     :label="label"
     :hint="hint"
     :open="open"
-    :busy="busy"
+    :busy="state.loading.value && !state.snapshot.value"
     @update:open="$emit('update:open', $event)"
   >
     <template #icon>
@@ -63,7 +63,7 @@ const hint = computed(() => {
       </p>
       <MarkdownRenderer v-if="state.markdown.value" :content="state.markdown.value" mode="markdown" :stream="false" />
       <p v-else class="text-sm text-muted-foreground">
-        {{ t(state.loading.value ? 'chat.planViewer.loading' : 'chat.planViewer.empty') }}
+        {{ t(state.loading.value && !state.snapshot.value ? 'chat.planViewer.loading' : 'chat.planViewer.empty') }}
       </p>
     </div>
   </SessionChip>

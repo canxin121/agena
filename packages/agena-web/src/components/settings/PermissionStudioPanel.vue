@@ -949,12 +949,15 @@ async function save() {
   error.value = ''
   saveError.value = ''
   try {
+    let savedPermission = snapshot
     if (source === 'session') {
-      await apiJson(`/api/v1/sessions/${sessionId}/permission`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ permission: snapshot }),
-      })
+      const response = await chat.setSessionPermission(String(sessionId), snapshot as JsonValue)
+      const execution = response.execution as SessionStateResponse['execution']
+      savedPermission = asConfig(
+        execution?.execution?.selected_permission ||
+          execution?.selected_permission ||
+          execution?.context?.selected_permission,
+      )
     } else if (!Object.keys(snapshot).length) {
       await deleteRuntimeSetting('permission', { reload: true }, source as 'global' | 'workspace')
     } else {
@@ -962,7 +965,8 @@ async function save() {
     }
     drafts.delete(key)
     if (key === contextKey.value) {
-      savedConfig.value = clone(snapshot)
+      savedConfig.value = clone(savedPermission)
+      config.value = clone(savedPermission)
       syncRaw()
     }
     toasts.push('success', st('{scope} updated', { scope: scopeLabel }))

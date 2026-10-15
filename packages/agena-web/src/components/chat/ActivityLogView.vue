@@ -26,10 +26,10 @@ const logs = useActivityLogs(key, () => props.activity)
     <p v-if="logs.error.value" role="alert" class="text-xs text-destructive">{{ logs.error.value }}</p>
     <pre
       class="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-xs"
-      :aria-busy="logs.loading.value"
+      :aria-busy="logs.loading.value && !logs.data.value"
       >{{
         activityLogText(logs.data.value) ||
-        t(logs.loading.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput')
+        t(logs.loading.value && !logs.data.value ? 'chat.sessionWork.loading' : 'chat.sessionWork.noOutput')
       }}</pre
     >
     <p v-if="logs.data.value?.dropped_lines" class="text-xs text-muted-foreground">

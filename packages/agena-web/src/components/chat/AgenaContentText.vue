@@ -53,7 +53,7 @@ function connect() {
     active.value = !frame.buffer.resource || frame.buffer.resource.state === 'active'
     gap.value = frame.buffer.gap
     error.value = frame.error
-    loading.value = !frame.buffer.resource && !frame.error
+    loading.value = !frame.buffer.resource && !frame.text && !frame.error
   })
 }
 if (pane)

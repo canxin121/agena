@@ -85,7 +85,7 @@ const {
   sessionEnded,
   retryStatus,
   currentPhase,
-  showAssistantPlaceholder,
+  showRunLoading,
 
   // Activity.
   activityCollapseSignal,
@@ -480,7 +480,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :copied-message-id="copiedMessageId"
                   :revert-busy-message-id="revertBusyMessageId"
                   :is-streaming-assistant-message="isStreamingAssistantMessage"
-                  :show-assistant-placeholder="showAssistantPlaceholder"
+                  :show-run-loading="showRunLoading"
                   :session-ended="sessionEnded"
                   :retry-status="retryStatus"
                   :retry-countdown="retryCountdownLabel"

@@ -27,17 +27,40 @@ const chat = useChatStore()
 const toasts = useToastsStore()
 const { t } = useI18n()
 
-const busy = ref(false)
-const selected = ref<string[][]>([])
-const customDrafts = ref<string[]>([])
-const customOpen = ref<boolean[]>([])
 const rootEl = ref<HTMLElement | null>(null)
 const activeControlKey = ref('')
-const questionPage = ref(0)
 
 const interaction = computed(() => props.interaction || null)
 const permission = computed(() => props.permission || null)
 const requestId = computed(() => interaction.value?.requestId || permission.value?.requestId || '')
+// Attention can precede the durable owner's page. Keep the user's work by
+// request identity when that owner arrives or the view remounts.
+const draft = computed(() => chat.getInteractionDraft(props.sessionId || '', requestId.value))
+const busy = computed(() => draft.value.busy)
+const selected = computed({
+  get: () => draft.value.selected,
+  set: (value) => {
+    draft.value.selected = value
+  },
+})
+const customDrafts = computed({
+  get: () => draft.value.customDrafts,
+  set: (value) => {
+    draft.value.customDrafts = value
+  },
+})
+const customOpen = computed({
+  get: () => draft.value.customOpen,
+  set: (value) => {
+    draft.value.customOpen = value
+  },
+})
+const questionPage = computed({
+  get: () => draft.value.questionPage,
+  set: (value) => {
+    draft.value.questionPage = value
+  },
+})
 const isPermission = computed(() => Boolean(permission.value))
 const isPendingPermission = computed(() => permission.value?.pending === true)
 const isReview = computed(() => (interaction.value?.kind || '').trim().toLowerCase() === 'review')
@@ -106,9 +129,11 @@ function hasExplicitCustomOption(label: string): boolean {
 
 function ensureSlots() {
   const count = questions.value.length
-  if (selected.value.length !== count) selected.value = questions.value.map(() => [])
-  if (customDrafts.value.length !== count) customDrafts.value = questions.value.map(() => '')
-  if (customOpen.value.length !== count) customOpen.value = questions.value.map(() => false)
+  if (selected.value.length !== count) selected.value = questions.value.map((_, index) => selected.value[index] || [])
+  if (customDrafts.value.length !== count)
+    customDrafts.value = questions.value.map((_, index) => customDrafts.value[index] || '')
+  if (customOpen.value.length !== count)
+    customOpen.value = questions.value.map((_, index) => customOpen.value[index] || false)
 }
 
 function syncReplyState() {
@@ -132,11 +157,8 @@ function syncReplyState() {
 watch(
   () => requestId.value,
   () => {
-    selected.value = []
-    customDrafts.value = []
-    customOpen.value = []
-    questionPage.value = 0
-    syncReplyState()
+    if (interaction.value?.pending) ensureSlots()
+    else syncReplyState()
   },
   { immediate: true },
 )
@@ -315,10 +337,11 @@ const canSubmit = computed(
 )
 
 async function replyPermission(reply: 'once' | 'always' | 'reject') {
-  if (!props.sessionId || !requestId.value) return
-  busy.value = true
+  if (!props.sessionId || !requestId.value || busy.value) return
+  const pendingDraft = draft.value
+  pendingDraft.busy = true
   try {
-    await chat.replyPermission(props.sessionId, requestId.value, reply)
+    if (!(await chat.replyPermission(props.sessionId, requestId.value, reply))) return
     toasts.push(
       'success',
       reply === 'reject' ? t('chat.attention.toasts.permissionRejected') : t('chat.attention.toasts.permissionGranted'),
@@ -326,7 +349,7 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
-    busy.value = false
+    pendingDraft.busy = false
   }
 }
 
@@ -342,27 +365,29 @@ async function submitAnswers() {
     goToQuestionPage(answers.findIndex((answer) => !answer.length))
     return
   }
-  busy.value = true
+  const pendingDraft = draft.value
+  pendingDraft.busy = true
   try {
-    await chat.replyQuestion(props.sessionId, requestId.value, answers)
+    if (!(await chat.replyQuestion(props.sessionId, requestId.value, answers))) return
     toasts.push('success', t('chat.attention.toasts.answerSent'))
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
-    busy.value = false
+    pendingDraft.busy = false
   }
 }
 
 async function rejectAnswers() {
   if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
-  busy.value = true
+  const pendingDraft = draft.value
+  pendingDraft.busy = true
   try {
-    await chat.rejectQuestion(props.sessionId, requestId.value)
+    if (!(await chat.rejectQuestion(props.sessionId, requestId.value))) return
     toasts.push('success', t('chat.attention.toasts.questionRejected'))
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
-    busy.value = false
+    pendingDraft.busy = false
   }
 }
 

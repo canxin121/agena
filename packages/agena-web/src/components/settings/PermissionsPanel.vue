@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -50,6 +50,8 @@ type PermissionRulePage = {
   }
 }
 
+const PERMISSION_RULE_BATCH_SIZE = 200
+
 const props = defineProps<{ scope: PermissionScope }>()
 const toasts = useToastsStore()
 const chat = useChatStore()
@@ -58,12 +60,15 @@ const directorySessions = useDirectorySessionStore()
 
 const rules = ref<PermissionRule[]>([])
 const hasMore = ref(false)
+const selectedIds = ref<Set<number>>(new Set())
 
 const createBusy = ref(false)
 const createError = ref('')
 const newToolName = ref('')
 const newQualifier = ref('')
 const newMode = ref<PermissionMode>('ask')
+const bulkMode = ref<PermissionMode>('ask')
+const bulkBusy = ref(false)
 const activeSessionId = computed(() => {
   const id = Number(chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
@@ -107,6 +112,17 @@ const sortedRules = computed(() =>
     })
     .filter((rule) => permissionRuleMatchesScope(rule, props.scope, activeWorkspaceId.value, activeSessionId.value)),
 )
+const selectableRules = computed(() => sortedRules.value.filter((rule) => canRemoveRule(rule)))
+const selectedRules = computed(() => selectableRules.value.filter((rule) => selectedIds.value.has(rule.id)))
+const selectedActiveRules = computed(() => selectedRules.value.filter((rule) => !rule.revoked_at))
+const allSelected = computed(
+  () => selectableRules.value.length > 0 && selectableRules.value.every((rule) => selectedIds.value.has(rule.id)),
+)
+
+watch(selectableRules, (available) => {
+  const allowed = new Set(available.map((rule) => rule.id))
+  selectedIds.value = new Set([...selectedIds.value].filter((id) => allowed.has(id)))
+})
 
 function canRemoveRule(rule: PermissionRule): boolean {
   return canEdit.value && permissionRuleMatchesScope(rule, props.scope, activeWorkspaceId.value, activeSessionId.value)
@@ -132,6 +148,73 @@ const { loading, error, refresh } = usePaneRead(
     hasMore.value = data?.page?.has_more === true
   },
 )
+
+function toggleRuleSelection(id: number, checked: boolean) {
+  const next = new Set(selectedIds.value)
+  if (checked) next.add(id)
+  else next.delete(id)
+  selectedIds.value = next
+}
+
+function toggleAllSelection() {
+  if (allSelected.value) {
+    selectedIds.value = new Set([...selectedIds.value].filter((id) => !selectableRules.value.some((rule) => rule.id === id)))
+  } else {
+    selectedIds.value = new Set([...selectedIds.value, ...selectableRules.value.map((rule) => rule.id)])
+  }
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+async function applyBulkOperation(action: 'delete' | 'set_mode') {
+  const targetRules = action === 'set_mode' ? selectedActiveRules.value : selectedRules.value
+  if (!targetRules.length || bulkBusy.value) return
+  const ruleIds = targetRules.map((rule) => rule.id)
+  const scope = props.scope
+  const sessionId = activeSessionId.value
+  const operation = action === 'delete' ? { action: 'delete' } : { action: 'set_mode', mode: bulkMode.value }
+  bulkBusy.value = true
+  try {
+    let affectedCount = 0
+    let missingCount = 0
+    for (let offset = 0; offset < ruleIds.length; offset += PERMISSION_RULE_BATCH_SIZE) {
+      const response = await apiJson<{ affected?: PermissionRule[]; missing_ids?: number[] }>(
+        '/api/v1/permission-rules/batch',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            rule_ids: ruleIds.slice(offset, offset + PERMISSION_RULE_BATCH_SIZE),
+            scope,
+            ...(scope === 'session' && sessionId ? { session_id: sessionId } : {}),
+            operation,
+          }),
+        },
+      )
+      affectedCount += Array.isArray(response?.affected) ? response.affected.length : 0
+      missingCount += Array.isArray(response?.missing_ids) ? response.missing_ids.length : 0
+    }
+    clearSelection()
+    if (missingCount) {
+      toasts.push('info', st('Some selected rules had changed and were skipped.'))
+    } else {
+      toasts.push(
+        'success',
+        action === 'delete'
+          ? st('{count} permission rules removed', { count: affectedCount })
+          : st('{count} permission rules updated', { count: affectedCount }),
+      )
+    }
+    await refresh()
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+    await refresh().catch(() => {})
+  } finally {
+    bulkBusy.value = false
+  }
+}
 
 async function createRule() {
   if (!canCreate.value) return
@@ -255,6 +338,58 @@ async function removeRule(id: number) {
     </div>
 
     <div class="grid gap-3">
+      <div
+        v-if="selectableRules.length"
+        class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+      >
+        <label class="flex items-center gap-2 text-xs font-medium">
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :aria-label="$st('Select all permission rules')"
+            @change="toggleAllSelection"
+          />
+          {{ $st('Select all') }} ({{ selectableRules.length }})
+        </label>
+        <span class="text-xs text-muted-foreground">{{ $st('{count} selected', { count: selectedRules.length }) }}</span>
+        <div class="ml-auto flex flex-wrap items-center gap-2">
+          <Button variant="ghost" size="sm" :disabled="!selectedRules.length || bulkBusy" @click="clearSelection">
+            {{ $st('Select none') }}
+          </Button>
+          <div class="w-36">
+            <OptionPicker
+              v-model="bulkMode"
+              :options="modeOptions"
+              :include-empty="false"
+              :title="$st('Set mode for selected rules')"
+              :disabled="!selectedActiveRules.length || bulkBusy"
+              size="sm"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="!selectedActiveRules.length || bulkBusy"
+            @click="applyBulkOperation('set_mode')"
+          >
+            {{ $st('Set mode ({count})', { count: selectedActiveRules.length }) }}
+          </Button>
+          <ConfirmPopover
+            :title="$st('Remove selected permission rules?')"
+            :description="$st('Remove {count} selected permission rules?', { count: selectedRules.length })"
+            :confirm-text="$st('Remove selected')"
+            :cancel-text="$st('Cancel')"
+            variant="destructive"
+            @confirm="applyBulkOperation('delete')"
+          >
+            <Button variant="destructive" size="sm" :disabled="!selectedRules.length || bulkBusy">
+              <RiDeleteBinLine class="mr-1.5 h-4 w-4" />
+              {{ $st('Remove selected ({count})', { count: selectedRules.length }) }}
+            </Button>
+          </ConfirmPopover>
+        </div>
+      </div>
+
       <div v-if="loading && rules.length === 0" class="text-sm text-muted-foreground">
         {{ $st('Loading permission rules...') }}
       </div>
@@ -275,7 +410,15 @@ async function removeRule(id: number) {
           class="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-background/50 px-3 py-2.5"
           :class="rule.revoked_at ? 'opacity-60' : ''"
         >
-          <div class="min-w-0">
+          <input
+            v-if="canRemoveRule(rule)"
+            type="checkbox"
+            class="shrink-0"
+            :checked="selectedIds.has(rule.id)"
+            :aria-label="$st('Select permission rule {id}', { id: rule.id })"
+            @change="toggleRuleSelection(rule.id, ($event.target as HTMLInputElement).checked)"
+          />
+          <div class="min-w-0 flex-1">
             <div class="break-words font-mono text-sm font-semibold">{{ ruleTitle(rule) }}</div>
             <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
               <span>#{{ rule.id }}</span>

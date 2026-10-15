@@ -42,6 +42,7 @@ export function useGitRepoSelection(opts: {
   const parentRepos = ref<string[]>([])
   const reposLoading = ref(false)
   const repoPickerLoading = ref(false)
+  const repoDiscoveryTruncated = ref(false)
   const reposError = ref<string | null>(null)
   const repoPickerPage = ref(1)
   const repoPickerPageSize = ref(30)
@@ -65,7 +66,7 @@ export function useGitRepoSelection(opts: {
 
   const beginLoadRepos = createLatestRequestGuard(() => projectRoot.value, repos)
 
-  async function loadRepos() {
+  async function loadRepos(refresh = false) {
     const dir = projectRoot.value
     if (!dir) return
     const isCurrent = beginLoadRepos()
@@ -73,9 +74,10 @@ export function useGitRepoSelection(opts: {
     reposLoading.value = true
     reposError.value = null
     try {
-      const resp = await gitJson<GitRepoListResponse>('repos', dir)
+      const resp = await gitJson<GitRepoListResponse>('repos', dir, { refresh: refresh || undefined })
       if (!isCurrent()) return
       const allRepos = Array.isArray(resp.repos) ? resp.repos : []
+      repoDiscoveryTruncated.value = resp.discoveryTruncated === true
       const closed = new Set(gitRepos.getClosedRelatives(dir).map((x) => (x || '').trim() || '.'))
       repos.value = allRepos.filter((r) => !closed.has((r.relative || '.').trim() || '.'))
       closedRepos.value = allRepos.filter((r) => closed.has((r.relative || '.').trim() || '.'))
@@ -110,6 +112,7 @@ export function useGitRepoSelection(opts: {
         repoPickerTotal.value = 0
         repoPickerTotalPages.value = 1
       }
+      repoDiscoveryTruncated.value = false
     } finally {
       if (isCurrent()) reposLoading.value = false
     }
@@ -117,7 +120,12 @@ export function useGitRepoSelection(opts: {
 
   const beginLoadRepoPickerPage = createLatestRequestGuard(() => projectRoot.value, repoPickerRepos)
 
-  async function loadRepoPickerPage(opts?: { page?: number; pageSize?: number; search?: string }) {
+  async function loadRepoPickerPage(opts?: {
+    page?: number
+    pageSize?: number
+    search?: string
+    refresh?: boolean
+  }) {
     const dir = projectRoot.value
     if (!dir) return
     const isCurrent = beginLoadRepoPickerPage()
@@ -134,9 +142,11 @@ export function useGitRepoSelection(opts: {
         page,
         pageSize,
         search: search || undefined,
+        refresh: opts?.refresh || undefined,
       })
       if (!isCurrent()) return
       const allRepos = Array.isArray(resp.repos) ? resp.repos : []
+      repoDiscoveryTruncated.value = resp.discoveryTruncated === true
       repoPickerRepos.value = allRepos
       parentRepos.value = Array.isArray(resp?.parentRepos)
         ? resp.parentRepos.map((x) => (x || '').trim()).filter(Boolean)
@@ -153,6 +163,7 @@ export function useGitRepoSelection(opts: {
       repoPickerPage.value = 1
       repoPickerTotal.value = 0
       repoPickerTotalPages.value = 1
+      repoDiscoveryTruncated.value = false
     } finally {
       if (isCurrent()) repoPickerLoading.value = false
     }
@@ -175,7 +186,7 @@ export function useGitRepoSelection(opts: {
         initRepoOpen.value = false
         initRepoDefaultBranch.value = ''
         toasts.push('success', i18n.global.t('git.toasts.initializedGitRepository'))
-        await loadRepos()
+        await loadRepos(true)
         await load()
       }
     } catch (err) {
@@ -214,7 +225,7 @@ export function useGitRepoSelection(opts: {
         cloneRepoRef.value = ''
         cloneRepoRecursive.value = false
         toasts.push('success', i18n.global.t('git.toasts.clonedRepository'))
-        await loadRepos()
+        await loadRepos(true)
         await load()
       }
     } catch (err) {
@@ -268,6 +279,7 @@ export function useGitRepoSelection(opts: {
     parentRepos,
     reposLoading,
     repoPickerLoading,
+    repoDiscoveryTruncated,
     reposError,
     repoPickerPage,
     repoPickerPageSize,

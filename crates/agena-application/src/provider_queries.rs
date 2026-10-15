@@ -196,6 +196,8 @@ pub fn list_configured_provider_models_response(
 }
 
 pub fn provider_model_resource_from_domain(value: Model) -> ProviderModelResource {
+    let mut thinking_modes = value.thinking_modes;
+    thinking_modes.sort_by(agena_domain::compare_thinking_mode_strength);
     ProviderModelResource {
         provider_id: value.provider_id.to_string(),
         adapter_id: value.adapter_id.map(|id| id.to_string()),
@@ -205,8 +207,7 @@ pub fn provider_model_resource_from_domain(value: Model) -> ProviderModelResourc
         native_compaction: value.native_compaction,
         capabilities: provider_model_capabilities_resource_from_domain(value.capabilities),
         metadata: provider_model_metadata_resource_from_domain(value.metadata),
-        thinking_modes: value
-            .thinking_modes
+        thinking_modes: thinking_modes
             .into_iter()
             .map(provider_model_thinking_mode_resource_from_domain)
             .collect(),

@@ -952,19 +952,14 @@ mod mode_request_override_tests {
     fn service_tier_override(tier: &str) -> ModelSpeedModeRequestOverride {
         ModelSpeedModeRequestOverride {
             headers: BTreeMap::new(),
-            body_patch: BTreeMap::from([(
-                "service_tier".to_owned(),
-                serde_json::json!(tier),
-            )]),
+            body_patch: BTreeMap::from([("service_tier".to_owned(), serde_json::json!(tier))]),
         }
     }
 
     #[test]
     fn vendor_shortcut_key_applies_to_every_openai_adapter() {
-        let adapter_overrides = BTreeMap::from([(
-            "openai".to_owned(),
-            service_tier_override("priority"),
-        )]);
+        let adapter_overrides =
+            BTreeMap::from([("openai".to_owned(), service_tier_override("priority"))]);
         for adapter in ["openai_responses", "openai_chat_completions"] {
             let adapter_id = AdapterId::new(adapter);
             let resolved = resolve_mode_request_override(
@@ -982,10 +977,8 @@ mod mode_request_override_tests {
 
     #[test]
     fn other_adapters_never_receive_the_openai_shortcut() {
-        let adapter_overrides = BTreeMap::from([(
-            "openai".to_owned(),
-            service_tier_override("priority"),
-        )]);
+        let adapter_overrides =
+            BTreeMap::from([("openai".to_owned(), service_tier_override("priority"))]);
         let adapter_id = AdapterId::new("anthropic");
         let resolved = resolve_mode_request_override(
             &ModelSpeedModeRequestOverride::default(),
@@ -999,10 +992,7 @@ mod mode_request_override_tests {
     fn a_concrete_adapter_key_wins_over_the_vendor_shortcut() {
         let adapter_overrides = BTreeMap::from([
             ("openai".to_owned(), service_tier_override("priority")),
-            (
-                "openai_responses".to_owned(),
-                service_tier_override("flex"),
-            ),
+            ("openai_responses".to_owned(), service_tier_override("flex")),
         ]);
         let adapter_id = AdapterId::new("openai_responses");
         let resolved = resolve_mode_request_override(

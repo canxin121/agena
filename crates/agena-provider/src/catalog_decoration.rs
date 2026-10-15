@@ -49,7 +49,9 @@ pub fn apply_catalog_definition_as_authority(
     mut model: Model,
 ) -> Model {
     let configured = catalog_definition_to_provider_definition(definition);
-    let catalog_capabilities = configured.capabilities.apply_to(ModelCapabilities::default());
+    let catalog_capabilities = configured
+        .capabilities
+        .apply_to(ModelCapabilities::default());
     let route_capabilities = model
         .capabilities
         .clone()
@@ -270,7 +272,9 @@ pub fn merge_catalog_baseline_thinking_modes(
         .as_deref()
         .or_else(|| baseline.default.mode());
     retain_mode_map_default(&mut modes, default);
-    modes.into_values().collect()
+    let mut modes = modes.into_values().collect::<Vec<_>>();
+    modes.sort_by(agena_domain::compare_thinking_mode_strength);
+    modes
 }
 
 pub fn merge_catalog_baseline_speed_modes(
@@ -391,7 +395,10 @@ mod tests {
             model,
         );
 
-        assert_eq!(decorated.metadata.limits.context_window_tokens, Some(1_050_000));
+        assert_eq!(
+            decorated.metadata.limits.context_window_tokens,
+            Some(1_050_000)
+        );
         assert_eq!(decorated.metadata.limits.max_output_tokens, Some(128_000));
         assert_eq!(decorated.display_name.as_deref(), Some("GPT-6.1 Sol"));
         assert_eq!(selectors(&decorated), ["max"]);
@@ -413,7 +420,10 @@ mod tests {
             model,
         );
 
-        assert_eq!(decorated.metadata.limits.context_window_tokens, Some(1_050_000));
+        assert_eq!(
+            decorated.metadata.limits.context_window_tokens,
+            Some(1_050_000)
+        );
         assert_eq!(decorated.metadata.limits.max_output_tokens, Some(64_000));
     }
 

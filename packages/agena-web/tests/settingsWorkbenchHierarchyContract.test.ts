@@ -28,17 +28,11 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
   for (const id of ['provider-studio', 'model-catalog', 'defaults', 'approval-model']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing models subpage ${id}`)
   }
-  for (const id of [
-    'plugin-workbench',
-    'plugin-settings',
-    'plugin-commands',
-    'plugin-tools',
-    'plugin-logs',
-    'plugin-diagnostics',
-    'marketplace',
-    'mcp-server',
-  ]) {
+  for (const id of ['plugin-workbench', 'marketplace', 'mcp-server']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing plugins subpage ${id}`)
+  }
+  for (const id of ['plugin-settings', 'plugin-commands', 'plugin-tools', 'plugin-logs', 'plugin-diagnostics']) {
+    assert.ok(!catalog.includes(`id: '${id}'`), `${id} belongs inside the selected plugin`)
   }
   for (const id of ['filesystem', 'network', 'tools']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing permission subpage ${id}`)
@@ -47,16 +41,18 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
   assert.ok(!catalog.includes("id: 'harnesses'"), 'tool harness settings are removed')
 })
 
-test('the section workbench renders only the selected content, not a second navigation', () => {
+test('the section workbench renders one scope selector beside the selected content', () => {
   const source = readFileSync(
     resolve(import.meta.dir, '../src/components/settings/workbench/SettingsSectionWorkbench.vue'),
     'utf8',
   )
-  assert.ok(!source.includes('<aside'), 'settings content must not render a second desktop navigation')
+  assert.ok(source.includes('<aside v-if="scopes.length"'), 'scoped settings pages expose their scope selector')
+  assert.equal((source.match(/<aside\b/g) || []).length, 1, 'scope selection is the only workbench aside')
   assert.ok(!source.includes('SearchInput'), 'section-local navigation search must be removed')
   assert.ok(!source.includes('OptionPicker'), 'compact layout must use the shared left navigation')
   assert.ok(source.includes('<slot :active-page="activePage"'))
-  assert.ok(!source.includes('useRouter'), 'content must not maintain a second route state')
+  assert.ok(source.includes('useRouter'), 'scope selection must remain shareable in the route')
+  assert.ok(source.includes("query: { ...route.query, scope }"), 'scope changes must preserve other route state')
   assert.ok(!source.includes('localStorage'), 'remembering the destination belongs to SettingsPage')
 })
 

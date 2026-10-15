@@ -2118,6 +2118,7 @@ export default {
           sections: {
             closedRepos: '已关闭的仓库',
             parentRepos: '父文件夹中的仓库',
+            discoveryLimited: '仓库扫描达到安全上限，可能遗漏部分嵌套仓库。',
           },
         },
 

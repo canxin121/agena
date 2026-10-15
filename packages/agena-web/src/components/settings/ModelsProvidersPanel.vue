@@ -9,8 +9,7 @@ const ApprovalSettingsPanel = defineAsyncComponent(() => import('@/components/se
 const ModelDefaultsPanel = defineAsyncComponent(() => import('@/components/settings/ModelDefaultsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
-// Model defaults and the approval model share one layer choice, which the left
-// navigation owns; the section only forwards the selected scope.
+// Model defaults and approval settings share the workbench's layer selector.
 defineProps<{ activePage: string; scope: string }>()
 </script>
 

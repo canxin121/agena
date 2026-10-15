@@ -106,15 +106,14 @@ const activeView = computed(() => {
     remembered = localStorage.getItem(settingsSubpageStorageKey(activeSection.value)) || ''
   } catch {}
   const requested =
-    activeSection.value === 'plugins-tools' && (route.query.view || route.query.pluginTab)
-      ? normalizePluginSettingsView(route.query.view || 'plugin-workbench', route.query.pluginTab)
+    activeSection.value === 'plugins-tools'
+      ? normalizePluginSettingsView(route.query.view || (route.query.pluginTab ? 'plugin-workbench' : remembered))
       : route.query.view
   return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
 })
 
-// The scope is the page's second dimension: every scoped page inside a section
-// resolves the same configuration layers, and the left navigation owns the
-// choice, so the content only reports which layer it is showing.
+// Every scoped page resolves the same configuration layers; its workbench owns
+// the visible selector while the route keeps the choice shareable.
 const activeScopes = computed(() => buildSettingsScopes(activeSection.value, activeView.value))
 const activeScope = computed(() => {
   let remembered = ''
@@ -149,11 +148,14 @@ watch(
     const { pluginTab: _legacyPluginTab, scope: _scope, ...query } = route.query
     if (activeScope.value) query.scope = activeScope.value
     const isPluginView = activeSection.value === 'plugins-tools' && pluginTabForSettingsView(activeView.value)
-    if (!isPluginView) delete query.plugin
+    if (isPluginView) {
+      const tab = pluginTabForSettingsView(route.query.view || activeView.value, route.query.pluginTab)
+      if (tab && tab !== 'overview') query.pluginTab = tab
+    } else delete query.plugin
     if (
       query.view === activeView.value &&
       query.scope === (activeScope.value || undefined) &&
-      route.query.pluginTab === undefined &&
+      route.query.pluginTab === query.pluginTab &&
       (isPluginView || route.query.plugin === undefined)
     )
       return
@@ -166,6 +168,7 @@ watch(
   { immediate: true },
 )
 const settingsRefreshNonce = ref(0)
+const pluginsToolsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 
 function goToSettingsDestination(destination: SettingsSidebarDestination) {
   const path = settingsPathForTab(destination.section)
@@ -198,10 +201,11 @@ const tabs = computed(() =>
 )
 
 async function refreshSettingsSidebar() {
-  // Remount the active server-backed workbench as well as refreshing the
-  // browser-only preference store. This gives the sidebar refresh control the
-  // same practical meaning as opening Settings again in the TUI.
-  settingsRefreshNonce.value += 1
+  // Plugins refresh in place so an unsaved configuration survives. Other
+  // server-backed workbenches remount, and browser preferences refresh below.
+  if (activeSection.value === 'plugins-tools' && activeView.value === 'plugin-workbench') {
+    await pluginsToolsPanel.value?.refresh()
+  } else settingsRefreshNonce.value += 1
   await settings.refresh()
   await transcriptPreferences.refresh()
 }
@@ -888,6 +892,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <!-- Plugins & Tools -->
           <PluginsToolsPanel
+            ref="pluginsToolsPanel"
             :active-page="activeView"
             v-else-if="activeSection === 'plugins-tools'"
             :key="`plugins-tools-${settingsRefreshNonce}`"

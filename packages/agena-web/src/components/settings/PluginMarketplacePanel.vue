@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue'
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RiDownloadCloud2Line, RiRefreshLine, RiSearchLine, RiUploadCloud2Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -42,6 +42,7 @@ type MarketplaceSearchResponse = {
     owner_url?: string | null
   }
   entries?: MarketplacePlugin[]
+  renames?: Record<string, string | null>
 }
 
 type InstalledPlugin = {
@@ -71,6 +72,8 @@ type BackgroundTaskStart = {
   task: BackgroundTask
 }
 
+const MAX_UPGRADE_BATCH_SIZE = 200
+
 const toasts = useToastsStore()
 const loading = ref(false)
 const actionKey = ref('')
@@ -83,6 +86,9 @@ const allowUnverified = ref(false)
 const searchResponse = ref<MarketplaceSearchResponse | null>(null)
 const installed = ref<InstalledPlugin[]>([])
 const outdated = ref<OutdatedPlugin[]>([])
+const selectedUpgradeIds = ref<Set<string>>(new Set())
+const responseQuery = ref('')
+const responseSource = ref('')
 const taskWaitController = new AbortController()
 let disposed = false
 onScopeDispose(() => {
@@ -90,9 +96,67 @@ onScopeDispose(() => {
   taskWaitController.abort()
 })
 
-const entries = computed(() => searchResponse.value?.entries || [])
+const responseMatchesInputs = computed(
+  () => responseQuery.value === query.value.trim() && responseSource.value === source.value.trim(),
+)
+const entries = computed(() => {
+  if (!responseMatchesInputs.value) return []
+  return [...(searchResponse.value?.entries || [])].sort((left, right) => {
+    if (left.featured !== right.featured) return left.featured ? -1 : 1
+    const tierRank = { official: 0, verified: 1, community: 2 }
+    const tierDifference =
+      (tierRank[left.review_tier as keyof typeof tierRank] ?? 3) -
+      (tierRank[right.review_tier as keyof typeof tierRank] ?? 3)
+    return tierDifference || left.plugin_id.localeCompare(right.plugin_id)
+  })
+})
+const matchingReleaseCount = computed(() => entries.value.reduce((sum, plugin) => sum + plugin.version_count, 0))
+const renamedQuery = computed(() => {
+  if (!responseMatchesInputs.value || entries.value.length > 0) return null
+  const normalizedQuery = query.value.trim().toLowerCase()
+  if (!normalizedQuery) return null
+  const rename = Object.entries(searchResponse.value?.renames || {}).find(
+    ([oldId]) => oldId.toLowerCase() === normalizedQuery,
+  )
+  return rename ? { oldId: rename[0], newId: rename[1] } : null
+})
 const installedById = computed(() => new Map(installed.value.map((entry) => [entry.plugin_id, entry])))
 const outdatedById = computed(() => new Map(outdated.value.map((entry) => [entry.plugin_id, entry])))
+const upgradeableInstalled = computed(() => installed.value.filter((entry) => outdatedById.value.has(entry.plugin_id)))
+const selectedUpgradeablePlugins = computed(() =>
+  upgradeableInstalled.value.filter((entry) => selectedUpgradeIds.value.has(entry.plugin_id)),
+)
+const allUpgradeableSelected = computed(
+  () =>
+    upgradeableInstalled.value.length > 0 &&
+    upgradeableInstalled.value.every((entry) => selectedUpgradeIds.value.has(entry.plugin_id)),
+)
+
+watch(upgradeableInstalled, (available) => {
+  const allowed = new Set(available.map((entry) => entry.plugin_id))
+  selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value].filter((pluginId) => allowed.has(pluginId)))
+})
+
+function toggleUpgradeSelection(pluginId: string, event: Event) {
+  const next = new Set(selectedUpgradeIds.value)
+  if ((event.target as HTMLInputElement).checked) next.add(pluginId)
+  else next.delete(pluginId)
+  selectedUpgradeIds.value = next
+}
+
+function toggleAllUpgrades() {
+  const ids = upgradeableInstalled.value.map((entry) => entry.plugin_id)
+  if (allUpgradeableSelected.value) {
+    const removing = new Set(ids)
+    selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value].filter((pluginId) => !removing.has(pluginId)))
+  } else {
+    selectedUpgradeIds.value = new Set([...selectedUpgradeIds.value, ...ids])
+  }
+}
+
+function clearUpgradeSelection() {
+  selectedUpgradeIds.value = new Set()
+}
 
 function marketplaceRegistryBody(): { registry_id?: string; registry_url?: string } {
   const value = source.value.trim()
@@ -121,56 +185,54 @@ async function waitForTask(start: BackgroundTaskStart): Promise<BackgroundTask> 
   }
 }
 
-async function runTask(key: string, request: Promise<BackgroundTaskStart>) {
-  if (actionKey.value) return
+async function runTask(key: string, request: () => Promise<BackgroundTaskStart>): Promise<boolean> {
+  if (actionKey.value) return false
   actionKey.value = key
   error.value = ''
   try {
-    const task = await waitForTask(await request)
-    if (disposed) return
+    const task = await waitForTask(await request())
+    if (disposed) return false
     if (task.status === 'succeeded') {
       toasts.push('success', task.message || st('Marketplace operation completed'))
     } else {
       throw new Error(taskFailure(task) || st('Marketplace operation failed'))
     }
-    await refreshInstalled()
-    await search(false)
+    await refresh(false)
+    return true
   } catch (reason) {
-    if (disposed) return
+    if (disposed) return false
     const message = reason instanceof Error ? reason.message : String(reason)
     error.value = message
     toasts.push('error', message)
+    return false
   } finally {
     actionKey.value = ''
   }
 }
 
-async function refreshInstalled() {
-  const [installedResponse, outdatedResponse] = await Promise.all([
-    apiJson<ItemEnvelope<InstalledPlugin>>('/api/v1/plugins/marketplace/installed'),
-    apiJson<ItemEnvelope<OutdatedPlugin>>('/api/v1/plugins/marketplace/outdated'),
-  ])
-  installed.value = [...(installedResponse.items || [])].sort((left, right) =>
-    left.plugin_id.localeCompare(right.plugin_id),
-  )
-  outdated.value = [...(outdatedResponse.items || [])].sort((left, right) =>
-    left.plugin_id.localeCompare(right.plugin_id),
-  )
+function searchRequest(refresh: boolean) {
+  return apiJson<MarketplaceSearchResponse>('/api/v1/plugins/marketplace/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...marketplaceRegistryBody(),
+      query: query.value.trim() || null,
+      refresh,
+    }),
+  })
+}
+
+function setSearchResponse(response: MarketplaceSearchResponse) {
+  searchResponse.value = response
+  responseQuery.value = query.value.trim()
+  responseSource.value = source.value.trim()
 }
 
 async function search(refresh = false) {
   loading.value = true
   error.value = ''
   try {
-    searchResponse.value = await apiJson<MarketplaceSearchResponse>('/api/v1/plugins/marketplace/search', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...marketplaceRegistryBody(),
-        query: query.value.trim() || null,
-        refresh,
-      }),
-    })
+    setSearchResponse(await searchRequest(refresh))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -181,7 +243,7 @@ async function search(refresh = false) {
 async function syncRegistry() {
   await runTask(
     'sync',
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/sync', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(marketplaceRegistryBody()),
@@ -194,7 +256,7 @@ async function installPlugin(spec: string, dryRun = false) {
   if (!trimmed) return
   await runTask(
     `${dryRun ? 'dry-run' : 'install'}:${trimmed}`,
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -212,7 +274,7 @@ async function installPlugin(spec: string, dryRun = false) {
 async function uninstallPlugin(pluginId: string) {
   await runTask(
     `uninstall:${pluginId}`,
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
+    () => apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/uninstall', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ plugin_id: pluginId, cascade: false }),
@@ -221,33 +283,87 @@ async function uninstallPlugin(pluginId: string) {
 }
 
 async function upgradePlugin(pluginId?: string) {
-  await runTask(
-    pluginId ? `upgrade:${pluginId}` : 'upgrade:all',
-    apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        plugin_id: pluginId || null,
-        all: !pluginId,
-        ...marketplaceRegistryBody(),
-      }),
-    }),
-  )
+  await upgradePlugins(pluginId ? [pluginId] : undefined)
 }
 
-async function refresh() {
-  loading.value = true
-  error.value = ''
-  try {
-    await Promise.all([refreshInstalled(), search(false)])
-  } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
-  } finally {
-    loading.value = false
+async function upgradePlugins(pluginIds?: string[]) {
+  const selectedIds = pluginIds ? [...new Set(pluginIds.map((id) => id.trim()).filter(Boolean))].sort() : null
+  if (selectedIds && !selectedIds.length) return
+  if (actionKey.value) return
+  const registryBody = marketplaceRegistryBody()
+  const batches: Array<string[] | null> = selectedIds
+    ? Array.from({ length: Math.ceil(selectedIds.length / MAX_UPGRADE_BATCH_SIZE) }, (_, index) =>
+        selectedIds.slice(index * MAX_UPGRADE_BATCH_SIZE, (index + 1) * MAX_UPGRADE_BATCH_SIZE),
+      )
+    : [null]
+
+  for (let index = 0; index < batches.length; index++) {
+    const batch = batches[index]
+    if (!batch) {
+      await runTask('upgrade:all', () =>
+        apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plugin_id: null, plugin_ids: [], all: true, ...registryBody }),
+        }),
+      )
+      return
+    }
+
+    const completed = await runTask(`upgrade:selected:${index + 1}`, () =>
+      apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/upgrade', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          plugin_id: batch.length === 1 ? batch[0] : null,
+          plugin_ids: batch.length > 1 ? batch : [],
+          all: false,
+          ...registryBody,
+        }),
+      }),
+    )
+    if (!completed) return
   }
 }
 
-onMounted(() => void refresh())
+function upgradeSelectedPlugins() {
+  return upgradePlugins(selectedUpgradeablePlugins.value.map((plugin) => plugin.plugin_id))
+}
+
+async function refresh(forceSearch = true) {
+  loading.value = true
+  error.value = ''
+  const [catalogResult, installedResult] = await Promise.allSettled([
+    searchRequest(forceSearch),
+    Promise.all([
+      apiJson<ItemEnvelope<InstalledPlugin>>('/api/v1/plugins/marketplace/installed'),
+      apiJson<ItemEnvelope<OutdatedPlugin>>('/api/v1/plugins/marketplace/outdated'),
+    ]),
+  ])
+  const failures: string[] = []
+  if (catalogResult.status === 'fulfilled') {
+    setSearchResponse(catalogResult.value)
+  } else {
+    failures.push(catalogResult.reason instanceof Error ? catalogResult.reason.message : String(catalogResult.reason))
+  }
+  if (installedResult.status === 'fulfilled') {
+    const [installedResponse, outdatedResponse] = installedResult.value
+    installed.value = [...(installedResponse.items || [])].sort((left, right) =>
+      left.plugin_id.localeCompare(right.plugin_id),
+    )
+    outdated.value = [...(outdatedResponse.items || [])].sort((left, right) =>
+      left.plugin_id.localeCompare(right.plugin_id),
+    )
+  } else {
+    failures.push(
+      installedResult.reason instanceof Error ? installedResult.reason.message : String(installedResult.reason),
+    )
+  }
+  error.value = failures.join(' · ')
+  loading.value = false
+}
+
+onMounted(() => void refresh(false))
 </script>
 
 <template>
@@ -267,9 +383,12 @@ onMounted(() => void refresh())
 
     <div
       v-if="error"
-      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
-      {{ error }}
+      <span class="min-w-0 flex-1">{{ error }}</span>
+      <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="refresh">
+        <RiRefreshLine class="mr-1.5 h-4 w-4" />{{ $st('Refresh marketplace') }}
+      </Button>
     </div>
 
     <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
@@ -310,6 +429,9 @@ onMounted(() => void refresh())
           {{ searchResponse.registry_url }}
         </span>
       </div>
+      <p class="text-[11px] leading-4 text-muted-foreground">
+        {{ $st('Trusted signing keys are read from plugins.host.trusted_keys in your Agena config.') }}
+      </p>
       <div
         v-if="searchResponse?.marketplace?.name"
         class="rounded-md border border-border/50 bg-background/70 px-3 py-2 text-xs"
@@ -366,8 +488,8 @@ onMounted(() => void refresh())
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 class="text-sm font-semibold">{{ $st('Marketplace catalog') }}</h3>
-          <p class="mt-0.5 text-xs text-muted-foreground">
-            {{ $st('{count} plugin releases match the current query.', { count: entries.length }) }}
+          <p v-if="responseMatchesInputs" class="mt-0.5 text-xs text-muted-foreground">
+            {{ $st('{count} plugin releases match the current query.', { count: matchingReleaseCount }) }}
           </p>
         </div>
       </div>
@@ -375,7 +497,19 @@ onMounted(() => void refresh())
         {{ $st('Loading marketplace plugins…') }}
       </div>
       <div
-        v-else-if="entries.length === 0"
+        v-else-if="entries.length === 0 && !error && responseMatchesInputs && renamedQuery"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 p-5"
+      >
+        <p v-if="renamedQuery.newId" class="text-sm text-muted-foreground">
+          {{ $st('This plugin was renamed to {pluginId}.', { pluginId: renamedQuery.newId }) }}
+        </p>
+        <p v-else class="text-sm text-muted-foreground">{{ $st('This plugin was removed from the marketplace.') }}</p>
+        <Button v-if="renamedQuery.newId" size="sm" @click="installPlugin(renamedQuery.newId)">
+          <RiDownloadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Install') }}
+        </Button>
+      </div>
+      <div
+        v-else-if="entries.length === 0 && !error && responseMatchesInputs"
         class="rounded-md border border-border/60 p-6 text-center text-sm text-muted-foreground"
       >
         {{ $st('No marketplace plugins match this query.') }}
@@ -492,6 +626,36 @@ onMounted(() => void refresh())
           {{ $st('Upgrade all outdated plugins') }}
         </Button>
       </div>
+      <div
+        v-if="upgradeableInstalled.length"
+        class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+      >
+        <label class="flex items-center gap-2 text-xs font-medium">
+          <input type="checkbox" :checked="allUpgradeableSelected" @change="toggleAllUpgrades" />
+          {{ $st('Select all') }} ({{ upgradeableInstalled.length }})
+        </label>
+        <span class="text-xs text-muted-foreground">{{
+          $st('{count} selected', { count: selectedUpgradeablePlugins.length })
+        }}</span>
+        <div class="ml-auto flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            :disabled="!selectedUpgradeablePlugins.length || Boolean(actionKey)"
+            @click="clearUpgradeSelection"
+          >
+            {{ $st('Select none') }}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            :disabled="!selectedUpgradeablePlugins.length || Boolean(actionKey)"
+            @click="upgradeSelectedPlugins"
+          >
+            {{ $st('Upgrade selected plugins ({count})', { count: selectedUpgradeablePlugins.length }) }}
+          </Button>
+        </div>
+      </div>
       <div v-if="installed.length === 0" class="text-sm text-muted-foreground">
         {{ $st('No marketplace plugins are installed.') }}
       </div>
@@ -499,8 +663,18 @@ onMounted(() => void refresh())
         <div
           v-for="plugin in installed"
           :key="plugin.plugin_id"
-          class="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+          class="grid gap-2 px-4 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
+          <label v-if="outdatedById.has(plugin.plugin_id)" class="flex items-start justify-center pt-1">
+            <input
+              type="checkbox"
+              :checked="selectedUpgradeIds.has(plugin.plugin_id)"
+              :disabled="Boolean(actionKey)"
+              @change="toggleUpgradeSelection(plugin.plugin_id, $event)"
+            />
+            <span class="sr-only">{{ plugin.plugin_id }}</span>
+          </label>
+          <span v-else class="w-4" />
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <span class="font-mono text-xs font-semibold">{{ plugin.plugin_id }}</span>

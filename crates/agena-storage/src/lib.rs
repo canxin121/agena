@@ -427,6 +427,14 @@ pub struct PermissionRuleListQuery {
     pub limit: u64,
 }
 
+/// Bounds a multi-rule mutation to one configuration layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionRuleBatchScope {
+    pub scope: PermissionScope,
+    pub workspace_id: Option<i64>,
+    pub session_id: Option<i64>,
+}
+
 #[derive(Debug, thiserror::Error)]
 /// Backend error from the permission rule repository.
 pub enum PermissionRuleRepositoryError {
@@ -481,6 +489,21 @@ pub trait PermissionRuleRepository: Send + Sync {
         &self,
         rule_id: i64,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError>;
+
+    /// Delete selected rules that still belong to the requested scope.
+    async fn delete_many(
+        &self,
+        rule_ids: &[i64],
+        scope: PermissionRuleBatchScope,
+    ) -> Result<Vec<PermissionRuleRecord>, PermissionRuleRepositoryError>;
+
+    /// Apply one decision to selected rules that still belong to the requested scope.
+    async fn set_mode_many(
+        &self,
+        rule_ids: &[i64],
+        mode: PermissionMode,
+        scope: PermissionRuleBatchScope,
+    ) -> Result<Vec<PermissionRuleRecord>, PermissionRuleRepositoryError>;
 
     async fn resolve(
         &self,

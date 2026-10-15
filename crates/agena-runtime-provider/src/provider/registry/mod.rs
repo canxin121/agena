@@ -112,6 +112,9 @@ fn hydrate_model_from_provider(
     if model.thinking_modes.is_empty() {
         model.thinking_modes = thinking_modes;
     }
+    model
+        .thinking_modes
+        .sort_by(agena_domain::compare_thinking_mode_strength);
     if model.speed_modes.is_empty() {
         model.speed_modes = speed_modes;
     }

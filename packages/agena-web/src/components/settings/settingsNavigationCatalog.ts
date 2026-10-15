@@ -1,6 +1,5 @@
 import type { SettingsSidebarNavigationNode, SettingsTab } from './sidebar/settingsSidebarNavigation'
 import type { SettingsSubpageDefinition } from './workbench/settingsSectionNavigation'
-import { buildSettingsScopes } from './settingsScopeCatalog'
 import { settingsText as st } from '../../i18n/settingsText'
 
 type SettingsSubpageSource = Omit<SettingsSubpageDefinition, 'label' | 'description'> & {
@@ -60,47 +59,28 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   'plugins-tools': [
     {
+      id: 'plugin-workbench',
+      label: () => st('Installed plugins'),
+      description: () => st('Select a plugin to manage its settings, tools, commands, and activity.'),
+      keywords: [
+        'plugins',
+        'installed',
+        'schema',
+        'config',
+        'settings',
+        'tools',
+        'commands',
+        'operations',
+        'logs',
+        'diagnostics',
+      ],
+      fillsViewport: true,
+    },
+    {
       id: 'marketplace',
       label: () => st('Plugin Marketplace'),
       description: () => st('Discover, verify, install, upgrade, and remove GitHub-hosted Agena plugins.'),
       keywords: ['marketplace', 'github', 'install', 'upgrade', 'release', 'plugins'],
-    },
-    {
-      id: 'plugin-workbench',
-      label: () => st('Plugin overview'),
-      description: () =>
-        st('Configure plugins, run tools and operations, and inspect capabilities, logs, and diagnostics.'),
-      keywords: ['plugins', 'schema', 'config', 'tools', 'operations', 'logs'],
-    },
-    {
-      id: 'plugin-settings',
-      label: () => st('Plugin settings'),
-      description: () => st('Edit the selected plugin’s configuration.'),
-      keywords: ['plugin', 'configuration', 'schema', 'settings'],
-    },
-    {
-      id: 'plugin-commands',
-      label: () => st('Plugin commands'),
-      description: () => st('Run commands contributed by the selected plugin.'),
-      keywords: ['plugin', 'command', 'operation', 'invoke'],
-    },
-    {
-      id: 'plugin-tools',
-      label: () => st('Plugin tools'),
-      description: () => st('Inspect tools contributed by the selected plugin.'),
-      keywords: ['plugin', 'tool', 'registry', 'capability'],
-    },
-    {
-      id: 'plugin-logs',
-      label: () => st('Plugin logs'),
-      description: () => st('Read logs from the selected plugin.'),
-      keywords: ['plugin', 'log', 'trace'],
-    },
-    {
-      id: 'plugin-diagnostics',
-      label: () => st('Plugin diagnostics'),
-      description: () => st('Inspect the selected plugin’s lifecycle and diagnostics.'),
-      keywords: ['plugin', 'diagnostic', 'lifecycle', 'reload'],
     },
     {
       id: 'mcp-server',
@@ -200,28 +180,15 @@ export function buildSettingsSubpages(section: SettingsTab): SettingsSubpageDefi
   }))
 }
 
-/**
- * The same catalog feeds the left navigation: each page becomes a row and, when
- * the page resolves configuration layers, one child row per layer. Content and
- * navigation therefore always describe the same destinations.
- */
+/** The settings sidebar has two levels; scope selection lives in the page workbench. */
 export function buildSettingsSidebarNodes(section: SettingsTab): SettingsSidebarNavigationNode[] {
   return buildSettingsSubpages(section).map((page) => {
-    const scopes = buildSettingsScopes(section, page.id)
     return {
       id: page.id,
       label: page.label,
       description: page.description,
       keywords: page.keywords,
-      children: scopes.length
-        ? scopes.map((scope) => ({
-            id: scope.id,
-            label: scope.label,
-            description: scope.description,
-            view: page.id,
-            scope: scope.id,
-          }))
-        : undefined,
+      view: page.id,
     }
   })
 }

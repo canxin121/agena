@@ -42,8 +42,7 @@ const DEFAULT_SELECTION_PATH = 'providers.default_selection'
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
 
-// The layer choice lives in the left navigation, so the panel follows the
-// forwarded scope instead of holding its own picker state.
+// The workbench owns layer selection; the editor follows its route-backed value.
 const props = defineProps<{ scope: string }>()
 
 function normalizeModelDefaultScope(value: unknown): ModelDefaultScope {

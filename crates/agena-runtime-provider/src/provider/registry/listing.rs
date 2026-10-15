@@ -48,9 +48,11 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<Vec<ModelThinkingMode>, ProviderError> {
-        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
+        let mut modes = self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_thinking_modes_for_adapter(adapter_id, model_id)
-        })
+        })?;
+        modes.sort_by(agena_domain::compare_thinking_mode_strength);
+        Ok(modes)
     }
 
     pub fn model_speed_modes(

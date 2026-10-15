@@ -1,10 +1,13 @@
+use std::hash::{Hash, Hasher};
+
 static MARKETPLACE_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
 static MARKETPLACE_MUTATIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 pub async fn search_marketplace_plugins(
-    State(_): State<AppState>,
+    State(state): State<AppState>,
     Json(request): Json<MarketplaceSearchRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.config_path().map_err(ServerError::from)?;
     MARKETPLACE_READS
         .run(move || {
             let registry_spec = marketplace_registry_spec(
@@ -15,7 +18,7 @@ pub async fn search_marketplace_plugins(
             let registry_id = registry_spec.id.clone();
             let registry_url = registry_spec.url.clone();
 
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path).map_err(ServerError::internal)?;
             let registry = client.registry(registry_spec);
             let index = registry
                 .fetch_index(request.refresh)
@@ -43,6 +46,8 @@ pub async fn search_marketplace_plugins(
                     .as_ref()
                     .and_then(|owner| owner.url.clone()),
             };
+            let renames = index.renames.clone();
+            let target = agena_plugin_marketplace::current_target_triple();
             let mut entries = index
                 .plugins
                 .into_iter()
@@ -63,16 +68,26 @@ pub async fn search_marketplace_plugins(
                     blob.contains(&needle)
                 })
                 .map(|plugin| {
-                    let latest = plugin.versions.iter().max_by(|left, right| {
-                        let left_semver = semver::Version::parse(&left.version).ok();
-                        let right_semver = semver::Version::parse(&right.version).ok();
-                        match (left_semver, right_semver) {
-                            (Some(left_version), Some(right_version)) => {
-                                left_version.cmp(&right_version)
+                    let version_count = plugin
+                        .versions
+                        .iter()
+                        .map(|version| version.version.as_str())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len();
+                    let latest = plugin
+                        .versions
+                        .iter()
+                        .filter(|version| version.platform == target || version.platform == "any")
+                        .max_by(|left, right| {
+                            let left_semver = semver::Version::parse(&left.version).ok();
+                            let right_semver = semver::Version::parse(&right.version).ok();
+                            match (left_semver, right_semver) {
+                                (Some(left_version), Some(right_version)) => {
+                                    left_version.cmp(&right_version)
+                                }
+                                _ => left.version.cmp(&right.version),
                             }
-                            _ => left.version.cmp(&right.version),
-                        }
-                    });
+                        });
                     MarketplacePluginResource {
                         plugin_id: plugin.id,
                         name: plugin.name,
@@ -82,7 +97,7 @@ pub async fn search_marketplace_plugins(
                         license: plugin.license,
                         category: plugin.category,
                         tags: plugin.tags,
-                        version_count: plugin.versions.len(),
+                        version_count,
                         latest_version: latest.map(|version| version.version.clone()),
                         latest_kind: latest.map(|version| version.kind.to_string()),
                         latest_platform: latest.map(|version| version.platform.clone()),
@@ -107,6 +122,7 @@ pub async fn search_marketplace_plugins(
                 registry_url,
                 marketplace,
                 entries,
+                renames,
             }))
         })
         .await
@@ -124,6 +140,7 @@ pub async fn sync_marketplace_registry(
     )?;
     let registry_id = registry_spec.id.clone();
     let registry_url = registry_spec.url.clone();
+    let config_path = state.config_path().map_err(ServerError::from)?;
 
     spawn_marketplace_background_task(
         &state,
@@ -134,7 +151,7 @@ pub async fn sync_marketplace_registry(
         )),
         "sync marketplace registry task failed",
         move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path)?;
             let registry = client.registry(registry_spec);
             let index = registry.fetch_index(true)?;
             Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
@@ -149,11 +166,12 @@ pub async fn sync_marketplace_registry(
 }
 
 pub async fn list_marketplace_installed_plugins(
-    State(_): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.config_path().map_err(ServerError::from)?;
     MARKETPLACE_READS
         .run(move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path).map_err(ServerError::internal)?;
             let mut entries = client
                 .list_installed()
                 .map_err(ServerError::internal)?
@@ -182,11 +200,12 @@ pub async fn list_marketplace_installed_plugins(
 }
 
 pub async fn list_marketplace_outdated_plugins(
-    State(_): State<AppState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let config_path = state.config_path().map_err(ServerError::from)?;
     MARKETPLACE_READS
         .run(move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path).map_err(ServerError::internal)?;
             let entries = client
                 .list_outdated()
                 .map_err(ServerError::internal)?
@@ -274,7 +293,7 @@ pub async fn install_marketplace_plugin(
         Some(dedupe_key),
         "install marketplace plugin task failed",
         move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path)?;
             let (registry, plugin_id, version, install_refresh) = match plan {
                 MarketplaceInstallPlan::Marketplace {
                     registry,
@@ -324,6 +343,7 @@ pub async fn uninstall_marketplace_plugin(
         return Err(ServerError::bad_request("The plugin ID cannot be empty."));
     }
     let cascade = request.cascade;
+    let config_path = state.config_path().map_err(ServerError::from)?;
     let title = format!("Uninstall marketplace plugin {plugin_id}");
     let dedupe_key = format!("marketplace_plugin_uninstall:{plugin_id}:{cascade}");
     spawn_marketplace_background_task(
@@ -333,7 +353,7 @@ pub async fn uninstall_marketplace_plugin(
         Some(dedupe_key),
         "uninstall marketplace plugin task failed",
         move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path)?;
             let entries = client.uninstall_with(plugin_id.as_str(), cascade)?;
             let message = format!(
                 "Uninstalled {}.",
@@ -355,9 +375,37 @@ pub async fn upgrade_marketplace_plugins(
     State(state): State<AppState>,
     Json(request): Json<MarketplaceUpgradeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if !request.all && request.plugin_id.as_deref().unwrap_or("").trim().is_empty() {
+    let single_plugin_id = request
+        .plugin_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let has_single_plugin = !single_plugin_id.is_empty();
+    let mut plugin_ids = request
+        .plugin_ids
+        .into_iter()
+        .map(|plugin_id| plugin_id.trim().to_string())
+        .filter(|plugin_id| !plugin_id.is_empty())
+        .collect::<Vec<_>>();
+    plugin_ids.sort();
+    plugin_ids.dedup();
+
+    if (request.all && (has_single_plugin || !plugin_ids.is_empty()))
+        || (has_single_plugin && !plugin_ids.is_empty())
+    {
         return Err(ServerError::bad_request(
-            "A plugin ID is required unless all plugins are selected.",
+            "Choose all plugins, one plugin ID, or a list of plugin IDs.",
+        ));
+    }
+    if plugin_ids.len() > 200 {
+        return Err(ServerError::bad_request(
+            "select no more than 200 marketplace plugins to upgrade",
+        ));
+    }
+    if !request.all && !has_single_plugin && plugin_ids.is_empty() {
+        return Err(ServerError::bad_request(
+            "A plugin ID or plugin ID list is required unless all plugins are selected.",
         ));
     }
     let override_spec = match request.registry.registry_url.as_deref() {
@@ -368,21 +416,27 @@ pub async fn upgrade_marketplace_plugins(
         )?),
         None => None,
     };
-    let plugin_id = request
-        .plugin_id
-        .clone()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let selected_ids = if has_single_plugin {
+        vec![single_plugin_id]
+    } else {
+        plugin_ids
+    };
+    let config_path = state.config_path().map_err(ServerError::from)?;
     let title = if request.all {
         "Upgrade marketplace plugins".to_owned()
+    } else if selected_ids.len() > 1 {
+        format!("Upgrade {} marketplace plugins", selected_ids.len())
     } else {
-        format!("Upgrade marketplace plugin {plugin_id}")
+        format!("Upgrade marketplace plugin {}", selected_ids[0])
     };
     let dedupe_key = if request.all {
         "marketplace_plugin_upgrade:all".to_owned()
+    } else if selected_ids.len() > 1 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        selected_ids.hash(&mut hasher);
+        format!("marketplace_plugin_upgrade:batch:{:016x}", hasher.finish())
     } else {
-        format!("marketplace_plugin_upgrade:{plugin_id}")
+        format!("marketplace_plugin_upgrade:{}", selected_ids[0])
     };
     let all = request.all;
     spawn_marketplace_background_task(
@@ -392,7 +446,7 @@ pub async fn upgrade_marketplace_plugins(
         Some(dedupe_key),
         "upgrade marketplace plugin task failed",
         move || {
-            let client = marketplace_client();
+            let client = marketplace_client(&config_path)?;
             let targets = if all {
                 client
                     .list_installed()?
@@ -400,7 +454,7 @@ pub async fn upgrade_marketplace_plugins(
                     .map(|record| record.plugin_id)
                     .collect::<Vec<_>>()
             } else {
-                vec![plugin_id.clone()]
+                selected_ids.clone()
             };
 
             let mut upgraded = Vec::new();
@@ -497,14 +551,19 @@ fn single_release_plugin_id(
     }
 }
 
-fn marketplace_client()
--> agena_plugin_marketplace::MarketplaceClient<agena_plugin_marketplace::ReqwestFetcher> {
-    agena_plugin_marketplace::MarketplaceClient::new(
+fn marketplace_client(
+    config_path: &std::path::Path,
+) -> Result<
+    agena_plugin_marketplace::MarketplaceClient<agena_plugin_marketplace::ReqwestFetcher>,
+    agena_plugin_marketplace::MarketplaceError,
+> {
+    let trusted_keys = agena_plugin_marketplace::trusted_keys_from_config(config_path)?;
+    Ok(agena_plugin_marketplace::MarketplaceClient::new(
         agena_plugin_marketplace::MarketplaceCache::new(
             agena_plugin_marketplace::default_cache_root(),
         ),
-        std::collections::BTreeMap::new(),
-    )
+        trusted_keys,
+    ))
 }
 
 async fn spawn_marketplace_background_task<F>(

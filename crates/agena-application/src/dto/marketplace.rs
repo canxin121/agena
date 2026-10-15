@@ -54,6 +54,7 @@ pub struct MarketplaceSearchResponse {
     pub registry_url: String,
     pub marketplace: MarketplaceIdentityResource,
     pub entries: Vec<MarketplacePluginResource>,
+    pub renames: std::collections::BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,6 +171,8 @@ pub struct MarketplaceUninstallOutcomeResource {
 pub struct MarketplaceUpgradeRequest {
     #[serde(default)]
     pub plugin_id: Option<String>,
+    #[serde(default)]
+    pub plugin_ids: Vec<String>,
     #[serde(default)]
     pub all: bool,
     #[serde(flatten)]

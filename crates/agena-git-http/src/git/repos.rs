@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -12,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 static REPO_DISCOVERY_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-const MAX_REPO_DISCOVERY_ENTRIES: usize = 100_000;
-const MAX_REPO_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
+const MAX_REPO_DISCOVERY_ENTRIES: usize = 1_000_000;
+const REPO_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(30);
+const MAX_REPO_DISCOVERY_CACHE_ENTRIES: usize = 64;
 
 use super::{
     DirectoryQuery, git_command_result_or_log, git_command_transport_error_response,
@@ -29,6 +31,7 @@ pub struct GitReposQuery {
     pub page: Option<usize>,
     pub page_size: Option<usize>,
     pub search: Option<String>,
+    pub refresh: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +86,37 @@ pub struct GitRepoInfo {
     pub kind: String,
 }
 
+#[derive(Clone)]
+struct RepoDiscoveryResult {
+    repos: Vec<GitRepoInfo>,
+    parent_repos: Vec<String>,
+    truncated: bool,
+    discovered_at: Instant,
+}
+
+type RepoDiscoveryEntry = Arc<tokio::sync::Mutex<Option<RepoDiscoveryResult>>>;
+
+fn repo_discovery_entry(base: &Path) -> RepoDiscoveryEntry {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, RepoDiscoveryEntry>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Mutex::default);
+    let mut entries = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(entry) = entries.get(base) {
+        return entry.clone();
+    }
+    if entries.len() >= MAX_REPO_DISCOVERY_CACHE_ENTRIES {
+        if let Some(oldest_unused) = entries
+            .iter()
+            .find(|(_, entry)| Arc::strong_count(entry) == 1)
+            .map(|(path, _)| path.clone())
+        {
+            entries.remove(&oldest_unused);
+        }
+    }
+    let entry = Arc::new(tokio::sync::Mutex::new(None));
+    entries.insert(base.to_path_buf(), entry.clone());
+    entry
+}
+
 async fn discover_parent_repos(base: &Path) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -112,22 +146,15 @@ async fn discover_parent_repos(base: &Path) -> Vec<String> {
     out
 }
 
-fn discover_nested_repos(base: &Path) -> (HashSet<PathBuf>, bool) {
-    let max_depth = 8usize;
-    let started_at = Instant::now();
+fn discover_nested_repos(base: &Path) -> (Vec<GitRepoInfo>, bool) {
     let mut roots = HashSet::new();
     let mut truncated = false;
     let mut entries = 0_usize;
-    let mut it = WalkDir::new(base)
-        .follow_links(false)
-        .max_depth(max_depth)
-        .into_iter();
+    let mut it = WalkDir::new(base).follow_links(false).into_iter();
 
     while let Some(next) = it.next() {
         entries = entries.saturating_add(1);
-        if entries > MAX_REPO_DISCOVERY_ENTRIES
-            || started_at.elapsed() >= MAX_REPO_DISCOVERY_DURATION
-        {
+        if entries > MAX_REPO_DISCOVERY_ENTRIES {
             truncated = true;
             break;
         }
@@ -172,7 +199,42 @@ fn discover_nested_repos(base: &Path) -> (HashSet<PathBuf>, bool) {
             roots.insert(parent.to_path_buf());
         }
     }
-    (roots, truncated)
+    let mut repos: Vec<GitRepoInfo> = roots
+        .into_iter()
+        .map(|root| {
+            let git_path = root.join(".git");
+            let kind = match std::fs::metadata(&git_path) {
+                Ok(metadata) if metadata.is_file() => "worktree".to_owned(),
+                Ok(metadata) if metadata.is_dir() => "dir".to_owned(),
+                Ok(_) => "unknown".to_owned(),
+                Err(error) => {
+                    tracing::warn!(
+                        path = %git_path.display(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to inspect a discovered Git metadata path",
+                            &error,
+                        ),
+                        "discovered repository kind is unknown"
+                    );
+                    "unknown".to_owned()
+                }
+            };
+            GitRepoInfo {
+                root: path_slash(&root),
+                relative: rel_path_slash(base, &root),
+                kind,
+            }
+        })
+        .collect();
+    repos.sort_by(|a, b| {
+        let al = a.relative.matches('/').count();
+        let bl = b.relative.matches('/').count();
+        (a.relative != ".")
+            .cmp(&(b.relative != "."))
+            .then(al.cmp(&bl))
+            .then(a.relative.cmp(&b.relative))
+    });
+    (repos, truncated)
 }
 
 pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
@@ -186,81 +248,66 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
     let page_size = q.page_size.unwrap_or(30).clamp(1, 200);
     let page_requested = q.page.is_some() || q.page_size.is_some() || !normalized_search.is_empty();
 
-    let permit = match REPO_DISCOVERY_WORKERS.acquire().await {
-        Ok(permit) => permit,
-        Err(error) => {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "repository discovery worker pool is unavailable",
-                    &error,
-                ),
-                "repository discovery request cannot run"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error":"repository discovery is unavailable"})),
-            )
-                .into_response();
-        }
-    };
-    let scan_base = base.clone();
-    let (roots, discovery_truncated) = match tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        discover_nested_repos(&scan_base)
-    })
-    .await
+    let entry = repo_discovery_entry(&base);
+    let mut cached = entry.lock().await;
+    if q.refresh.unwrap_or(false) {
+        *cached = None;
+    }
+    if cached
+        .as_ref()
+        .is_none_or(|result| result.discovered_at.elapsed() >= REPO_DISCOVERY_CACHE_TTL)
     {
-        Ok(result) => result,
-        Err(error) => {
-            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
-                "repository discovery worker task failed",
-                &error,
-            );
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": diagnostic})),
-            )
-                .into_response();
-        }
-    };
-
-    let mut repos: Vec<GitRepoInfo> = roots
-        .into_iter()
-        .map(|root| {
-            let git_path = root.join(".git");
-            let kind = match std::fs::metadata(&git_path) {
-                Ok(m) if m.is_file() => "worktree".to_string(),
-                Ok(m) if m.is_dir() => "dir".to_string(),
-                Ok(_) => "unknown".to_string(),
-                Err(error) => {
-                    tracing::warn!(
-                        path = %git_path.display(),
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "failed to inspect a discovered Git metadata path",
-                            &error,
-                        ),
-                        "discovered repository kind is unknown"
-                    );
-                    "unknown".to_string()
-                }
-            };
-            GitRepoInfo {
-                root: path_slash(&root),
-                relative: rel_path_slash(&base, &root),
-                kind,
+        let permit = match REPO_DISCOVERY_WORKERS.acquire().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                tracing::error!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "repository discovery worker pool is unavailable",
+                        &error,
+                    ),
+                    "repository discovery request cannot run"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"error":"repository discovery is unavailable"})),
+                )
+                    .into_response();
             }
-        })
-        .collect();
-
-    repos.sort_by(|a, b| {
-        // Stable-ish ordering: project root first, then shallow -> deeper.
-        let al = a.relative.matches('/').count();
-        let bl = b.relative.matches('/').count();
-        (a.relative != ".")
-            .cmp(&(b.relative != "."))
-            .then(al.cmp(&bl))
-            .then(a.relative.cmp(&b.relative))
-    });
+        };
+        let scan_base = base.clone();
+        let scan = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            discover_nested_repos(&scan_base)
+        });
+        let (scan, parent_repos) = tokio::join!(scan, discover_parent_repos(&base));
+        let (repos, truncated) = match scan {
+            Ok(result) => result,
+            Err(error) => {
+                let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                    "repository discovery worker task failed",
+                    &error,
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": diagnostic})),
+                )
+                    .into_response();
+            }
+        };
+        *cached = Some(RepoDiscoveryResult {
+            repos,
+            parent_repos,
+            truncated,
+            discovered_at: Instant::now(),
+        });
+    }
+    let result = cached
+        .as_ref()
+        .expect("repository discovery cache was filled");
+    let mut repos = result.repos.clone();
+    let parent_repos = result.parent_repos.clone();
+    let discovery_truncated = result.truncated;
+    drop(cached);
 
     if !normalized_search.is_empty() {
         repos.retain(|repo| {
@@ -286,8 +333,6 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
             Vec::new()
         };
     }
-
-    let parent_repos = discover_parent_repos(&base).await;
 
     Json(serde_json::json!({
         "repos": repos,

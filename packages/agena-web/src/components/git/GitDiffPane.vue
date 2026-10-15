@@ -14,6 +14,7 @@ type DiffSource = 'working' | 'staged'
 const props = defineProps<{
   directory: string
   selectedFile: string | null
+  visible: boolean
   diffSource: DiffSource
   commit?: string | null
   parentCommit?: string | null
@@ -145,6 +146,7 @@ function close() {
           v-if="showConflictEditor"
           :directory="directory || ''"
           :path="selectedFile || ''"
+          :visible="visible"
           :conflict-paths="conflictPaths || []"
           @resolved="handleResolved"
           @fallbackDiff="openDiffFallback"
@@ -155,6 +157,7 @@ function close() {
           ref="diffViewerRef"
           :directory="directory || ''"
           :path="selectedFile"
+          :visible="visible"
           :staged="diffSource === 'staged'"
           :commit="props.commit"
           :parent-commit="props.parentCommit"

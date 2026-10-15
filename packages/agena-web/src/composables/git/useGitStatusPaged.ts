@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 
-import type { GitStatusFile, GitStatusResponse } from '@/types/git'
+import type { GitStatusFile, GitStatusResponse, GitStatusScopePage } from '@/types/git'
 import { limitBackgroundReads } from '../../lib/backgroundReads'
 
 export function useGitStatusPaged(opts: {
@@ -12,6 +12,7 @@ export function useGitStatusPaged(opts: {
     scope: 'staged' | 'unstaged' | 'untracked' | 'merge'
     offset: number
     limit: number
+    snapshotId?: string
     signal?: AbortSignal
   }) => Promise<GitStatusResponse>
 }) {
@@ -42,6 +43,7 @@ export function useGitStatusPaged(opts: {
   )
 
   let generation = 0
+  const snapshotByScope = new Map<Scope, string>()
   type PageRead = {
     directory: string
     controller: AbortController
@@ -118,9 +120,11 @@ export function useGitStatusPaged(opts: {
     current.promise = Promise.resolve()
       .then(async () => {
         let reload = firstPage
+        let snapshotForReload: string | undefined
         do {
           await waitForCooldown(scope, signal)
           let offset = 0
+          let requestedSnapshotId: string | undefined
           const resp = await limitBackgroundReads(() => {
             // A first-page invalidation received while a load-more request
             // waits for cooldown / a permit changes that queued read itself.
@@ -128,16 +132,35 @@ export function useGitStatusPaged(opts: {
             reload ||= current.reload
             current.reload = false
             offset = reload ? 0 : (pageByScope.value[scope]?.offset ?? list.value.length)
+            requestedSnapshotId = reload ? snapshotForReload : snapshotByScope.get(scope)
             return opts.loadStatusPage({
               directory: trimmedDirectory,
               scope,
               offset,
               limit: opts.pageSize,
+              snapshotId: requestedSnapshotId,
               signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
             })
           }, signal)
           signal.throwIfAborted()
           if (requestGeneration !== generation || flights.get(scope) !== current) return
+          if (
+            requestedSnapshotId &&
+            resp.snapshotId !== requestedSnapshotId
+          ) {
+            // The bounded server cache evicted this old cursor. Restart from
+            // page one against the fresh snapshot instead of mixing revisions.
+            // Keep this per scope so other lists can detect their stale cursor
+            // and refresh themselves before appending another page.
+            if (resp.snapshotId) snapshotByScope.set(scope, resp.snapshotId)
+            else snapshotByScope.delete(scope)
+            snapshotForReload = resp.snapshotId
+            current.reload = true
+            reload = true
+            continue
+          }
+          if (resp.snapshotId) snapshotByScope.set(scope, resp.snapshotId)
+          else snapshotByScope.delete(scope)
           failures.delete(scope)
           allowedAt.set(scope, Date.now() + 750)
           if (!current.reload) {
@@ -174,6 +197,27 @@ export function useGitStatusPaged(opts: {
     return readPage(directory, scope, true)
   }
 
+  function applyFirstPages(
+    pages: Partial<Record<Scope, GitStatusScopePage>> | undefined,
+    snapshotId?: string,
+  ) {
+    // Watch refreshes can update just one visible scope. Keep the other scopes'
+    // snapshot IDs paired with their existing first pages until they refresh.
+    if (!pages) return
+    for (const scope of Object.keys(pages) as Scope[]) {
+      const page = pages[scope]
+      if (!page) continue
+      if (snapshotId) snapshotByScope.set(scope, snapshotId)
+      else snapshotByScope.delete(scope)
+      flights.get(scope)?.controller.abort()
+      flights.delete(scope)
+      listForScope(scope).value = mapFiles({ files: page.files, diffStats: page.diffStats } as GitStatusResponse)
+      pageByScope.value[scope] = { offset: page.files.length, hasMore: page.hasMore }
+      loadingForScope(scope).value = false
+      failures.delete(scope)
+    }
+  }
+
   function loadMore(directory: string, scope: Scope) {
     if (pageByScope.value[scope]?.hasMore === false) return Promise.resolve()
     return readPage(directory, scope, false)
@@ -196,6 +240,7 @@ export function useGitStatusPaged(opts: {
   function clearScope(scope: Scope) {
     flights.get(scope)?.controller.abort()
     flights.delete(scope)
+    snapshotByScope.delete(scope)
     loadingForScope(scope).value = false
     listForScope(scope).value = []
     pageByScope.value[scope] = { offset: 0, hasMore: false }
@@ -203,6 +248,7 @@ export function useGitStatusPaged(opts: {
 
   function resetAll() {
     cancelRequests()
+    snapshotByScope.clear()
     pageByScope.value = {}
     mergeList.value = []
     stagedList.value = []
@@ -232,6 +278,7 @@ export function useGitStatusPaged(opts: {
     loadMore,
     reloadFirstPages,
     reloadScopeFirstPage,
+    applyFirstPages,
     cancelRequests,
     clearScope,
     resetAll,

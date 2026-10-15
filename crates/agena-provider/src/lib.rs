@@ -28,10 +28,9 @@ use std::{
 };
 
 use agena_domain::{
-    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelPricing, ModelRef, ModelSpeedMode,
-    ModelSpeedModeRequestOverride, ModelThinkingMode, ProviderId, ReasoningEffort, ThinkingDisplay,
-    ThinkingRequest,
+    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
+    ModelMetadata, ModelPricing, ModelRef, ModelSpeedMode, ModelSpeedModeRequestOverride,
+    ModelThinkingMode, ProviderId, ReasoningEffort, ThinkingDisplay, ThinkingRequest,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

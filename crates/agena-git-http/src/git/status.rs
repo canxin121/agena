@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
@@ -19,11 +20,11 @@ use serde::{Deserialize, Serialize};
 use crate::git2_utils;
 
 use super::{
-    MAX_BLOB_BYTES, git_command_result_or_log, git_io_error_response, git_task_error_response,
-    git2_open_error_response, require_directory_raw, run_git, run_git_checked, spawn_libgit2,
+    MAX_BLOB_BYTES, git_io_error_response, git_task_error_response, git2_open_error_response,
+    require_directory_raw, run_git_checked, spawn_libgit2,
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 /// A file in the git status.
 pub struct GitStatusFile {
@@ -34,6 +35,19 @@ pub struct GitStatusFile {
     pub index_old_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_old_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// One first-page result returned by a batched status request.
+pub struct GitStatusScopePage {
+    pub files: Vec<GitStatusFile>,
+    pub total_files: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_stats: Option<HashMap<String, DiffStat>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,7 +70,11 @@ pub struct GitStatusResponse {
     pub has_more: bool,
     pub scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_stats: Option<HashMap<String, DiffStat>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_pages: Option<HashMap<String, GitStatusScopePage>>,
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
@@ -231,7 +249,11 @@ fn read_branch_state(
     let upstream = match branch.upstream() {
         Ok(upstream) => upstream,
         Err(error) if error.code() == ErrorCode::NotFound => {
-            return Ok((current, None, 0, 0));
+            let (ahead, behind) = head
+                .target()
+                .and_then(|head_id| unpublished_commit_counts(repo, head_id))
+                .unwrap_or((0, 0));
+            return Ok((current, None, ahead as i32, behind as i32));
         }
         Err(error) => {
             return Err(git2_other(
@@ -260,50 +282,46 @@ fn read_branch_state(
     Ok((current, Some(tracking), ahead as i32, behind as i32))
 }
 
-async fn select_base_ref_for_unpublished(dir: &Path) -> Option<String> {
-    let candidates = {
-        let mut out = Vec::new();
-        if let Some((code, stdout, stderr)) = git_command_result_or_log(
-            run_git(dir, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]).await,
-            "resolve the default origin branch for unpublished-commit estimation",
-        ) {
-            if code == 0 {
-                let branch = stdout.trim();
-                if !branch.is_empty() {
-                    out.push(branch.replace("refs/remotes/", ""));
-                }
-            } else {
-                tracing::debug!(
-                    git_exit_code = code,
-                    git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
-                    "default origin branch is unavailable for unpublished-commit estimation"
-                );
-            }
-        }
-        out.extend(
-            ["origin/main", "origin/master", "main", "master"]
-                .into_iter()
-                .map(|s| s.to_string()),
-        );
-        out
-    };
+fn unpublished_commit_counts(repo: &git2::Repository, head: git2::Oid) -> Option<(usize, usize)> {
+    let symbolic_origin_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|reference| {
+            reference
+                .symbolic_target()
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        });
+    let candidates = symbolic_origin_head.into_iter().chain(
+        [
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/master",
+            "refs/heads/main",
+            "refs/heads/master",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
 
-    for r in candidates {
-        let Some((code, stdout, stderr)) = git_command_result_or_log(
-            run_git(dir, &["rev-parse", "--verify", &r]).await,
-            "validate a Git base reference for unpublished-commit estimation",
-        ) else {
+    for candidate in candidates {
+        let Some(base) = repo
+            .find_reference(&candidate)
+            .ok()
+            .and_then(|reference| reference.peel_to_commit().ok())
+        else {
             continue;
         };
-        if code == 0 && !stdout.trim().is_empty() {
-            return Some(r);
-        }
-        if code != 0 {
-            tracing::debug!(
-                git_exit_code = code,
-                git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
-                "candidate Git base reference is unavailable"
-            );
+        match repo.graph_ahead_behind(head, base.id()) {
+            Ok(counts) => return Some(counts),
+            Err(error) => tracing::debug!(
+                reference = %candidate,
+                diagnostic = %git2_utils::git2_error_diagnostic(
+                    "could not estimate unpublished commits from a local Git reference",
+                    &error,
+                ),
+                "unpublished Git commit estimation was unavailable"
+            ),
         }
     }
     None
@@ -317,6 +335,11 @@ pub struct GitStatusQuery {
     pub limit: Option<usize>,
     // "all" (default) | "staged" | "unstaged" | "merge" | "untracked"
     pub scope: Option<String>,
+    // Continue paging the exact snapshot returned by the first status read.
+    #[serde(rename = "snapshotId")]
+    pub snapshot_id: Option<String>,
+    // Comma-separated first pages to load from one status snapshot.
+    pub scopes: Option<String>,
     // If true, return counts/branch info only (no file list).
     #[serde(default)]
     pub summary: bool,
@@ -325,171 +348,488 @@ pub struct GitStatusQuery {
     pub include_diff_stats: bool,
 }
 
+#[derive(Clone)]
+struct GitStatusSnapshot {
+    current: String,
+    tracking: Option<String>,
+    ahead: i32,
+    behind: i32,
+    files: Vec<GitStatusFile>,
+    merge_indices: Vec<usize>,
+    staged_indices: Vec<usize>,
+    unstaged_indices: Vec<usize>,
+    untracked_indices: Vec<usize>,
+}
+
+struct CachedGitStatusSnapshot {
+    directory: PathBuf,
+    created_at: std::time::Instant,
+    estimated_bytes: usize,
+    snapshot: Arc<GitStatusSnapshot>,
+}
+
+static GIT_STATUS_SNAPSHOT_CACHE: OnceLock<Mutex<HashMap<String, CachedGitStatusSnapshot>>> =
+    OnceLock::new();
+const MAX_CACHED_STATUS_SNAPSHOTS: usize = 16;
+const MAX_CACHED_STATUS_BYTES_PER_SNAPSHOT: usize = 32 * 1024 * 1024;
+const MAX_CACHED_STATUS_BYTES_TOTAL: usize = 64 * 1024 * 1024;
+const STATUS_SNAPSHOT_TTL: Duration = Duration::from_secs(600);
+
+fn estimated_status_snapshot_bytes(snapshot: &GitStatusSnapshot) -> usize {
+    let mut bytes = std::mem::size_of::<GitStatusSnapshot>()
+        .saturating_add(
+            snapshot
+                .files
+                .capacity()
+                .saturating_mul(std::mem::size_of::<GitStatusFile>()),
+        )
+        .saturating_add(
+            snapshot
+                .merge_indices
+                .capacity()
+                .saturating_add(snapshot.staged_indices.capacity())
+                .saturating_add(snapshot.unstaged_indices.capacity())
+                .saturating_add(snapshot.untracked_indices.capacity())
+                .saturating_mul(std::mem::size_of::<usize>()),
+        )
+        .saturating_add(snapshot.current.capacity())
+        .saturating_add(snapshot.tracking.as_ref().map_or(0, String::capacity));
+
+    for file in &snapshot.files {
+        bytes = bytes
+            .saturating_add(file.path.capacity())
+            .saturating_add(file.index.capacity())
+            .saturating_add(file.working_dir.capacity())
+            .saturating_add(file.index_old_path.as_ref().map_or(0, String::capacity))
+            .saturating_add(file.working_old_path.as_ref().map_or(0, String::capacity));
+    }
+    bytes
+}
+
+fn find_status_snapshot(id: &str, directory: &Path) -> Option<Arc<GitStatusSnapshot>> {
+    let mut cache = GIT_STATUS_SNAPSHOT_CACHE
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let entry = cache.get(id)?;
+    if entry.directory != directory {
+        return None;
+    }
+    if entry.created_at.elapsed() >= STATUS_SNAPSHOT_TTL {
+        cache.remove(id);
+        return None;
+    }
+    Some(entry.snapshot.clone())
+}
+
+fn cache_status_snapshot(directory: &Path, snapshot: Arc<GitStatusSnapshot>) -> Option<String> {
+    let estimated_bytes = estimated_status_snapshot_bytes(&snapshot);
+    if estimated_bytes > MAX_CACHED_STATUS_BYTES_PER_SNAPSHOT {
+        return None;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut cache = GIT_STATUS_SNAPSHOT_CACHE
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    cache.retain(|_, entry| entry.created_at.elapsed() < STATUS_SNAPSHOT_TTL);
+    let mut cached_bytes = cache
+        .values()
+        .map(|entry| entry.estimated_bytes)
+        .sum::<usize>();
+    while cache.len() >= MAX_CACHED_STATUS_SNAPSHOTS
+        || cached_bytes.saturating_add(estimated_bytes) > MAX_CACHED_STATUS_BYTES_TOTAL
+    {
+        let oldest = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.created_at)
+            .map(|(key, _)| key.clone());
+        let Some(oldest) = oldest else { break };
+        if let Some(entry) = cache.remove(&oldest) {
+            cached_bytes = cached_bytes.saturating_sub(entry.estimated_bytes);
+        }
+    }
+    if cached_bytes.saturating_add(estimated_bytes) > MAX_CACHED_STATUS_BYTES_TOTAL {
+        return None;
+    }
+    cache.insert(
+        id.clone(),
+        CachedGitStatusSnapshot {
+            directory: directory.to_path_buf(),
+            created_at: std::time::Instant::now(),
+            estimated_bytes,
+            snapshot,
+        },
+    );
+    Some(id)
+}
+
+// A status snapshot larger than the cache budget cannot be retained between
+// page requests. Return a content cursor instead so the client can detect if
+// the repository changed before requesting the next page. The server rescans
+// these unusually large snapshots, but never silently mixes two revisions.
+fn uncached_status_cursor(snapshot: &GitStatusSnapshot) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    snapshot.current.hash(&mut hasher);
+    snapshot.tracking.hash(&mut hasher);
+    snapshot.ahead.hash(&mut hasher);
+    snapshot.behind.hash(&mut hasher);
+    for file in &snapshot.files {
+        file.path.hash(&mut hasher);
+        file.index.hash(&mut hasher);
+        file.working_dir.hash(&mut hasher);
+        file.index_old_path.hash(&mut hasher);
+        file.working_old_path.hash(&mut hasher);
+    }
+    format!("scan:{:016x}", hasher.finish())
+}
+
+const STATUS_SCOPES: [&str; 4] = ["merge", "staged", "unstaged", "untracked"];
+
+fn status_scope_matches(file: &GitStatusFile, scope: &str) -> bool {
+    let is_merge = file.index.trim() == "U" || file.working_dir.trim() == "U";
+    let is_untracked = file.index.trim() == "?" && file.working_dir.trim() == "?";
+    match scope {
+        "merge" => is_merge,
+        "staged" => !is_merge && !file.index.trim().is_empty() && file.index.trim() != "?",
+        "unstaged" => !is_merge && !is_untracked && !file.working_dir.trim().is_empty(),
+        "untracked" => is_untracked,
+        _ => true,
+    }
+}
+
+fn status_scope_indices<'a>(snapshot: &'a GitStatusSnapshot, scope: &str) -> Option<&'a [usize]> {
+    match scope {
+        "merge" => Some(&snapshot.merge_indices),
+        "staged" => Some(&snapshot.staged_indices),
+        "unstaged" => Some(&snapshot.unstaged_indices),
+        "untracked" => Some(&snapshot.untracked_indices),
+        _ => None,
+    }
+}
+
+fn status_scope_total(snapshot: &GitStatusSnapshot, scope: &str) -> usize {
+    status_scope_indices(snapshot, scope).map_or(snapshot.files.len(), |indices| indices.len())
+}
+
+fn status_scope_page(
+    snapshot: &GitStatusSnapshot,
+    scope: &str,
+    offset: usize,
+    limit: usize,
+) -> Vec<GitStatusFile> {
+    if let Some(indices) = status_scope_indices(snapshot, scope) {
+        let start = offset.min(indices.len());
+        let end = start.saturating_add(limit).min(indices.len());
+        indices[start..end]
+            .iter()
+            .map(|index| snapshot.files[*index].clone())
+            .collect()
+    } else {
+        let start = offset.min(snapshot.files.len());
+        let end = start.saturating_add(limit).min(snapshot.files.len());
+        snapshot.files[start..end].iter().cloned().collect()
+    }
+}
+
+async fn collect_status_diff_stats(
+    dir: &Path,
+    files: &[GitStatusFile],
+) -> Result<HashMap<String, DiffStat>, Response> {
+    let mut paths: Vec<String> = files
+        .iter()
+        .map(|file| file.path.trim().to_owned())
+        .filter(|path| !path.is_empty())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let mut map = HashMap::new();
+
+    if !paths.is_empty() {
+        let mut staged_args: Vec<String> = vec![
+            "diff".into(),
+            "--cached".into(),
+            "--numstat".into(),
+            "--".into(),
+        ];
+        staged_args.extend(paths.iter().cloned());
+        let staged_refs: Vec<&str> = staged_args.iter().map(String::as_str).collect();
+        let (staged, _) =
+            run_git_checked(dir, &staged_refs, Some("git_status_staged_numstat_failed")).await?;
+        if let Err(diagnostic) = parse_numstat(&staged, &mut map) {
+            return Err(git_status_diagnostic_response(
+                "parse staged Git diff statistics",
+                &diagnostic,
+                "git_status_numstat_invalid",
+            ));
+        }
+
+        let mut working_args: Vec<String> = vec!["diff".into(), "--numstat".into(), "--".into()];
+        working_args.extend(paths);
+        let working_refs: Vec<&str> = working_args.iter().map(String::as_str).collect();
+        let (working, _) = run_git_checked(
+            dir,
+            &working_refs,
+            Some("git_status_worktree_numstat_failed"),
+        )
+        .await?;
+        if let Err(diagnostic) = parse_numstat(&working, &mut map) {
+            return Err(git_status_diagnostic_response(
+                "parse worktree Git diff statistics",
+                &diagnostic,
+                "git_status_numstat_invalid",
+            ));
+        }
+    }
+
+    for file in files {
+        let status_code = if file.working_dir.trim().is_empty() {
+            &file.index
+        } else {
+            &file.working_dir
+        };
+        if status_code != "?" && status_code != "A" {
+            continue;
+        }
+        if map
+            .get(&file.path)
+            .is_some_and(|existing| existing.insertions > 0)
+        {
+            continue;
+        }
+        match estimate_new_file_lines(dir, &file.path).await {
+            Ok(Some(stat)) => {
+                map.insert(file.path.clone(), stat);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(git_io_error_response(
+                    "estimate diff statistics for a new worktree file",
+                    &error,
+                    "git_status_file_read_failed",
+                ));
+            }
+        }
+    }
+
+    let allowed: HashSet<String> = files.iter().map(|file| file.path.clone()).collect();
+    map.retain(|path, _| allowed.contains(path));
+    Ok(map)
+}
+
 pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     let dir = match require_directory_raw(q.directory.as_deref()) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
 
-    // Use libgit2 for stable, structured status.
-    // Keep output compatible with our current UI (porcelain-like index + working_dir codes).
-    let snapshot = spawn_libgit2({
-        let dir = dir.clone();
-        move || {
-            use git2::{Status, StatusOptions};
+    let requested_scopes = if let Some(raw_scopes) = q.scopes.as_deref() {
+        let mut scopes = Vec::new();
+        for raw_scope in raw_scopes
+            .split(',')
+            .map(str::trim)
+            .filter(|scope| !scope.is_empty())
+        {
+            let scope = raw_scope.to_ascii_lowercase();
+            if !STATUS_SCOPES.contains(&scope.as_str()) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("unsupported Git status scope `{scope}`"),
+                        "code": "git_status_scope_invalid",
+                    })),
+                )
+                    .into_response();
+            }
+            if !scopes.iter().any(|existing| existing == &scope) {
+                scopes.push(scope);
+            }
+        }
+        Some(scopes)
+    } else {
+        None
+    };
 
-            let repo = match git2_utils::open_repo_discover(&dir) {
-                Ok(r) => r,
-                Err(e) => return Err(e),
-            };
+    // A page continuation reuses the exact status snapshot produced by the
+    // first read. Only a new summary/watch refresh runs libgit2 again.
+    let cached_snapshot = q
+        .snapshot_id
+        .as_deref()
+        .and_then(|id| find_status_snapshot(id, &dir));
+    let (snapshot, snapshot_id) = if let Some(snapshot) = cached_snapshot {
+        (snapshot, q.snapshot_id.clone())
+    } else {
+        let scanned = spawn_libgit2({
+            let dir = dir.clone();
+            move || {
+                use git2::{Status, StatusOptions};
 
-            let (current, tracking, ahead, behind) = read_branch_state(&repo)?;
+                let repo = match git2_utils::open_repo_discover(&dir) {
+                    Ok(r) => r,
+                    Err(e) => return Err(e),
+                };
 
-            let mut opts = StatusOptions::new();
-            opts.include_untracked(true)
-                .recurse_untracked_dirs(true)
-                .include_ignored(false)
-                .include_unmodified(false)
-                .renames_head_to_index(true);
+                let (current, tracking, ahead, behind) = read_branch_state(&repo)?;
 
-            let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
-                git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
-                    "failed to inspect Git status",
+                let mut opts = StatusOptions::new();
+                opts.include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .include_ignored(false)
+                    .include_unmodified(false)
+                    .renames_head_to_index(true);
+
+                let statuses = repo.statuses(Some(&mut opts)).map_err(|error| {
+                    git2_utils::Git2OpenError::Other(git2_utils::git2_error_diagnostic(
+                        "failed to inspect Git status",
+                        &error,
+                    ))
+                })?;
+
+                fn idx_code(st: Status) -> &'static str {
+                    if st.is_conflicted() {
+                        return "U";
+                    }
+                    if st.contains(Status::INDEX_NEW) {
+                        return "A";
+                    }
+                    if st.contains(Status::INDEX_MODIFIED) {
+                        return "M";
+                    }
+                    if st.contains(Status::INDEX_DELETED) {
+                        return "D";
+                    }
+                    if st.contains(Status::INDEX_RENAMED) {
+                        return "R";
+                    }
+                    if st.contains(Status::INDEX_TYPECHANGE) {
+                        return "T";
+                    }
+                    ""
+                }
+                fn wt_code(st: Status) -> &'static str {
+                    if st.is_conflicted() {
+                        return "U";
+                    }
+                    if st.contains(Status::WT_NEW) {
+                        return "?";
+                    }
+                    if st.contains(Status::WT_MODIFIED) {
+                        return "M";
+                    }
+                    if st.contains(Status::WT_DELETED) {
+                        return "D";
+                    }
+                    if st.contains(Status::WT_RENAMED) {
+                        return "R";
+                    }
+                    if st.contains(Status::WT_TYPECHANGE) {
+                        return "T";
+                    }
+                    ""
+                }
+
+                let mut files: Vec<GitStatusFile> = Vec::new();
+                for entry in statuses.iter() {
+                    let path = entry.path().map_err(|error| {
+                        git2_other("Git status path is not valid UTF-8", &error)
+                    })?;
+                    let head_delta = entry.head_to_index();
+                    let work_delta = entry.index_to_workdir();
+                    let new_path = work_delta
+                        .as_ref()
+                        .and_then(|d| d.new_file().path())
+                        .or_else(|| head_delta.as_ref().and_then(|d| d.new_file().path()));
+                    let path = new_path.and_then(|p| p.to_str()).unwrap_or(path);
+                    let old_path = |delta: Option<&git2::DiffDelta<'_>>| {
+                        delta
+                            .filter(|d| d.status() == git2::Delta::Renamed)
+                            .and_then(|d| d.old_file().path())
+                            .and_then(|p| p.to_str())
+                            .map(str::to_owned)
+                    };
+                    let st = entry.status();
+                    let x = idx_code(st).to_string();
+                    let y = wt_code(st).to_string();
+                    if x.is_empty() && y.is_empty() {
+                        continue;
+                    }
+                    let (x, y) = if y == "?" {
+                        ("?".to_string(), "?".to_string())
+                    } else {
+                        (x, y)
+                    };
+                    files.push(GitStatusFile {
+                        path: path.to_string(),
+                        index: x,
+                        working_dir: y,
+                        index_old_path: old_path(head_delta.as_ref()),
+                        working_old_path: old_path(work_delta.as_ref()),
+                    });
+                }
+                files.sort_by(|a, b| a.path.cmp(&b.path));
+                Ok((current, tracking, ahead, behind, files))
+            }
+        })
+        .await;
+
+        let (current, tracking, ahead, behind, files) = match scanned {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => return git2_open_error_response(error),
+            Err(error) => {
+                let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
+                    "Git status worker task failed",
                     &error,
-                ))
-            })?;
-
-            fn idx_code(st: Status) -> &'static str {
-                if st.is_conflicted() {
-                    return "U";
-                }
-                if st.contains(Status::INDEX_NEW) {
-                    return "A";
-                }
-                if st.contains(Status::INDEX_MODIFIED) {
-                    return "M";
-                }
-                if st.contains(Status::INDEX_DELETED) {
-                    return "D";
-                }
-                if st.contains(Status::INDEX_RENAMED) {
-                    return "R";
-                }
-                if st.contains(Status::INDEX_TYPECHANGE) {
-                    return "T";
-                }
-                ""
+                );
+                return git_status_diagnostic_response(
+                    "join Git status worker task",
+                    &diagnostic,
+                    "git2_task_failed",
+                );
             }
-            fn wt_code(st: Status) -> &'static str {
-                if st.is_conflicted() {
-                    return "U";
-                }
-                if st.contains(Status::WT_NEW) {
-                    return "?";
-                }
-                if st.contains(Status::WT_MODIFIED) {
-                    return "M";
-                }
-                if st.contains(Status::WT_DELETED) {
-                    return "D";
-                }
-                if st.contains(Status::WT_RENAMED) {
-                    return "R";
-                }
-                if st.contains(Status::WT_TYPECHANGE) {
-                    return "T";
-                }
-                ""
+        };
+        let mut merge_indices = Vec::new();
+        let mut staged_indices = Vec::new();
+        let mut unstaged_indices = Vec::new();
+        let mut untracked_indices = Vec::new();
+        for (index, file) in files.iter().enumerate() {
+            if status_scope_matches(file, "merge") {
+                merge_indices.push(index);
             }
-
-            let mut files: Vec<GitStatusFile> = Vec::new();
-            for entry in statuses.iter() {
-                let path = entry
-                    .path()
-                    .map_err(|error| git2_other("Git status path is not valid UTF-8", &error))?;
-                let head_delta = entry.head_to_index();
-                let work_delta = entry.index_to_workdir();
-                let new_path = work_delta
-                    .as_ref()
-                    .and_then(|d| d.new_file().path())
-                    .or_else(|| head_delta.as_ref().and_then(|d| d.new_file().path()));
-                let path = new_path.and_then(|p| p.to_str()).unwrap_or(path);
-                let old_path = |delta: Option<&git2::DiffDelta<'_>>| {
-                    delta
-                        .filter(|d| d.status() == git2::Delta::Renamed)
-                        .and_then(|d| d.old_file().path())
-                        .and_then(|p| p.to_str())
-                        .map(str::to_owned)
-                };
-                let st = entry.status();
-                let x = idx_code(st).to_string();
-                let y = wt_code(st).to_string();
-                if x.is_empty() && y.is_empty() {
-                    continue;
-                }
-                // libgit2 uses WT_NEW for untracked. Match porcelain "??".
-                let (x, y) = if y == "?" {
-                    ("?".to_string(), "?".to_string())
-                } else {
-                    (x, y)
-                };
-                files.push(GitStatusFile {
-                    path: path.to_string(),
-                    index: x,
-                    working_dir: y,
-                    index_old_path: old_path(head_delta.as_ref()),
-                    working_old_path: old_path(work_delta.as_ref()),
-                });
+            if status_scope_matches(file, "staged") {
+                staged_indices.push(index);
             }
-            files.sort_by(|a, b| a.path.cmp(&b.path));
-
-            Ok((current, tracking, ahead, behind, files))
+            if status_scope_matches(file, "unstaged") {
+                unstaged_indices.push(index);
+            }
+            if status_scope_matches(file, "untracked") {
+                untracked_indices.push(index);
+            }
         }
-    })
-    .await;
-
-    let (current, tracking, mut ahead, mut behind, files) = match snapshot {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => return git2_open_error_response(e),
-        Err(error) => {
-            let diagnostic = agena_failure::diagnostic::format_error_chain_with_context(
-                "Git status worker task failed",
-                &error,
-            );
-            return git_status_diagnostic_response(
-                "join Git status worker task",
-                &diagnostic,
-                "git2_task_failed",
-            );
-        }
+        let fresh = Arc::new(GitStatusSnapshot {
+            current,
+            tracking,
+            ahead,
+            behind,
+            files,
+            merge_indices,
+            staged_indices,
+            unstaged_indices,
+            untracked_indices,
+        });
+        let snapshot_id = cache_status_snapshot(&dir, fresh.clone())
+            .or_else(|| Some(uncached_status_cursor(&fresh)));
+        (fresh, snapshot_id)
     };
 
-    let is_merge = |f: &GitStatusFile| f.index.trim() == "U" || f.working_dir.trim() == "U";
-    let is_untracked = |f: &GitStatusFile| f.index.trim() == "?" && f.working_dir.trim() == "?";
-    // Match VS Code Git view grouping semantics:
-    // - Merge changes are separate.
-    // - Untracked is separate.
-    // - Staged vs unstaged can overlap for the same path (e.g. "MM").
-    let is_staged = |f: &GitStatusFile| {
-        if is_merge(f) {
-            return false;
-        }
-        let x = f.index.trim();
-        !x.is_empty() && x != "?"
-    };
-    let is_unstaged = |f: &GitStatusFile| {
-        if is_merge(f) || is_untracked(f) {
-            return false;
-        }
-        let y = f.working_dir.trim();
-        !y.is_empty()
-    };
-
-    let total_files = files.len();
-    let staged_count = files.iter().filter(|f| is_staged(f)).count();
-    let unstaged_count = files.iter().filter(|f| is_unstaged(f)).count();
-    let untracked_count = files.iter().filter(|f| is_untracked(f)).count();
-    let merge_count = files.iter().filter(|f| is_merge(f)).count();
+    let current = snapshot.current.clone();
+    let tracking = snapshot.tracking.clone();
+    let ahead = snapshot.ahead;
+    let behind = snapshot.behind;
+    let total_files = snapshot.files.len();
+    let staged_count = snapshot.staged_indices.len();
+    let unstaged_count = snapshot.unstaged_indices.len();
+    let untracked_count = snapshot.untracked_indices.len();
+    let merge_count = snapshot.merge_indices.len();
 
     let summary = q.summary;
     let scope = q
@@ -499,155 +839,66 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
         .trim()
         .to_ascii_lowercase();
 
-    let mut scoped: Vec<GitStatusFile> = match scope.as_str() {
-        "staged" => files.into_iter().filter(|f| is_staged(f)).collect(),
-        "unstaged" => files.into_iter().filter(|f| is_unstaged(f)).collect(),
-        "merge" => files.into_iter().filter(|f| is_merge(f)).collect(),
-        "untracked" => files.into_iter().filter(|f| is_untracked(f)).collect(),
-        _ => files,
-    };
-
-    let scope_total = scoped.len();
-    let offset = if summary { 0 } else { q.offset.unwrap_or(0) };
-    // Default to a bounded page size; callers can page via offset/limit.
-    let mut limit = if summary { 0 } else { q.limit.unwrap_or(200) };
-    // Guardrails for request size.
-    limit = limit.min(500);
-
-    let end = offset.saturating_add(limit).min(scope_total);
-    let has_more = end < scope_total;
-    let page_files = if limit == 0 || offset >= scope_total {
-        Vec::new()
+    let mut limit = q.limit.unwrap_or(200).min(500);
+    let offset = if summary || requested_scopes.is_some() {
+        0
     } else {
-        scoped.drain(offset..end).collect::<Vec<_>>()
+        q.offset.unwrap_or(0)
     };
-
-    let mut diff_stats: Option<HashMap<String, DiffStat>> = None;
-    let include_diff_stats = q.include_diff_stats;
-
-    if include_diff_stats && !summary && !page_files.is_empty() {
-        let mut map: HashMap<String, DiffStat> = HashMap::new();
-        let mut paths: Vec<String> = page_files
-            .iter()
-            .map(|f| f.path.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect();
-        paths.sort();
-        paths.dedup();
-
-        if !paths.is_empty() {
-            let mut staged_args: Vec<String> = vec![
-                "diff".into(),
-                "--cached".into(),
-                "--numstat".into(),
-                "--".into(),
-            ];
-            staged_args.extend(paths.iter().cloned());
-            let staged_refs: Vec<&str> = staged_args.iter().map(|s| s.as_str()).collect();
-            let (staged, _) =
-                match run_git_checked(&dir, &staged_refs, Some("git_status_staged_numstat_failed"))
-                    .await
-                {
-                    Ok(output) => output,
-                    Err(response) => return response,
-                };
-            if let Err(diagnostic) = parse_numstat(&staged, &mut map) {
-                return git_status_diagnostic_response(
-                    "parse staged Git diff statistics",
-                    &diagnostic,
-                    "git_status_numstat_invalid",
-                );
-            }
-
-            let mut working_args: Vec<String> =
-                vec!["diff".into(), "--numstat".into(), "--".into()];
-            working_args.extend(paths.iter().cloned());
-            let working_refs: Vec<&str> = working_args.iter().map(|s| s.as_str()).collect();
-            let (working, _) = match run_git_checked(
-                &dir,
-                &working_refs,
-                Some("git_status_worktree_numstat_failed"),
-            )
-            .await
-            {
-                Ok(output) => output,
-                Err(response) => return response,
-            };
-            if let Err(diagnostic) = parse_numstat(&working, &mut map) {
-                return git_status_diagnostic_response(
-                    "parse worktree Git diff statistics",
-                    &diagnostic,
-                    "git_status_numstat_invalid",
-                );
-            }
-        }
-
-        // Estimate new file insertions for untracked/added where numstat didn't include content.
-        // Limit this to the returned page so paging stays cheap.
-        for f in &page_files {
-            let status_code = if f.working_dir.trim().is_empty() {
-                &f.index
-            } else {
-                &f.working_dir
-            };
-            if status_code != "?" && status_code != "A" {
-                continue;
-            }
-            if let Some(existing) = map.get(&f.path)
-                && existing.insertions > 0
-            {
-                continue;
-            }
-            match estimate_new_file_lines(&dir, &f.path).await {
-                Ok(Some(stat)) => {
-                    map.insert(f.path.clone(), stat);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    return git_io_error_response(
-                        "estimate diff statistics for a new worktree file",
-                        &error,
-                        "git_status_file_read_failed",
-                    );
-                }
-            }
-        }
-
-        // Only return stats for paths in this page to keep the response bounded.
-        let allowed: HashSet<String> = page_files.iter().map(|f| f.path.clone()).collect();
-        map.retain(|k, _| allowed.contains(k));
-        diff_stats = Some(map);
+    if summary || requested_scopes.is_some() {
+        limit = 0;
     }
 
-    // If no upstream tracking but we know current branch, estimate unpublished commits.
-    if tracking.is_none()
-        && !current.is_empty()
-        && let Some(base) = select_base_ref_for_unpublished(&dir).await
-        && let Some((code, stdout, stderr)) = git_command_result_or_log(
-            run_git(&dir, &["rev-list", "--count", &format!("{base}..HEAD")]).await,
-            "estimate unpublished Git commit count",
-        )
-    {
-        if code == 0 {
-            match stdout.trim().parse::<i32>() {
-                Ok(count) => {
-                    ahead = count;
-                    behind = 0;
-                }
-                Err(error) => tracing::warn!(
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "Git returned an invalid unpublished commit count",
-                        &error,
-                    ),
-                    "unpublished Git commit estimation was unavailable"
-                ),
-            }
-        } else {
-            tracing::debug!(
-                git_exit_code = code,
-                git_stderr = %super::redact_git_output(&super::truncate_for_payload(&stderr, 4_000)),
-                "Git could not estimate unpublished commits"
+    let mut scope_pages = None;
+    let mut diff_stats = None;
+    let mut page_files = Vec::new();
+    let mut has_more = false;
+    if let Some(scopes) = requested_scopes.as_ref() {
+        let page_limit = q.limit.unwrap_or(200).min(500);
+        let mut pages = HashMap::new();
+        let mut paged_files = Vec::new();
+        for requested_scope in scopes {
+            let total = status_scope_total(&snapshot, requested_scope);
+            let page = status_scope_page(&snapshot, requested_scope, 0, page_limit);
+            paged_files.extend(page.iter().cloned());
+            pages.insert(
+                requested_scope.clone(),
+                GitStatusScopePage {
+                    files: page,
+                    total_files: total,
+                    offset: 0,
+                    limit: page_limit,
+                    has_more: total > page_limit,
+                    diff_stats: None,
+                },
             );
+        }
+        if q.include_diff_stats && !paged_files.is_empty() {
+            let stats = match collect_status_diff_stats(&dir, &paged_files).await {
+                Ok(stats) => stats,
+                Err(response) => return response,
+            };
+            for page in pages.values_mut() {
+                let paths: HashSet<&str> =
+                    page.files.iter().map(|file| file.path.as_str()).collect();
+                let mut page_stats = stats.clone();
+                page_stats.retain(|path, _| paths.contains(path.as_str()));
+                page.diff_stats = Some(page_stats);
+            }
+        }
+        scope_pages = Some(pages);
+    } else if !summary {
+        let scope_total = status_scope_total(&snapshot, scope.as_str());
+        let end = offset.saturating_add(limit).min(scope_total);
+        has_more = end < scope_total;
+        if offset < end {
+            page_files = status_scope_page(&snapshot, scope.as_str(), offset, end - offset);
+        }
+        if q.include_diff_stats && !page_files.is_empty() {
+            diff_stats = match collect_status_diff_stats(&dir, &page_files).await {
+                Ok(stats) => Some(stats),
+                Err(response) => return response,
+            };
         }
     }
 
@@ -669,7 +920,9 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
         limit,
         has_more,
         scope,
+        snapshot_id,
         diff_stats,
+        scope_pages,
     })
     .into_response()
 }
@@ -1213,6 +1466,73 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
 mod watch_tests {
     use super::*;
     use futures_util::StreamExt;
+
+    #[test]
+    fn large_status_snapshots_stay_cached_when_the_memory_budget_allows_them() {
+        let files = (0..60_001)
+            .map(|index| GitStatusFile {
+                path: format!("src/module_{index}.rs"),
+                index: String::new(),
+                working_dir: "M".to_owned(),
+                index_old_path: None,
+                working_old_path: None,
+            })
+            .collect::<Vec<_>>();
+        let unstaged_indices = (0..files.len()).collect::<Vec<_>>();
+        let snapshot = Arc::new(GitStatusSnapshot {
+            current: "main".to_owned(),
+            tracking: Some("origin/main".to_owned()),
+            ahead: 0,
+            behind: 0,
+            files,
+            merge_indices: Vec::new(),
+            staged_indices: Vec::new(),
+            unstaged_indices,
+            untracked_indices: Vec::new(),
+        });
+        assert!(
+            estimated_status_snapshot_bytes(&snapshot) <= MAX_CACHED_STATUS_BYTES_PER_SNAPSHOT,
+            "the test snapshot should fit within the bounded byte budget"
+        );
+
+        let directory = PathBuf::from(format!("status-cache-test-{}", uuid::Uuid::new_v4()));
+        let id = cache_status_snapshot(&directory, snapshot.clone())
+            .expect("more than 50,000 short paths should still be cacheable");
+        let cached = find_status_snapshot(&id, &directory).expect("cached snapshot is available");
+        assert!(Arc::ptr_eq(&snapshot, &cached));
+        GIT_STATUS_SNAPSHOT_CACHE
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&id);
+    }
+
+    #[test]
+    fn uncached_status_cursor_is_stable_and_changes_with_file_status() {
+        let snapshot = GitStatusSnapshot {
+            current: "main".to_owned(),
+            tracking: Some("origin/main".to_owned()),
+            ahead: 1,
+            behind: 0,
+            files: vec![GitStatusFile {
+                path: "src/lib.rs".to_owned(),
+                index: "".to_owned(),
+                working_dir: "M".to_owned(),
+                index_old_path: None,
+                working_old_path: None,
+            }],
+            merge_indices: Vec::new(),
+            staged_indices: Vec::new(),
+            unstaged_indices: vec![0],
+            untracked_indices: Vec::new(),
+        };
+        let cursor = uncached_status_cursor(&snapshot);
+        assert_eq!(cursor, uncached_status_cursor(&snapshot));
+
+        let mut changed = snapshot;
+        changed.files[0].working_dir = "D".to_owned();
+        assert_ne!(cursor, uncached_status_cursor(&changed));
+    }
 
     #[tokio::test]
     async fn watch_streams_share_idle_snapshots_and_detect_content_changes_in_already_dirty_files()

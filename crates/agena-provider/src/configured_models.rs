@@ -61,7 +61,9 @@ pub fn apply_configured_thinking_modes(
         retain_first_default(modes.values_mut());
     }
 
-    modes.into_values().collect()
+    let mut modes = modes.into_values().collect::<Vec<_>>();
+    modes.sort_by(agena_domain::compare_thinking_mode_strength);
+    modes
 }
 
 fn retain_first_default<'a, Mode>(modes: impl Iterator<Item = &'a mut Mode>)

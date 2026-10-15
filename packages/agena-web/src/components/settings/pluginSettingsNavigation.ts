@@ -9,23 +9,25 @@ export const PLUGIN_SETTINGS_VIEWS = {
 
 export type PluginSettingsTab = (typeof PLUGIN_SETTINGS_VIEWS)[keyof typeof PLUGIN_SETTINGS_VIEWS]
 
-export function pluginTabForSettingsView(view: unknown): PluginSettingsTab | null {
+export function pluginTabForSettingsView(view: unknown, requestedTab?: unknown): PluginSettingsTab | null {
   const id = String(view || '')
     .trim()
     .toLowerCase()
+  if (id === 'plugin-workbench') {
+    const tab = String(requestedTab || '')
+      .trim()
+      .toLowerCase()
+    return Object.values(PLUGIN_SETTINGS_VIEWS).find((value) => value === tab) || 'overview'
+  }
   return Object.hasOwn(PLUGIN_SETTINGS_VIEWS, id)
     ? PLUGIN_SETTINGS_VIEWS[id as keyof typeof PLUGIN_SETTINGS_VIEWS]
     : null
 }
 
-/** Keep existing plugin-workbench?pluginTab=... links usable. */
-export function normalizePluginSettingsView(view: unknown, legacyTab?: unknown): string {
+/** Old sidebar destinations now open a tab inside the same plugin workbench. */
+export function normalizePluginSettingsView(view: unknown): string {
   const id = String(view || '')
     .trim()
     .toLowerCase()
-  if (id !== 'plugin-workbench') return id
-  const tab = String(legacyTab || '')
-    .trim()
-    .toLowerCase()
-  return Object.entries(PLUGIN_SETTINGS_VIEWS).find(([, value]) => value === tab)?.[0] || id
+  return pluginTabForSettingsView(id) ? 'plugin-workbench' : id
 }

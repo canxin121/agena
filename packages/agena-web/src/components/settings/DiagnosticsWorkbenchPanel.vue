@@ -10,7 +10,7 @@ const MemoriesPanel = defineAsyncComponent(() => import('@/components/settings/M
 const UsagePanel = defineAsyncComponent(() => import('@/components/settings/UsagePanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('diagnostics'))
-// The advanced editor writes one explicit layer, which the left navigation owns.
+// The advanced editor writes the explicit layer selected in its workbench.
 defineProps<{ activePage: string; scope: string }>()
 </script>
 

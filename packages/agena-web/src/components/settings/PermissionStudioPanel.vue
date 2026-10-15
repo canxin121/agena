@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
@@ -62,8 +62,7 @@ const PermissionsPanel = defineAsyncComponent(() => import('@/components/setting
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
-// The permission source is chosen in the shared left navigation, so the panel
-// only normalizes the forwarded layer and never writes it back.
+// The workbench owns source selection; this editor only normalizes the layer.
 const selectedSource = computed<PermissionSource>(() => normalizePermissionSource(props.scope))
 
 function normalizePermissionSource(value: unknown): PermissionSource {
@@ -88,6 +87,15 @@ const newToolNameMode = ref<PermissionMode>('ask')
 const newCommandTool = ref('shell')
 const newCommandPattern = ref('')
 const newCommandMode = ref<PermissionMode>('ask')
+const selectedPathRuleKeys = ref<Set<string>>(new Set())
+const selectedNetworkRuleKeys = ref<Set<string>>(new Set())
+const selectedToolNameRuleKeys = ref<Set<string>>(new Set())
+const selectedCommandRuleKeys = ref<Set<string>>(new Set())
+const bulkPathReadMode = ref<PermissionMode | ''>('auto')
+const bulkPathWriteMode = ref<PermissionMode | ''>('auto')
+const bulkNetworkMode = ref<PermissionMode>('auto')
+const bulkToolNameMode = ref<PermissionMode>('auto')
+const bulkCommandMode = ref<PermissionMode>('ask')
 
 const activeSessionId = computed(() => {
   const value = Number(chat.selectedSessionId)
@@ -121,11 +129,164 @@ const commandRules = computed(() => {
     }
     if (!rawRules || typeof rawRules !== 'object' || Array.isArray(rawRules)) continue
     for (const [command, mode] of Object.entries(rawRules)) {
+      if (tool === '*' && command !== 'read-only') continue
       if (isMode(mode)) rows.push({ tool, command, mode })
     }
   }
   return rows
 })
+const selectedPathRules = computed(() => pathRules.value.filter(([path]) => selectedPathRuleKeys.value.has(path)))
+const selectedNetworkRules = computed(() =>
+  networkRules.value.filter(([target]) => selectedNetworkRuleKeys.value.has(target)),
+)
+const selectedToolNameRules = computed(() =>
+  toolNameRules.value.filter(([name]) => selectedToolNameRuleKeys.value.has(name)),
+)
+const selectedCommandRules = computed(() =>
+  commandRules.value.filter((row) => selectedCommandRuleKeys.value.has(commandRuleKey(row.tool, row.command))),
+)
+const allPathRulesSelected = computed(() =>
+  areAllSelected(
+    pathRules.value.map(([path]) => path),
+    selectedPathRuleKeys.value,
+  ),
+)
+const allNetworkRulesSelected = computed(() =>
+  areAllSelected(
+    networkRules.value.map(([target]) => target),
+    selectedNetworkRuleKeys.value,
+  ),
+)
+const allToolNameRulesSelected = computed(() =>
+  areAllSelected(
+    toolNameRules.value.map(([name]) => name),
+    selectedToolNameRuleKeys.value,
+  ),
+)
+const allCommandRulesSelected = computed(() =>
+  areAllSelected(
+    commandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
+    selectedCommandRuleKeys.value,
+  ),
+)
+
+function areAllSelected(keys: string[], selected: Set<string>): boolean {
+  return keys.length > 0 && keys.every((key) => selected.has(key))
+}
+
+function toggleSelection(selection: Ref<Set<string>>, key: string, event: Event) {
+  const next = new Set(selection.value)
+  if ((event.target as HTMLInputElement).checked) next.add(key)
+  else next.delete(key)
+  selection.value = next
+}
+
+function toggleAllSelection(selection: Ref<Set<string>>, keys: string[]) {
+  if (areAllSelected(keys, selection.value)) {
+    const removing = new Set(keys)
+    selection.value = new Set([...selection.value].filter((key) => !removing.has(key)))
+  } else {
+    selection.value = new Set([...selection.value, ...keys])
+  }
+}
+
+function clearSelection(selection: Ref<Set<string>>) {
+  selection.value = new Set()
+}
+
+function commandRuleKey(tool: string, command: string): string {
+  return `${tool}\u0000${command}`
+}
+
+function pruneSelection(selection: Ref<Set<string>>, keys: string[]) {
+  const available = new Set(keys)
+  const next = new Set([...selection.value].filter((key) => available.has(key)))
+  if (next.size !== selection.value.size) selection.value = next
+}
+
+function togglePathRule(path: string, event: Event) {
+  toggleSelection(selectedPathRuleKeys, path, event)
+}
+function toggleNetworkRule(target: string, event: Event) {
+  toggleSelection(selectedNetworkRuleKeys, target, event)
+}
+function toggleToolNameRule(name: string, event: Event) {
+  toggleSelection(selectedToolNameRuleKeys, name, event)
+}
+function toggleCommandRule(tool: string, command: string, event: Event) {
+  toggleSelection(selectedCommandRuleKeys, commandRuleKey(tool, command), event)
+}
+function toggleAllPathRules() {
+  toggleAllSelection(
+    selectedPathRuleKeys,
+    pathRules.value.map(([path]) => path),
+  )
+}
+function toggleAllNetworkRules() {
+  toggleAllSelection(
+    selectedNetworkRuleKeys,
+    networkRules.value.map(([target]) => target),
+  )
+}
+function toggleAllToolNameRules() {
+  toggleAllSelection(
+    selectedToolNameRuleKeys,
+    toolNameRules.value.map(([name]) => name),
+  )
+}
+function toggleAllCommandRules() {
+  toggleAllSelection(
+    selectedCommandRuleKeys,
+    commandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
+  )
+}
+function clearPathRuleSelection() {
+  clearSelection(selectedPathRuleKeys)
+}
+function clearNetworkRuleSelection() {
+  clearSelection(selectedNetworkRuleKeys)
+}
+function clearToolNameRuleSelection() {
+  clearSelection(selectedToolNameRuleKeys)
+}
+function clearCommandRuleSelection() {
+  clearSelection(selectedCommandRuleKeys)
+}
+function applySelectedPathReadMode() {
+  setSelectedPathMode('read', bulkPathReadMode.value)
+}
+function applySelectedPathWriteMode() {
+  setSelectedPathMode('write', bulkPathWriteMode.value)
+}
+function clearAllRuleSelections() {
+  clearSelection(selectedPathRuleKeys)
+  clearSelection(selectedNetworkRuleKeys)
+  clearSelection(selectedToolNameRuleKeys)
+  clearSelection(selectedCommandRuleKeys)
+}
+
+watch(
+  [pathRules, networkRules, toolNameRules, commandRules],
+  () => {
+    pruneSelection(
+      selectedPathRuleKeys,
+      pathRules.value.map(([path]) => path),
+    )
+    pruneSelection(
+      selectedNetworkRuleKeys,
+      networkRules.value.map(([target]) => target),
+    )
+    pruneSelection(
+      selectedToolNameRuleKeys,
+      toolNameRules.value.map(([name]) => name),
+    )
+    pruneSelection(
+      selectedCommandRuleKeys,
+      commandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
+    )
+  },
+  { flush: 'sync' },
+)
 
 // The built-in entries, offered as one-click rows so the shipped behaviour is
 // visible and adjustable without typing the keywords by hand. Each one is an
@@ -245,14 +406,44 @@ function setPathRuleMode(path: string, access: 'read' | 'write', value: string) 
     const modes: AccessModes = { ...(next.path.rules[path] || {}) }
     if (isMode(value)) modes[access] = value
     else delete modes[access]
-    next.path.rules[path] = modes
+    if (modes.read || modes.write) next.path.rules[path] = modes
+    else delete next.path.rules[path]
+    if (isEmptyPathSection(next.path)) delete next.path
   })
 }
 
 function removePathRule(path: string) {
   mutate((next) => {
     if (next.path?.rules) delete next.path.rules[path]
+    if (isEmptyPathSection(next.path)) delete next.path
   })
+}
+
+function setSelectedPathMode(access: 'read' | 'write', value: string) {
+  const paths = selectedPathRules.value.map(([path]) => path)
+  if (!paths.length) return
+  mutate((next) => {
+    for (const path of paths) {
+      const rule = next.path?.rules?.[path]
+      if (!rule) continue
+      if (isMode(value)) rule[access] = value
+      else delete rule[access]
+      if (!rule.read && !rule.write) delete next.path!.rules![path]
+    }
+    if (isEmptyPathSection(next.path)) delete next.path
+  })
+}
+
+function removeSelectedPathRules() {
+  const paths = selectedPathRules.value.map(([path]) => path)
+  if (!paths.length) return
+  mutate((next) => {
+    for (const path of paths) {
+      if (next.path?.rules) delete next.path.rules[path]
+    }
+    if (isEmptyPathSection(next.path)) delete next.path
+  })
+  clearSelection(selectedPathRuleKeys)
 }
 
 function renamePathRule(path: string, event: Event) {
@@ -301,7 +492,46 @@ function setNetworkRule(target: string, value: string) {
 function removeNetworkRule(target: string) {
   mutate((next) => {
     if (next.network?.rules) delete next.network.rules[target]
+    if (
+      next.network &&
+      !next.network.internet &&
+      !next.network.private &&
+      !next.network.loopback &&
+      !Object.keys(next.network.rules || {}).length
+    ) {
+      delete next.network
+    }
   })
+}
+
+function setSelectedNetworkMode(value: string) {
+  const targets = selectedNetworkRules.value.map(([target]) => target)
+  if (!targets.length || !isMode(value)) return
+  mutate((next) => {
+    next.network ||= {}
+    next.network.rules ||= {}
+    for (const target of targets) next.network.rules[target] = value
+  })
+}
+
+function removeSelectedNetworkRules() {
+  const targets = selectedNetworkRules.value.map(([target]) => target)
+  if (!targets.length) return
+  mutate((next) => {
+    for (const target of targets) {
+      if (next.network?.rules) delete next.network.rules[target]
+    }
+    if (
+      next.network &&
+      !next.network.internet &&
+      !next.network.private &&
+      !next.network.loopback &&
+      !Object.keys(next.network.rules || {}).length
+    ) {
+      delete next.network
+    }
+  })
+  clearSelection(selectedNetworkRuleKeys)
 }
 
 function renameNetworkRule(target: string, event: Event) {
@@ -348,7 +578,30 @@ function setToolNameMode(name: string, value: string) {
 function removeToolName(name: string) {
   mutate((next) => {
     if (next.tools?.names) delete next.tools.names[name]
+    if (isEmptyToolSection(next.tools)) delete next.tools
   })
+}
+
+function setSelectedToolNameMode(value: string) {
+  const names = selectedToolNameRules.value.map(([name]) => name)
+  if (!names.length || !isMode(value)) return
+  mutate((next) => {
+    next.tools ||= {}
+    next.tools.names ||= {}
+    for (const name of names) next.tools.names[name] = value
+  })
+}
+
+function removeSelectedToolNameRules() {
+  const names = selectedToolNameRules.value.map(([name]) => name)
+  if (!names.length) return
+  mutate((next) => {
+    for (const name of names) {
+      if (next.tools?.names) delete next.tools.names[name]
+    }
+    if (isEmptyToolSection(next.tools)) delete next.tools
+  })
+  clearSelection(selectedToolNameRuleKeys)
 }
 
 function renameToolName(name: string, event: Event) {
@@ -375,39 +628,59 @@ function renameToolName(name: string, event: Event) {
 }
 
 function setCommandMode(tool: string, command: string, value: string) {
-  if (!isShellCapableTool(tool)) return
+  if (!isShellCapableTool(tool) && tool !== '*') return
   mutate((next) => {
-    next.tools ||= {}
-    next.tools.rules ||= {}
-    const current = next.tools.rules[tool]
-    const rules: Record<string, PermissionMode> = isMode(current)
-      ? { '*': current }
-      : current && typeof current === 'object' && !Array.isArray(current)
-        ? ({ ...current } as Record<string, PermissionMode>)
-        : {}
-    if (isMode(value)) rules[command] = value
-    else delete rules[command]
-    next.tools.rules[tool] = rules
+    setCommandRuleInConfig(next, tool, command, value)
   })
 }
 
 function removeCommandRule(tool: string, command: string) {
   mutate((next) => {
-    const raw = next.tools?.rules?.[tool]
-    if (isMode(raw)) {
-      if (command === '*') delete next.tools!.rules![tool]
-      return
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
-    const rules = { ...raw } as Record<string, PermissionMode>
-    delete rules[command]
-    if (Object.keys(rules).length) next.tools!.rules![tool] = rules
-    else delete next.tools!.rules![tool]
+    setCommandRuleInConfig(next, tool, command, '')
+    if (isEmptyToolSection(next.tools)) delete next.tools
   })
+}
+
+function setCommandRuleInConfig(next: PermissionConfig, tool: string, command: string, value: string) {
+  if (!isShellCapableTool(tool) && !(tool === '*' && command === 'read-only')) return
+  next.tools ||= {}
+  next.tools.rules ||= {}
+  const current = next.tools.rules[tool]
+  const rules: Record<string, PermissionMode> = isMode(current)
+    ? { '*': current }
+    : current && typeof current === 'object' && !Array.isArray(current)
+      ? ({ ...current } as Record<string, PermissionMode>)
+      : {}
+  if (isMode(value)) rules[command] = value
+  else delete rules[command]
+  if (Object.keys(rules).length) next.tools.rules[tool] = rules
+  else delete next.tools.rules[tool]
+}
+
+function setSelectedCommandMode(value: string) {
+  const rows = selectedCommandRules.value.map(({ tool, command }) => ({ tool, command }))
+  if (!rows.length || !isMode(value)) return
+  mutate((next) => {
+    for (const { tool, command } of rows) setCommandRuleInConfig(next, tool, command, value)
+  })
+}
+
+function removeSelectedCommandRules() {
+  const rows = selectedCommandRules.value.map(({ tool, command }) => ({ tool, command }))
+  if (!rows.length) return
+  mutate((next) => {
+    for (const { tool, command } of rows) setCommandRuleInConfig(next, tool, command, '')
+    if (isEmptyToolSection(next.tools)) delete next.tools
+  })
+  clearSelection(selectedCommandRuleKeys)
 }
 
 function renameCommandRule(tool: string, command: string, event: Event) {
   const input = event.target as HTMLInputElement
+  if (tool === '*') {
+    input.value = command
+    return
+  }
   const nextCommand = input.value.trim()
   if (!nextCommand || nextCommand === command) {
     input.value = command
@@ -508,6 +781,7 @@ function applyRawJson() {
 async function load() {
   loading.value = true
   error.value = ''
+  clearAllRuleSelections()
   try {
     const [effective, global, workspace, toolResponse] = await Promise.all([
       apiJson<SettingsResponse>('/api/v1/settings?source=effective&path=permission'),
@@ -695,10 +969,97 @@ onMounted(() => void load())
                 }}
               </p>
               <div
+                v-if="pathRules.length"
+                class="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+              >
+                <label class="flex items-center gap-2 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    :checked="allPathRulesSelected"
+                    :aria-label="$st('Select all permission rules')"
+                    @change="toggleAllPathRules"
+                  />
+                  {{ $st('Select all') }} ({{ pathRules.length }})
+                </label>
+                <span class="text-xs text-muted-foreground">{{
+                  $st('{count} selected', { count: selectedPathRules.length })
+                }}</span>
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="!selectedPathRules.length"
+                    @click="clearPathRuleSelection"
+                  >
+                    {{ $st('Select none') }}
+                  </Button>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-muted-foreground">{{ $st('Read') }}</span>
+                    <div class="w-32">
+                      <OptionPicker
+                        v-model="bulkPathReadMode"
+                        :options="modeOptions"
+                        :include-empty="true"
+                        :empty-label="$st('Read default')"
+                        :title="$st('Path rule read mode')"
+                        :disabled="!selectedPathRules.length"
+                        size="sm"
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      :disabled="!selectedPathRules.length"
+                      @click="applySelectedPathReadMode"
+                    >
+                      {{ $st('Set mode ({count})', { count: selectedPathRules.length }) }}
+                    </Button>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-muted-foreground">{{ $st('Write') }}</span>
+                    <div class="w-32">
+                      <OptionPicker
+                        v-model="bulkPathWriteMode"
+                        :options="modeOptions"
+                        :include-empty="true"
+                        :empty-label="$st('Write default')"
+                        :title="$st('Path rule write mode')"
+                        :disabled="!selectedPathRules.length"
+                        size="sm"
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      :disabled="!selectedPathRules.length"
+                      @click="applySelectedPathWriteMode"
+                    >
+                      {{ $st('Set mode ({count})', { count: selectedPathRules.length }) }}
+                    </Button>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    :disabled="!selectedPathRules.length"
+                    @click="removeSelectedPathRules"
+                  >
+                    {{ $st('Remove selected ({count})', { count: selectedPathRules.length }) }}
+                  </Button>
+                </div>
+              </div>
+              <div
                 v-for="[path, rule] in pathRules"
                 :key="path"
-                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] sm:items-end"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[auto_minmax(0,1.5fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] sm:items-end"
               >
+                <label class="flex h-9 items-center justify-center">
+                  <input
+                    type="checkbox"
+                    :checked="selectedPathRuleKeys.has(path)"
+                    @change="togglePathRule(path, $event)"
+                  />
+                  <span class="sr-only">{{ path }}</span>
+                </label>
                 <input
                   :value="path"
                   type="text"
@@ -781,10 +1142,64 @@ onMounted(() => void load())
             <div class="grid gap-2">
               <div class="text-sm font-medium">{{ $st('Domain Rules') }}</div>
               <div
+                v-if="networkRules.length"
+                class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+              >
+                <label class="flex items-center gap-2 text-xs font-medium">
+                  <input type="checkbox" :checked="allNetworkRulesSelected" @change="toggleAllNetworkRules" />
+                  {{ $st('Select all') }} ({{ networkRules.length }})
+                </label>
+                <span class="text-xs text-muted-foreground">{{
+                  $st('{count} selected', { count: selectedNetworkRules.length })
+                }}</span>
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="!selectedNetworkRules.length"
+                    @click="clearNetworkRuleSelection"
+                  >
+                    {{ $st('Select none') }}
+                  </Button>
+                  <div class="w-36">
+                    <OptionPicker
+                      v-model="bulkNetworkMode"
+                      :options="modeOptions"
+                      :include-empty="false"
+                      :title="$st('Network rule mode')"
+                      :disabled="!selectedNetworkRules.length"
+                      size="sm"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="!selectedNetworkRules.length"
+                    @click="setSelectedNetworkMode(bulkNetworkMode)"
+                    >{{ $st('Set mode ({count})', { count: selectedNetworkRules.length }) }}</Button
+                  >
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    :disabled="!selectedNetworkRules.length"
+                    @click="removeSelectedNetworkRules"
+                    >{{ $st('Remove selected ({count})', { count: selectedNetworkRules.length }) }}</Button
+                  >
+                </div>
+              </div>
+              <div
                 v-for="[target, mode] in networkRules"
                 :key="target"
-                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
               >
+                <label class="flex h-9 items-center justify-center">
+                  <input
+                    type="checkbox"
+                    :checked="selectedNetworkRuleKeys.has(target)"
+                    @change="toggleNetworkRule(target, $event)"
+                  />
+                  <span class="sr-only">{{ target }}</span>
+                </label>
                 <input
                   :value="target"
                   type="text"
@@ -856,10 +1271,64 @@ onMounted(() => void load())
             <div class="grid gap-2">
               <div class="text-sm font-medium">{{ $st('Name Rules') }}</div>
               <div
+                v-if="toolNameRules.length"
+                class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+              >
+                <label class="flex items-center gap-2 text-xs font-medium">
+                  <input type="checkbox" :checked="allToolNameRulesSelected" @change="toggleAllToolNameRules" />
+                  {{ $st('Select all') }} ({{ toolNameRules.length }})
+                </label>
+                <span class="text-xs text-muted-foreground">{{
+                  $st('{count} selected', { count: selectedToolNameRules.length })
+                }}</span>
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="!selectedToolNameRules.length"
+                    @click="clearToolNameRuleSelection"
+                  >
+                    {{ $st('Select none') }}
+                  </Button>
+                  <div class="w-36">
+                    <OptionPicker
+                      v-model="bulkToolNameMode"
+                      :options="modeOptions"
+                      :include-empty="false"
+                      :title="$st('Tool name mode')"
+                      :disabled="!selectedToolNameRules.length"
+                      size="sm"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="!selectedToolNameRules.length"
+                    @click="setSelectedToolNameMode(bulkToolNameMode)"
+                    >{{ $st('Set mode ({count})', { count: selectedToolNameRules.length }) }}</Button
+                  >
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    :disabled="!selectedToolNameRules.length"
+                    @click="removeSelectedToolNameRules"
+                    >{{ $st('Remove selected ({count})', { count: selectedToolNameRules.length }) }}</Button
+                  >
+                </div>
+              </div>
+              <div
                 v-for="[name, mode] in toolNameRules"
                 :key="name"
-                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
               >
+                <label class="flex h-9 items-center justify-center">
+                  <input
+                    type="checkbox"
+                    :checked="selectedToolNameRuleKeys.has(name)"
+                    @change="toggleToolNameRule(name, $event)"
+                  />
+                  <span class="sr-only">{{ name }}</span>
+                </label>
                 <input
                   :value="name"
                   type="text"
@@ -920,10 +1389,64 @@ onMounted(() => void load())
                 }}
               </p>
               <div
+                v-if="commandRules.length"
+                class="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+              >
+                <label class="flex items-center gap-2 text-xs font-medium">
+                  <input type="checkbox" :checked="allCommandRulesSelected" @change="toggleAllCommandRules" />
+                  {{ $st('Select all') }} ({{ commandRules.length }})
+                </label>
+                <span class="text-xs text-muted-foreground">{{
+                  $st('{count} selected', { count: selectedCommandRules.length })
+                }}</span>
+                <div class="ml-auto flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="!selectedCommandRules.length"
+                    @click="clearCommandRuleSelection"
+                  >
+                    {{ $st('Select none') }}
+                  </Button>
+                  <div class="w-36">
+                    <OptionPicker
+                      v-model="bulkCommandMode"
+                      :options="modeOptions"
+                      :include-empty="false"
+                      :title="$st('Command rule mode')"
+                      :disabled="!selectedCommandRules.length"
+                      size="sm"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    :disabled="!selectedCommandRules.length"
+                    @click="setSelectedCommandMode(bulkCommandMode)"
+                    >{{ $st('Set mode ({count})', { count: selectedCommandRules.length }) }}</Button
+                  >
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    :disabled="!selectedCommandRules.length"
+                    @click="removeSelectedCommandRules"
+                    >{{ $st('Remove selected ({count})', { count: selectedCommandRules.length }) }}</Button
+                  >
+                </div>
+              </div>
+              <div
                 v-for="row in commandRules"
                 :key="`${row.tool}:${row.command}`"
-                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[auto_minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
               >
+                <label class="flex h-9 items-center justify-center">
+                  <input
+                    type="checkbox"
+                    :checked="selectedCommandRuleKeys.has(commandRuleKey(row.tool, row.command))"
+                    @change="toggleCommandRule(row.tool, row.command, $event)"
+                  />
+                  <span class="sr-only">{{ row.tool }} {{ row.command }}</span>
+                </label>
                 <code class="break-all text-xs">{{ row.tool }}</code>
                 <input
                   :value="row.command"

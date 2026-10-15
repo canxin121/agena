@@ -1,8 +1,8 @@
 /**
  * Scope-aware settings pages read or write one configuration layer at a time:
  * the effective (merged) view, the global layer, the current workspace, or the
- * current session. The left navigation renders those layers as a third level
- * under the page row, so a page never needs its own scope picker.
+ * current session. The page workbench renders those layers in its left scope
+ * selector, keeping the global settings sidebar to two levels.
  */
 
 import type { SettingsTab } from './sidebar/settingsSidebarNavigation'

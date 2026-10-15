@@ -44,6 +44,11 @@ pub struct MarketplaceProjectManifest {
     pub marketplace: MarketplaceMetadata,
     #[serde(default)]
     pub plugins: BTreeMap<String, MarketplacePluginPolicy>,
+    /// Historical plugin ids mapped to their current id, or `None` when a
+    /// plugin has been intentionally removed. Destinations are validated
+    /// against the generated release index during marketplace builds.
+    #[serde(default)]
+    pub renames: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -79,6 +84,14 @@ impl MarketplaceProjectManifest {
         for plugin_id in self.plugins.keys() {
             agena_plugin_contracts::validate_plugin_identity(plugin_id)
                 .map_err(|error| MarketplaceError::project_error(&error))?;
+        }
+        for (plugin_id, destination) in &self.renames {
+            agena_plugin_contracts::validate_plugin_identity(plugin_id)
+                .map_err(|error| MarketplaceError::project_error(&error))?;
+            if let Some(destination) = destination {
+                agena_plugin_contracts::validate_plugin_identity(destination)
+                    .map_err(|error| MarketplaceError::project_error(&error))?;
+            }
         }
         Ok(())
     }
@@ -132,6 +145,7 @@ pub fn scaffold_marketplace(request: ScaffoldMarketplaceRequest) -> Result<(), M
             }),
         },
         plugins: BTreeMap::new(),
+        renames: BTreeMap::new(),
     };
     write_text(
         &request.destination.join(AGENA_MARKETPLACE_PROJECT_FILENAME),
@@ -356,6 +370,7 @@ pub fn build_marketplace(
             schema_version: 1,
             marketplace: MarketplaceMetadata::default(),
             plugins: BTreeMap::new(),
+            renames: BTreeMap::new(),
         }
     };
     let mut index = RegistryIndex {
@@ -363,6 +378,7 @@ pub fn build_marketplace(
         ..RegistryIndex::default()
     };
     let plugin_policies = project.plugins;
+    let plugin_renames = project.renames;
     let mut release_ids = BTreeSet::new();
     for path in paths {
         let release: PluginReleaseManifest = serde_json::from_slice(&fs::read(&path)?)?;
@@ -392,6 +408,7 @@ pub fn build_marketplace(
         record.review_tier = policy.review_tier;
         record.featured = policy.featured;
     }
+    index.renames = plugin_renames;
     if request.github_only {
         index.validate_github_distribution()?;
     } else {

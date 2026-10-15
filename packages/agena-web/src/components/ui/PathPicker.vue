@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { apiJson } from '@/lib/api'
 import { normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
@@ -92,6 +92,10 @@ const browserFoldersOnly = ref(false)
 const browserEntries = ref<ListEntry[]>([])
 const browserLoading = ref(false)
 const browserError = ref<string | null>(null)
+let browserLoadSequence = 0
+onBeforeUnmount(() => {
+  browserLoadSequence++
+})
 const createFolderName = ref('')
 const createFolderLoading = ref(false)
 const createFolderError = ref<string | null>(null)
@@ -203,13 +207,17 @@ function resolveBrowserDraftPath(raw: string): string {
 }
 
 async function loadBrowser(path: string) {
+  const sequence = ++browserLoadSequence
+  const draftAtStart = value.value
   browserLoading.value = true
   browserError.value = null
   try {
     const resp = await fetchList(path)
+    if (sequence !== browserLoadSequence) return
     browserPath.value = resp.path
     // For directory pickers, the "current folder" is the selection.
-    if (props.mode === 'directory') {
+    // A slow listing must not overwrite a path typed while it was loading.
+    if (props.mode === 'directory' && value.value === draftAtStart) {
       updateValue(formatOutputPath(resp.path))
     }
     const list = (resp.entries || [])
@@ -225,10 +233,11 @@ async function loadBrowser(path: string) {
       })
     browserEntries.value = list
   } catch (err) {
+    if (sequence !== browserLoadSequence) return
     browserError.value = err instanceof Error ? err.message : String(err)
     browserEntries.value = []
   } finally {
-    browserLoading.value = false
+    if (sequence === browserLoadSequence) browserLoading.value = false
   }
 }
 

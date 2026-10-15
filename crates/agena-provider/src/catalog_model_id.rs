@@ -199,6 +199,12 @@ const DUO_MODEL_MAP: &[(&str, &str)] = &[
 /// Normalizes a raw provider model ID into the catalog's canonical identity.
 pub fn normalized_catalog_model_id(model_id: &str) -> String {
     let mut normalized = strip_path_prefixes(model_id.trim().to_ascii_lowercase().as_str());
+    if let Some((base, suffix)) = normalized.rsplit_once('@')
+        && (matches!(suffix, "eu" | "us" | "global" | "apac" | "jp" | "au")
+            || (suffix.len() == 8 && suffix.bytes().all(|byte| byte.is_ascii_digit())))
+    {
+        normalized = base.to_owned();
+    }
     for suffix in ["@default", "-maas", ":free", "-free"] {
         if let Some(stripped) = normalized.strip_suffix(suffix) {
             normalized = stripped.to_owned();
@@ -296,6 +302,15 @@ mod tests {
             "gpt.5"
         );
         assert_eq!(catalog_model_id_for_raw("   "), None);
+        assert_eq!(normalized_catalog_model_id("gpt-5@eu"), "gpt-5");
+        assert_eq!(
+            normalized_catalog_model_id("claude-opus-4-5@20251101"),
+            "claude-opus-4-5"
+        );
+        assert_eq!(
+            normalized_catalog_model_id("model@unknown"),
+            "model@unknown"
+        );
         assert_eq!(
             catalog_model_id_for_raw("cline-pass/deepseek-v4.1-flash").as_deref(),
             Some("deepseek-v4.1-flash")

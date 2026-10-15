@@ -269,6 +269,8 @@ fn provider_model_metadata_resource_from_domain(
         supports_parallel_tool_calls: value.supports_parallel_tool_calls,
         supports_verbosity: value.supports_verbosity,
         default_verbosity: value.default_verbosity,
+        verbosity_levels: value.verbosity_levels,
+        provider_default_verbosity: value.provider_default_verbosity,
         default_temperature: value.default_temperature,
         default_top_p: value.default_top_p,
         default_top_k: value.default_top_k,

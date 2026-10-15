@@ -11,25 +11,46 @@ function model(overrides: Partial<ProviderModel>): ProviderModel {
   return { provider_id: 'test', id: 'model', ...overrides }
 }
 
-test('verbosity options follow Agena model metadata and preserve custom defaults', () => {
+test('verbosity options use explicit levels and preserve user defaults', () => {
   assert.deepEqual(
-    verbosityOptionsForModel(model({ supports_verbosity: true } as Partial<ProviderModel>)).map((item) => item.value),
-    ['low', 'medium', 'high'],
+    verbosityOptionsForModel(
+      model({ supports_verbosity: true, metadata: { verbosity_levels: ['low', 'high'] } } as Partial<ProviderModel>),
+    ).map((item) => item.value),
+    ['low', 'high'],
   )
   assert.deepEqual(
-    verbosityOptionsForModel(model({ metadata: { supports_verbosity: true, default_verbosity: 'verbose' } })).map(
-      (item) => item.value,
-    ),
+    verbosityOptionsForModel(
+      model({
+        metadata: {
+          supports_verbosity: true,
+          verbosity_levels: ['low', 'medium', 'high'],
+          default_verbosity: 'verbose',
+        },
+      }),
+    ).map((item) => item.value),
     ['low', 'medium', 'high', 'verbose'],
   )
 })
 
-test('gpt-5 chat models expose the runtime-supported medium verbosity only', () => {
+test('model names do not imply verbosity support or allowed values', () => {
+  assert.deepEqual(
+    verbosityOptionsForModel(model({ id: 'gpt-99-chat-latest' })).map((item) => item.value),
+    [],
+  )
+})
+
+test('an explicit unsupported profile suppresses configured verbosity values', () => {
   assert.deepEqual(
     verbosityOptionsForModel(
-      model({ id: 'gpt-5-chat-latest', supports_verbosity: true } as Partial<ProviderModel>),
-    ).map((item) => item.value),
-    ['medium'],
+      model({
+        metadata: {
+          supports_verbosity: false,
+          verbosity_levels: ['low', 'high'],
+          default_verbosity: 'medium',
+        },
+      }),
+    ),
+    [],
   )
 })
 

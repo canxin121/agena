@@ -5,15 +5,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CatalogModelRecord, ConfiguredModelDefinition, ConfiguredModelModeMap,
-    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityPatch,
-    ModelCatalogSnapshotSourceKind, ProviderModelCatalog,
+    CatalogModelRecord, CatalogProviderVerbosityProfile, ConfiguredModelDefinition,
+    ConfiguredModelModeMap, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
+    ModelCapabilityPatch, ModelCatalogSnapshotSourceKind, ProviderModelCatalog,
 };
 
 /// Stable provider catalog definition. The ranking sidecar is deliberately
 /// excluded from serialization so persisted catalog data stays portable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CatalogModelDefinition {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verbosity_by_provider: BTreeMap<String, CatalogProviderVerbosityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +99,8 @@ impl CatalogModelDefinition {
         capabilities: ModelCapabilityPatch,
     ) -> Self {
         Self {
+            provider_sources: Vec::new(),
+            verbosity_by_provider: BTreeMap::new(),
             lifecycle,
             context_window_tokens,
             max_input_tokens,
@@ -132,7 +138,9 @@ impl CatalogModelDefinition {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lifecycle.is_none()
+        self.provider_sources.is_empty()
+            && self.verbosity_by_provider.is_empty()
+            && self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
             && self.max_input_tokens.is_none()
             && self.max_output_tokens.is_none()
@@ -173,6 +181,8 @@ impl CatalogModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
+            verbosity_levels: Vec::new(),
+            provider_default_verbosity: None,
             default_temperature: self.default_temperature,
             default_top_p: self.default_top_p,
             default_top_k: self.default_top_k,
@@ -275,6 +285,8 @@ impl ModelCatalogSnapshot {
     pub fn model_record(model_id: &str, definition: &CatalogModelDefinition) -> CatalogModelRecord {
         CatalogModelRecord {
             model_id: model_id.to_owned(),
+            provider_sources: definition.provider_sources.clone(),
+            verbosity_by_provider: definition.verbosity_by_provider.clone(),
             display_name: definition.display_name.clone(),
             origin: definition.origin.clone(),
             lifecycle: definition.lifecycle,
@@ -328,7 +340,7 @@ pub struct ModelCatalogResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogDefinitionSourcePriority, CatalogModelDefinition};
+    use super::{CatalogDefinitionSourcePriority, CatalogModelDefinition, ModelCatalogDocument};
     #[test]
     fn persisted_definition_excludes_ranking_sidecar() {
         let definition = CatalogModelDefinition {
@@ -346,5 +358,30 @@ mod tests {
             CatalogDefinitionSourcePriority::default()
         );
         assert!(value.get("source_priority").is_none());
+    }
+
+    #[test]
+    fn public_catalog_decodes_provider_sources_and_scoped_verbosity_profiles() {
+        let document: ModelCatalogDocument = serde_json::from_value(serde_json::json!({
+            "models": {
+                "gpt-99": {
+                    "provider_sources": ["openai", "openrouter"],
+                    "verbosity_by_provider": {
+                        "openai": {
+                            "supported": true,
+                            "levels": ["low", "medium", "high"],
+                            "provider_default": "medium"
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("decode public catalog schema");
+        let model = &document.models["gpt-99"];
+        assert_eq!(model.provider_sources, ["openai", "openrouter"]);
+        assert_eq!(
+            model.verbosity_by_provider["openai"].levels,
+            ["low", "medium", "high"]
+        );
     }
 }

@@ -46,9 +46,23 @@ pub fn apply_catalog_definition_as_authority(
     definition: &CatalogModelDefinition,
     capability_fallback: &ModelCapabilities,
     metadata_fallback: &ModelMetadata,
-    mut model: Model,
+    model: Model,
 ) -> Model {
     let configured = catalog_definition_to_provider_definition(definition);
+    apply_configured_definition_as_authority(
+        &configured,
+        capability_fallback,
+        metadata_fallback,
+        model,
+    )
+}
+
+pub fn apply_configured_definition_as_authority(
+    configured: &ConfiguredModelDefinition,
+    capability_fallback: &ModelCapabilities,
+    metadata_fallback: &ModelMetadata,
+    mut model: Model,
+) -> Model {
     let catalog_capabilities = configured
         .capabilities
         .apply_to(ModelCapabilities::default());

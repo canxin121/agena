@@ -558,6 +558,8 @@ fn source_preference_score(
 
 fn model_richness_score(definition: &CatalogModelDefinition) -> i32 {
     let mut score = 0;
+    score += (!definition.provider_sources.is_empty()) as i32;
+    score += (!definition.verbosity_by_provider.is_empty()) as i32;
     if definition.display_name.is_some() {
         score += 5;
     }

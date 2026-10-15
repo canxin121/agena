@@ -192,12 +192,16 @@ function modelMetadataValue(model: ProviderModel | null | undefined, key: string
 }
 
 export function verbosityOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
-  const supported = modelMetadataValue(model, 'supports_verbosity') === true
+  const support = modelMetadataValue(model, 'supports_verbosity')
+  if (support === false) return []
+  const supported = support === true
   const configuredDefault = readString(modelMetadataValue(model, 'default_verbosity'))
-  if (!supported && !configuredDefault) return []
-
-  const modelId = readString(model?.id).toLowerCase()
-  const values = modelId.includes('gpt-5') && modelId.includes('-chat') ? ['medium'] : ['low', 'medium', 'high']
+  const rawLevels = modelMetadataValue(model, 'verbosity_levels')
+  const values = Array.isArray(rawLevels)
+    ? rawLevels.map(readString).filter((value, index, list) => value.length > 0 && list.indexOf(value) === index)
+    : []
+  if (!supported && values.length === 0 && !configuredDefault) return []
+  if (values.length === 0 && configuredDefault) values.push(configuredDefault)
   if (configuredDefault && !values.includes(configuredDefault)) values.push(configuredDefault)
   return values.map((value) => ({
     value,

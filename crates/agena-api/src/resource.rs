@@ -535,6 +535,10 @@ pub enum ModelCatalogSourceKind {
 pub struct CatalogModelResource {
     pub model_id: String,
     pub source: ModelCatalogSourceKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verbosity_by_provider: BTreeMap<String, CatalogProviderVerbosityProfileResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -594,6 +598,17 @@ pub struct CatalogModelResource {
         skip_serializing_if = "ModelCapabilityPatchResource::is_empty"
     )]
     pub capabilities: ModelCapabilityPatchResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+/// Provider-scoped answer-verbosity information in the public API.
+pub struct CatalogProviderVerbosityProfileResource {
+    pub supported: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_default: Option<String>,
 }
 
 /// Configured model modes retain the distinction between inheriting a default,

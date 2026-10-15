@@ -55,6 +55,8 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             "supports_parallel_tool_calls",
             "supports_verbosity",
             "default_verbosity",
+            "verbosity_levels",
+            "provider_default_verbosity",
             "default_temperature",
             "default_top_p",
             "default_top_k",

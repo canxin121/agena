@@ -73,6 +73,11 @@ pub enum ModelCatalogSourceKind {
 /// A model entry in the catalog.
 pub struct CatalogModelResource {
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub verbosity_by_provider:
+        std::collections::BTreeMap<String, agena_provider::CatalogProviderVerbosityProfile>,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
@@ -157,6 +162,8 @@ impl CatalogModelResource {
 
         Self {
             model_id: value.model_id,
+            provider_sources: value.provider_sources,
+            verbosity_by_provider: value.verbosity_by_provider,
             source,
             source_label,
             display_name: value.display_name,

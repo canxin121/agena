@@ -237,6 +237,11 @@ pub fn merge_catalog_definition(
     if current.supports_parallel_tool_calls.is_none() {
         current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
     }
+    merge_provider_sources(&mut current.provider_sources, &next.provider_sources);
+    merge_verbosity_profiles_fill_missing(
+        &mut current.verbosity_by_provider,
+        &next.verbosity_by_provider,
+    );
     if current.supports_verbosity.is_none() {
         current.supports_verbosity = next.supports_verbosity;
     }
@@ -270,6 +275,23 @@ pub fn merge_catalog_definition(
     merge_mode_default(&mut current.speed_modes.default, &next.speed_modes.default);
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
     merge_source_priority(&mut current.source_priority, &next.source_priority);
+}
+
+fn merge_provider_sources(current: &mut Vec<String>, next: &[String]) {
+    let mut sources: std::collections::BTreeSet<String> = current.iter().cloned().collect();
+    sources.extend(next.iter().cloned());
+    *current = sources.into_iter().collect();
+}
+
+fn merge_verbosity_profiles_fill_missing(
+    current: &mut BTreeMap<String, crate::CatalogProviderVerbosityProfile>,
+    next: &BTreeMap<String, crate::CatalogProviderVerbosityProfile>,
+) {
+    for (provider, profile) in next {
+        current
+            .entry(provider.clone())
+            .or_insert_with(|| profile.clone());
+    }
 }
 
 /// Merges one live provider document into a mutable catalog. Public catalog

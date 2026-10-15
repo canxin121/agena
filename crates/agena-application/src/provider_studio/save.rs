@@ -611,7 +611,11 @@ fn generated_provider_model_settings(
         let mut route = JsonMap::new();
         // Tool mode is operational policy, not catalog metadata. Preserve a
         // non-default policy while leaving model metadata dynamically resolved.
-        let tools = catalog_model_to_provider_model_overlay(catalog_model).agena_tools;
+        let tools = catalog_model_to_provider_model_overlay(
+            catalog_model,
+            Some(&provider_model.provider_id),
+        )
+        .agena_tools;
         if !tools.is_default() {
             route.insert("agena_tools".to_owned(), serde_json::to_value(tools)?);
         }

@@ -160,6 +160,10 @@ pub struct ProviderModelMetadataResource {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verbosity_levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_temperature: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +194,8 @@ impl ProviderModelMetadataResource {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.verbosity_levels.is_empty()
+            && self.provider_default_verbosity.is_none()
             && self.default_temperature.is_none()
             && self.default_top_p.is_none()
             && self.default_top_k.is_none()

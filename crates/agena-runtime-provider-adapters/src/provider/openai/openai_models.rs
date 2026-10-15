@@ -122,6 +122,8 @@ impl OpenAiCompatibleModel {
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
+            verbosity_levels: Vec::new(),
+            provider_default_verbosity: None,
             default_temperature: None,
             default_top_p: None,
             default_top_k: None,
@@ -161,6 +163,8 @@ impl OpenAiRecommendedModel {
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
+            verbosity_levels: Vec::new(),
+            provider_default_verbosity: None,
             default_temperature: None,
             default_top_p: None,
             default_top_k: None,
@@ -292,7 +296,7 @@ impl OpenAiCodexModel {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let default_verbosity = self
+        let provider_default_verbosity = self
             .default_verbosity
             .as_ref()
             .and_then(|value| utils::normalize_optional_text(Some(value.clone())));
@@ -313,7 +317,9 @@ impl OpenAiCodexModel {
             open_weights: None,
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.support_verbosity,
-            default_verbosity,
+            default_verbosity: None,
+            verbosity_levels: Vec::new(),
+            provider_default_verbosity,
             default_temperature: None,
             default_top_p: None,
             default_top_k: None,

@@ -23,6 +23,12 @@ impl agena_provider::CatalogModelDecorationSource for ModelRuntimeCatalogDecorat
     fn provider_id(&self) -> &str {
         self.provider.id()
     }
+    fn catalog_source_id(&self) -> String {
+        match self.provider.capability_family() {
+            Some(agena_provider::CapabilityFamily::OpenAi) => "openai".to_owned(),
+            _ => self.provider.id().to_owned(),
+        }
+    }
     fn catalog_model_id_for_raw(&self, raw_model_id: &str) -> Option<String> {
         agena_provider::catalog_model_id_for_raw(raw_model_id)
     }

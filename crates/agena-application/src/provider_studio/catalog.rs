@@ -164,15 +164,21 @@ pub(crate) fn provider_model_overlay_for_model_id(
     model_id: &str,
     provider_model: Option<&agena_api::resource::ProviderModelResource>,
 ) -> agena_provider::ResolvedProviderModelConfig {
+    let provider_id = provider_model.map(|model| model.provider_id.as_str());
     let mut overlay = preferred_catalog_model_for_lookup_ids(
         catalog_entries,
         &catalog_lookup_candidates(model_id),
     )
-    .map(catalog_model_to_provider_model_overlay)
+    .map(|model| catalog_model_to_provider_model_overlay(model, provider_id))
     .or_else(|| {
         provider_model.and_then(|provider_model| {
             preferred_catalog_model_for_provider_model(catalog_entries, provider_model)
-                .map(catalog_model_to_provider_model_overlay)
+                .map(|model| {
+                    catalog_model_to_provider_model_overlay(
+                        model,
+                        Some(&provider_model.provider_id),
+                    )
+                })
                 .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
         })
     })
@@ -200,16 +206,31 @@ pub(crate) fn provider_model_overlay_to_json(
 
 pub(crate) fn catalog_model_to_provider_model_overlay(
     model: &crate::dto::CatalogModelResource,
+    provider_id: Option<&str>,
 ) -> agena_provider::ResolvedProviderModelConfig {
-    agena_provider::provider_model_overlay_from_catalog_definition(
-        &catalog_model_to_catalog_definition(model),
-    )
+    let definition = catalog_model_to_catalog_definition(model);
+    let mut overlay = agena_provider::provider_model_overlay_from_catalog_definition(&definition);
+    // Catalog verbosity is provider-scoped. Resolve only the profile belonging
+    // to the route being edited; never flatten another provider's profile into
+    // this route's saved configuration.
+    overlay.definition.supports_verbosity = None;
+    overlay.definition.default_verbosity = None;
+    overlay.definition.verbosity_levels.clear();
+    overlay.definition.provider_default_verbosity = None;
+    if let Some(profile) = provider_id.and_then(|id| definition.verbosity_by_provider.get(id)) {
+        overlay.definition.supports_verbosity = Some(profile.supported);
+        if profile.supported {
+            overlay.definition.verbosity_levels = profile.levels.clone();
+            overlay.definition.provider_default_verbosity = profile.provider_default.clone();
+        }
+    }
+    overlay
 }
 
 pub(crate) fn catalog_model_to_catalog_definition(
     model: &crate::dto::CatalogModelResource,
 ) -> CatalogModelDefinition {
-    CatalogModelDefinition::from_fields(
+    let mut definition = CatalogModelDefinition::from_fields(
         model.lifecycle,
         model.context_window_tokens,
         model.max_input_tokens,
@@ -234,7 +255,10 @@ pub(crate) fn catalog_model_to_catalog_definition(
         model.thinking_modes.clone(),
         model.speed_modes.clone(),
         sanitized_catalog_capability_patch(&model.capabilities),
-    )
+    );
+    definition.provider_sources = model.provider_sources.clone();
+    definition.verbosity_by_provider = model.verbosity_by_provider.clone();
+    definition
 }
 
 pub(crate) fn sanitized_catalog_capability_patch(
@@ -298,8 +322,8 @@ pub(crate) fn provider_model_to_provider_model_overlay(
         metadata.last_updated.clone(),
         metadata.open_weights,
         metadata.supports_parallel_tool_calls,
-        metadata.supports_verbosity,
-        metadata.default_verbosity.clone(),
+        None,
+        None,
         metadata.default_temperature.clone(),
         metadata.default_top_p.clone(),
         metadata.default_top_k,
@@ -315,6 +339,12 @@ pub(crate) fn provider_model_to_provider_model_overlay(
         provider_model_capabilities_to_patch(model),
     );
     let mut overlay = agena_provider::provider_model_overlay_from_catalog_definition(&definition);
+    // This fallback is used for a live provider model that has no catalog
+    // match, so its metadata is already scoped to the selected provider.
+    overlay.definition.supports_verbosity = metadata.supports_verbosity;
+    overlay.definition.default_verbosity = metadata.default_verbosity.clone();
+    overlay.definition.verbosity_levels = metadata.verbosity_levels.clone();
+    overlay.definition.provider_default_verbosity = metadata.provider_default_verbosity.clone();
     overlay.native_compaction = model.native_compaction;
     overlay
 }
@@ -794,7 +824,10 @@ pub(crate) fn required_trimmed<'a>(value: &'a str, field: &str) -> anyhow::Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{provider_model_overlay_to_json, provider_model_to_provider_model_overlay};
+    use super::{
+        catalog_model_to_provider_model_overlay, provider_model_overlay_to_json,
+        provider_model_to_provider_model_overlay,
+    };
     use agena_api::resource::{
         CapabilitySupportResource, ProviderModelCapabilitiesResource,
         ProviderModelMetadataResource, ProviderModelResource, ProviderModelSpeedModeResource,
@@ -846,6 +879,9 @@ mod tests {
             capabilities,
             metadata: ProviderModelMetadataResource {
                 context_window_tokens: Some(262_144),
+                supports_verbosity: Some(true),
+                verbosity_levels: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
+                provider_default_verbosity: Some("medium".to_owned()),
                 ..Default::default()
             },
             thinking_modes: vec![
@@ -965,9 +1001,62 @@ mod tests {
                 == Some(agena_domain::CapabilitySupport::Supported)
         );
         assert_eq!(overlay.definition.context_window_tokens, Some(262_144));
+        assert_eq!(overlay.definition.supports_verbosity, Some(true));
+        assert_eq!(
+            overlay.definition.verbosity_levels,
+            ["low", "medium", "high"]
+        );
+        assert_eq!(
+            overlay.definition.provider_default_verbosity.as_deref(),
+            Some("medium")
+        );
         assert_eq!(
             overlay.definition.display_name.as_deref(),
             Some("DeepSeek V4 Flash")
         );
+    }
+
+    #[test]
+    fn catalog_overlay_resolves_verbosity_for_the_current_provider_only() {
+        let model: crate::dto::CatalogModelResource = serde_json::from_value(serde_json::json!({
+            "model_id": "gpt-99",
+            "source": "generated",
+            "verbosity_by_provider": {
+                "openai": {
+                    "supported": true,
+                    "levels": ["low", "medium", "high"],
+                    "provider_default": "medium"
+                },
+                "openrouter": {
+                    "supported": true,
+                    "levels": ["low", "high"],
+                    "provider_default": "low"
+                }
+            }
+        }))
+        .expect("deserialize catalog model");
+
+        let openai = catalog_model_to_provider_model_overlay(&model, Some("openai"));
+        assert_eq!(openai.definition.supports_verbosity, Some(true));
+        assert_eq!(
+            openai.definition.verbosity_levels,
+            ["low", "medium", "high"]
+        );
+        assert_eq!(
+            openai.definition.provider_default_verbosity.as_deref(),
+            Some("medium")
+        );
+
+        let openrouter = catalog_model_to_provider_model_overlay(&model, Some("openrouter"));
+        assert_eq!(openrouter.definition.verbosity_levels, ["low", "high"]);
+        assert_eq!(
+            openrouter.definition.provider_default_verbosity.as_deref(),
+            Some("low")
+        );
+
+        let unrelated = catalog_model_to_provider_model_overlay(&model, Some("unrelated"));
+        assert!(unrelated.definition.supports_verbosity.is_none());
+        assert!(unrelated.definition.verbosity_levels.is_empty());
+        assert!(unrelated.definition.provider_default_verbosity.is_none());
     }
 }

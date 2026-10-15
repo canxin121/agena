@@ -29,6 +29,8 @@ impl ModelMetadataRegistry {
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
+            verbosity_levels: Vec::new(),
+            provider_default_verbosity: None,
             default_temperature: normalize_model_default_temperature(
                 detect_default_temperature(normalized_model.as_str()).map(ToOwned::to_owned),
             ),

@@ -33,6 +33,8 @@ type CatalogModel = {
   model_id: string
   source: string
   source_label?: string | null
+  provider_sources?: string[]
+  verbosity_by_provider?: Record<string, { supported?: boolean; levels?: string[]; provider_default?: string | null }>
   display_name?: string | null
   origin?: string | null
   lifecycle?: string | null
@@ -655,6 +657,8 @@ defineExpose({ refresh: () => load() })
                 v-for="item in [
                   { label: $st('Verbosity'), value: yesNo(selectedModel.supports_verbosity) },
                   { label: $st('Default verbosity'), value: selectedModel.default_verbosity },
+                  { label: $st('Provider sources'), value: selectedModel.provider_sources?.join(', ') },
+                  { label: $st('Verbosity by provider'), value: pretty(selectedModel.verbosity_by_provider ?? null) },
                   { label: $st('Temperature'), value: selectedModel.default_temperature },
                   { label: 'Top P', value: selectedModel.default_top_p },
                   { label: 'Top K', value: selectedModel.default_top_k },

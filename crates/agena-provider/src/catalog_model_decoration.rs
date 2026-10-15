@@ -8,15 +8,19 @@ use agena_domain::{
 };
 
 use crate::{
-    CatalogModelDefinition, ModelCatalogProviderRecord, apply_catalog_definition_as_authority,
-    apply_catalog_definition_as_baseline, catalog_definition_to_provider_definition,
-    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
+    CatalogModelDefinition, ConfiguredModelDefinition, ModelCatalogProviderRecord,
+    apply_configured_definition_as_authority, apply_configured_definition_as_baseline,
+    catalog_definition_to_provider_definition, merge_catalog_baseline_speed_modes,
+    merge_catalog_baseline_thinking_modes,
 };
 
 /// The small provider-specific read view required by catalog decoration.
 /// Concrete SDK/runtime implementations adapt themselves at composition time.
 pub trait CatalogModelDecorationSource: Send + Sync {
     fn provider_id(&self) -> &str;
+    fn catalog_source_id(&self) -> String {
+        self.provider_id().to_owned()
+    }
     fn catalog_model_id_for_raw(&self, raw_model_id: &str) -> Option<String>;
     fn native_compaction_enabled_for_adapter(
         &self,
@@ -129,19 +133,43 @@ fn decorate_provider_model(
         let adapter_id = model.adapter_id.clone();
         let capabilities = provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model_id);
         let metadata = provider.model_metadata_for_adapter(adapter_id.as_ref(), &model_id);
+        let configured = configured_definition_for_provider(definition, provider);
         if manual_overrides.contains(model_id.as_ref())
             || model
                 .catalog_model_id
                 .as_ref()
                 .is_some_and(|id| manual_overrides.contains(id.as_ref()))
         {
-            apply_catalog_definition_as_baseline(definition, &capabilities, &metadata, model)
+            apply_configured_definition_as_baseline(&configured, &capabilities, &metadata, model)
         } else {
-            apply_catalog_definition_as_authority(definition, &capabilities, &metadata, model)
+            apply_configured_definition_as_authority(&configured, &capabilities, &metadata, model)
         }
     } else {
         model
     }
+}
+
+fn configured_definition_for_provider(
+    definition: &CatalogModelDefinition,
+    provider: &dyn CatalogModelDecorationSource,
+) -> ConfiguredModelDefinition {
+    let mut configured = definition.clone().into_configured_definition();
+    // Legacy global catalog values must never leak onto a different provider
+    // route. The user's request default remains in provider configuration.
+    configured.supports_verbosity = None;
+    configured.default_verbosity = None;
+    configured.verbosity_levels.clear();
+    configured.provider_default_verbosity = None;
+    if let Some(profile) = definition
+        .verbosity_by_provider
+        .get(&provider.catalog_source_id())
+        && profile.supported
+    {
+        configured.supports_verbosity = Some(true);
+        configured.verbosity_levels = profile.levels.clone();
+        configured.provider_default_verbosity = profile.provider_default.clone();
+    }
+    configured
 }
 
 fn apply_catalog_display_name_as_fallback(model: &mut Model, definition: &CatalogModelDefinition) {
@@ -200,7 +228,10 @@ fn catalog_definition_for_model_id<'a>(
 #[cfg(test)]
 mod tests {
     use super::apply_catalog_display_name_as_fallback;
-    use crate::{CatalogModelDefinition, ModelCatalogProviderRecord, decorate_provider_models};
+    use crate::{
+        CatalogModelDefinition, CatalogProviderVerbosityProfile, ModelCatalogProviderRecord,
+        decorate_provider_models,
+    };
     use agena_domain::{
         AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode,
         ModelThinkingMode,
@@ -307,6 +338,60 @@ mod tests {
             Some(900_000),
             "manual_overrides must keep the route's own value"
         );
+    }
+
+    #[test]
+    fn verbosity_profile_is_applied_only_for_its_provider_and_keeps_defaults_separate() {
+        let mut record = catalog_record();
+        let definition = record.models.get_mut("gpt-6.1-sol").unwrap();
+        definition.provider_sources = vec!["openai".to_owned(), "openrouter".to_owned()];
+        definition.verbosity_by_provider.insert(
+            "openai".to_owned(),
+            CatalogProviderVerbosityProfile {
+                supported: true,
+                levels: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
+                provider_default: Some("medium".to_owned()),
+            },
+        );
+        definition.supports_verbosity = Some(true);
+        definition.default_verbosity = Some("high".to_owned());
+
+        let mut route = route_model();
+        route.metadata.default_verbosity = Some("low".to_owned());
+        let decorated =
+            decorate_provider_models(&StubSource, &record, &BTreeSet::new(), vec![route]);
+        assert_eq!(decorated[0].metadata.supports_verbosity, Some(true));
+        assert_eq!(
+            decorated[0].metadata.verbosity_levels,
+            vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]
+        );
+        assert_eq!(
+            decorated[0].metadata.provider_default_verbosity.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            decorated[0].metadata.default_verbosity.as_deref(),
+            Some("low")
+        );
+    }
+
+    #[test]
+    fn a_provider_does_not_receive_another_providers_verbosity_profile() {
+        let mut record = catalog_record();
+        let definition = record.models.get_mut("gpt-6.1-sol").unwrap();
+        definition.verbosity_by_provider.insert(
+            "openrouter".to_owned(),
+            CatalogProviderVerbosityProfile {
+                supported: true,
+                levels: vec!["low".to_owned(), "high".to_owned()],
+                provider_default: None,
+            },
+        );
+
+        let decorated =
+            decorate_provider_models(&StubSource, &record, &BTreeSet::new(), vec![route_model()]);
+        assert_eq!(decorated[0].metadata.supports_verbosity, None);
+        assert!(decorated[0].metadata.verbosity_levels.is_empty());
     }
 
     #[test]

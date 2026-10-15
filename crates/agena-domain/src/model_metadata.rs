@@ -103,6 +103,10 @@ pub struct ModelMetadata {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verbosity_levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_temperature: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +134,8 @@ impl ModelMetadata {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.verbosity_levels.is_empty()
+            && self.provider_default_verbosity.is_none()
             && self.default_temperature.is_none()
             && self.default_top_p.is_none()
             && self.default_top_k.is_none()
@@ -138,31 +144,17 @@ impl ModelMetadata {
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
     }
-    pub fn supported_verbosity_levels_for_model(&self, model_id: &ModelId) -> Vec<String> {
+    pub fn supported_verbosity_levels_for_model(&self, _model_id: &ModelId) -> Vec<String> {
+        if self.supports_verbosity == Some(false) {
+            return Vec::new();
+        }
         let default = self
             .default_verbosity
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_ascii_lowercase);
-        if !self.supports_verbosity.unwrap_or(false) && default.is_none() {
-            return Vec::new();
-        }
-        let mut levels = if model_id
-            .as_ref()
-            .trim()
-            .to_ascii_lowercase()
-            .contains("gpt-5")
-            && model_id
-                .as_ref()
-                .trim()
-                .to_ascii_lowercase()
-                .contains("-chat")
-        {
-            vec!["medium".to_owned()]
-        } else {
-            vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]
-        };
+        let mut levels = normalize_model_verbosity_levels(self.verbosity_levels.clone());
         if let Some(default) = default
             && !levels.iter().any(|v| v == &default)
         {
@@ -205,6 +197,14 @@ impl ModelMetadata {
             default_verbosity: self
                 .default_verbosity
                 .or_else(|| f.default_verbosity.clone()),
+            verbosity_levels: if self.verbosity_levels.is_empty() {
+                f.verbosity_levels.clone()
+            } else {
+                self.verbosity_levels
+            },
+            provider_default_verbosity: self
+                .provider_default_verbosity
+                .or_else(|| f.provider_default_verbosity.clone()),
             default_temperature: self
                 .default_temperature
                 .or_else(|| f.default_temperature.clone()),
@@ -224,6 +224,16 @@ impl ModelMetadata {
             pricing: self.pricing.or_else(|| f.pricing.clone()),
         }
     }
+}
+fn normalize_model_verbosity_levels(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim().to_ascii_lowercase();
+        if !value.is_empty() && !normalized.contains(&value) {
+            normalized.push(value);
+        }
+    }
+    normalized
 }
 fn parse_optional_f32(value: Option<&str>, predicate: impl Fn(f32) -> bool) -> Option<f32> {
     value
@@ -272,6 +282,7 @@ fn normalize_decimal(value: Option<String>, predicate: impl Fn(f32) -> bool) -> 
 #[cfg(test)]
 mod tests {
     use super::{ModelMetadata, ModelPricing, ModelTokenLimits};
+    use crate::ModelId;
 
     #[test]
     fn metadata_merge_and_wire_shape_are_stable() {
@@ -300,6 +311,37 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&merged).unwrap()["pricing"]["input_usd_per_million_tokens"],
             "1.5"
+        );
+    }
+
+    #[test]
+    fn verbosity_choices_use_only_explicit_levels_or_a_user_configured_default() {
+        let gpt = ModelId::new("gpt-99");
+        assert!(
+            ModelMetadata::default()
+                .supported_verbosity_levels_for_model(&gpt)
+                .is_empty()
+        );
+
+        let metadata = ModelMetadata {
+            supports_verbosity: Some(true),
+            verbosity_levels: vec!["low".to_owned(), "medium".to_owned()],
+            ..ModelMetadata::default()
+        };
+        assert_eq!(
+            metadata.supported_verbosity_levels_for_model(&gpt),
+            ["low", "medium"]
+        );
+
+        let unsupported = ModelMetadata {
+            supports_verbosity: Some(false),
+            default_verbosity: Some("low".to_owned()),
+            ..ModelMetadata::default()
+        };
+        assert!(
+            unsupported
+                .supported_verbosity_levels_for_model(&gpt)
+                .is_empty()
         );
     }
 }

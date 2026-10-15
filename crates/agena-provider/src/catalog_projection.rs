@@ -11,7 +11,9 @@ use crate::{
 /// This deliberately has no runtime, configuration, HTTP, or persistence
 /// dependency, so catalog construction can share it without depending on core.
 pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
-    CatalogModelDefinition {
+    let mut definition = CatalogModelDefinition {
+        provider_sources: Vec::new(),
+        verbosity_by_provider: Default::default(),
         lifecycle: model.metadata.lifecycle,
         context_window_tokens: model.metadata.limits.context_window_tokens,
         max_input_tokens: model.metadata.limits.max_input_tokens,
@@ -22,8 +24,8 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         last_updated: model.metadata.last_updated.clone(),
         open_weights: model.metadata.open_weights,
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
-        supports_verbosity: model.metadata.supports_verbosity,
-        default_verbosity: model.metadata.default_verbosity.clone(),
+        supports_verbosity: None,
+        default_verbosity: None,
         default_temperature: model.metadata.default_temperature.clone(),
         default_top_p: model.metadata.default_top_p.clone(),
         default_top_k: model.metadata.default_top_k,
@@ -81,7 +83,21 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         },
         capabilities: capability_patch_from_model(&model.capabilities),
         source_priority: CatalogDefinitionSourcePriority::default(),
+    };
+    if model.metadata.supports_verbosity.is_some()
+        || !model.metadata.verbosity_levels.is_empty()
+        || model.metadata.provider_default_verbosity.is_some()
+    {
+        definition.verbosity_by_provider.insert(
+            model.provider_id.as_ref().to_owned(),
+            crate::CatalogProviderVerbosityProfile {
+                supported: model.metadata.supports_verbosity.unwrap_or(true),
+                levels: model.metadata.verbosity_levels.clone(),
+                provider_default: model.metadata.provider_default_verbosity.clone(),
+            },
+        );
     }
+    definition
 }
 
 pub fn capability_patch_from_model(capabilities: &ModelCapabilities) -> ModelCapabilityPatch {

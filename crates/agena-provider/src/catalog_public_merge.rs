@@ -204,6 +204,8 @@ pub fn merge_public_source_catalog_definition(
     current: &mut CatalogModelDefinition,
     next: &CatalogModelDefinition,
 ) {
+    let current_semantics_priority = current.source_priority.semantics_priority;
+    let next_semantics_priority = next.source_priority.semantics_priority;
     if current.lifecycle.is_none() {
         current.lifecycle = next.lifecycle;
     }
@@ -243,6 +245,13 @@ pub fn merge_public_source_catalog_definition(
     if current.supports_parallel_tool_calls.is_none() {
         current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
     }
+    merge_provider_sources(&mut current.provider_sources, &next.provider_sources);
+    merge_verbosity_profiles_by_priority(
+        current,
+        next,
+        current_semantics_priority,
+        next_semantics_priority,
+    );
     if current.supports_verbosity.is_none() {
         current.supports_verbosity = next.supports_verbosity;
     }
@@ -284,6 +293,31 @@ pub fn merge_public_source_catalog_definition(
     );
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
     merge_source_priority(&mut current.source_priority, &next.source_priority);
+}
+
+fn merge_provider_sources(current: &mut Vec<String>, next: &[String]) {
+    let mut sources: std::collections::BTreeSet<String> = current.iter().cloned().collect();
+    sources.extend(next.iter().cloned());
+    *current = sources.into_iter().collect();
+}
+
+fn merge_verbosity_profiles_by_priority(
+    current: &mut CatalogModelDefinition,
+    next: &CatalogModelDefinition,
+    current_priority: i32,
+    next_priority: i32,
+) {
+    for (provider, profile) in &next.verbosity_by_provider {
+        let should_replace = current
+            .verbosity_by_provider
+            .get(provider)
+            .is_none_or(|_| next_priority > current_priority);
+        if should_replace {
+            current
+                .verbosity_by_provider
+                .insert(provider.clone(), profile.clone());
+        }
+    }
 }
 
 fn merge_limit_field(

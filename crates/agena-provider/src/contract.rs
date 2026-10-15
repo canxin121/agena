@@ -190,10 +190,25 @@ pub struct ProviderModelCatalog {
     pub appendable_model_ids: std::collections::BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+/// Answer verbosity support documented for one upstream provider API.
+pub struct CatalogProviderVerbosityProfile {
+    pub supported: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_default: Option<String>,
+}
+
 /// API-facing model catalog record independent of core persistence and ranking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CatalogModelRecord {
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub verbosity_by_provider: BTreeMap<String, CatalogProviderVerbosityProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -887,6 +902,10 @@ pub struct ConfiguredModelDefinition {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verbosity_levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_temperature: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -929,6 +948,8 @@ impl ConfiguredModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.verbosity_levels.is_empty()
+            && self.provider_default_verbosity.is_none()
             && self.default_temperature.is_none()
             && self.default_top_p.is_none()
             && self.default_top_k.is_none()
@@ -957,6 +978,8 @@ impl ConfiguredModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
+            verbosity_levels: self.verbosity_levels.clone(),
+            provider_default_verbosity: self.provider_default_verbosity.clone(),
             default_temperature: self.default_temperature.clone(),
             default_top_p: self.default_top_p.clone(),
             default_top_k: self.default_top_k,

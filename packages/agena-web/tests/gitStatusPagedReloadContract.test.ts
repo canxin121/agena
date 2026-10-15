@@ -132,3 +132,93 @@ test('overlapping Git pages advance by server rows and an empty page ends loadin
   )
   assert.equal(paged.hasMoreStaged.value, false)
 })
+
+test('a counts-only status response loads the missing visible file pages', async () => {
+  const summary = { ...makeStatus([], 'all'), unstagedCount: 31, untrackedCount: 5 }
+  const calls: string[] = []
+  const paged = useGitStatusPaged({
+    gitReady: ref(true),
+    status: ref(summary),
+    pageSize: 200,
+    loadStatusPage: async ({ scope, offset }) => {
+      calls.push(`${scope}:${offset}`)
+      const count = scope === 'unstaged' ? 31 : 5
+      return makeStatus(
+        Array.from({ length: count }, (_, index) => ({
+          path: `${scope}/${index}.ts`,
+          index: '',
+          workingDir: scope === 'untracked' ? '?' : 'M',
+        })),
+        scope,
+      )
+    },
+  })
+  const finish = paged.beginFirstPages(['staged', 'unstaged', 'untracked'])
+  assert.equal(paged.changesListLoading.value, true)
+  await paged.applySummaryPages('/repo', summary, ['staged', 'unstaged', 'untracked'])
+  finish()
+  assert.deepEqual(calls.sort(), ['unstaged:0', 'untracked:0'])
+  assert.equal(paged.changesList.value.length, 31)
+  assert.equal(paged.untrackedList.value.length, 5)
+  assert.equal(paged.stagedList.value.length, 0)
+  assert.equal(paged.changesListLoading.value, false)
+  assert.equal(paged.hasMoreStaged.value, false)
+})
+
+test('partial batched responses retain their pages and fetch only omitted scopes', async () => {
+  const calls: string[] = []
+  const summary = {
+    ...makeStatus([], 'all'),
+    stagedCount: 1,
+    unstagedCount: 1,
+    snapshotId: 'batch-snapshot',
+    scopePages: {
+      staged: {
+        files: [{ path: 'staged.ts', index: 'M', workingDir: '' }],
+        totalFiles: 1,
+        offset: 0,
+        limit: 50,
+        hasMore: false,
+        diffStats: { 'staged.ts': { insertions: 10, deletions: 2 } },
+      },
+    },
+  }
+  const paged = useGitStatusPaged({
+    gitReady: ref(true),
+    status: ref(summary),
+    pageSize: 50,
+    loadStatusPage: async ({ scope }) => {
+      calls.push(scope)
+      return makeStatus([{ path: 'working.ts', index: '', workingDir: 'M' }], scope)
+    },
+  })
+  await paged.applySummaryPages('/repo', summary, ['staged', 'unstaged'])
+  assert.deepEqual(calls, ['unstaged'])
+  assert.equal(paged.stagedList.value[0]?.path, 'staged.ts')
+  assert.equal(paged.stagedList.value[0]?.insertions, 10)
+  assert.equal(paged.changesList.value[0]?.path, 'working.ts')
+})
+
+test('superseded batched reads cannot hide the current first-page loading state', () => {
+  const paged = useGitStatusPaged({
+    gitReady: ref(true),
+    status: ref(makeStatus([], 'all')),
+    pageSize: 50,
+    loadStatusPage: async () => makeStatus([], 'all'),
+  })
+  const old = paged.beginFirstPages(['unstaged', 'untracked'])
+  const current = paged.beginFirstPages(['unstaged'])
+  old()
+  assert.equal(paged.changesListLoading.value, true)
+  assert.equal(paged.untrackedListLoading.value, false)
+  current()
+  assert.equal(paged.changesListLoading.value, false)
+  const beforeReset = paged.beginFirstPages(['unstaged'])
+  paged.resetAll()
+  assert.equal(paged.changesListLoading.value, false)
+  const afterReset = paged.beginFirstPages(['unstaged'])
+  beforeReset()
+  assert.equal(paged.changesListLoading.value, true)
+  afterReset()
+  assert.equal(paged.changesListLoading.value, false)
+})

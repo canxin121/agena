@@ -11,6 +11,7 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { useI18n } from 'vue-i18n'
 import { useGitDiffSelection } from '@/composables/git/useGitDiffSelection'
 import { useGitStatusPaged } from '@/composables/git/useGitStatusPaged'
+import { useGitStatusSummary } from '@/composables/git/useGitStatusSummary'
 import { useGitWatchSse } from '@/composables/git/useGitWatchSse'
 import { createRevalidator } from '@/lib/revalidation'
 import { createLatestRequestGuard } from '@/lib/latestRequest'
@@ -320,7 +321,8 @@ const {
   hasMoreUnstaged,
   hasMoreUntracked,
   loadMore,
-  applyFirstPages: applyStatusFirstPages,
+  applySummaryPages: applyStatusSummaryPages,
+  beginFirstPages: beginStatusFirstPages,
   cancelRequests: cancelStatusRequests,
   clearScope: clearStatusScope,
   resetAll: resetStatusPages,
@@ -960,8 +962,8 @@ const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatus
       payload.selectedPathSignature === prev.selectedPathSignature
     )
       return
-    // Update the summary immediately; an older HTTP snapshot cannot replace it.
-    gitStatusGeneration++
+    // Update the summary immediately; repository changes below invalidate any
+    // older HTTP snapshot. An unchanged heartbeat must not discard its pages.
     const baseStatus = status.value ?? createEmptyStatusSummary()
     const nextStatus = {
       ...baseStatus,
@@ -1012,6 +1014,7 @@ const { startWatch: startWatchInner, stopWatch } = useGitWatchSse<GitWatchStatus
       prevSignature !== nextSignature
 
     if (changedCounts) {
+      gitStatusGeneration++
       pendingWatchDiff ||=
         Boolean(selectedFile.value) &&
         (!baseline ||
@@ -1059,17 +1062,23 @@ function startWatch(directory: string) {
   startWatchInner(directory, `${directory}:${selectedFile.value ?? ''}`)
 }
 
-const beginStatusRead = createLatestRequestGuard(() => root.value, status)
 const beginRemoteRead = createLatestRequestGuard(() => root.value, remoteInfo)
 const beginSigningRead = createLatestRequestGuard(() => root.value, signingInfo)
 const beginStateRead = createLatestRequestGuard(() => root.value, gitState)
 
-async function loadStatusSummary(directory: string, scopes: WatchScope[] = [], signal?: AbortSignal) {
+const { loadSummary: loadStatusSummary } = useGitStatusSummary({
+  directory: root,
+  status,
+  generation: () => gitStatusGeneration,
+  readSignal: () => repoReadController.signal,
+  pages: { beginFirstPages: beginStatusFirstPages, applySummaryPages: applyStatusSummaryPages },
+  invalidate: (scopes) => {
+    scopes.forEach((scope) => dirtyWatchScopes.add(scope))
+    watchRefreshQueue.invalidate(0)
+  },
   // Counts and the visible first pages share one repository status snapshot.
-  const generation = gitStatusGeneration
-  const isCurrent = beginStatusRead()
-  try {
-    const response = await limitBackgroundReads(
+  read: (directory, scopes, signal) =>
+    limitBackgroundReads(
       () =>
         readRepoJson<GitStatusResponse>(
           'status',
@@ -1083,15 +1092,8 @@ async function loadStatusSummary(directory: string, scopes: WatchScope[] = [], s
           signal,
         ),
       signal || repoReadController.signal,
-    )
-    if (isCurrent() && generation === gitStatusGeneration) {
-      status.value = response
-      applyStatusFirstPages(response.scopePages, response.snapshotId)
-    }
-  } catch (error) {
-    if (isCurrent() && generation === gitStatusGeneration) throw error
-  }
-}
+    ),
+})
 
 async function loadRemoteInfo(directory: string) {
   const isCurrent = beginRemoteRead()

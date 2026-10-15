@@ -51,6 +51,7 @@ export function useGitStatusPaged(opts: {
     reload: boolean
   }
   const flights = new Map<Scope, PageRead>()
+  const firstPageReads = new Map<Scope, symbol>()
   const allowedAt = new Map<Scope, number>()
   const failures = new Map<Scope, number>()
 
@@ -66,6 +67,25 @@ export function useGitStatusPaged(opts: {
     if (scope === 'staged') return stagedListLoading
     if (scope === 'unstaged') return changesListLoading
     return untrackedListLoading
+  }
+
+  function updateLoading(scope: Scope) {
+    loadingForScope(scope).value = flights.has(scope) || firstPageReads.has(scope)
+  }
+
+  function beginFirstPages(scopes: Scope[]) {
+    const owner = Symbol('status first pages')
+    for (const scope of scopes) {
+      firstPageReads.set(scope, owner)
+      updateLoading(scope)
+    }
+    return () => {
+      for (const scope of scopes) {
+        if (firstPageReads.get(scope) !== owner) continue
+        firstPageReads.delete(scope)
+        updateLoading(scope)
+      }
+    }
   }
 
   function mapFiles(resp: GitStatusResponse): GitStatusFile[] {
@@ -113,10 +133,8 @@ export function useGitStatusPaged(opts: {
     const requestGeneration = generation
     const controller = new AbortController()
     const { signal } = controller
-    const loading = loadingForScope(scope)
     const list = listForScope(scope)
     const current: PageRead = { directory: trimmedDirectory, controller, promise: undefined!, reload: false }
-    loading.value = true
     current.promise = Promise.resolve()
       .then(async () => {
         let reload = firstPage
@@ -144,10 +162,7 @@ export function useGitStatusPaged(opts: {
           }, signal)
           signal.throwIfAborted()
           if (requestGeneration !== generation || flights.get(scope) !== current) return
-          if (
-            requestedSnapshotId &&
-            resp.snapshotId !== requestedSnapshotId
-          ) {
+          if (requestedSnapshotId && resp.snapshotId !== requestedSnapshotId) {
             // The bounded server cache evicted this old cursor. Restart from
             // page one against the fresh snapshot instead of mixing revisions.
             // Keep this per scope so other lists can detect their stale cursor
@@ -186,10 +201,11 @@ export function useGitStatusPaged(opts: {
       .finally(() => {
         if (flights.get(scope) === current) {
           flights.delete(scope)
-          loading.value = false
+          updateLoading(scope)
         }
       })
     flights.set(scope, current)
+    updateLoading(scope)
     return current.promise
   }
 
@@ -197,10 +213,7 @@ export function useGitStatusPaged(opts: {
     return readPage(directory, scope, true)
   }
 
-  function applyFirstPages(
-    pages: Partial<Record<Scope, GitStatusScopePage>> | undefined,
-    snapshotId?: string,
-  ) {
+  function applyFirstPages(pages: Partial<Record<Scope, GitStatusScopePage>> | undefined, snapshotId?: string) {
     // Watch refreshes can update just one visible scope. Keep the other scopes'
     // snapshot IDs paired with their existing first pages until they refresh.
     if (!pages) return
@@ -213,9 +226,33 @@ export function useGitStatusPaged(opts: {
       flights.delete(scope)
       listForScope(scope).value = mapFiles({ files: page.files, diffStats: page.diffStats } as GitStatusResponse)
       pageByScope.value[scope] = { offset: page.files.length, hasMore: page.hasMore }
-      loadingForScope(scope).value = false
+      updateLoading(scope)
       failures.delete(scope)
     }
+  }
+
+  async function applySummaryPages(directory: string, response: GitStatusResponse, scopes: Scope[]) {
+    applyFirstPages(response.scopePages, response.snapshotId)
+    // Older servers can return the summary without batched first pages. Fetch
+    // those scopes explicitly so nonzero counts cannot leave empty file lists.
+    await Promise.all(
+      scopes.map((scope) => {
+        if (response.scopePages?.[scope]) return Promise.resolve()
+        const count =
+          scope === 'staged'
+            ? response.stagedCount
+            : scope === 'unstaged'
+              ? response.unstagedCount
+              : scope === 'untracked'
+                ? response.untrackedCount
+                : response.mergeCount
+        if (count === 0) {
+          clearScope(scope)
+          return Promise.resolve()
+        }
+        return reloadScopeFirstPage(directory, scope)
+      }),
+    )
   }
 
   function loadMore(directory: string, scope: Scope) {
@@ -230,18 +267,19 @@ export function useGitStatusPaged(opts: {
 
   function cancelRequests() {
     generation++
-    for (const [scope, read] of flights) {
+    firstPageReads.clear()
+    for (const read of flights.values()) {
       read.controller.abort()
-      loadingForScope(scope).value = false
     }
     flights.clear()
+    for (const scope of ['merge', 'staged', 'unstaged', 'untracked'] as const) updateLoading(scope)
   }
 
   function clearScope(scope: Scope) {
     flights.get(scope)?.controller.abort()
     flights.delete(scope)
     snapshotByScope.delete(scope)
-    loadingForScope(scope).value = false
+    updateLoading(scope)
     listForScope(scope).value = []
     pageByScope.value[scope] = { offset: 0, hasMore: false }
   }
@@ -279,6 +317,8 @@ export function useGitStatusPaged(opts: {
     reloadFirstPages,
     reloadScopeFirstPage,
     applyFirstPages,
+    applySummaryPages,
+    beginFirstPages,
     cancelRequests,
     clearScope,
     resetAll,

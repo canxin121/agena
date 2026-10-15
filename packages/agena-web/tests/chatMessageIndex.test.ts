@@ -6,6 +6,7 @@ import {
   compareChatIds,
   foldedMessageCount,
   isNewerPart,
+  mergePartSnapshot,
   upsertMessageEntryIn,
   upsertPart,
 } from '../src/stores/chat/messageIndex'
@@ -93,6 +94,54 @@ test('isNewerPart treats a revision/updatedAt tie as not advancing the cached sn
   assert.equal(isNewerPart({ revision: 2, updatedAt: 10 }, { revision: 2, updatedAt: 20 }), false)
   assert.equal(isNewerPart({}, {}), false)
   assert.equal(isNewerPart({ updatedAt: 5 }, {}), true)
+})
+
+test('a tied history snapshot hydrates missing tool sections without replacing cached facts', () => {
+  const cached: MessagePart = {
+    id: '4',
+    sessionID: '1',
+    messageID: '2',
+    type: 'tool',
+    revision: 2,
+    updatedAt: 20,
+    agenaKind: 'tool_call',
+    partState: 'in_progress',
+    agenaContent: { name: 'fs.read', input: { file_path: 'live.md' } },
+    agenaPresentation: { title: 'Read live.md' },
+    agenaSections: [
+      { section: 'input', revision: 3 },
+      { section: 'presentation', revision: 3 },
+    ],
+  }
+  const incoming: MessagePart = {
+    ...cached,
+    agenaContent: {
+      name: 'stale.tool',
+      input: { file_path: 'stale.md' },
+      output: { text: 'Loaded detail' },
+    },
+    agenaPresentation: { title: 'Stale title' },
+    agenaSections: [
+      { section: 'input', revision: 3 },
+      { section: 'presentation', revision: 2 },
+      { section: 'output', revision: 1 },
+    ],
+  }
+
+  const merged = mergePartSnapshot(cached, incoming, { preferCachedOnTie: true })
+  assert.deepEqual(merged.agenaContent, {
+    name: 'fs.read',
+    input: { file_path: 'live.md' },
+    output: { text: 'Loaded detail' },
+  })
+  assert.equal(merged.agenaPresentation, cached.agenaPresentation)
+  assert.deepEqual(cached.agenaContent, { name: 'fs.read', input: { file_path: 'live.md' } })
+  assert.deepEqual(merged.agenaSections, [
+    { section: 'input', revision: 3 },
+    { section: 'presentation', revision: 3 },
+    { section: 'output', revision: 1 },
+  ])
+  assert.equal(mergePartSnapshot(merged, incoming, { preferCachedOnTie: true }), merged)
 })
 
 test('live part updates keep the cached object and apply the snapshot in place', () => {

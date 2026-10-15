@@ -122,11 +122,19 @@ function samePartSnapshot(cached: MessagePart, incoming: MessagePart): boolean {
   return true
 }
 
-/** A sparse transcript snapshot must retain detail sections already received. */
-export function mergePartSnapshot(cached: MessagePart, incoming: MessagePart): MessagePart {
-  const older = isOlderPart(incoming, cached)
-  const base = older ? cached : incoming
-  const supplement = older ? incoming : cached
+/**
+ * A sparse transcript snapshot must retain detail sections already received.
+ * History reads keep cached facts on version ties; live events may correct a
+ * same-version snapshot. Detail sections advance by their own revisions.
+ */
+export function mergePartSnapshot(
+  cached: MessagePart,
+  incoming: MessagePart,
+  options: { preferCachedOnTie?: boolean } = {},
+): MessagePart {
+  const keepCached = options.preferCachedOnTie ? !isNewerPart(incoming, cached) : isOlderPart(incoming, cached)
+  const base = keepCached ? cached : incoming
+  const supplement = keepCached ? incoming : cached
   let merged = base
   if (base.agenaKind === 'tool_call' && supplement.agenaKind === 'tool_call') {
     const content = base.agenaContent

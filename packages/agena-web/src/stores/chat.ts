@@ -610,7 +610,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function mergeMessageLists(
     older: MessageEntry[],
     newer: MessageEntry[],
-    opts?: { authoritativeFolds?: boolean },
+    opts?: { authoritativeFolds?: boolean; preferCachedOnTie?: boolean },
   ): MessageEntry[] {
     const map = new Map<string, MessageEntry>()
     for (const m of [...older, ...newer]) {
@@ -632,7 +632,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
           const pid = String(p?.id ?? '')
           // Equal revisions may add a previously omitted detail section.
           // Keep cached identities when the factual snapshot is unchanged.
-          if (pid) partMap.set(pid, partMap.has(pid) ? mergePartSnapshot(partMap.get(pid)!, p) : p)
+          if (pid)
+            partMap.set(
+              pid,
+              partMap.has(pid)
+                ? mergePartSnapshot(partMap.get(pid)!, p, { preferCachedOnTie: opts?.preferCachedOnTie })
+                : p,
+            )
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
         // A fold-free second message can be the result of a local expansion,
@@ -799,7 +805,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
             [],
             loaded.map((entry) => Number(entry.info.id)),
           )
-          setSessionMessages(sid, mergeMessageLists(ensureSessionMessages(sid), entries))
+          setSessionMessages(sid, mergeMessageLists(ensureSessionMessages(sid), entries, { preferCachedOnTie: true }))
         } catch (error) {
           membershipRevalidation.add(sid)
           throw error
@@ -838,7 +844,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
         shouldReplace || (!currentMessages.length && !hasLoadedOlder)
           ? ordered
           : reconcileTranscriptFolds(
-              mergeMessageLists(currentMessages, ordered, { authoritativeFolds: opts?.authoritativeFolds }),
+              mergeMessageLists(currentMessages, ordered, {
+                authoritativeFolds: opts?.authoritativeFolds,
+                preferCachedOnTie: true,
+              }),
               ordered,
               currentMessages,
             )
@@ -1202,7 +1211,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       [],
       current.map((entry) => Number(entry.info.id)),
     )
-    setSessionMessages(sid, mergeMessageLists(current, entries))
+    setSessionMessages(sid, mergeMessageLists(current, entries, { preferCachedOnTie: true }))
   }
 
   function applyExecutionStatus(st: chatApi.SessionExecutionStatus, activityGeneration?: number) {

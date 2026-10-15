@@ -50,7 +50,13 @@ const part = (revision = 1, text = 'old', id = 2) => ({
   revision,
   updated_at_ms: revision,
 })
-const page = (parts: unknown[], version = 1) => ({ parts, version, runs: [], user_message_count: 0, page: { has_more: false } })
+const page = (parts: unknown[], version = 1) => ({
+  parts,
+  version,
+  runs: [],
+  user_message_count: 0,
+  page: { has_more: false },
+})
 const state = (id = 7, version = 1) => ({
   session: { id, version, title: 'Session', state: { kind: 'ready', data: {} } },
   execution: {},
@@ -158,14 +164,25 @@ test('background activity events update the parent immediately and a pending sta
     globalThis.fetch = (async () => pending.promise) as typeof fetch
     const reading = chat.refreshExecutionStatus('7')
     const activity = {
-      id: 'task_a', kind: 'task', status: 'running', title: 'Child task', description: '',
-      session_id: 8, parent_session_id: 7, last_seq: 1, controls: ['stop'],
+      id: 'task_a',
+      kind: 'task',
+      status: 'running',
+      title: 'Child task',
+      description: '',
+      session_id: 8,
+      parent_session_id: 7,
+      last_seq: 1,
+      controls: ['stop'],
     }
-    const event = (value: typeof activity, reason = 'updated') => chat.applyEvent({
-      type: 'runtime_signal', properties: {
-        kind: 'activity', session_id: 7, payload: { activity_id: value.id, reason, activity: value },
-      },
-    })
+    const event = (value: typeof activity, reason = 'updated') =>
+      chat.applyEvent({
+        type: 'runtime_signal',
+        properties: {
+          kind: 'activity',
+          session_id: 7,
+          payload: { activity_id: value.id, reason, activity: value },
+        },
+      })
     event(activity)
     assert.equal(chat.sessionBackgroundActivities('7')[0]?.last_seq, 1)
     assert.equal(chat.sessionBackgroundActivityKinds('7').join(','), 'task')
@@ -369,7 +386,7 @@ test('global live events do not materialize unopened session histories', async (
     assert.equal(chat.getMessagesForSession('99').length, 0)
   }))
 
-test('a refetched page keeps the live part object when its revision ties the cached snapshot', async () =>
+test('refetched and overlapping older pages keep the live part object when revisions tie', async () =>
   withChat(async (chat) => {
     chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part: marker() } })
     chat.applyEvent({
@@ -379,10 +396,16 @@ test('a refetched page keeps the live part object when its revision ties the cac
     const cached = chat.getMessagesForSession('7')[0]!.parts[0]!
     assert.equal(cached.text, 'live body')
 
+    let loadedOlder = false
     globalThis.fetch = (async (url) => {
       const parsed = new URL(String(url), 'http://agena.test')
-      if (parsed.pathname.endsWith('/runs'))
-        return Response.json(page([marker(), part(2, 'stale page body')]))
+      if (parsed.pathname.endsWith('/runs')) {
+        loadedOlder = parsed.searchParams.has('cursor')
+        return Response.json({
+          ...page([marker(), part(2, 'stale page body')]),
+          page: loadedOlder ? { has_more: false } : { has_more: true, next_cursor: 'older' },
+        })
+      }
       return Response.json(state())
     }) as typeof fetch
 
@@ -390,4 +413,9 @@ test('a refetched page keeps the live part object when its revision ties the cac
     const refreshed = chat.getMessagesForSession('7')[0]!.parts[0]!
     assert.equal(refreshed, cached, 'the displayed object survives a revision tie')
     assert.equal(refreshed.text, 'live body')
+    assert.equal(await chat.loadOlderMessages('7'), true)
+    assert.equal(loadedOlder, true, 'the regression exercises an older cursor page')
+    const afterOlder = chat.getMessagesForSession('7')[0]!.parts[0]!
+    assert.equal(afterOlder, cached, 'an overlapping older page also retains the displayed object')
+    assert.equal(afterOlder.text, 'live body')
   }))

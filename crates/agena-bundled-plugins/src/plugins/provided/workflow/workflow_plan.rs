@@ -1302,9 +1302,12 @@ impl WorkflowPlugin {
         } else {
             Self::plan_output_text(format!("Plan review decision: {decision}.").as_str(), &plan)
         };
+        // The review dialog already displays the complete plan. Keep the tool
+        // result compact so accepting a review does not render the plan twice.
         let payload = serde_json::json!({
-            "plan": &plan,
             "decision": decision,
+            "phase": plan.phase,
+            "revision": plan.revision,
         });
         Ok(ToolInvokeOutput::from_parts(
             "plan review",

@@ -1566,19 +1566,16 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             RawOutput::from_parts(
                 Some(json!({
                     "decision": "approve",
-                    "plan": {
-                        "title": "Renderer cleanup",
-                        "phase": "active",
-                        "steps": [{"title": "Implement renderer", "status": "in_progress"}]
-                    }
+                    "phase": "active",
+                    "revision": 2
                 })),
                 "Plan review decision: approve.\n\nRenderer cleanup is now active.",
                 Vec::new(),
                 Vec::new(),
                 false,
             ),
-            vec!["approve", "Renderer cleanup", "active"],
-            true,
+            vec!["approve"],
+            false,
         ),
         (
             "chatgpt.cloud_image_generation",

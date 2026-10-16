@@ -8,12 +8,8 @@ const providerStudioSource = readFileSync(
   resolve(import.meta.dir, '../src/components/settings/ProviderStudioPanel.vue'),
   'utf8',
 )
-const defaultModelSource = readFileSync(
-  resolve(import.meta.dir, '../src/components/settings/ModelDefaultsPanel.vue'),
-  'utf8',
-)
-const approvalModelSource = readFileSync(
-  resolve(import.meta.dir, '../src/components/settings/ApprovalModelPanel.vue'),
+const modelSelectionSource = readFileSync(
+  resolve(import.meta.dir, '../src/components/settings/ModelSelectionSettings.vue'),
   'utf8',
 )
 
@@ -63,8 +59,6 @@ test('Model Catalog fills the settings content area instead of scrolling inside 
 
 test('parallel tool support is edited as model metadata, never as a default/approval selection option', () => {
   assert.ok(providerStudioSource.includes("key: 'supports_parallel_tool_calls'"))
-  assert.equal(defaultModelSource.includes('Parallel tool calls'), false)
-  assert.equal(approvalModelSource.includes('Parallel tool calls'), false)
-  assert.equal(defaultModelSource.includes('parallel_tool_calls'), false)
-  assert.equal(approvalModelSource.includes('parallel_tool_calls'), false)
+  assert.equal(modelSelectionSource.includes('Parallel tool calls'), false)
+  assert.equal(modelSelectionSource.includes('parallel_tool_calls'), false)
 })

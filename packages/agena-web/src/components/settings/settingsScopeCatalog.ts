@@ -48,23 +48,23 @@ const PERMISSION_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   },
 ]
 
-// A session can run one model, but it cannot pin a default for later runs, so
-// the model defaults only resolve three layers.
-const MODEL_DEFAULT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
+// Model selections share the effective, global, and workspace layers. A session
+// model is selected in the conversation rather than persisted on this page.
+const MODEL_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   {
     id: 'effective',
-    label: () => st('Effective default'),
-    description: () => st('Read-only merged default.'),
+    label: () => st('Effective settings'),
+    description: () => st('Read-only merged model settings.'),
   },
   {
     id: 'global',
-    label: () => st('Global default'),
+    label: () => st('Global layer'),
     description: () => st('Baseline for every workspace.'),
   },
   {
     id: 'workspace',
-    label: () => st('Workspace default'),
-    description: () => st('Overrides the global default for this workspace.'),
+    label: () => st('Workspace layer'),
+    description: () => st('Overrides for this workspace.'),
   },
 ]
 
@@ -90,8 +90,7 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
     tools: PERMISSION_SCOPE_SOURCES,
   },
   'models-providers': {
-    defaults: MODEL_DEFAULT_SCOPE_SOURCES,
-    'approval-model': MODEL_DEFAULT_SCOPE_SOURCES,
+    'model-settings': MODEL_SCOPE_SOURCES,
   },
   diagnostics: {
     'advanced-settings': LAYER_SCOPE_SOURCES,

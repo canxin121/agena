@@ -5,11 +5,10 @@ import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/se
 
 const ModelCatalogPanel = defineAsyncComponent(() => import('@/components/settings/ModelCatalogPanel.vue'))
 const ProviderStudioPanel = defineAsyncComponent(() => import('@/components/settings/ProviderStudioPanel.vue'))
-const ApprovalSettingsPanel = defineAsyncComponent(() => import('@/components/settings/ApprovalSettingsPanel.vue'))
-const ModelDefaultsPanel = defineAsyncComponent(() => import('@/components/settings/ModelDefaultsPanel.vue'))
+const ModelSettingsPanel = defineAsyncComponent(() => import('@/components/settings/ModelSettingsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
-// Model defaults and approval settings share the workbench's layer selector.
+// Both model selections share one page and the workbench's layer selector.
 defineProps<{ activePage: string; scope: string }>()
 const editor = ref<{ refresh: () => Promise<void> } | null>(null)
 defineExpose({
@@ -31,7 +30,6 @@ defineExpose({
   >
     <ProviderStudioPanel ref="editor" v-if="activePage === 'provider-studio'" />
     <ModelCatalogPanel ref="editor" v-else-if="activePage === 'model-catalog'" />
-    <ApprovalSettingsPanel ref="editor" v-else-if="activePage === 'approval-model'" :scope="scope" />
-    <ModelDefaultsPanel ref="editor" v-else :scope="scope" />
+    <ModelSettingsPanel ref="editor" v-else :scope="scope" />
   </SettingsSectionWorkbench>
 </template>

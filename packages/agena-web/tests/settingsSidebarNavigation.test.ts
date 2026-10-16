@@ -225,12 +225,10 @@ test('the settings catalog keeps page destinations flat and defines scopes indep
       ['effective', 'global', 'workspace', 'session'],
     )
   }
-  for (const page of ['defaults', 'approval-model']) {
-    assert.deepEqual(
-      buildSettingsScopes('models-providers', page).map((scope) => scope.id),
-      ['effective', 'global', 'workspace'],
-    )
-  }
+  assert.deepEqual(
+    buildSettingsScopes('models-providers', 'model-settings').map((scope) => scope.id),
+    ['effective', 'global', 'workspace'],
+  )
   assert.deepEqual(
     buildSettingsScopes('diagnostics', 'advanced-settings').map((scope) => scope.id),
     ['global', 'workspace'],

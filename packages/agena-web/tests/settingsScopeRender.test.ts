@@ -100,19 +100,19 @@ test('scope toolbar avoids duplicate navigation while sidebar layout remains ava
     return renderToString(app)
   }
 
-  const scoped = await render('models-providers', 'defaults', 'workspace')
-  assert.ok(scoped.includes('Model defaults'))
-  assert.ok(scoped.includes('· Workspace default'))
-  assert.equal(scoped.match(/<h1[^>]*>[\s\S]*?<\/h1>/)?.[0].match(/Workspace default/g)?.length, 1)
+  const scoped = await render('models-providers', 'model-settings', 'workspace')
+  assert.ok(scoped.includes('Model settings'))
+  assert.ok(scoped.includes('· Workspace layer'))
+  assert.equal(scoped.match(/<h1[^>]*>[\s\S]*?<\/h1>/)?.[0].match(/Workspace layer/g)?.length, 1)
 
-  const toolbar = await render('models-providers', 'defaults', 'workspace', 'toolbar')
+  const toolbar = await render('models-providers', 'model-settings', 'workspace', 'toolbar')
   assert.equal(toolbar.includes('<aside'), false)
   assert.equal(toolbar.match(/aria-current="true"/g)?.length, 1)
-  assert.equal(toolbar.match(/Workspace default/g)?.length, 1)
-  assert.equal(toolbar.includes('· Workspace default'), false)
-  for (const label of ['Effective default', 'Global default', 'Workspace default']) assert.ok(toolbar.includes(label))
+  assert.equal(toolbar.match(/Workspace layer/g)?.length, 1)
+  assert.equal(toolbar.includes('· Workspace layer'), false)
+  for (const label of ['Effective settings', 'Global layer', 'Workspace layer']) assert.ok(toolbar.includes(label))
 
   const unscoped = await render('models-providers', 'provider-studio', '')
   assert.ok(unscoped.includes('Provider Studio'))
-  assert.equal(unscoped.includes('Workspace default'), false)
+  assert.equal(unscoped.includes('Workspace layer'), false)
 })

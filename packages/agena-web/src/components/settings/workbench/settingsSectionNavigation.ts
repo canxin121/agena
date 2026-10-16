@@ -1,5 +1,8 @@
 export type SettingsSubpageDefinition = {
   id: string
+  // Previous page ids keep bookmarks and remembered destinations working when
+  // pages are renamed or merged. Resolution always returns the current id.
+  aliases?: readonly string[]
   label: string
   description: string
   keywords?: string[]
@@ -27,11 +30,17 @@ export function resolveSettingsSubpage(
   pages: readonly SettingsSubpageDefinition[],
   fallback: string,
 ): string {
-  const ids = new Set(pages.map((page) => normalizeSettingsSubpageId(page.id)).filter(Boolean))
+  const ids = new Map<string, string>()
+  for (const page of pages) {
+    const id = normalizeSettingsSubpageId(page.id)
+    if (!id) continue
+    ids.set(id, id)
+    for (const alias of page.aliases || []) ids.set(normalizeSettingsSubpageId(alias), id)
+  }
   const candidates = [requested, remembered, fallback, pages[0]?.id]
   for (const candidate of candidates) {
     const normalized = normalizeSettingsSubpageId(candidate)
-    if (normalized && ids.has(normalized)) return normalized
+    if (normalized && ids.has(normalized)) return ids.get(normalized)!
   }
   return ''
 }
@@ -43,7 +52,9 @@ export function filterSettingsSubpages(
   const normalized = normalizeSettingsSubpageId(query)
   if (!normalized) return [...pages]
   return pages.filter((page) => {
-    const searchText = [page.id, page.label, page.description, ...(page.keywords || [])].join('\n').toLowerCase()
+    const searchText = [page.id, ...(page.aliases || []), page.label, page.description, ...(page.keywords || [])]
+      .join('\n')
+      .toLowerCase()
     return searchText.includes(normalized)
   })
 }

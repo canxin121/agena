@@ -25,7 +25,7 @@ test('the shared catalog exposes the high-value models and plugin subpages', () 
     resolve(import.meta.dir, '../src/components/settings/settingsNavigationCatalog.ts'),
     'utf8',
   )
-  for (const id of ['provider-studio', 'model-catalog', 'defaults', 'approval-model']) {
+  for (const id of ['provider-studio', 'model-catalog', 'model-settings']) {
     assert.ok(catalog.includes(`id: '${id}'`), `missing models subpage ${id}`)
   }
   for (const id of ['plugin-workbench', 'marketplace', 'mcp-server']) {
@@ -96,12 +96,7 @@ test('every layer-aware settings page reads its scope from the shared navigation
   }
 
   const models = readFileSync(resolve(root, 'ModelsProvidersPanel.vue'), 'utf8')
-  assert.ok(
-    models.includes(
-      '<ApprovalSettingsPanel ref="editor" v-else-if="activePage === \'approval-model\'" :scope="scope" />',
-    ),
-  )
-  assert.ok(models.includes('<ModelDefaultsPanel ref="editor" v-else :scope="scope" />'))
+  assert.ok(models.includes('<ModelSettingsPanel ref="editor" v-else :scope="scope" />'))
 
   // The section header names the active layer once, so the pages below it never
   // repeat the layer or its per-option summary text.
@@ -113,12 +108,7 @@ test('every layer-aware settings page reads its scope from the shared navigation
       `${file} must pass the scope`,
     )
   }
-  for (const file of [
-    'PermissionStudioPanel.vue',
-    'ModelDefaultsPanel.vue',
-    'ApprovalSettingsPanel.vue',
-    'AdvancedSettingsPanel.vue',
-  ]) {
+  for (const file of ['PermissionStudioPanel.vue', 'ModelSettingsPanel.vue', 'AdvancedSettingsPanel.vue']) {
     const source = readFileSync(resolve(root, file), 'utf8')
     for (const text of [
       ':options="sourceOptions"',

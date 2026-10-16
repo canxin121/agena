@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
-import { RiCpuLine, RiEqualizerLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
+import { RiCpuLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
-import { confirmAction } from '@/lib/appConfirm'
 import { sameServerModelIdentity } from '@/lib/serverModelSettings'
 import {
   deleteRuntimeSetting,
@@ -187,79 +185,58 @@ async function save() {
     saving.value = false
   }
 }
-async function canLeave() {
-  if (saving.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved model changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-onBeforeRouteUpdate(async (to, from) => {
-  if (to.path === from.path && to.query.scope === from.query.scope && to.query.view === from.query.view) return true
-  if (!(await canLeave())) return false
-  syncEditor()
-  return true
-})
-onBeforeRouteLeave(canLeave)
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !saving.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 watch(scope, syncEditor)
-onMounted(() => {
-  void refresh()
-  window.addEventListener('beforeunload', beforeUnload)
-})
+onMounted(() => void refresh())
 onBeforeUnmount(() => {
   disposed = true
   controller?.abort()
-  window.removeEventListener('beforeunload', beforeUnload)
 })
-defineExpose({ refresh })
+defineExpose({ refresh, dirty, saving, discard: syncEditor })
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-4" data-model-selection>
-    <div class="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground" role="status">
-      <span>{{
-        loading
-          ? $st('Loading…')
-          : !editable
-            ? $st('Read-only')
-            : dirty
-              ? $st('You have unsaved changes.')
-              : $st('All changes are saved.')
-      }}</span>
-      <IconButton
-        variant="ghost"
-        size="sm"
-        :disabled="loading || saving"
-        :tooltip="$st('Refresh model settings')"
-        :aria-label="$st('Refresh model settings')"
-        @click="refresh"
+  <SettingsCard
+    :title="title"
+    :icon="approval ? RiShieldCheckLine : RiCpuLine"
+    :description="
+      approval
+        ? $st('Used to review permission requests in Auto mode. When unset, the session model reviews them.')
+        : $st('Choose the model used for new runs when no model is explicitly selected.')
+    "
+    :data-model-selection="purpose"
+    :aria-busy="loading || saving"
+  >
+    <template #actions>
+      <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground" role="status">
+        <span>{{
+          loading
+            ? $st('Loading…')
+            : !editable
+              ? $st('Read-only')
+              : dirty
+                ? $st('You have unsaved changes.')
+                : $st('All changes are saved.')
+        }}</span>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          :disabled="loading || saving"
+          :tooltip="$st('Refresh model settings')"
+          :aria-label="$st('Refresh model settings')"
+          @click="refresh"
+        >
+          <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+        </IconButton>
+      </div>
+    </template>
+    <div class="grid min-w-0 gap-4">
+      <div
+        v-if="error || catalog.catalogError.value"
+        class="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        role="alert"
       >
-        <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
-      </IconButton>
-    </div>
-    <div
-      v-if="error || catalog.catalogError.value"
-      class="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-      role="alert"
-    >
-      {{ error || catalog.catalogError.value }}
-    </div>
-    <SettingsCard
-      :title="title"
-      :icon="approval ? RiShieldCheckLine : RiCpuLine"
-      :description="
-        approval
-          ? $st('Used to review permission requests in Auto mode. When unset, the session model reviews them.')
-          : $st('Choose the model used for new runs when no model is explicitly selected.')
-      "
-    >
+        {{ error || catalog.catalogError.value }}
+      </div>
       <div class="grid min-w-0 gap-4">
         <div v-if="editable" class="grid min-w-0 gap-2">
           <label class="grid min-w-0 gap-1.5">
@@ -314,64 +291,65 @@ defineExpose({ refresh })
           }}</Button>
         </div>
       </div>
-    </SettingsCard>
-    <SettingsCard
-      :title="$st('Response preferences')"
-      :description="$st('Empty mode fields use the selected model’s defaults. Available options depend on the model.')"
-      :icon="RiEqualizerLine"
-    >
-      <div class="grid min-w-0 gap-4 md:grid-cols-3">
-        <label class="grid min-w-0 content-start gap-2">
-          <span class="text-sm font-medium">{{ $st('Thinking') }}</span>
-          <OptionPicker
-            v-model="thinkingMode"
-            :options="thinkingOptions"
-            :title="$st('Thinking')"
-            :empty-label="$st('Model default')"
-            :disabled="disabled || !modelKey"
-          />
-          <span class="text-xs leading-relaxed text-muted-foreground">{{
-            $st('How much reasoning the model uses before responding.')
-          }}</span>
-        </label>
-        <label class="grid min-w-0 content-start gap-2">
-          <span class="text-sm font-medium">{{ $st('Speed') }}</span>
-          <OptionPicker
-            v-model="speedMode"
-            :options="speedOptions"
-            :title="$st('Speed')"
-            :empty-label="$st('Model default')"
-            :disabled="disabled || !modelKey"
-          />
-          <span class="text-xs leading-relaxed text-muted-foreground">{{
-            $st('Choose a response speed supported by this model.')
-          }}</span>
-        </label>
-        <label class="grid min-w-0 content-start gap-2">
-          <span class="text-sm font-medium">{{ $st('Verbosity') }}</span>
-          <OptionPicker
-            v-model="verbosity"
-            :options="verbosityOptions"
-            :title="$st('Verbosity')"
-            :empty-label="$st('Model default')"
-            :disabled="disabled || !modelKey || !verbosityOptions.length"
-          />
-          <span class="text-xs leading-relaxed text-muted-foreground">{{
-            $st('Control the level of detail in the model’s response.')
-          }}</span>
-        </label>
-      </div>
-    </SettingsCard>
-    <SettingsSaveBar
-      v-if="dirty || saving"
-      :dirty="dirty"
-      :saving="saving"
-      :disabled="loading || !sources"
-      :error="saveError"
-      :save-label="approval ? $st('Save approval model') : $st('Save default model')"
-      sticky
-      @save="save"
-      @discard="syncEditor"
-    />
-  </div>
+      <section class="grid min-w-0 gap-4 border-t border-border/60 pt-4" :aria-label="$st('Response preferences')">
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold">{{ $st('Response preferences') }}</h3>
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{ $st('Empty mode fields use the selected model’s defaults. Available options depend on the model.') }}
+          </p>
+        </div>
+        <div class="grid min-w-0 gap-4 md:grid-cols-3">
+          <label class="grid min-w-0 content-start gap-2">
+            <span class="text-sm font-medium">{{ $st('Thinking') }}</span>
+            <OptionPicker
+              v-model="thinkingMode"
+              :options="thinkingOptions"
+              :title="$st('Thinking')"
+              :empty-label="$st('Model default')"
+              :disabled="disabled || !modelKey"
+            />
+            <span class="text-xs leading-relaxed text-muted-foreground">{{
+              $st('How much reasoning the model uses before responding.')
+            }}</span>
+          </label>
+          <label class="grid min-w-0 content-start gap-2">
+            <span class="text-sm font-medium">{{ $st('Speed') }}</span>
+            <OptionPicker
+              v-model="speedMode"
+              :options="speedOptions"
+              :title="$st('Speed')"
+              :empty-label="$st('Model default')"
+              :disabled="disabled || !modelKey"
+            />
+            <span class="text-xs leading-relaxed text-muted-foreground">{{
+              $st('Choose a response speed supported by this model.')
+            }}</span>
+          </label>
+          <label class="grid min-w-0 content-start gap-2">
+            <span class="text-sm font-medium">{{ $st('Verbosity') }}</span>
+            <OptionPicker
+              v-model="verbosity"
+              :options="verbosityOptions"
+              :title="$st('Verbosity')"
+              :empty-label="$st('Model default')"
+              :disabled="disabled || !modelKey || !verbosityOptions.length"
+            />
+            <span class="text-xs leading-relaxed text-muted-foreground">{{
+              $st('Control the level of detail in the model’s response.')
+            }}</span>
+          </label>
+        </div>
+      </section>
+      <SettingsSaveBar
+        v-if="dirty || saving"
+        :dirty="dirty"
+        :saving="saving"
+        :disabled="loading || !sources"
+        :error="saveError"
+        :save-label="approval ? $st('Save approval model') : $st('Save default model')"
+        @save="save"
+        @discard="syncEditor"
+      />
+    </div>
+  </SettingsCard>
 </template>

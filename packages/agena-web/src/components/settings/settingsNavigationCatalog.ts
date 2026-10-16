@@ -25,16 +25,11 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       fillsViewport: true,
     },
     {
-      id: 'defaults',
-      label: () => st('Model defaults'),
-      description: () => st('Choose the default model and its optional execution modes.'),
-      keywords: ['default', 'model', 'thinking', 'speed', 'verbosity'],
-    },
-    {
-      id: 'approval-model',
-      label: () => st('Automatic approval model'),
-      description: () => st('Choose the model and execution modes used to review permission requests.'),
-      keywords: ['approval', 'permission', 'review', 'thinking', 'auto'],
+      id: 'model-settings',
+      aliases: ['defaults', 'approval-model'],
+      label: () => st('Model settings'),
+      description: () => st('Configure the default model, automatic approval model, and their response preferences.'),
+      keywords: ['default', 'model', 'approval', 'permission', 'review', 'thinking', 'speed', 'verbosity', 'auto'],
     },
   ],
   permissions: [

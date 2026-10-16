@@ -13,9 +13,7 @@ test('every layer-aware settings page resolves the layers it can show', () => {
   for (const page of ['filesystem', 'network', 'tools']) {
     assert.deepEqual(settingsScopeIdsForPage('permissions', page), ['effective', 'global', 'workspace', 'session'])
   }
-  for (const page of ['defaults', 'approval-model']) {
-    assert.deepEqual(settingsScopeIdsForPage('models-providers', page), ['effective', 'global', 'workspace'])
-  }
+  assert.deepEqual(settingsScopeIdsForPage('models-providers', 'model-settings'), ['effective', 'global', 'workspace'])
   assert.deepEqual(settingsScopeIdsForPage('diagnostics', 'advanced-settings'), ['global', 'workspace'])
 })
 
@@ -28,7 +26,7 @@ test('pages without a layer choice resolve no scope', () => {
 
 test('a requested scope is reused only while the active page resolves it', () => {
   const permissionScopes = buildSettingsScopes('permissions', 'filesystem')
-  const modelScopes = buildSettingsScopes('models-providers', 'defaults')
+  const modelScopes = buildSettingsScopes('models-providers', 'model-settings')
 
   assert.equal(resolveSettingsScope('global', '', permissionScopes), 'global')
   assert.equal(resolveSettingsScope('missing', 'session', permissionScopes), 'session')

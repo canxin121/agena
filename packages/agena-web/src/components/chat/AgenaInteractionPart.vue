@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { RiCheckLine, RiCloseLine, RiShieldKeyholeLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import Button from '@/components/ui/Button.vue'
 import { isImeComposing } from '@/lib/imeKeyboard'
+import { hasOpenKeyboardOverlay, isVisibleKeyboardTarget } from '@/lib/keyboardNavigation'
+import { interactionText } from '@/pages/chat/interactionText'
 import type { JsonValue } from '@/types/json'
 import {
   jsonArray,
@@ -29,6 +31,9 @@ const { t } = useI18n()
 
 const rootEl = ref<HTMLElement | null>(null)
 const activeControlKey = ref('')
+const instanceId = useId()
+const hintId = `${instanceId}-interaction-hint`
+const displayText = (value: string) => interactionText(interaction.value?.kind || '', value, t)
 
 const requestId = computed(() => props.interaction?.requestId || props.permission?.requestId || '')
 const pendingRequest = computed(() =>
@@ -105,7 +110,6 @@ const permissionStatusLabel = computed(() => {
   }
   return status
 })
-const hasKeyboardControls = computed(() => isPendingInteraction.value)
 // Keep the Web layout in lockstep with the TUI: only a single, single-choice
 // question with options is the compact plan-review decision surface. Other
 // review-shaped requests still render as the ask-user flow so no
@@ -202,15 +206,11 @@ function textareaControlKey(index: number): string {
   return `question:${index}:textarea`
 }
 
-function controlTabIndex(key: string): number {
-  return activeControlKey.value === key ? 0 : -1
-}
-
 function interactionControls(): HTMLElement[] {
   const root = rootEl.value
   if (!root) return []
   return Array.from(root.querySelectorAll<HTMLElement>('[data-interaction-control="true"]')).filter(
-    (element) => !element.hasAttribute('disabled') && element.getAttribute('aria-disabled') !== 'true',
+    (element) => !element.matches(':disabled, [aria-disabled="true"]') && isVisibleKeyboardTarget(element),
   )
 }
 
@@ -234,25 +234,34 @@ function focusControlElement(element: HTMLElement | null | undefined) {
   const key = controlKey(element)
   if (key) activeControlKey.value = key
   element.focus({ preventScroll: true })
+  element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
+function scheduleControlFocus(resolve: () => HTMLElement | null | undefined) {
+  const root = rootEl.value
+  const owner = requestId.value
+  const origin = document.activeElement
+  nextTick(() => {
+    if (!root || root !== rootEl.value || owner !== requestId.value || !isVisibleKeyboardTarget(root)) return
+    if (hasOpenKeyboardOverlay()) return
+    const active = document.activeElement
+    if (active !== origin && active !== document.body && !root.contains(active)) return
+    const target = resolve()
+    if (target) focusControlElement(target)
+    else root.focus({ preventScroll: true })
+  })
 }
 
 function focusControlByKey(key: string) {
   if (!key) return
   activeControlKey.value = key
-  nextTick(() => {
-    const target = interactionControls().find((element) => controlKey(element) === key)
-    if (target) focusControlElement(target)
-  })
+  scheduleControlFocus(() => interactionControls().find((element) => controlKey(element) === key))
 }
 
 function focusFirstControl(reverse = false) {
-  nextTick(() => {
+  scheduleControlFocus(() => {
     const controls = interactionControls()
-    if (controls.length) {
-      focusControlElement(reverse ? controls.at(-1) : controls[0])
-      return
-    }
-    rootEl.value?.focus({ preventScroll: true })
+    return reverse ? controls.at(-1) : controls[0]
   })
 }
 
@@ -298,7 +307,7 @@ function visibleOptions(index: number) {
 
 function toggleOption(index: number, label: string) {
   const question = questions.value[index]
-  if (!question) return
+  if (!question || !interaction.value?.pending || busy.value) return
   if (hasExplicitCustomOption(label)) {
     customOpen.value[index] = !customOpen.value[index]
     if (!question.multiple) selected.value[index] = []
@@ -316,7 +325,7 @@ function toggleOption(index: number, label: string) {
 
 function toggleCustom(index: number) {
   const question = questions.value[index]
-  if (!question || !customAllowed(index)) return
+  if (!question || !customAllowed(index) || !interaction.value?.pending || busy.value) return
   customOpen.value[index] = !customOpen.value[index]
   if (!question.multiple) selected.value[index] = []
   if (customOpen.value[index]) {
@@ -345,12 +354,33 @@ const canSubmit = computed(
     answerState.value.every((answer) => answer.length > 0),
 )
 
+function retainReplyFocus(): string | null {
+  const root = rootEl.value
+  if (!root?.contains(document.activeElement)) return null
+  const key = activeControlKey.value
+  root.focus({ preventScroll: true })
+  return key
+}
+
+function restoreReplyFocus(key: string | null, replied: boolean) {
+  if (key === null) return
+  nextTick(() => {
+    if (document.activeElement !== rootEl.value || hasOpenKeyboardOverlay()) return
+    if (replied || !isPendingInteraction.value) returnToTranscript()
+    else if (key) focusControlByKey(key)
+    else focusFirstControl()
+  })
+}
+
 async function replyPermission(reply: 'once' | 'always' | 'reject') {
   if (!props.sessionId || !requestId.value || busy.value || !isPendingPermission.value) return
+  const focusKey = retainReplyFocus()
+  let replied = false
   const pendingDraft = draft.value
   pendingDraft.busy = true
   try {
-    if (!(await chat.replyPermission(props.sessionId, requestId.value, reply))) return
+    replied = await chat.replyPermission(props.sessionId, requestId.value, reply)
+    if (!replied) return
     toasts.push(
       'success',
       reply === 'reject' ? t('chat.attention.toasts.permissionRejected') : t('chat.attention.toasts.permissionGranted'),
@@ -359,6 +389,7 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
     pendingDraft.busy = false
+    restoreReplyFocus(focusKey, replied)
   }
 }
 
@@ -369,34 +400,42 @@ async function submitAnswers() {
     return
   }
   const answers = answerState.value
-  if (!answers.every((answer) => answer.length > 0)) {
+  if (!answers.length || !answers.every((answer) => answer.length > 0)) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
     goToQuestionPage(answers.findIndex((answer) => !answer.length))
     return
   }
+  const focusKey = retainReplyFocus()
+  let replied = false
   const pendingDraft = draft.value
   pendingDraft.busy = true
   try {
-    if (!(await chat.replyQuestion(props.sessionId, requestId.value, answers))) return
+    replied = await chat.replyQuestion(props.sessionId, requestId.value, answers)
+    if (!replied) return
     toasts.push('success', t('chat.attention.toasts.answerSent'))
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
     pendingDraft.busy = false
+    restoreReplyFocus(focusKey, replied)
   }
 }
 
 async function rejectAnswers() {
   if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
+  const focusKey = retainReplyFocus()
+  let replied = false
   const pendingDraft = draft.value
   pendingDraft.busy = true
   try {
-    if (!(await chat.rejectQuestion(props.sessionId, requestId.value))) return
+    replied = await chat.rejectQuestion(props.sessionId, requestId.value)
+    if (!replied) return
     toasts.push('success', t('chat.attention.toasts.questionRejected'))
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   } finally {
     pendingDraft.busy = false
+    restoreReplyFocus(focusKey, replied)
   }
 }
 
@@ -473,22 +512,6 @@ function moveArrowFocus(target: Element | null, direction: 1 | -1) {
   }
 }
 
-function handleTab(event: KeyboardEvent, target: HTMLElement) {
-  const controls = interactionControls()
-  if (!controls.length) return
-  const current = target.closest<HTMLElement>('[data-interaction-control="true"]')
-  if (!current) {
-    event.preventDefault()
-    focusFirstControl(event.shiftKey)
-    return
-  }
-  const currentIndex = controls.indexOf(current)
-  const nextIndex = currentIndex + (event.shiftKey ? -1 : 1)
-  if (nextIndex < 0 || nextIndex >= controls.length) return
-  event.preventDefault()
-  focusControlElement(controls[nextIndex])
-}
-
 function clearCustomDraft(target: Element | null) {
   const index = currentQuestionIndex(target)
   if (index < 0 || !customAllowed(index)) return
@@ -504,115 +527,126 @@ async function cancelInteraction() {
   await rejectAnswers()
 }
 
+function returnToTranscript() {
+  const root = rootEl.value
+  if (!root || !isVisibleKeyboardTarget(root)) return
+  const part = root.closest<HTMLElement>('[data-transcript-node="part"]')
+  const pane = root.closest<HTMLElement>('[data-workspace-pane-window], [data-keyboard-region], main')
+  const target =
+    part?.querySelector<HTMLElement>('[data-transcript-vim-toggle="true"]') ||
+    part ||
+    Array.from(pane?.querySelectorAll<HTMLElement>('[data-chat-input="true"]') || []).find(isVisibleKeyboardTarget) ||
+    root
+  target.focus({ preventScroll: true })
+  target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
+
 function handleEscape(target: Element | null) {
   const index = currentQuestionIndex(target)
-  if (index >= 0 && customOpen.value[index]) {
+  if (isPendingInteraction.value && !busy.value && index >= 0 && customOpen.value[index]) {
     customOpen.value[index] = false
-    nextTick(() => focusQuestionEntry(index))
+    focusControlByKey(customControlKey(index))
     return
   }
-  const active = document.activeElement
-  if (active instanceof HTMLElement && rootEl.value?.contains(active)) active.blur()
+  returnToTranscript()
+}
+
+function consumeKey(event: KeyboardEvent) {
+  event.preventDefault()
+  event.stopPropagation()
 }
 
 async function handleKeydown(event: KeyboardEvent) {
-  // An IME confirmation key belongs to the input method, not to this wizard:
-  // the committed text arrives through `input`, and only the next real Enter
-  // commits the answer or advances to the following question.
-  if (isImeComposing(event)) return
+  if (event.defaultPrevented || isImeComposing(event)) return
   const target = event.target instanceof HTMLElement ? event.target : rootEl.value
   if (!target) return
   const control = target.closest<HTMLElement>('[data-interaction-control="true"]')
   const kind = controlKind(control)
   const key = event.key
   const lowerKey = key.toLowerCase()
+  const isTextEditor = Boolean(target.closest('textarea, input[type="text"], [contenteditable="true"]'))
 
-  if (event.ctrlKey && lowerKey === 'x') {
-    event.preventDefault()
-    await cancelInteraction()
-    return
-  }
-  if (event.ctrlKey && lowerKey === 'd') {
-    event.preventDefault()
-    clearCustomDraft(control)
-    return
-  }
-  if (key === 'Escape') {
-    event.preventDefault()
+  // Native Tab order includes the custom editor, navigation and action buttons.
+  // Let unhandled shortcuts reach the app (including focus-composer shortcuts).
+  if (key === 'Tab') return
+  if (key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    consumeKey(event)
     handleEscape(control)
     return
   }
-
-  const isTextEditor =
-    target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && target.type === 'text')
+  // Markdown links, code blocks and their controls own their keyboard actions.
+  if (!control && target !== rootEl.value) return
+  if (!isPendingInteraction.value || busy.value) return
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === 'Enter') {
+    if (!isPermission.value) {
+      consumeKey(event)
+      await submitAnswers()
+    }
+    return
+  }
   if (isTextEditor) {
-    // Enter commits this answer and advances to the next page. Only the
-    // summary can submit an ask; Shift+Enter keeps native multiline editing.
-    if (key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
+    // Preserve native editing, cut/paste, selection and IME confirmation.
+    if (key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      consumeKey(event)
       const index = currentQuestionIndex(control)
       if (index >= 0 && (customDrafts.value[index] || '').trim()) {
-        if (isReviewDecision.value) {
-          await submitAnswers()
-        } else {
-          // TUI commits the current custom answer and advances through the
-          // question flow instead of attempting a partial submission.
-          goToQuestionPage(index + 1)
-        }
+        if (isReviewDecision.value) await submitAnswers()
+        else goToQuestionPage(index + 1)
       } else if (index >= 0) {
         customOpen.value[index] = false
-        nextTick(() => focusQuestionEntry(index))
+        focusControlByKey(customControlKey(index))
       }
     }
     return
   }
-
-  if (key === 'Tab') {
-    handleTab(event, target)
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && lowerKey === 'x') {
+    consumeKey(event)
+    await cancelInteraction()
     return
   }
-  if (
-    isQuestionFlow.value &&
-    (key === 'ArrowLeft' || key === 'ArrowRight') &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.metaKey
-  ) {
-    event.preventDefault()
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && lowerKey === 'd') {
+    consumeKey(event)
+    clearCustomDraft(control)
+    return
+  }
+  if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+  if (isQuestionFlow.value && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+    consumeKey(event)
     goToQuestionPage(questionPage.value + (key === 'ArrowRight' ? 1 : -1))
     return
   }
-  if (key === 'ArrowUp') {
-    event.preventDefault()
-    moveArrowFocus(control, -1)
+  if (
+    key === 'ArrowUp' ||
+    key === 'ArrowDown' ||
+    (isReview.value && (key === 'ArrowLeft' || key === 'ArrowRight' || lowerKey === 'k' || lowerKey === 'j'))
+  ) {
+    consumeKey(event)
+    moveArrowFocus(control, key === 'ArrowUp' || key === 'ArrowLeft' || lowerKey === 'k' ? -1 : 1)
     return
   }
-  if (key === 'ArrowDown') {
-    event.preventDefault()
-    moveArrowFocus(control, 1)
+  if (key === 'Home' || key === 'End') {
+    consumeKey(event)
+    const index = currentQuestionIndex(control)
+    const controls = kind === 'option' || kind === 'custom' ? questionControls(index) : interactionControls()
+    focusControlElement(key === 'Home' ? controls[0] : controls.at(-1))
     return
   }
-  if ((lowerKey === 'k' || lowerKey === 'j') && isReview.value && !event.altKey && !event.ctrlKey && !event.metaKey) {
-    event.preventDefault()
-    moveArrowFocus(control, lowerKey === 'k' ? -1 : 1)
-    return
-  }
-  if (lowerKey === 'e' && !event.altKey && !event.metaKey) {
+  if (lowerKey === 'e') {
     const index = currentQuestionIndex(control)
     if (index >= 0 && customAllowed(index)) {
-      event.preventDefault()
+      consumeKey(event)
       openCustomEditor(index)
     }
     return
   }
   if (key === ' ' || key === 'Spacebar') {
     if (kind === 'option') {
-      event.preventDefault()
+      consumeKey(event)
       const index = currentQuestionIndex(control)
       const label = control?.getAttribute('data-interaction-control-value') || ''
       if (index >= 0 && label) toggleOption(index, label)
     } else if (kind === 'custom') {
-      event.preventDefault()
+      consumeKey(event)
       const index = currentQuestionIndex(control)
       if (index >= 0) toggleCustom(index)
     }
@@ -620,53 +654,55 @@ async function handleKeydown(event: KeyboardEvent) {
   }
   if (key === 'Enter') {
     if (kind === 'option') {
-      event.preventDefault()
+      consumeKey(event)
       await confirmCurrentOption(control)
     } else if (kind === 'custom') {
-      event.preventDefault()
+      consumeKey(event)
       const index = currentQuestionIndex(control)
       if (index >= 0) toggleCustom(index)
-    } else if (!control) {
-      event.preventDefault()
-      await confirmCurrentOption(null)
+    } else if (!control && target === rootEl.value) {
+      consumeKey(event)
+      focusFirstControl()
     }
   }
 }
 
-function focusPendingInteraction(force = false) {
-  if (!isPendingInteraction.value) return
+// A request can finish in another client. Move focus before its controls are
+// disabled; mounting/streaming requests never take focus from another pane.
+watch(isPendingInteraction, (pending, previous) => {
+  if (!pending && previous && rootEl.value?.contains(document.activeElement)) returnToTranscript()
+})
+
+// Attention can be replaced by its durable operation while the user types.
+// Restore only the focus that this instance owned, within the same visible pane.
+onBeforeUnmount(() => {
+  const root = rootEl.value
+  if (!root?.contains(document.activeElement)) return
+  const scope = root.closest<HTMLElement>('[data-workspace-pane-window], main') || root.parentElement
+  const owner = requestId.value
+  const session = props.sessionId || ''
+  const key = activeControlKey.value
+  const headline = root
+    .closest('[data-transcript-node="part"]')
+    ?.querySelector<HTMLElement>('[data-transcript-vim-toggle="true"]')
   nextTick(() => {
-    const root = rootEl.value
-    if (!root) return
-    const current = document.activeElement
-    const currentIsControl =
-      current instanceof HTMLElement &&
-      root.contains(current) &&
-      current.getAttribute('data-interaction-control') === 'true'
-    if (!force && currentIsControl) {
-      const key = controlKey(current)
-      if (key) activeControlKey.value = key
-      return
-    }
-    const controls = interactionControls()
-    if (controls.length) {
-      focusControlElement(controls[0])
-    } else {
-      root.focus({ preventScroll: true })
-    }
+    if (!scope || !isVisibleKeyboardTarget(scope) || hasOpenKeyboardOverlay()) return
+    if (document.activeElement !== document.body) return
+    const replacement = Array.from(
+      scope.querySelectorAll<HTMLElement>('[data-transcript-interaction-part="true"]'),
+    ).find(
+      (element) =>
+        element.dataset.interactionRequestId === owner &&
+        element.dataset.interactionSessionId === session &&
+        isVisibleKeyboardTarget(element),
+    )
+    const target = Array.from(
+      replacement?.querySelectorAll<HTMLElement>('[data-interaction-control="true"]') || [],
+    ).find((element) => controlKey(element) === key && !element.matches(':disabled, [aria-disabled="true"]'))
+    if (target) target.focus({ preventScroll: true })
+    else if (headline && isVisibleKeyboardTarget(headline)) headline.focus({ preventScroll: true })
   })
-}
-
-watch(
-  () => [requestId.value, isPendingInteraction.value, questions.value.length, isPermission.value],
-  () => {
-    activeControlKey.value = ''
-    focusPendingInteraction(true)
-  },
-  { immediate: true },
-)
-
-onMounted(focusPendingInteraction)
+})
 </script>
 
 <template>
@@ -676,10 +712,18 @@ onMounted(focusPendingInteraction)
     class="min-w-0 border-y border-border/55 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
     data-transcript-interaction-part="true"
     :data-interaction-request-id="requestId"
+    :data-interaction-session-id="sessionId || ''"
     data-transcript-chrome="true"
-    :tabindex="hasKeyboardControls ? -1 : 0"
+    :tabindex="isPendingInteraction ? -1 : 0"
+    :aria-label="
+      permission
+        ? t('chat.attention.ui.permissionLabel')
+        : displayText(interaction?.title || t('chat.attention.title.question'))
+    "
+    :aria-describedby="isPendingInteraction ? hintId : undefined"
+    :aria-busy="busy"
     :data-transcript-interaction-kind="isPermission ? 'permission' : isReviewDecision ? 'review' : 'ask-user'"
-    @keydown.stop="handleKeydown"
+    @keydown="handleKeydown"
   >
     <template v-if="permission">
       <div class="flex items-start justify-between gap-3">
@@ -716,7 +760,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="permission"
           data-interaction-control-key="permission:reject"
-          :tabindex="controlTabIndex('permission:reject')"
           @focus="markControlFocus"
           @click="replyPermission('reject')"
         >
@@ -730,7 +773,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="permission"
           data-interaction-control-key="permission:once"
-          :tabindex="controlTabIndex('permission:once')"
           @focus="markControlFocus"
           @click="replyPermission('once')"
         >
@@ -744,7 +786,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="permission"
           data-interaction-control-key="permission:always"
-          :tabindex="controlTabIndex('permission:always')"
           @focus="markControlFocus"
           @click="replyPermission('always')"
         >
@@ -762,8 +803,8 @@ onMounted(focusPendingInteraction)
       >
         {{ unavailableStatus }}
       </div>
-      <div v-if="interaction.title && !isReviewDecision" class="mb-2 text-xs font-semibold">
-        {{ interaction.title }}
+      <div v-if="interaction.title" class="mb-2 text-xs font-semibold">
+        {{ displayText(interaction.title) }}
       </div>
       <MarkdownRenderer
         v-if="interaction.bodyMarkdown && (!isQuestionFlow || questionPage === 0)"
@@ -791,9 +832,14 @@ onMounted(focusPendingInteraction)
       </div>
 
       <div v-if="isReviewDecision" class="space-y-1.5">
-        <fieldset v-if="questions[0]" class="space-y-1">
+        <fieldset
+          v-if="questions[0]"
+          class="space-y-1"
+          :aria-label="displayText(questions[0].question)"
+          :aria-describedby="isPendingInteraction ? hintId : undefined"
+        >
           <legend v-if="questions[0].question && !hasBody" class="mb-2 text-xs font-medium">
-            {{ questions[0].question }}
+            {{ displayText(questions[0].question) }}
           </legend>
           <label
             v-for="option in visibleOptions(0)"
@@ -803,35 +849,38 @@ onMounted(focusPendingInteraction)
           >
             <input
               type="radio"
-              :name="`review-${requestId}`"
+              :name="`${instanceId}-review-${requestId}`"
               :checked="isOptionChecked(0, option.label)"
               :disabled="!interaction.pending || busy"
+              tabindex="0"
               data-interaction-control="true"
               data-interaction-control-kind="option"
               :data-interaction-control-key="optionControlKey(0, option.label)"
               :data-interaction-control-value="option.label"
               data-interaction-question-index="0"
-              :tabindex="controlTabIndex(optionControlKey(0, option.label))"
               @focus="markControlFocus"
-              class="mt-0.5 accent-primary"
+              class="mt-0.5 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               @change="toggleOption(0, option.label)"
             />
             <span class="min-w-0">
-              <span class="font-medium">{{ option.label }}</span>
-              <span v-if="option.description" class="ml-2 text-muted-foreground">{{ option.description }}</span>
+              <span class="font-medium">{{ displayText(option.label) }}</span>
+              <span v-if="option.description" class="ml-2 text-muted-foreground">{{
+                displayText(option.description)
+              }}</span>
             </span>
           </label>
           <button
+            tabindex="0"
             v-if="questions[0] && customAllowed(0) && (interaction.pending || customDrafts[0])"
             type="button"
-            class="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-muted/40"
+            class="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
             :class="customOpen[0] ? 'bg-muted/55' : ''"
+            :aria-expanded="Boolean(customOpen[0])"
             :disabled="!interaction.pending || busy"
             data-interaction-control="true"
             data-interaction-control-kind="custom"
             :data-interaction-control-key="customControlKey(0)"
             data-interaction-question-index="0"
-            :tabindex="controlTabIndex(customControlKey(0))"
             @focus="markControlFocus"
             @click="toggleCustom(0)"
           >
@@ -844,18 +893,19 @@ onMounted(focusPendingInteraction)
           v-model="customDrafts[0]"
           rows="3"
           :disabled="!interaction.pending || busy"
+          tabindex="0"
           data-interaction-control="true"
           data-interaction-control-kind="textarea"
           :data-interaction-control-key="textareaControlKey(0)"
           data-interaction-question-index="0"
-          :tabindex="controlTabIndex(textareaControlKey(0))"
           @focus="markControlFocus"
           class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
           :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
+          :aria-label="t('chat.attention.ui.customAnswerFor', { question: displayText(questions[0]?.question || '') })"
         />
         <div v-if="!interaction.pending && answerFor(0).length" class="text-[11px] text-muted-foreground">
           <span class="font-semibold">{{ t('chat.attention.ui.answerLabel') }}:</span>
-          {{ answerFor(0).join(', ') }}
+          {{ answerFor(0).map(displayText).join(', ') }}
         </div>
       </div>
 
@@ -866,12 +916,12 @@ onMounted(focusPendingInteraction)
           class="flex items-start justify-between gap-3 rounded-md border border-border/60 p-2"
         >
           <div class="min-w-0 text-xs">
-            <div class="font-medium break-words">{{ question.header || question.question }}</div>
+            <div class="font-medium break-words">{{ displayText(question.header || question.question) }}</div>
             <div
               class="mt-1 whitespace-pre-wrap break-words"
               :class="answerState[questionIndex]?.length ? 'text-foreground' : 'text-muted-foreground'"
             >
-              {{ answerState[questionIndex]?.join(', ') || t('chat.attention.ui.unanswered') }}
+              {{ answerState[questionIndex]?.map(displayText).join(', ') || t('chat.attention.ui.unanswered') }}
             </div>
           </div>
           <Button
@@ -881,7 +931,7 @@ onMounted(focusPendingInteraction)
             data-interaction-control="true"
             data-interaction-control-kind="summary"
             :data-interaction-control-key="`summary:${questionIndex}`"
-            :tabindex="controlTabIndex(`summary:${questionIndex}`)"
+            :aria-label="`${t('chat.attention.ui.editAnswer')}: ${displayText(question.header || question.question)}`"
             @focus="markControlFocus"
             @click="goToQuestionPage(questionIndex)"
           >
@@ -897,14 +947,21 @@ onMounted(focusPendingInteraction)
         <section
           v-for="{ question, questionIndex } in visibleQuestions"
           :key="question.questionId || questionIndex"
+          role="group"
+          :aria-label="displayText(question.question)"
+          :aria-describedby="isPendingInteraction ? hintId : undefined"
           class="space-y-1.5"
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
               <div class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {{ question.header || `Q${questionIndex + 1}` }}
+                {{
+                  question.header
+                    ? displayText(question.header)
+                    : t('chat.attention.ui.numberedQuestion', { count: questionIndex + 1 })
+                }}
               </div>
-              <div class="mt-1 text-xs font-medium">{{ question.question }}</div>
+              <div class="mt-1 text-xs font-medium">{{ displayText(question.question) }}</div>
             </div>
             <span class="shrink-0 font-mono text-[10px] text-muted-foreground">
               {{ question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single') }}
@@ -919,35 +976,38 @@ onMounted(focusPendingInteraction)
             >
               <input
                 :type="question.multiple ? 'checkbox' : 'radio'"
-                :name="`question-${requestId}-${questionIndex}`"
+                :name="`${instanceId}-question-${requestId}-${questionIndex}`"
                 :checked="isOptionChecked(questionIndex, option.label)"
                 :disabled="!interaction.pending || busy"
+                tabindex="0"
                 data-interaction-control="true"
                 data-interaction-control-kind="option"
                 :data-interaction-control-key="optionControlKey(questionIndex, option.label)"
                 :data-interaction-control-value="option.label"
                 :data-interaction-question-index="questionIndex"
-                :tabindex="controlTabIndex(optionControlKey(questionIndex, option.label))"
                 @focus="markControlFocus"
-                class="mt-0.5 accent-primary"
+                class="mt-0.5 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 @change="toggleOption(questionIndex, option.label)"
               />
               <span class="min-w-0">
-                <span class="font-medium">{{ option.label }}</span>
-                <span v-if="option.description" class="ml-2 text-muted-foreground">{{ option.description }}</span>
+                <span class="font-medium">{{ displayText(option.label) }}</span>
+                <span v-if="option.description" class="ml-2 text-muted-foreground">{{
+                  displayText(option.description)
+                }}</span>
               </span>
             </label>
           </div>
           <button
+            tabindex="0"
             v-if="customAllowed(questionIndex) && (interaction.pending || customDrafts[questionIndex])"
             type="button"
-            class="text-left text-[11px] text-primary hover:underline"
+            class="rounded text-left text-[11px] text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+            :aria-expanded="Boolean(customOpen[questionIndex])"
             :disabled="!interaction.pending || busy"
             data-interaction-control="true"
             data-interaction-control-kind="custom"
             :data-interaction-control-key="customControlKey(questionIndex)"
             :data-interaction-question-index="questionIndex"
-            :tabindex="controlTabIndex(customControlKey(questionIndex))"
             @focus="markControlFocus"
             @click="toggleCustom(questionIndex)"
           >
@@ -958,18 +1018,19 @@ onMounted(focusPendingInteraction)
             v-model="customDrafts[questionIndex]"
             rows="2"
             :disabled="!interaction.pending || busy"
+            tabindex="0"
             data-interaction-control="true"
             data-interaction-control-kind="textarea"
             :data-interaction-control-key="textareaControlKey(questionIndex)"
             :data-interaction-question-index="questionIndex"
-            :tabindex="controlTabIndex(textareaControlKey(questionIndex))"
             @focus="markControlFocus"
             class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
             :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
+            :aria-label="t('chat.attention.ui.customAnswerFor', { question: displayText(question.question) })"
           />
           <div v-if="!interaction.pending && answerFor(questionIndex).length" class="text-[11px] text-muted-foreground">
             <span class="font-semibold">{{ t('chat.attention.ui.answerLabel') }}:</span>
-            {{ answerFor(questionIndex).join(', ') }}
+            {{ answerFor(questionIndex).map(displayText).join(', ') }}
           </div>
         </section>
       </div>
@@ -985,7 +1046,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="navigation"
           data-interaction-control-key="page:previous"
-          :tabindex="controlTabIndex('page:previous')"
           @focus="markControlFocus"
           @click="goToQuestionPage(questionPage - 1)"
         >
@@ -999,7 +1059,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="navigation"
           data-interaction-control-key="page:next"
-          :tabindex="controlTabIndex('page:next')"
           @focus="markControlFocus"
           @click="goToQuestionPage(questionPage + 1)"
         >
@@ -1022,7 +1081,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="action"
           data-interaction-control-key="action:reject"
-          :tabindex="controlTabIndex('action:reject')"
           @focus="markControlFocus"
           @click="rejectAnswers"
         >
@@ -1036,7 +1094,6 @@ onMounted(focusPendingInteraction)
           data-interaction-control="true"
           data-interaction-control-kind="action"
           data-interaction-control-key="action:submit"
-          :tabindex="controlTabIndex('action:submit')"
           @focus="markControlFocus"
           @click="submitAnswers"
         >
@@ -1051,5 +1108,16 @@ onMounted(focusPendingInteraction)
         {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.unanswered') }}
       </div>
     </template>
+    <p v-if="isPendingInteraction" :id="hintId" class="mt-2 text-[10px] text-muted-foreground">
+      {{
+        t(
+          isPermission
+            ? 'chat.attention.ui.permissionKeyboardHint'
+            : isReviewDecision
+              ? 'chat.attention.ui.reviewKeyboardHint'
+              : 'chat.attention.ui.questionKeyboardHint',
+        )
+      }}
+    </p>
   </section>
 </template>

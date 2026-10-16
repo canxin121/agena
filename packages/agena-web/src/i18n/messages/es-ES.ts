@@ -1777,6 +1777,36 @@ export default {
         "slash": "barra"
       }
     },
+    planReview: {
+      "creationTitle": "Aprobar nuevo plan",
+      "statusTitle": "Revisar cambio de estado del plan",
+      "decision": "Decisión",
+      "approve": "Aprobar",
+      "approveAutorunOn": "Aprobar y activar la ejecución automática",
+      "approveAutorunOff": "Aprobar y desactivar la ejecución automática",
+      "approveRequested": "Aprobar el estado solicitado",
+      "approveRequestedPause": "Aprobar el estado y desactivar la continuación automática",
+      "keepPlanning": "Seguir planificando",
+      "reject": "Rechazar",
+      "cancelPlan": "Cancelar plan",
+      "approveAutorunOnDescription": "Aprobar el plan, activarlo y mantener la ejecución automática activada.",
+      "approveAutorunOffDescription": "Aprobar el plan, activarlo y mantener la ejecución automática desactivada.",
+      "approveBlockedDescription": "Aprobar el plan y marcarlo como bloqueado.",
+      "approveCompletedDescription": "Aprobar el plan y marcarlo como completado.",
+      "approvePlanningDescription": "Aprobar el plan y volver a la planificación.",
+      "approveCancelledDescription": "Aprobar y cancelar el plan.",
+      "keepPlanningDescription": "Volver a la planificación para seguir editando el plan.",
+      "rejectDescription": "Rechazar el plan actual y marcar la revisión como rechazada.",
+      "cancelPlanDescription": "Cancelar todo el plan y detener el trabajo en él.",
+      "question": "Elige si el plan debe pasar a {phase} o escribe comentarios para que el asistente lo revise.",
+      "phases": {
+        "planning": "en planificación",
+        "active": "activo",
+        "blocked": "bloqueado",
+        "completed": "completado",
+        "cancelled": "cancelado"
+      }
+    },
     "planViewer": {
       "title": "Plan",
       "session": "Sesión {id}",
@@ -1825,6 +1855,10 @@ export default {
       "ui": {
         requestNoLongerPending: 'Esta solicitud ya no está pendiente.',
         checkingRequestStatus: 'Comprobando el estado de la solicitud…',
+        customAnswerFor: "Respuesta personalizada: {question}",
+        permissionKeyboardHint: "Tab / Shift+Tab: navegar · ↑ / ↓ / Home / End: elegir · Enter / Espacio: confirmar · Esc: volver",
+        reviewKeyboardHint: "Tab / Shift+Tab: navegar · ↑ / ↓ / Home / End: elegir · Espacio: seleccionar · Enter: enviar · E: comentarios · Shift+Enter: nueva línea · Esc: volver",
+        questionKeyboardHint: "Tab / Shift+Tab: navegar · ↑ / ↓ / Home / End: elegir · Espacio: seleccionar · Enter: siguiente · ← / →: cambiar pregunta · Shift+Enter: nueva línea · Esc: volver",
         "permissionStatus": {
           "allowedOnce": "Permitido una vez",
           "allowedPersistently": "Permitido de forma permanente",

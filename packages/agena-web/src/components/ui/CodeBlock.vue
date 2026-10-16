@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { RiArrowDownSLine, RiArrowUpSLine, RiCheckLine, RiClipboardLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -24,12 +24,18 @@ const isLarge = computed(() => {
 })
 
 const userExpanded = ref<boolean>()
+const toggleEl = ref<HTMLButtonElement | null>(null)
 const expanded = computed({
   get: () => userExpanded.value ?? !isLarge.value,
   set: (value: boolean) => {
     userExpanded.value = value
   },
 })
+
+function expandCode() {
+  expanded.value = true
+  nextTick(() => toggleEl.value?.focus({ preventScroll: true }))
+}
 
 const toasts = useToastsStore()
 const { t } = useI18n()
@@ -66,17 +72,21 @@ async function copyCode() {
       <span class="text-xs font-mono text-muted-foreground">{{ lang || 'text' }}</span>
       <div class="flex items-center gap-1">
         <button
+          ref="toggleEl"
+          tabindex="0"
           v-if="isLarge"
           type="button"
           class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition"
           :title="expanded ? t('codeBlock.collapse') : t('codeBlock.expandLines', { lines })"
           :aria-label="expanded ? t('codeBlock.collapseAria') : t('codeBlock.expandAria')"
+          :aria-expanded="expanded"
           @click="expanded = !expanded"
         >
           <RiArrowUpSLine v-if="expanded" class="h-4 w-4" />
           <RiArrowDownSLine v-else class="h-4 w-4" />
         </button>
         <button
+          tabindex="0"
           type="button"
           @click="copyCode"
           class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -90,6 +100,8 @@ async function copyCode() {
     </div>
     <div class="relative min-w-0">
       <pre
+        tabindex="0"
+        data-transcript-keyboard-owner="true"
         class="overflow-x-auto font-mono"
         :class="[
           props.compact ? 'px-2 py-1.5 text-xs leading-snug' : 'px-3 py-2 text-sm leading-snug',
@@ -103,9 +115,10 @@ async function copyCode() {
       />
       <div v-if="!expanded && isLarge" class="absolute inset-x-0 bottom-0 flex justify-center pb-2">
         <button
+          tabindex="0"
           type="button"
           class="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-background/70 backdrop-blur text-muted-foreground hover:text-foreground active:scale-95 transition"
-          @click="expanded = true"
+          @click="expandCode"
           :title="t('codeBlock.expand')"
           :aria-label="t('codeBlock.expand')"
         >

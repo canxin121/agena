@@ -33,6 +33,7 @@ import {
   subscribeResource,
 } from '@/lib/resourceSync'
 import type { JsonValue } from '@/types/json'
+import { interactionText } from '@/pages/chat/interactionText'
 
 const props = defineProps<{
   part: TranscriptDisplayPart
@@ -507,6 +508,7 @@ function toggleOuter() {
 <template>
   <div class="min-w-0">
     <button
+      tabindex="0"
       type="button"
       class="group/headline flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
@@ -541,7 +543,14 @@ function toggleOuter() {
         v-if="!expanded && (operation.userInputs[0]?.questions[0]?.question || operation.summary)"
         class="min-w-0 max-w-[55%] truncate text-xs text-muted-foreground"
       >
-        · {{ operation.userInputs[0]?.questions[0]?.question || operation.userInputs[0]?.title || operation.summary }}
+        ·
+        {{
+          interactionText(
+            operation.userInputs[0]?.kind || '',
+            operation.userInputs[0]?.questions[0]?.question || operation.userInputs[0]?.title || operation.summary,
+            t,
+          )
+        }}
       </span>
       <span v-if="operation.durationMs !== null" class="shrink-0 font-mono text-[10px] text-muted-foreground/70">
         {{ operation.durationMs }}ms
@@ -627,6 +636,7 @@ function toggleOuter() {
       </div>
 
       <button
+        tabindex="0"
         type="button"
         class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
         :aria-expanded="detailsExpanded"
@@ -639,6 +649,7 @@ function toggleOuter() {
       <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-2" data-tool-details>
         <section v-for="section in toolDetailSections" :key="section" class="py-0.5">
           <button
+            tabindex="0"
             type="button"
             class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
             :aria-expanded="sectionExpanded(section)"
@@ -658,7 +669,7 @@ function toggleOuter() {
           <div v-if="sectionExpanded(section)" class="min-w-0 pl-3 pt-1" :aria-busy="sectionPending(section)">
             <div v-if="sectionError(section)" role="alert" class="py-1 text-xs text-rose-700 dark:text-rose-300">
               {{ sectionError(section) }}
-              <button type="button" class="ml-2 underline" @click="loadSection(section)">
+              <button tabindex="0" type="button" class="ml-2 underline" @click="loadSection(section)">
                 {{ t('common.retry') }}
               </button>
             </div>

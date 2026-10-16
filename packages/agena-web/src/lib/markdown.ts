@@ -106,7 +106,7 @@ function renderMermaidBlock(code: string): string {
 
   const toggleBtn = large
     ? `
-<button type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-label="${escapeHtml(currentLabels.toggleDiagramAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
+<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleDiagramAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
   ${inlineIcon('chevronDown')}
   ${inlineIcon('chevronUp')}
 </button>`.trim()
@@ -115,7 +115,7 @@ function renderMermaidBlock(code: string): string {
   const moreBtn = large
     ? `
 <div class="oc-md-mermaid__morewrap">
-  <button type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-label="${escapeHtml(currentLabels.expandDiagramAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
+  <button tabindex="0" type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandDiagramAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
     ${inlineIcon('chevronDown')}
   </button>
 </div>`.trim()
@@ -127,7 +127,7 @@ function renderMermaidBlock(code: string): string {
     <span class="oc-md-codeblock__lang" title="mermaid">mermaid</span>
     <div class="oc-md-codeblock__actions">
       ${toggleBtn}
-      <button type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyDiagramSourceAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
+      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyDiagramSourceAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
         ${inlineIcon('copy')}
         ${inlineIcon('check')}
       </button>
@@ -159,7 +159,7 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
 
   const toggleBtn = large
     ? `
-<button type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-label="${escapeHtml(currentLabels.toggleCodeAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
+<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleCodeAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
   ${inlineIcon('chevronDown')}
   ${inlineIcon('chevronUp')}
 </button>`.trim()
@@ -168,7 +168,7 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
   const moreBtn = large
     ? `
 <div class="oc-md-codeblock__morewrap">
-  <button type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-label="${escapeHtml(currentLabels.expandCodeAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
+  <button tabindex="0" type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandCodeAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
     ${inlineIcon('chevronDown')}
   </button>
 </div>`.trim()
@@ -180,14 +180,14 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
     <span class="oc-md-codeblock__lang" title="${titleEsc}">${langEsc}</span>
     <div class="oc-md-codeblock__actions">
       ${toggleBtn}
-      <button type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyCodeAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
+      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyCodeAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
         ${inlineIcon('copy')}
         ${inlineIcon('check')}
       </button>
     </div>
   </div>
   <div class="oc-md-codeblock__body">
-    <pre class="oc-md-pre"><code class="hljs ${classAttr}">${highlighted}</code></pre>
+    <pre class="oc-md-pre" tabindex="0" data-transcript-keyboard-owner="true"><code class="hljs ${classAttr}">${highlighted}</code></pre>
     <div class="oc-md-codeblock__fade" aria-hidden="true"></div>
     ${moreBtn}
   </div>
@@ -267,6 +267,7 @@ const defaultLinkOpen = md.renderer.rules.link_open
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
   if (token) {
+    token.attrSet('tabindex', '0')
     const href = token.attrGet('href')
     if (href && !href.startsWith('#')) {
       token.attrSet('target', '_blank')

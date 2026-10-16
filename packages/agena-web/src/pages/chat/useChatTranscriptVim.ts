@@ -56,7 +56,11 @@ import {
   type TranscriptTextProjection,
   type TranscriptVisualRow,
 } from './transcriptDomCursor'
-import { focusTranscriptPartControl, transcriptNativeControl } from './transcriptControls'
+import {
+  focusTranscriptInteractionControl,
+  focusTranscriptPartControl,
+  transcriptNativeControl,
+} from './transcriptControls'
 
 type ToastsLike = { push: (kind: 'success' | 'error' | 'info', message: string, duration?: number) => void }
 
@@ -2153,16 +2157,20 @@ export function useChatTranscriptVim(opts: {
         if (opts.draft.value.trim()) opts.clearComposer()
         else if (opts.canAbort.value) void opts.abortRun()
       } else if (action?.type === 'open-plan') {
-        // Composer focus does not open Plan in the TUI, but Ctrl+P must not
-        // fall through to the browser's print dialog.
         event.preventDefault()
         event.stopPropagation()
+        opts.openPlan()
       }
       return
     }
 
     if (isEditable(target)) return
-    if (target instanceof Element && target.closest('[data-transcript-chrome="true"]')) return
+    // Scrollable content owns its focused keys while remaining selectable text.
+    if (
+      target instanceof Element &&
+      target.closest('[data-transcript-chrome="true"], [data-transcript-keyboard-owner="true"]')
+    )
+      return
     if (target instanceof Element) {
       // A focused disclosure has native Enter/Space activation. The text
       // cursor's active key may belong to a different row during a remount.
@@ -2202,11 +2210,15 @@ export function useChatTranscriptVim(opts: {
       !event.metaKey &&
       !event.altKey &&
       !event.shiftKey &&
-      (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
-      activeElement()?.dataset.partKind === 'activity_summary'
+      (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
     ) {
-      const row = activeElement()!
-      if (focusTranscriptPartControl(row, event.key === 'ArrowRight' ? 1 : -1)) {
+      const row = activeElement()
+      const direction = event.key === 'ArrowRight' ? 1 : -1
+      if (
+        row &&
+        ((row.dataset.partKind === 'activity_summary' && focusTranscriptPartControl(row, direction)) ||
+          focusTranscriptInteractionControl(row, direction))
+      ) {
         event.preventDefault()
         event.stopPropagation()
         return

@@ -74,7 +74,12 @@ const visibleFiles = computed(() => {
           <span class="text-emerald-700 dark:text-emerald-400">+{{ file.additions }}</span>
           <span class="text-rose-700 dark:text-rose-400">−{{ file.deletions }}</span>
         </div>
-        <div class="overflow-x-auto" tabindex="0" :aria-label="file.path || t('chat.toolDetails.diff')">
+        <div
+          class="overflow-x-auto"
+          tabindex="0"
+          data-transcript-keyboard-owner="true"
+          :aria-label="file.path || t('chat.toolDetails.diff')"
+        >
           <div class="min-w-full w-max font-mono text-xs leading-[1.4]">
             <div
               v-for="(row, rowIndex) in file.rows"
@@ -115,6 +120,7 @@ const visibleFiles = computed(() => {
     </template>
     <div class="flex flex-wrap items-center gap-3">
       <button
+        tabindex="0"
         type="button"
         class="min-h-8 rounded px-2 text-xs text-muted-foreground hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
         @click="copyDiff"
@@ -122,6 +128,7 @@ const visibleFiles = computed(() => {
         {{ copied ? t('common.copied') : t('chat.toolDetails.copyDiff') }}
       </button>
       <button
+        tabindex="0"
         v-if="totalRows > previewLimit"
         type="button"
         class="flex min-h-8 items-center gap-2 rounded px-2 text-xs text-primary hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"

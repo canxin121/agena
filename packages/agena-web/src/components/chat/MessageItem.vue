@@ -484,6 +484,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
               class="inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground sm:h-8 sm:px-2"
             >
               <button
+                tabindex="0"
                 type="button"
                 class="h-full min-w-0 rounded px-1 transition-colors outline-none hover:bg-secondary/40 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/50"
                 :aria-label="t('chat.messages.controls.expandNextCount', { count: activityPageSize })"

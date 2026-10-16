@@ -87,6 +87,7 @@ function openAttachment() {
   <section class="min-w-0 border-y border-border/50 py-1.5">
     <div class="flex min-w-0 items-start gap-2">
       <button
+        tabindex="0"
         v-if="attachment.path"
         type="button"
         class="min-w-0 flex-1 truncate text-left font-mono text-xs text-foreground hover:text-primary"
@@ -97,6 +98,7 @@ function openAttachment() {
         {{ attachment.label }}
       </button>
       <a
+        tabindex="0"
         v-else-if="href"
         :href="href"
         target="_blank"
@@ -115,6 +117,7 @@ function openAttachment() {
     </div>
 
     <button
+      tabindex="0"
       v-if="isImage && href"
       type="button"
       class="mt-2 block max-w-full overflow-hidden rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"

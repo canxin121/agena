@@ -565,7 +565,7 @@ describe('TUI-parity part presentation', () => {
     )
     expect(interactionSource).toContain('data-transcript-interaction-part="true"')
     expect(interactionSource).toContain('data-transcript-chrome="true"')
-    expect(interactionSource).toContain('@keydown.stop="handleKeydown"')
+    expect(interactionSource).toContain('@keydown="handleKeydown"')
     expect(interactionSource).toContain('ArrowUp')
     expect(interactionSource).toContain('ArrowDown')
     expect(interactionSource).toContain("lowerKey === 'k'")

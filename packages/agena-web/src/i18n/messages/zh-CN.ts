@@ -1295,6 +1295,36 @@ export default {
       output: '输出',
       metadata: '元数据',
     },
+    planReview: {
+      "creationTitle": "审批新计划",
+      "statusTitle": "审批计划状态变更",
+      "decision": "决策",
+      "approve": "批准",
+      "approveAutorunOn": "批准并开启自动执行",
+      "approveAutorunOff": "批准并关闭自动执行",
+      "approveRequested": "批准请求的状态",
+      "approveRequestedPause": "批准请求的状态并关闭自动继续",
+      "keepPlanning": "继续规划",
+      "reject": "拒绝",
+      "cancelPlan": "取消计划",
+      "approveAutorunOnDescription": "批准计划，将其设为进行中，并开启自动执行。",
+      "approveAutorunOffDescription": "批准计划，将其设为进行中，并关闭自动执行。",
+      "approveBlockedDescription": "批准计划，并将其设为受阻。",
+      "approveCompletedDescription": "批准计划，并将其标记为已完成。",
+      "approvePlanningDescription": "批准计划，并返回规划阶段。",
+      "approveCancelledDescription": "批准并取消该计划。",
+      "keepPlanningDescription": "返回规划阶段，以便继续修改计划。",
+      "rejectDescription": "拒绝当前计划，并将本次审批标记为已拒绝。",
+      "cancelPlanDescription": "取消整个计划，并停止执行该计划。",
+      "question": "请选择是否将此计划设为“{phase}”，或输入反馈，让助手修改计划。",
+      "phases": {
+        "planning": "规划中",
+        "active": "进行中",
+        "blocked": "受阻",
+        "completed": "已完成",
+        "cancelled": "已取消"
+      }
+    },
     planViewer: {
       title: '计划',
       session: '会话 {id}',
@@ -1418,6 +1448,10 @@ export default {
       ui: {
         requestNoLongerPending: '此请求已不再等待处理。',
         checkingRequestStatus: '正在确认请求状态…',
+        customAnswerFor: "自定义回答：{question}",
+        permissionKeyboardHint: "Tab / Shift+Tab 切换 · ↑ / ↓ / Home / End 选择 · Enter / 空格 确认 · Esc 返回",
+        reviewKeyboardHint: "Tab / Shift+Tab 切换 · ↑ / ↓ / Home / End 选择 · 空格 勾选 · Enter 提交 · E 输入反馈 · Shift+Enter 换行 · Esc 返回",
+        questionKeyboardHint: "Tab / Shift+Tab 切换 · ↑ / ↓ / Home / End 选择 · 空格 勾选 · Enter 下一步 · ← / → 切换问题 · Shift+Enter 换行 · Esc 返回",
         permissionStatus: {
           allowedOnce: '已允许一次',
           allowedPersistently: '已始终允许',

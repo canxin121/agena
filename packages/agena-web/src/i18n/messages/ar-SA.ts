@@ -551,6 +551,36 @@ export default {
         rename: { cancel: 'إلغاء إعادة التسمية', save: 'حفظ الاسم', saving: 'جارٍ حفظ الاسم' },
       },
     },
+    planReview: {
+      "creationTitle": "الموافقة على الخطة الجديدة",
+      "statusTitle": "مراجعة تغيير حالة الخطة",
+      "decision": "القرار",
+      "approve": "موافقة",
+      "approveAutorunOn": "الموافقة مع تشغيل التنفيذ التلقائي",
+      "approveAutorunOff": "الموافقة مع إيقاف التنفيذ التلقائي",
+      "approveRequested": "الموافقة على الحالة المطلوبة",
+      "approveRequestedPause": "الموافقة على الحالة وإيقاف المتابعة التلقائية",
+      "keepPlanning": "متابعة التخطيط",
+      "reject": "رفض",
+      "cancelPlan": "إلغاء الخطة",
+      "approveAutorunOnDescription": "الموافقة على الخطة وتفعيلها مع إبقاء التنفيذ التلقائي قيد التشغيل.",
+      "approveAutorunOffDescription": "الموافقة على الخطة وتفعيلها مع إبقاء التنفيذ التلقائي متوقفًا.",
+      "approveBlockedDescription": "الموافقة على الخطة وتعيينها كخطة متوقفة بسبب عائق.",
+      "approveCompletedDescription": "الموافقة على الخطة ووضع علامة مكتملة عليها.",
+      "approvePlanningDescription": "الموافقة على الخطة والعودة إلى التخطيط.",
+      "approveCancelledDescription": "الموافقة على الخطة وإلغاؤها.",
+      "keepPlanningDescription": "العودة إلى التخطيط لمواصلة تعديل الخطة.",
+      "rejectDescription": "رفض الخطة الحالية وتسجيل المراجعة كمرفوضة.",
+      "cancelPlanDescription": "إلغاء الخطة بالكامل وإيقاف العمل عليها.",
+      "question": "اختر ما إذا كنت تريد نقل الخطة إلى حالة {phase}، أو اكتب ملاحظات ليعدّل المساعد الخطة.",
+      "phases": {
+        "planning": "قيد التخطيط",
+        "active": "نشطة",
+        "blocked": "متوقفة بسبب عائق",
+        "completed": "مكتملة",
+        "cancelled": "ملغاة"
+      }
+    },
     planViewer: {
       title: 'الخطة',
       session: 'الجلسة {id}',
@@ -668,6 +698,10 @@ export default {
       ui: {
         requestNoLongerPending: 'لم يعد هذا الطلب معلقًا.',
         checkingRequestStatus: 'جارٍ التحقق من حالة الطلب…',
+        customAnswerFor: "إجابة مخصصة: {question}",
+        permissionKeyboardHint: "Tab / Shift+Tab: تنقّل · ↑ / ↓ / Home / End: اختر · Enter / مسافة: تأكيد · Esc: رجوع",
+        reviewKeyboardHint: "Tab / Shift+Tab: تنقّل · ↑ / ↓ / Home / End: اختر · مسافة: تحديد · Enter: إرسال · E: ملاحظات · Shift+Enter: سطر جديد · Esc: رجوع",
+        questionKeyboardHint: "Tab / Shift+Tab: تنقّل · ↑ / ↓ / Home / End: اختر · مسافة: تحديد · Enter: التالي · ← / →: تغيير السؤال · Shift+Enter: سطر جديد · Esc: رجوع",
         permissionStatus: {
           allowedOnce: 'سُمح به مرة واحدة',
           allowedPersistently: 'سُمح به دائمًا',

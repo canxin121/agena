@@ -431,6 +431,10 @@ export default {
       ui: {
         requestNoLongerPending: 'Cette demande n’est plus en attente.',
         checkingRequestStatus: 'Vérification de l’état de la demande…',
+        customAnswerFor: "Réponse personnalisée : {question}",
+        permissionKeyboardHint: "Tab / Shift+Tab : naviguer · ↑ / ↓ / Home / End : choisir · Entrée / Espace : confirmer · Échap : revenir",
+        reviewKeyboardHint: "Tab / Shift+Tab : naviguer · ↑ / ↓ / Home / End : choisir · Espace : sélectionner · Entrée : envoyer · E : commentaires · Shift+Entrée : nouvelle ligne · Échap : revenir",
+        questionKeyboardHint: "Tab / Shift+Tab : naviguer · ↑ / ↓ / Home / End : choisir · Espace : sélectionner · Entrée : suivant · ← / → : changer de question · Shift+Entrée : nouvelle ligne · Échap : revenir",
         permissionStatus: {
           allowedOnce: 'Autorisation accordée une fois',
           allowedPersistently: 'Autorisation accordée durablement',
@@ -770,6 +774,36 @@ export default {
           saving: 'Enregistrement du nouveau nom',
         },
       },
+    },
+    planReview: {
+      "creationTitle": "Approuver le nouveau plan",
+      "statusTitle": "Examiner le changement d’état du plan",
+      "decision": "Décision",
+      "approve": "Approuver",
+      "approveAutorunOn": "Approuver et activer l’exécution automatique",
+      "approveAutorunOff": "Approuver et désactiver l’exécution automatique",
+      "approveRequested": "Approuver l’état demandé",
+      "approveRequestedPause": "Approuver l’état et désactiver la poursuite automatique",
+      "keepPlanning": "Poursuivre la planification",
+      "reject": "Refuser",
+      "cancelPlan": "Annuler le plan",
+      "approveAutorunOnDescription": "Approuver le plan, l’activer et laisser l’exécution automatique activée.",
+      "approveAutorunOffDescription": "Approuver le plan, l’activer et laisser l’exécution automatique désactivée.",
+      "approveBlockedDescription": "Approuver le plan et le marquer comme bloqué.",
+      "approveCompletedDescription": "Approuver le plan et le marquer comme terminé.",
+      "approvePlanningDescription": "Approuver le plan et revenir à la planification.",
+      "approveCancelledDescription": "Approuver et annuler le plan.",
+      "keepPlanningDescription": "Revenir à la planification pour continuer à modifier le plan.",
+      "rejectDescription": "Refuser le plan actuel et marquer l’examen comme refusé.",
+      "cancelPlanDescription": "Annuler tout le plan et arrêter le travail associé.",
+      "question": "Choisissez si le plan doit passer à l’état {phase}, ou saisissez des commentaires pour que l’assistant le révise.",
+      "phases": {
+        "planning": "en planification",
+        "active": "actif",
+        "blocked": "bloqué",
+        "completed": "terminé",
+        "cancelled": "annulé"
+      }
     },
     planViewer: {
       title: 'Plan',

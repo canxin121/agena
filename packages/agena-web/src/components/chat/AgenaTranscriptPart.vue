@@ -120,6 +120,7 @@ function openAttachment(path: string, url: string) {
 
   <div v-else class="min-w-0">
     <button
+      tabindex="0"
       type="button"
       class="group/headline flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"

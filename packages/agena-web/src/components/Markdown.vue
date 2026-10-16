@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -16,6 +16,7 @@ import { useChatStore } from '@/stores/chat'
 import { queryText, resourceDirectory } from '@/app/workspace/resourceDirectory'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
+import { isPlainNavigationKey, navigationIndex } from '@/lib/keyboardNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -191,6 +192,35 @@ type TocItem = { id: string; text: string; level: number }
 const toc = ref<TocItem[]>([])
 const showToc = ref(false)
 const tocMenuRef = ref<HTMLElement | null>(null)
+const tocTriggerRef = ref<HTMLButtonElement | null>(null)
+const tocId = `${useId()}-markdown-toc`
+
+function onTocKeydown(event: KeyboardEvent) {
+  if (!isPlainNavigationKey(event) || event.shiftKey) return
+  if (event.key === 'Escape' && showToc.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    showToc.value = false
+    tocTriggerRef.value?.focus({ preventScroll: true })
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  event.stopPropagation()
+  showToc.value = true
+  nextTick(() => {
+    const items = Array.from(tocMenuRef.value?.querySelectorAll<HTMLButtonElement>('[data-markdown-toc-item]') || [])
+    const index = navigationIndex(event.key, items.indexOf(event.target as HTMLButtonElement), items.length)
+    if (index !== null) {
+      items[index]?.focus({ preventScroll: true })
+      items[index]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+  })
+}
+
+function onTocFocusout(event: FocusEvent) {
+  if (!(event.relatedTarget instanceof Node) || !tocMenuRef.value?.contains(event.relatedTarget)) showToc.value = false
+}
 
 onClickOutside(tocMenuRef, () => {
   showToc.value = false
@@ -264,6 +294,7 @@ function scrollToAnchor(rawId: string): boolean {
 
 function scrollToHeading(id: string) {
   showToc.value = false
+  tocTriggerRef.value?.focus({ preventScroll: true })
   scrollToAnchor(id)
 }
 
@@ -725,7 +756,15 @@ async function handleRootClick(event: MouseEvent) {
 
   if (action === 'toggle') {
     const next = block.getAttribute('data-oc-expanded') === '1' ? '0' : '1'
+    if (next === '1' && btn.classList.contains('oc-md-codeblock__more')) {
+      block
+        .querySelector<HTMLElement>('.oc-md-codeblock__header [data-oc-code-action="toggle"]')
+        ?.focus({ preventScroll: true })
+    }
     block.setAttribute('data-oc-expanded', next)
+    for (const toggle of block.querySelectorAll('[data-oc-code-action="toggle"]')) {
+      toggle.setAttribute('aria-expanded', next === '1' ? 'true' : 'false')
+    }
     return
   }
 
@@ -870,14 +909,26 @@ onBeforeUnmount(() => {
       <div class="sticky top-0 flex justify-end p-2">
         <div
           class="relative pointer-events-auto transition-opacity duration-200"
-          :class="[showToc ? 'opacity-100' : 'opacity-60 hover:opacity-100 lg:opacity-0 lg:group-hover:opacity-100']"
+          :class="[
+            showToc
+              ? 'opacity-100'
+              : 'opacity-60 hover:opacity-100 focus-within:opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100',
+          ]"
           ref="tocMenuRef"
+          @keydown="onTocKeydown"
+          @focusout="onTocFocusout"
         >
           <button
+            ref="tocTriggerRef"
             type="button"
-            class="inline-flex items-center justify-center w-8 h-8 rounded-md border border-border bg-background/80 backdrop-blur shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            tabindex="0"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-md border border-border bg-background/80 backdrop-blur shadow-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @click="showToc = !showToc"
             :title="t('markdown.tableOfContents')"
+            :aria-label="t('markdown.tableOfContents')"
+            :aria-expanded="showToc"
+            :aria-controls="showToc ? tocId : undefined"
+            data-markdown-toc-trigger
           >
             <RiListUnordered class="w-4 h-4" />
           </button>
@@ -887,12 +938,14 @@ onBeforeUnmount(() => {
             v-if="showToc"
             class="absolute top-full right-0 mt-1 w-56 max-w-[80vw] max-h-80 overflow-y-auto rounded-md border border-border bg-popover shadow-lg p-1.5 z-50 text-sm origin-top-right animate-in fade-in zoom-in-95 duration-100"
           >
-            <nav class="flex flex-col">
+            <nav :id="tocId" class="flex flex-col" :aria-label="t('markdown.tableOfContents')">
               <button
                 v-for="item in toc"
                 :key="item.id"
                 type="button"
-                class="text-left px-2 py-1.5 rounded-sm hover:bg-accent hover:text-accent-foreground truncate transition-colors"
+                tabindex="0"
+                data-markdown-toc-item
+                class="text-left px-2 py-1.5 rounded-sm hover:bg-accent hover:text-accent-foreground truncate transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :class="{ 'font-medium': item.level === 1 }"
                 :style="{ paddingLeft: `${(item.level - 1) * 0.75 + 0.5}rem` }"
                 @click="scrollToHeading(item.id)"

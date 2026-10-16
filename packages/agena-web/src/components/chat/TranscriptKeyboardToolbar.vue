@@ -154,6 +154,7 @@ onBeforeUnmount(() => {
     class="chat-message-column flex flex-wrap items-center gap-1 border-t border-border/40 py-1 text-xs"
   >
     <button
+      tabindex="0"
       type="button"
       :disabled="loading || !count"
       class="rounded px-2 py-1 hover:bg-secondary disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -162,6 +163,7 @@ onBeforeUnmount(() => {
       {{ t('keyboard.previousMessage') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       :disabled="loading || !count"
       class="rounded px-2 py-1 hover:bg-secondary disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -170,6 +172,7 @@ onBeforeUnmount(() => {
       {{ t('keyboard.nextMessage') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       :disabled="!count"
       class="rounded px-2 py-1 hover:bg-secondary disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -178,6 +181,7 @@ onBeforeUnmount(() => {
       {{ t('keyboard.copyMessage') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       :disabled="!count"
       class="rounded px-2 py-1 hover:bg-secondary disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -186,6 +190,7 @@ onBeforeUnmount(() => {
       {{ t('keyboard.selectMessageText') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       class="rounded px-2 py-1 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
       @click="emit('search')"
@@ -193,6 +198,7 @@ onBeforeUnmount(() => {
       {{ t('common.search') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       :disabled="!planAvailable"
       class="rounded px-2 py-1 hover:bg-secondary disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -201,6 +207,7 @@ onBeforeUnmount(() => {
       {{ t('keyboard.openPlan') }}
     </button>
     <button
+      tabindex="0"
       type="button"
       class="rounded px-2 py-1 hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring"
       @click="emit('input')"

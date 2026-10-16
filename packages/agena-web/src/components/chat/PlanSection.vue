@@ -38,8 +38,8 @@ const hint = computed(() => {
         class="h-7 w-7"
         :tooltip="t('chat.planViewer.refresh')"
         :aria-label="t('chat.planViewer.refresh')"
-        :disabled="busy"
-        @click="state.refresh"
+        :aria-disabled="busy"
+        @click="!busy && state.refresh()"
       >
         <RiRefreshLine class="h-3.5 w-3.5" />
       </IconButton>
@@ -51,10 +51,11 @@ const hint = computed(() => {
       >
         <input
           type="checkbox"
+          tabindex="0"
           :checked="state.autorun.value"
-          :disabled="busy"
+          :aria-disabled="busy"
           class="h-4 w-4"
-          @change="state.toggleAutorun"
+          @click.prevent="state.toggleAutorun"
         />
         {{ t('chat.planViewer.autorun') }}
       </label>

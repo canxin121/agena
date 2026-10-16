@@ -590,6 +590,7 @@ defineExpose({
     <slot name="overlay" />
     <div class="absolute top-1 right-1 z-10 flex items-center gap-1">
       <button
+        tabindex="0"
         type="button"
         :data-oc-keyboard-tap="fullscreen ? 'blur' : 'keep'"
         class="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/80 hover:bg-secondary/60 hover:text-foreground"

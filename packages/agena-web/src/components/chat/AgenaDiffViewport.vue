@@ -61,6 +61,7 @@ onBeforeUnmount(() => {
     class="overflow-auto rounded-md border border-border/60 font-mono text-xs"
     :style="{ maxHeight: `${viewportHeight}px` }"
     tabindex="0"
+    data-transcript-keyboard-owner="true"
     :aria-label="label"
     data-diff-viewport
     @scroll.passive="onScroll"

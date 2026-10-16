@@ -52,7 +52,9 @@ const nativeType = computed(() => {
 
 const passthroughAttrs = computed(() => {
   const { title, type: _type, ...rest } = attrs
-  return rest
+  // WebKit can skip implicit button tab stops with macOS keyboard defaults.
+  // Explicit caller values still own roving or programmatic focus.
+  return { tabindex: 0, ...rest }
 })
 
 const nativeTitle = computed(() => {

@@ -665,6 +665,7 @@ onBeforeUnmount(() => {
             >
               <button
                 v-if="isImageFile(f)"
+                tabindex="0"
                 type="button"
                 class="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 :aria-label="`${t('common.open')}: ${f.filename}`"
@@ -839,6 +840,7 @@ onBeforeUnmount(() => {
                 >
                   <button
                     v-if="isImageFile(f)"
+                    tabindex="0"
                     type="button"
                     class="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     :aria-label="`${t('common.open')}: ${f.filename}`"

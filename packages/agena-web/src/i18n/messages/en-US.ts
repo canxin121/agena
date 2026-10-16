@@ -1302,6 +1302,36 @@ export default {
       output: 'Output',
       metadata: 'Metadata',
     },
+    planReview: {
+      "creationTitle": "Approve new plan",
+      "statusTitle": "Review plan status change",
+      "decision": "Decision",
+      "approve": "Approve",
+      "approveAutorunOn": "Approve with autorun on",
+      "approveAutorunOff": "Approve with autorun off",
+      "approveRequested": "Approve requested status",
+      "approveRequestedPause": "Approve requested status with auto-continue off",
+      "keepPlanning": "Keep in planning",
+      "reject": "Reject",
+      "cancelPlan": "Cancel plan",
+      "approveAutorunOnDescription": "Approve the plan, move it to active, and keep autorun on.",
+      "approveAutorunOffDescription": "Approve the plan, move it to active, and keep autorun off.",
+      "approveBlockedDescription": "Approve the plan and move it to blocked.",
+      "approveCompletedDescription": "Approve the plan and mark it completed.",
+      "approvePlanningDescription": "Approve the plan and return it to planning.",
+      "approveCancelledDescription": "Approve the plan and cancel it.",
+      "keepPlanningDescription": "Return to planning so the plan can be edited further.",
+      "rejectDescription": "Reject the current plan and mark the review as rejected.",
+      "cancelPlanDescription": "Cancel the plan entirely and stop work on it.",
+      "question": "Choose whether this plan should move to {phase}, or type feedback for the agent to revise the plan.",
+      "phases": {
+        "planning": "planning",
+        "active": "active",
+        "blocked": "blocked",
+        "completed": "completed",
+        "cancelled": "cancelled"
+      }
+    },
     planViewer: {
       title: 'Plan',
       session: 'Session {id}',
@@ -1425,6 +1455,10 @@ export default {
       ui: {
         requestNoLongerPending: 'This request is no longer pending.',
         checkingRequestStatus: 'Checking request status…',
+        customAnswerFor: "Custom answer: {question}",
+        permissionKeyboardHint: "Tab / Shift+Tab: move · ↑ / ↓ / Home / End: choose · Enter / Space: confirm · Esc: return",
+        reviewKeyboardHint: "Tab / Shift+Tab: move · ↑ / ↓ / Home / End: choose · Space: select · Enter: submit · E: feedback · Shift+Enter: new line · Esc: return",
+        questionKeyboardHint: "Tab / Shift+Tab: move · ↑ / ↓ / Home / End: choose · Space: select · Enter: next · ← / →: change question · Shift+Enter: new line · Esc: return",
         permissionStatus: {
           allowedOnce: 'Allowed once',
           allowedPersistently: 'Allowed persistently',

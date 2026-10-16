@@ -91,6 +91,7 @@ watch(
         <template v-if="!selected">
           <div class="flex flex-col items-stretch gap-0.5">
             <button
+              tabindex="0"
               v-for="file in files"
               :key="file.path"
               type="button"

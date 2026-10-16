@@ -80,6 +80,7 @@ async function control(activity: SessionActivity, action: string) {
       >
         <div class="flex flex-wrap items-center gap-2 text-xs">
           <button
+            tabindex="0"
             type="button"
             class="min-h-8 rounded px-2 text-left font-medium hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
             :aria-expanded="selected?.id === activity.id"

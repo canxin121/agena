@@ -68,6 +68,7 @@ function handleKeydown(event: KeyboardEvent) {
       <article v-for="entry in state.exchanges" :key="entry.id" class="min-w-0">
         <div class="flex items-start gap-2">
           <button
+            tabindex="0"
             type="button"
             class="flex min-h-7 min-w-0 flex-1 items-start gap-1.5 text-left text-sm"
             :aria-expanded="entry.expanded"

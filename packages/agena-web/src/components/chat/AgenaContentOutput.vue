@@ -461,10 +461,22 @@ watch(
         <span v-if="hasStderr" class="rounded bg-amber-500/10 px-1.5 text-amber-600">stderr</span>
       </div>
       <div class="flex items-center gap-3">
-        <button v-if="paused || selectionActive" class="text-primary hover:underline" type="button" @click="follow">
+        <button
+          tabindex="0"
+          v-if="paused || selectionActive"
+          class="text-primary hover:underline"
+          type="button"
+          @click="follow"
+        >
           {{ t('content.follow') }}<span v-if="unseen" class="ml-1">+{{ unseen }}</span> ↓
         </button>
-        <button type="button" class="hover:text-foreground disabled:opacity-50" :disabled="copying" @click="copy">
+        <button
+          tabindex="0"
+          type="button"
+          class="hover:text-foreground disabled:opacity-50"
+          :disabled="copying"
+          @click="copy"
+        >
           {{ t('content.copy') }}
         </button>
       </div>

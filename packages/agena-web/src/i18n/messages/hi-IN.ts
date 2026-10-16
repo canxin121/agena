@@ -1321,6 +1321,10 @@ export default {
       ui: {
         requestNoLongerPending: 'यह अनुरोध अब लंबित नहीं है।',
         checkingRequestStatus: 'अनुरोध की स्थिति जाँची जा रही है…',
+        customAnswerFor: "अपना उत्तर: {question}",
+        permissionKeyboardHint: "Tab / Shift+Tab: आगे-पीछे जाएँ · ↑ / ↓ / Home / End: चुनें · Enter / Space: पुष्टि करें · Esc: वापस जाएँ",
+        reviewKeyboardHint: "Tab / Shift+Tab: आगे-पीछे जाएँ · ↑ / ↓ / Home / End: चुनें · Space: चयन करें · Enter: भेजें · E: सुझाव लिखें · Shift+Enter: नई पंक्ति · Esc: वापस जाएँ",
+        questionKeyboardHint: "Tab / Shift+Tab: आगे-पीछे जाएँ · ↑ / ↓ / Home / End: चुनें · Space: चयन करें · Enter: अगला · ← / →: प्रश्न बदलें · Shift+Enter: नई पंक्ति · Esc: वापस जाएँ",
         permissionStatus: {
           allowedOnce: 'एक बार अनुमति दी गई', allowedPersistently: 'स्थायी अनुमति दी गई', approvedAutomatically: 'अपने आप स्वीकृत',
           deniedOnce: 'एक बार अस्वीकार किया गया', deniedPersistently: 'स्थायी रूप से अस्वीकार किया गया', awaitingApproval: 'उपयोगकर्ता की मंज़ूरी की प्रतीक्षा में', replied: 'जवाब दिया ({kind})',
@@ -1595,6 +1599,36 @@ export default {
       copyDiff: 'अंतर कॉपी करें', diffChangeA: 'जोड़ा गया', diffChangeM: 'बदला गया', diffChangeD: 'मिटाया गया', diffChangeR: 'नाम बदला गया',
       presentation: 'प्रस्तुति डेटा', diff: 'बदलाव', expandDiff: '{count} और पंक्तियाँ दिखाएँ', collapseDiff: 'कम पंक्तियाँ दिखाएँ',
       label: 'तकनीकी विवरण', input: 'इनपुट', output: 'आउटपुट', metadata: 'मेटाडेटा',
+    },
+    planReview: {
+      "creationTitle": "नई योजना को मंज़ूरी दें",
+      "statusTitle": "योजना की स्थिति में बदलाव की समीक्षा करें",
+      "decision": "निर्णय",
+      "approve": "मंज़ूरी दें",
+      "approveAutorunOn": "मंज़ूरी देकर स्वतः निष्पादन चालू करें",
+      "approveAutorunOff": "मंज़ूरी देकर स्वतः निष्पादन बंद करें",
+      "approveRequested": "अनुरोधित स्थिति को मंज़ूरी दें",
+      "approveRequestedPause": "स्थिति को मंज़ूरी देकर स्वतः जारी रखना बंद करें",
+      "keepPlanning": "योजना बनाना जारी रखें",
+      "reject": "अस्वीकार करें",
+      "cancelPlan": "योजना रद्द करें",
+      "approveAutorunOnDescription": "योजना को मंज़ूरी दें, उसे सक्रिय करें और स्वतः निष्पादन चालू रखें।",
+      "approveAutorunOffDescription": "योजना को मंज़ूरी दें, उसे सक्रिय करें और स्वतः निष्पादन बंद रखें।",
+      "approveBlockedDescription": "योजना को मंज़ूरी देकर अवरुद्ध चिह्नित करें।",
+      "approveCompletedDescription": "योजना को मंज़ूरी देकर पूर्ण चिह्नित करें।",
+      "approvePlanningDescription": "योजना को मंज़ूरी देकर योजना बनाने के चरण में लौटें।",
+      "approveCancelledDescription": "योजना को मंज़ूरी देकर रद्द करें।",
+      "keepPlanningDescription": "योजना में और बदलाव करने के लिए योजना बनाने के चरण में लौटें।",
+      "rejectDescription": "मौजूदा योजना को अस्वीकार करें और समीक्षा को अस्वीकृत चिह्नित करें।",
+      "cancelPlanDescription": "पूरी योजना रद्द करें और उस पर काम रोक दें।",
+      "question": "चुनें कि योजना को {phase} स्थिति में ले जाना है या सहायक को योजना संशोधित करने के लिए सुझाव लिखें।",
+      "phases": {
+        "planning": "योजना बन रही है",
+        "active": "सक्रिय",
+        "blocked": "अवरुद्ध",
+        "completed": "पूर्ण",
+        "cancelled": "रद्द"
+      }
     },
     planViewer: {
       title: 'योजना', session: 'सेशन {id}', requiresSession: 'योजना देखने से पहले कोई सेशन खोलें।',

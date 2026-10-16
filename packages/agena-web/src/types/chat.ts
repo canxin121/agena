@@ -242,6 +242,7 @@ export type MessagePart = {
   id: string
   sessionID: string
   messageID: string
+  originSessionId?: number
   type: string
   text?: string
   // Agena part state (string wire value, e.g. "completed").

@@ -12,11 +12,11 @@ import {
   isRunCancelled,
   isRunFailureState,
   isRunInFlight,
-  isRunTerminal,
   normalizeRunState,
 } from '../../lib/chatRunState'
 import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
 import type { JsonValue } from '@/types/json'
+import { pendingPartInteractions } from '../../lib/interactiveRequests'
 
 type JsonRecord = Record<string, JsonValue>
 
@@ -257,32 +257,11 @@ function noticeSummary(part: MessagePartLike): string {
 }
 
 export function partHasPendingInteraction(part: MessagePartLike): boolean {
-  if (isRunTerminal(part.partState)) return false
-  const operation = toolCallView(part)
-  const userInput = record(operation.user_input)
-  const userInputPending = (Array.isArray(userInput.requests) ? userInput.requests : []).some((value) => {
-    const request = record(value)
-    return request.reply === null || request.reply === undefined
-  })
-  if (userInputPending) return true
-
-  const authorization = record(operation.authorization)
-  return (Array.isArray(authorization.permissions) ? authorization.permissions : []).some((value) => {
-    const permission = record(value)
-    return permission.reply === null || permission.reply === undefined
-  })
+  return pendingPartInteractions(part).length > 0
 }
 
 export function partPendingInteractionRequestIds(part: MessagePartLike): string[] {
-  if (durablePartKind(part) !== 'tool_call' || isRunTerminal(part.partState)) return []
-  const operation = toolCallView(part)
-  const requests = record(operation.user_input).requests
-  const permissions = record(operation.authorization).permissions
-  return [...(Array.isArray(requests) ? requests : []), ...(Array.isArray(permissions) ? permissions : [])]
-    .map(record)
-    .filter((entry) => entry.reply === null || entry.reply === undefined)
-    .map((entry) => firstText(record(entry.request), ['request_id']))
-    .filter(Boolean)
+  return pendingPartInteractions(part).map((request) => request.requestId)
 }
 
 export function partHasInteraction(part: MessagePartLike): boolean {

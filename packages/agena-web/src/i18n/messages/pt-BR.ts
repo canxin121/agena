@@ -1086,6 +1086,8 @@ export default {
         "blocksUntilRespond": "Esta execução aguarda sua resposta."
       },
       "ui": {
+        requestNoLongerPending: 'Esta solicitação não está mais pendente.',
+        checkingRequestStatus: 'Verificando o status da solicitação…',
         "permissionStatus": {
           "allowedOnce": "Permitida uma vez",
           "allowedPersistently": "Permitida permanentemente",

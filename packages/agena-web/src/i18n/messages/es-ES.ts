@@ -1823,6 +1823,8 @@ export default {
         "blocksUntilRespond": "Esta ejecución está en pausa hasta que respondas."
       },
       "ui": {
+        requestNoLongerPending: 'Esta solicitud ya no está pendiente.',
+        checkingRequestStatus: 'Comprobando el estado de la solicitud…',
         "permissionStatus": {
           "allowedOnce": "Permitido una vez",
           "allowedPersistently": "Permitido de forma permanente",

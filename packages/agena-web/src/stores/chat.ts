@@ -28,6 +28,12 @@ import {
   subscribeResource,
 } from '../lib/resourceSync'
 import { isRunTerminal } from '../lib/chatRunState'
+import {
+  interactiveRequests,
+  pendingPartInteractions,
+  type InteractiveRequest,
+  type InteractiveRequestKind,
+} from '../lib/interactiveRequests'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
@@ -170,6 +176,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const composerDraftBySession = ref<Record<string, string>>({})
 
   const attentionBySession = ref<Record<string, AttentionEvent>>({})
+  // Only a full execution snapshot enumerates all pending requests. List and
+  // metadata resources may carry the same version with a compact state.
+  const interactiveBySession = ref<Record<string, { version: number; requests: InteractiveRequest[] }>>({})
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
   const interactionDrafts = ref<
     Record<
@@ -978,6 +987,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
       historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
       historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+      // This page may have started before the current interaction snapshot.
+      void reconcileInteractionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
       return normalized.length > 0
     } catch (error) {
       if (generation === transcriptCacheGeneration) {
@@ -1063,6 +1074,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         activeFold = nextFold
         if (!cursor || nextFold.hiddenCount <= 0 || (!all && fetchedContent > 0)) break
       } while (cursor)
+      void reconcileInteractionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
       return loadedAny
     } catch (error) {
       if (generation === transcriptCacheGeneration) {
@@ -1125,6 +1137,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         sessionResourceSubscriptions.delete(sid)
       }
     presentedInteractiveRequestBySession.clear()
+    interactiveBySession.value = {}
     transcriptCache.clear()
     evictedTranscriptSessions.clear()
     messagesBySession.value = {}
@@ -1157,6 +1170,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
             const observed = executionObservations.get(sid)
             if (observed?.token) await checkResourceVersions(sessionRecoveryResources())
             if (
+              hasInteractionSnapshot(sid) &&
               observed?.scope === captureResourceObservation(key).scope &&
               observed.token &&
               canReuseResource(key, observed.token)
@@ -1179,7 +1193,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const observed = executionObservations.get(sid)
     if (observed?.scope === captureResourceObservation(key).scope && observed.token) {
       await checkResourceVersions([key])
-      if (canReuseResource(key, observed.token)) return
+      if (canReuseResource(key, observed.token) && hasInteractionSnapshot(sid)) {
+        await reconcileInteractionParts(sid)
+        return
+      }
     }
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
@@ -1193,13 +1210,58 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
     if (!st) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
-    if (writeEpoch !== (executionWriteEpoch.get(sid) ?? 0)) {
+    if (
+      writeEpoch !== (executionWriteEpoch.get(sid) ?? 0) &&
+      Number(st.session.version || 0) <= Number(getSessionById(sid)?.version || 0)
+    ) {
       mergeExecutionParts(sid, st.parts)
       scheduleSessionStatusRefresh(sid, 0)
       return
     }
     if (st.observation) executionObservations.set(sid, st.observation)
     applyExecutionStatus(st, activityGeneration)
+    await reconcileInteractionParts(sid)
+  }
+
+  function getPendingInteraction(sessionId: string, requestId: string, kind: InteractiveRequestKind) {
+    return (
+      interactiveBySession.value[sessionId]?.requests.find(
+        (request) => request.requestId === requestId && request.kind === kind,
+      ) ?? null
+    )
+  }
+
+  function hasInteractionSnapshot(sessionId: string) {
+    return Boolean(interactiveBySession.value[sessionId])
+  }
+
+  /** A state shell can retire an ask outside the recent run window. Re-read
+   * its loaded owner, without inventing a reply or walking unloaded history. */
+  async function reconcileInteractionParts(sid: string) {
+    const snapshot = interactiveBySession.value[sid]
+    if (!snapshot) return
+    const ids = ensureSessionMessages(sid).flatMap((entry) =>
+      entry.parts
+        .filter((part) =>
+          pendingPartInteractions(part).some(
+            (request) =>
+              !snapshot.requests.some(
+                (pending) => pending.kind === request.kind && pending.requestId === request.requestId,
+              ),
+          ),
+        )
+        .map((part) => part.id),
+    )
+    if (!ids.length) return
+    const generation = transcriptCacheGeneration
+    const parts = await chatApi.getLoadedParts(sid, [...new Set(ids)])
+    if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
+    const present = new Set(parts.map((part) => String(part.part_id)))
+    let removed = removedParts.get(sid)
+    if (!removed) removedParts.set(sid, (removed = new Set()))
+    for (const id of ids) if (!present.has(id)) removed.add(id)
+    mergeExecutionParts(sid, parts)
+    setSessionMessages(sid, ensureSessionMessages(sid))
   }
 
   function mergeExecutionParts(sid: string, parts: chatApi.AgenaPart[] | undefined) {
@@ -1220,6 +1282,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     // attention so the request is rendered on its durable owner immediately.
     mergeExecutionParts(sid, st.parts)
     if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
+    if ((interactiveBySession.value[sid]?.version ?? -1) > Number(st.session.version || 0)) return
+    interactiveBySession.value[sid] = {
+      version: Number(st.session.version || 0),
+      requests: interactiveRequests(sessionStateRequests(st.state), sid),
+    }
     upsertSessionCache(st.session)
     applyAttention(sid, st.state)
     if (activityGeneration === undefined || activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
@@ -1418,11 +1485,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
       const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
-      if (next.kind === 'question' && requestId && presentedInteractiveRequestBySession.get(sid) !== requestId) {
-        presentedInteractiveRequestBySession.set(sid, requestId)
+      const owner = getPendingInteraction(sid, requestId, 'user_input')?.sessionId || sid
+      if (next.kind === 'question' && requestId && presentedInteractiveRequestBySession.get(owner) !== requestId) {
+        presentedInteractiveRequestBySession.set(owner, requestId)
         const generation = transcriptCacheGeneration
-        const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
-        void chatApi.presentInteractiveRequest(sid, requestId).then((resource) => {
+        const activityGeneration = backgroundActivityGeneration.get(owner) ?? 0
+        void chatApi.presentInteractiveRequest(owner, requestId).then((resource) => {
           applyExecutionResource(resource, generation, activityGeneration)
         })
       }
@@ -1610,6 +1678,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     executionRecovery.delete(sid)
     executionObservations.delete(sid)
     executionWriteEpoch.delete(sid)
+    delete interactiveBySession.value[sid]
     delete interactionDrafts.value[sid]
     backgroundActivityGeneration.delete(sid)
     for (const key of backgroundActivityTimes.keys()) if (key.startsWith(`${sid}:`)) backgroundActivityTimes.delete(key)
@@ -1942,57 +2011,95 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── interactive replies ──────────────────────────────────────────────────
 
+  async function refreshInteractiveState(sid: string, generation: number) {
+    const epoch = executionWriteEpoch.get(sid) ?? 0
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const state = await chatApi.getSessionExecutionStatus(sid, true)
+    if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return false
+    if (!state) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
+    if (
+      epoch === (executionWriteEpoch.get(sid) ?? 0) ||
+      Number(state.session.version || 0) > Number(getSessionById(sid)?.version || 0)
+    )
+      applyExecutionStatus(state, activityGeneration)
+    // Reply eligibility comes from this state read. Repairing an old owner's
+    // history is independent and must not undo a known lifecycle transition.
+    await reconcileInteractionParts(sid).catch(() => messageRevalidator(sid).invalidate(0))
+    return true
+  }
+
+  async function replyToInteraction(
+    sessionId: string,
+    requestId: string,
+    kind: InteractiveRequestKind,
+    send: (owner: string, pending: InteractiveRequest) => Promise<chatApi.AgenaExecutionState>,
+  ) {
+    const sid = sessionId.trim()
+    if (!sid || !requestId.trim()) return false
+    const generation = transcriptCacheGeneration
+    if (!(await refreshInteractiveState(sid, generation))) return false
+    let pending = getPendingInteraction(sid, requestId, kind)
+    const owner = pending?.sessionId || sid
+    // Parent attention can include a delegated session's request. Resolve its
+    // actual owner from the typed context, never from the opaque request id.
+    if (pending && owner !== sid) {
+      if (!(await refreshInteractiveState(owner, generation))) return false
+      pending = getPendingInteraction(owner, requestId, kind)
+    }
+    if (!pending) {
+      toasts.push('info', i18n.global.t('chat.attention.ui.requestNoLongerPending'))
+      return false
+    }
+    const activityGeneration = backgroundActivityGeneration.get(owner) ?? 0
+    let updated: chatApi.AgenaExecutionState
+    try {
+      updated = await send(owner, pending)
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== 'interaction.request_not_pending') throw error
+      // The request can resolve between preflight and commit. This is a
+      // lifecycle conflict: reload its facts and retire the controls.
+      if (!(await refreshInteractiveState(owner, generation))) return false
+      if (owner !== sid) await refreshInteractiveState(sid, generation)
+      reconcileExecutionAfterWrite(owner)
+      if (owner !== sid) reconcileExecutionAfterWrite(sid)
+      toasts.push('info', i18n.global.t('chat.attention.ui.requestNoLongerPending'))
+      return false
+    }
+    if (!applyExecutionResource(updated, generation, activityGeneration)) return false
+    reconcileExecutionAfterWrite(owner)
+    if (owner !== sid) reconcileExecutionAfterWrite(sid)
+    // The reply is committed. A failed history refresh must not report that
+    // approval failed or invite the user to send it again.
+    await reconcileInteractionParts(owner).catch(() => messageRevalidator(owner).invalidate(0))
+    if (owner !== sid) await refreshInteractiveState(sid, generation).catch(() => scheduleSessionStatusRefresh(sid, 0))
+    return true
+  }
+
   async function replyPermission(
     sessionId: string,
     requestId: string,
     reply: 'once' | 'always' | 'reject' | 'reject_always',
     message?: string,
   ) {
-    const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
-    const state = await chatApi.replyPermission(sessionId, requestId, reply, message)
-    if (!applyExecutionResource(state, generation, activityGeneration)) return false
-    reconcileExecutionAfterWrite((sessionId || '').trim())
-    return true
+    return replyToInteraction(sessionId, requestId, 'permission', (owner) =>
+      chatApi.replyPermission(owner, requestId, reply, message),
+    )
   }
 
   async function replyQuestion(sessionId: string, requestId: string, answers: string[][]) {
-    const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
-    const answersMap: Record<string, string[]> = {}
-    const state = await chatApi.getSessionExecution(sessionId).catch(() => null)
-    applyExecutionResource(state, generation, activityGeneration)
-    const requests = sessionStateRequests(state?.session?.state) as JsonValue[]
-    const request = (Array.isArray(requests) ? requests : []).find((r) => {
-      const rec = asRecord(r)
-      return readString(rec.request_id as JsonValue) === requestId
-    })
-    const rawQuestions = request ? asRecord(request).questions : null
-    if (Array.isArray(rawQuestions)) {
-      rawQuestions.forEach((_, index) => {
+    return replyToInteraction(sessionId, requestId, 'user_input', (owner, pending) => {
+      const answersMap: Record<string, string[]> = {}
+      const questions = Array.isArray(pending.request.questions) ? pending.request.questions : []
+      questions.forEach((_, index) => {
         // The user-input reply contract is indexed by question ordinal.
         answersMap[String(index)] = Array.isArray(answers[index]) ? answers[index] : []
       })
-    } else {
-      answers.forEach((a, index) => {
-        answersMap[String(index)] = Array.isArray(a) ? a : []
-      })
-    }
-    if (generation !== transcriptCacheGeneration || deletedSessions.has(sessionId)) return false
-    const replyActivityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
-    const updated = await chatApi.replyQuestion(sessionId, requestId, answersMap)
-    if (!applyExecutionResource(updated, generation, replyActivityGeneration)) return false
-    reconcileExecutionAfterWrite((sessionId || '').trim())
-    return true
+      return chatApi.replyQuestion(owner, requestId, answersMap)
+    })
   }
 
   async function rejectQuestion(sessionId: string, requestId: string) {
-    const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sessionId) ?? 0
-    const state = await chatApi.rejectQuestion(sessionId, requestId)
-    if (!applyExecutionResource(state, generation, activityGeneration)) return false
-    reconcileExecutionAfterWrite((sessionId || '').trim())
-    return true
+    return replyToInteraction(sessionId, requestId, 'user_input', (owner) => chatApi.rejectQuestion(owner, requestId))
   }
 
   // ─── compact ──────────────────────────────────────────────────────────────
@@ -2378,6 +2485,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionHistory,
     getSessionAttention,
     getInteractionDraft,
+    getPendingInteraction,
+    hasInteractionSnapshot,
     getSessionError,
     getSessionRunConfig,
     getSessionUsage,

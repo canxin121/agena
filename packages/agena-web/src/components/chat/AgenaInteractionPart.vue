@@ -30,9 +30,25 @@ const { t } = useI18n()
 const rootEl = ref<HTMLElement | null>(null)
 const activeControlKey = ref('')
 
-const interaction = computed(() => props.interaction || null)
-const permission = computed(() => props.permission || null)
-const requestId = computed(() => interaction.value?.requestId || permission.value?.requestId || '')
+const requestId = computed(() => props.interaction?.requestId || props.permission?.requestId || '')
+const pendingRequest = computed(() =>
+  chat.getPendingInteraction(props.sessionId || '', requestId.value, props.permission ? 'permission' : 'user_input'),
+)
+const interaction = computed(() =>
+  props.interaction
+    ? { ...props.interaction, pending: props.interaction.pending && Boolean(pendingRequest.value) }
+    : null,
+)
+const permission = computed(() =>
+  props.permission ? { ...props.permission, pending: props.permission.pending && Boolean(pendingRequest.value) } : null,
+)
+const unavailableStatus = computed(() =>
+  t(
+    chat.hasInteractionSnapshot(props.sessionId || '')
+      ? 'chat.attention.ui.requestNoLongerPending'
+      : 'chat.attention.ui.checkingRequestStatus',
+  ),
+)
 // Attention can precede the durable owner's page. Keep the user's work by
 // request identity when that owner arrives or the view remounts.
 const draft = computed(() => chat.getInteractionDraft(props.sessionId || '', requestId.value))
@@ -68,6 +84,7 @@ const questions = computed(() => interaction.value?.questions || [])
 const hasBody = computed(() => Boolean(interaction.value?.bodyMarkdown?.trim()))
 const isPendingInteraction = computed(() => Boolean(permission.value?.pending || interaction.value?.pending))
 const permissionStatusLabel = computed(() => {
+  if (props.permission?.pending && !permission.value?.pending) return unavailableStatus.value
   const status = permission.value?.status || ''
   switch (status) {
     case 'Allowed once':
@@ -329,7 +346,7 @@ const canSubmit = computed(
 )
 
 async function replyPermission(reply: 'once' | 'always' | 'reject') {
-  if (!props.sessionId || !requestId.value || busy.value) return
+  if (!props.sessionId || !requestId.value || busy.value || !isPendingPermission.value) return
   const pendingDraft = draft.value
   pendingDraft.busy = true
   try {
@@ -738,6 +755,13 @@ onMounted(focusPendingInteraction)
     </template>
 
     <template v-else-if="interaction">
+      <div
+        v-if="props.interaction?.pending && !interaction.pending"
+        class="mb-2 text-xs text-muted-foreground"
+        role="status"
+      >
+        {{ unavailableStatus }}
+      </div>
       <div v-if="interaction.title && !isReviewDecision" class="mb-2 text-xs font-semibold">
         {{ interaction.title }}
       </div>

@@ -3,6 +3,8 @@ import type { JsonValue } from '@/types/json'
 
 export type MessagePartLike = {
   id?: string
+  sessionID?: string
+  originSessionId?: number
   type?: string
   tool?: string
   state?: JsonValue

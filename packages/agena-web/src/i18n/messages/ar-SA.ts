@@ -666,6 +666,8 @@ export default {
         blocksUntilRespond: 'ينتظر هذا التشغيل ردك قبل المتابعة.',
       },
       ui: {
+        requestNoLongerPending: 'لم يعد هذا الطلب معلقًا.',
+        checkingRequestStatus: 'جارٍ التحقق من حالة الطلب…',
         permissionStatus: {
           allowedOnce: 'سُمح به مرة واحدة',
           allowedPersistently: 'سُمح به دائمًا',

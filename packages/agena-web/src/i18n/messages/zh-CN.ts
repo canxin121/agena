@@ -1416,6 +1416,8 @@ export default {
         blocksUntilRespond: '此运行会等待你的回应。',
       },
       ui: {
+        requestNoLongerPending: '此请求已不再等待处理。',
+        checkingRequestStatus: '正在确认请求状态…',
         permissionStatus: {
           allowedOnce: '已允许一次',
           allowedPersistently: '已始终允许',

@@ -1319,6 +1319,8 @@ export default {
       title: { permissionRequired: 'अनुमति आवश्यक', question: 'प्रश्न' },
       subtitle: { answerAllToEnableSend: 'भेजने का विकल्प चालू करने के लिए सभी प्रश्नों के उत्तर दें।', blocksUntilRespond: 'आपके जवाब देने तक यह रन प्रतीक्षा करेगा।' },
       ui: {
+        requestNoLongerPending: 'यह अनुरोध अब लंबित नहीं है।',
+        checkingRequestStatus: 'अनुरोध की स्थिति जाँची जा रही है…',
         permissionStatus: {
           allowedOnce: 'एक बार अनुमति दी गई', allowedPersistently: 'स्थायी अनुमति दी गई', approvedAutomatically: 'अपने आप स्वीकृत',
           deniedOnce: 'एक बार अस्वीकार किया गया', deniedPersistently: 'स्थायी रूप से अस्वीकार किया गया', awaitingApproval: 'उपयोगकर्ता की मंज़ूरी की प्रतीक्षा में', replied: 'जवाब दिया ({kind})',

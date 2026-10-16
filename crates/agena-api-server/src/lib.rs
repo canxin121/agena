@@ -1313,45 +1313,11 @@ mod router_contract_tests {
     // through the plugin host; the plugin host blocks on the ambient runtime
     // handle, and a current-thread runtime would deadlock there.
     #[tokio::test(flavor = "multi_thread")]
-    async fn mark_interactive_request_presented_route_rejects_unknown_requests() {
-        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
-            workspace_root: Some(std::env::temp_dir()),
-            config_path: Some(isolated_global_config_path()),
-            database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
-            tracing_reload_handle: None,
-            ..RuntimeBootstrapRequest::default()
-        })
-        .await
-        .expect("build test runtime");
-        let app = router(AppState::from_application(application_for_test(&runtime)));
-
-        let workspace_path = std::env::temp_dir().join(format!(
-            "agena-api-server-present-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/api/v1/workspaces")
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({"path": workspace_path}).to_string(),
-                    ))
-                    .expect("build create workspace request"),
-            )
-            .await
-            .expect("serve create workspace request");
-        assert_eq!(response.status(), http::StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read workspace response");
-        let workspace: agena_api::resource::WorkspaceResource =
-            serde_json::from_slice(&body).expect("decode shared workspace response");
+    async fn interactive_routes_reject_unknown_requests_as_refreshable_conflicts() {
+        let server = start_test_server("http://127.0.0.1:9").await;
+        let app = router(AppState::from_application(application_for_test(
+            &server.runtime,
+        )));
 
         let response = app
             .clone()
@@ -1360,7 +1326,7 @@ mod router_contract_tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(axum::body::Body::from(
                         serde_json::json!({
-                            "workspace_id": workspace.id,
+                            "workspace_id": server.workspace_id,
                             "title": "present contract session"
                         })
                         .to_string(),
@@ -1376,31 +1342,74 @@ mod router_contract_tests {
         let session: agena_api::resource::SessionResource =
             serde_json::from_slice(&body).expect("decode shared session response");
 
-        // The route is wired and maps the runtime command error through the
-        // standard failure contract. A request id that matches no pending
-        // user-input part is rejected by the real command path.
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post(format!(
-                    "/api/v1/sessions/{}/interactive/host-input:999999:1:0/present",
-                    session.id
-                ))
-                .body(axum::body::Body::empty())
-                .expect("build present request"),
-            )
-            .await
-            .expect("serve present request");
-        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read present error body");
-        let error: agena_api::ApiError =
-            serde_json::from_slice(&body).expect("decode shared api error response");
-        assert_eq!(
-            error.problem.category,
-            agena_failure::FailureCategory::Internal
-        );
+        // Presentation, answer, cancellation and permission commands all use
+        // the same refreshable lifecycle conflict when their request is gone.
+        let request_id = "host-input:999999:1:0";
+        for (path, reply) in [
+            (format!("interactive/{request_id}/present"), None),
+            (
+                "user-input-replies".to_owned(),
+                Some(serde_json::json!({
+                    "request_id": request_id,
+                    "kind": "submit",
+                    "answers": { "0": ["Approve"] }
+                })),
+            ),
+            (
+                "user-input-replies".to_owned(),
+                Some(serde_json::json!({ "request_id": request_id, "kind": "cancel" })),
+            ),
+            (
+                "permission-replies".to_owned(),
+                Some(
+                    serde_json::json!({ "request_id": "permission-unknown", "kind": "allow_once" }),
+                ),
+            ),
+        ] {
+            let body = reply
+                .map(|reply| {
+                    axum::body::Body::from(
+                        serde_json::json!({
+                            "model": {
+                                "provider_id": "fake",
+                                "adapter_id": "openai_responses",
+                                "model_id": "fake-model"
+                            },
+                            "reply": reply
+                        })
+                        .to_string(),
+                    )
+                })
+                .unwrap_or_else(axum::body::Body::empty);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post(format!("/api/v1/sessions/{}/{path}", session.id))
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(body)
+                        .expect("build interaction request"),
+                )
+                .await
+                .expect("serve interaction request");
+            assert_eq!(response.status(), http::StatusCode::CONFLICT, "{path}");
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read interaction error body");
+            let error: agena_api::ApiError =
+                serde_json::from_slice(&body).expect("decode shared api error response");
+            assert_eq!(
+                error.problem.category,
+                agena_failure::FailureCategory::Conflict
+            );
+            assert_eq!(
+                error.problem.code.as_str(),
+                "interaction.request_not_pending"
+            );
+            assert_eq!(
+                error.problem.recovery,
+                agena_failure::RecoveryDirective::Refresh
+            );
+        }
 
         // A session with no pending requests reports an empty interactive list.
         let response = app
@@ -1424,8 +1433,6 @@ mod router_contract_tests {
                 .pending_interactive_requests()
                 .is_empty()
         );
-
-        let _ = std::fs::remove_dir_all(workspace_path);
     }
 
     #[cfg(feature = "ws")]

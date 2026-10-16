@@ -107,9 +107,10 @@ struct ReplySessionContinuation {
 }
 
 fn pending_reply_not_found_error(request_kind: &str, request_id: &str) -> AppError {
-    AppError::Internal(format!(
-        "pending {request_kind} request not found: {request_id}"
-    ))
+    AppError::InteractiveRequestNotPending {
+        request_kind: request_kind.to_owned(),
+        request_id: request_id.to_owned(),
+    }
 }
 
 fn pending_reply_payload_missing_error(request_kind: &str, request_id: &str) -> AppError {
@@ -333,6 +334,9 @@ fn matching_request_part_refs(
         .iter()
         .enumerate()
         .filter_map(|(part_index, part)| {
+            if part.origin_session_id != session.id {
+                return None;
+            }
             if pending_only && !part.state.is_in_flight() {
                 return None;
             }
@@ -408,7 +412,10 @@ pub(super) fn find_pending_permission_by_request_id(
         .iter()
         .enumerate()
         .find_map(|(part_index, part)| {
-            if part.kind != "tool_call" || !part.state.is_in_flight() {
+            if part.origin_session_id != session.id
+                || part.kind != "tool_call"
+                || !part.state.is_in_flight()
+            {
                 return None;
             }
             let operation = operation_from_part(part)?;
@@ -433,7 +440,8 @@ pub(super) fn find_pending_permission_by_request_id(
 
 pub(super) fn has_replied_permission_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
-        part.kind == "tool_call"
+        part.origin_session_id == session.id
+            && part.kind == "tool_call"
             && operation_from_part(part).is_some_and(|operation| {
                 operation
                     .authorization
@@ -468,7 +476,7 @@ pub(super) fn find_pending_user_input_by_request_id(
         .iter()
         .enumerate()
         .find_map(|(part_index, part)| {
-            if !part.state.is_in_flight() {
+            if part.origin_session_id != session.id || !part.state.is_in_flight() {
                 return None;
             }
             if part.kind != "tool_call" {
@@ -491,9 +499,10 @@ pub(super) fn find_pending_user_input_by_request_id(
 
 pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
-        user_input_records_from_part(part)
-            .iter()
-            .any(|(request, reply)| request.request_id == request_id && reply.is_some())
+        part.origin_session_id == session.id
+            && user_input_records_from_part(part)
+                .iter()
+                .any(|(request, reply)| request.request_id == request_id && reply.is_some())
     })
 }
 
@@ -524,7 +533,10 @@ pub(super) fn has_finished_operation(session: &Session, operation_id: &str) -> b
         .filter(|suffix| !suffix.is_empty() && !suffix.contains(':'))
         .and_then(|suffix| suffix.parse::<i64>().ok());
     session.parts().iter().any(|part| {
-        if part.kind != "tool_call" || !part.state.is_terminal() {
+        if part.origin_session_id != session.id
+            || part.kind != "tool_call"
+            || !part.state.is_terminal()
+        {
             return false;
         }
         operation_from_part(part).is_some_and(|operation| {
@@ -1262,7 +1274,7 @@ impl SessionManager {
                 let request_parts =
                     matching_request_part_refs(&session, request_id.as_str(), false);
                 if request_parts.is_empty() {
-                    return Err(pending_reply_part_missing_error(
+                    return Err(pending_reply_not_found_error(
                         "user input",
                         request_id.as_str(),
                     ));
@@ -1666,6 +1678,113 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn session_with_requests() -> Session {
+        let mut session = session_with_assistant_turn(7, &ModelRef::new("fake", "model"));
+        let mut operation = crate::part::OperationPart::pending(
+            8,
+            agena_domain::ToolInvocation::new("plan.set", Default::default()),
+            Default::default(),
+        );
+        operation
+            .user_input
+            .push_pending(agena_domain::UserInputRequest {
+                request_id: "host-input:1:8:0".to_owned(),
+                session_id: Some(1),
+                title: "Approve plan".to_owned(),
+                body_markdown: String::new(),
+                kind: agena_domain::UserInputKind::Review,
+                source: agena_domain::UserInputSource::Host,
+                auto_resolution_ms: None,
+                presented_at: None,
+                questions: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        operation
+            .authorization
+            .push_pending(agena_domain::PermissionRequest {
+                request_id: "permission-1".to_owned(),
+                session_id: Some(1),
+                action: agena_domain::PermissionAction::Tool {
+                    tool_name: "plan.set".to_owned(),
+                    qualifier: None,
+                },
+                related_actions: Vec::new(),
+                requested_actions: Vec::new(),
+                reason: "Review".to_owned(),
+                explanation: String::new(),
+                source: None,
+                scope: None,
+                operator: None,
+                trace: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        let mut tool = session.parts()[0].clone();
+        tool.part_id = 8;
+        tool.run_id = Some(7);
+        tool.kind = "tool_call".to_owned();
+        tool.content = super::operation_content_value(&operation).unwrap();
+        session.install_projected_parts(vec![session.parts()[0].clone(), tool]);
+        session
+    }
+
+    #[test]
+    fn inherited_requests_cannot_be_replied_to_or_presented_from_a_fork() {
+        let mut session = session_with_requests();
+        assert!(
+            super::find_pending_user_input_by_request_id(&session, "host-input:1:8:0").is_some()
+        );
+        assert!(super::find_pending_permission_by_request_id(&session, "permission-1").is_some());
+        assert_eq!(
+            super::matching_request_part_refs(&session, "host-input:1:8:0", false).len(),
+            1
+        );
+
+        session.id = 2;
+        session.install_projected_parts(session.parts().to_vec());
+        assert!(
+            super::find_pending_user_input_by_request_id(&session, "host-input:1:8:0").is_none()
+        );
+        assert!(super::find_pending_permission_by_request_id(&session, "permission-1").is_none());
+        assert!(super::matching_request_part_refs(&session, "host-input:1:8:0", false).is_empty());
+        assert!(!session.blocked());
+    }
+
+    #[test]
+    fn terminal_requests_remain_recognizable_for_idempotent_late_replies() {
+        for state in [
+            PartState::Completed,
+            PartState::Cancelled,
+            PartState::Failed,
+        ] {
+            let mut session = session_with_requests();
+            let mut parts = session.parts().to_vec();
+            parts[1].state = state;
+            session.install_projected_parts(parts);
+            assert!(
+                super::find_pending_user_input_by_request_id(&session, "host-input:1:8:0")
+                    .is_none()
+            );
+            assert!(
+                super::find_pending_permission_by_request_id(&session, "permission-1").is_none()
+            );
+            assert!(super::has_finished_operation(&session, "host-input:1:8:0"));
+            assert!(super::has_finished_operation(&session, "permission-1"));
+            session.id = 2;
+            assert!(!super::has_finished_operation(&session, "host-input:1:8:0"));
+            assert!(!super::has_finished_operation(&session, "permission-1"));
+        }
+    }
+
+    #[test]
+    fn missing_requests_are_refreshable_lifecycle_conflicts() {
+        let failure = super::pending_reply_not_found_error("user input", "missing").failure();
+        assert_eq!(failure.code.as_str(), "interaction.request_not_pending");
+        assert_eq!(failure.category, agena_failure::FailureCategory::Conflict);
+        assert_eq!(failure.retry, agena_failure::RetryDirective::AfterRefresh);
+        assert_eq!(failure.recovery, agena_failure::RecoveryDirective::Refresh);
+        assert!(!failure.user.fallback.contains("missing"));
     }
 }
 use super::{

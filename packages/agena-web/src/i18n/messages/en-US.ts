@@ -1423,6 +1423,8 @@ export default {
         blocksUntilRespond: 'This run waits until you respond.',
       },
       ui: {
+        requestNoLongerPending: 'This request is no longer pending.',
+        checkingRequestStatus: 'Checking request status…',
         permissionStatus: {
           allowedOnce: 'Allowed once',
           allowedPersistently: 'Allowed persistently',

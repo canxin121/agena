@@ -4,6 +4,8 @@ import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
 import { attachmentLabel } from '../../lib/attachmentLabels'
+import { isRunInFlight } from '../../lib/chatRunState'
+import { partOwnsInteractions } from '../../lib/interactiveRequests'
 
 export type JsonRecord = Record<string, JsonValue>
 
@@ -426,6 +428,7 @@ export function operationPresentation(
   const startMs = numericValue(jsonRecord(operation.lifecycle).start_ms) ?? part.source.time?.start ?? null
   const endMs = numericValue(jsonRecord(operation.lifecycle).end_ms) ?? part.source.time?.end ?? null
   const terminal = partStatusPresentation(part.status).terminal
+  const canReply = isRunInFlight(part.status) && partOwnsInteractions(part.source)
   const userInput = jsonRecord(operation.user_input)
   const userInputs = jsonArray(userInput.requests)
     .map((raw) => {
@@ -433,7 +436,7 @@ export function operationPresentation(
       const request = jsonRecord(record.request)
       if (!Object.keys(request).length) return null
       const presentation = userInputPresentationFromRequest(request, record.reply ?? null, part.title)
-      return { ...presentation, pending: !terminal && presentation.pending }
+      return { ...presentation, pending: canReply && presentation.pending }
     })
     .filter((item): item is InteractionPresentation => Boolean(item))
   const authorization = jsonRecord(operation.authorization)
@@ -462,7 +465,7 @@ export function operationPresentation(
                     : 'Awaiting user approval'
     return {
       requestId: firstString(request, ['request_id']),
-      pending: !terminal && !hasReply,
+      pending: canReply && !hasReply,
       status,
       action: permissionActionLabel(action),
       reason: firstString(request, ['reason']),

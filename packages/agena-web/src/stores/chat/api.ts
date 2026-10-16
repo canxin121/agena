@@ -489,6 +489,7 @@ export function normalizeAgenaPart(
     id: partIdStr,
     sessionID: sessionId,
     messageID: messageId,
+    ...(typeof part.origin_session_id === 'number' ? { originSessionId: part.origin_session_id } : {}),
     type: 'text',
     revision: typeof part.revision === 'number' ? part.revision : 0,
     updatedAt: typeof part.updated_at_ms === 'number' ? part.updated_at_ms : 0,
@@ -1410,13 +1411,17 @@ export async function presentInteractiveRequest(
 // --- session execution status ----------------------------------------------
 
 /** Execution status derived from GET /state. */
-export async function getSessionExecutionStatus(sessionId: string): Promise<SessionExecutionStatus | null> {
+export async function getSessionExecutionStatus(
+  sessionId: string,
+  force = false,
+): Promise<SessionExecutionStatus | null> {
   const sid = String(sessionId || '').trim()
   if (!sid) return null
   const { value: raw, observation } = await conditionalJsonObserved<AgenaExecutionState>(
     `session:${sid}:state`,
     `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
     { signal: AbortSignal.timeout(30_000) },
+    force,
   )
   const state = {
     ...raw,

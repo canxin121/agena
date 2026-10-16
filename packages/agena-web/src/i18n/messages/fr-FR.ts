@@ -429,6 +429,8 @@ export default {
     },
     attention: {
       ui: {
+        requestNoLongerPending: 'Cette demande n’est plus en attente.',
+        checkingRequestStatus: 'Vérification de l’état de la demande…',
         permissionStatus: {
           allowedOnce: 'Autorisation accordée une fois',
           allowedPersistently: 'Autorisation accordée durablement',

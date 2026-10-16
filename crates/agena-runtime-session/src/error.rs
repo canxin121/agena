@@ -99,6 +99,11 @@ pub enum AppError {
     },
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
+    #[error("{request_kind} request is no longer pending in this session: {request_id}")]
+    InteractiveRequestNotPending {
+        request_kind: String,
+        request_id: String,
+    },
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -194,6 +199,9 @@ impl AppError {
                 "The conversation is too large for the selected model. Compact the conversation or choose a model with a larger context window."
             }
             Self::NoActiveExecution(_) => "This session has no active response.",
+            Self::InteractiveRequestNotPending { .. } => {
+                "This request is no longer pending. Refresh to see its current status."
+            }
             Self::PersistenceBusy => "The database is busy. Try again in a moment.",
             Self::Database(error) if is_database_busy(error) => {
                 "The database is busy. Try again in a moment."
@@ -334,6 +342,13 @@ impl AppError {
                 Responsibility::Dependency,
                 Retry::Backoff,
                 Recovery::ChooseAlternative,
+            ),
+            Self::InteractiveRequestNotPending { .. } => (
+                "interaction.request_not_pending",
+                Category::Conflict,
+                Responsibility::Caller,
+                Retry::AfterRefresh,
+                Recovery::Refresh,
             ),
             Self::Conflict { .. }
             | Self::PersistenceConflict(_)

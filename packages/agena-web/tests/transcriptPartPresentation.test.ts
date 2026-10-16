@@ -6,6 +6,7 @@ import {
   attachmentPresentations,
   decodeStructuredValue,
   interactionPresentationFromAttention,
+  mediaAttachmentPresentation,
   operationPresentation,
   partInteractionRequestIds,
   partStatusPresentation,
@@ -43,6 +44,45 @@ function operationPart(
 }
 
 describe('TUI-parity part presentation', () => {
+  test('projects the canonical media artifact into an inline image preview', () => {
+    const image = mediaAttachmentPresentation({
+      type: 'media',
+      id: 'media',
+      artifact: {
+        uri: 'data:image/png;base64,aGVsbG8=',
+        mime: 'image/png',
+        name: 'generated-image.png',
+        size_bytes: 5,
+      },
+    })
+    expect(image).toMatchObject({
+      label: 'generated-image.png',
+      url: 'data:image/png;base64,aGVsbG8=',
+      path: '',
+      mime: 'image/png',
+      sizeBytes: 5,
+    })
+  })
+
+  test('keeps local media paths separate from remote URLs and supports video and audio artifacts', () => {
+    expect(
+      mediaAttachmentPresentation({
+        type: 'media',
+        artifact: { uri: 'file:///workspace/artifacts/UI draft.png', mime: 'image/png', name: 'UI draft.png' },
+      }),
+    ).toMatchObject({ path: '/workspace/artifacts/UI draft.png', label: 'UI draft.png', mime: 'image/png' })
+    for (const mime of ['video/webm', 'audio/mpeg']) {
+      expect(
+        mediaAttachmentPresentation({
+          type: 'media',
+          artifact: { uri: 'https://example.test/output', mime, name: 'Preview' },
+        }),
+      ).toMatchObject({ path: '', url: 'https://example.test/output', mime, label: 'Preview' })
+    }
+    expect(mediaAttachmentPresentation({ type: 'text', text: 'file:///workspace/image.png' })).toBeNull()
+    expect(mediaAttachmentPresentation({ type: 'media', artifact: { mime: 'image/png' } })).toBeNull()
+  })
+
   test('decodes structured operation input and renders nested Markdown bullets', () => {
     const structured = {
       fields: [

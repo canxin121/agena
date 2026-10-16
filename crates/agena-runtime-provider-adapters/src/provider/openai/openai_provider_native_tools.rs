@@ -310,8 +310,22 @@ pub(super) fn openai_image_generation_tool_event(
     let title = revised_prompt
         .map(|prompt| format!("image generation {prompt}"))
         .unwrap_or_else(|| "image generation".to_owned());
-    let details = ToolOutput::from_json_payload(Some(item)).map_err(ProviderError::Provider)?;
-    let raw = Some(item.clone());
+    let blocks = openai_image_generation_blocks(item);
+    let image_count = blocks
+        .iter()
+        .filter(|block| matches!(block, ProviderNativeToolOutputBlock::Media { .. }))
+        .count();
+    // The artifact is the image's canonical result. Keeping its base64 in
+    // the envelope as well turns it into a large text resource and a second
+    // binary copy in the diagnostic trace, including gateways that send
+    // the image in the initial event.
+    let mut metadata = item.clone();
+    if image_count > 0 {
+        metadata
+            .as_object_mut()
+            .expect("image item object")
+            .remove("result");
+    }
 
     Ok(Some(if event_type == "response.output_item.added" {
         OpenAiProviderNativeToolEvent::Started {
@@ -319,14 +333,11 @@ pub(super) fn openai_image_generation_tool_event(
             id,
             invocation,
             title,
-            raw,
+            raw: Some(metadata),
         }
     } else {
-        let blocks = openai_image_generation_blocks(item);
-        let image_count = blocks
-            .iter()
-            .filter(|block| matches!(block, ProviderNativeToolOutputBlock::Media { .. }))
-            .count();
+        let details =
+            ToolOutput::from_json_payload(Some(&metadata)).map_err(ProviderError::Provider)?;
         OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
@@ -336,7 +347,7 @@ pub(super) fn openai_image_generation_tool_event(
             output_text: revised_prompt.unwrap_or_default().to_owned(),
             blocks,
             details,
-            raw,
+            raw: Some(metadata),
         }
     }))
 }
@@ -684,7 +695,16 @@ pub(super) fn openai_image_generation_blocks(
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("image/png")
+        .unwrap_or_else(|| {
+            match item
+                .get("output_format")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("jpeg" | "jpg") => "image/jpeg",
+                Some("webp") => "image/webp",
+                _ => "image/png",
+            }
+        })
         .to_owned();
     let extension = mime_type
         .strip_prefix("image/")
@@ -703,6 +723,102 @@ pub(super) fn openai_image_generation_blocks(
             sha256: None,
         },
     }]
+}
+
+#[cfg(test)]
+mod image_result_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn completed_image_has_one_binary_result_and_preserves_provider_facts() {
+        let item = json!({
+            "type": "image_generation_call", "id": "ig_fixture", "status": "completed",
+            "result": "aW1hZ2U=", "output_format": "webp", "quality": "medium",
+            "revised_prompt": "A dashboard", "size": "1536x1024"
+        });
+        let event = openai_image_generation_tool_event(
+            "response.output_item.done",
+            &json!({"output_index": 0}),
+            &item,
+        )
+        .unwrap()
+        .unwrap();
+        let OpenAiProviderNativeToolEvent::Completed {
+            blocks,
+            details,
+            raw,
+            ..
+        } = event
+        else {
+            panic!("expected completed image event");
+        };
+        let [ProviderNativeToolOutputBlock::Media { artifact, .. }] = blocks.as_slice() else {
+            panic!("expected one image artifact");
+        };
+        assert_eq!(artifact.uri, "data:image/webp;base64,aW1hZ2U=");
+        assert_eq!(artifact.mime, "image/webp");
+        assert_eq!(artifact.name.as_deref(), Some("generated-image.webp"));
+        let payload = details.to_json_payload().unwrap();
+        assert!(payload.get("result").is_none());
+        assert_eq!(payload["revised_prompt"], "A dashboard");
+        assert_eq!(payload["quality"], "medium");
+        assert_eq!(payload["size"], "1536x1024");
+        assert_eq!(raw, Some(payload));
+        assert_eq!(item["result"], "aW1hZ2U=", "the wire response stays intact");
+        let started = openai_image_generation_tool_event(
+            "response.output_item.added",
+            &json!({"output_index": 0}),
+            &item,
+        )
+        .unwrap()
+        .unwrap();
+        let OpenAiProviderNativeToolEvent::Started { raw: Some(raw), .. } = started else {
+            panic!("expected initial image event");
+        };
+        assert!(
+            raw.get("result").is_none(),
+            "initial diagnostics must not retain a duplicate image either"
+        );
+    }
+
+    #[test]
+    fn image_format_and_explicit_mime_control_the_artifact() {
+        for (format, explicit, expected) in [
+            ("png", None, "image/png"),
+            ("jpeg", None, "image/jpeg"),
+            ("webp", Some("image/jpeg"), "image/jpeg"),
+        ] {
+            let blocks = openai_image_generation_blocks(&json!({
+                "result": "aW1hZ2U=", "output_format": format, "mime_type": explicit
+            }));
+            let [ProviderNativeToolOutputBlock::Media { artifact, .. }] = blocks.as_slice() else {
+                panic!("expected image artifact");
+            };
+            assert_eq!(artifact.mime, expected);
+            assert_eq!(artifact.uri, format!("data:{expected};base64,aW1hZ2U="));
+        }
+    }
+
+    #[test]
+    fn an_empty_image_result_keeps_failure_metadata_and_does_not_invent_media() {
+        let item = json!({"type":"image_generation_call", "id":"ig_empty", "result":"", "status":"failed", "error":{"message":"no image"}});
+        let event = openai_image_generation_tool_event(
+            "response.output_item.done",
+            &json!({"output_index": 0}),
+            &item,
+        )
+        .unwrap()
+        .unwrap();
+        let OpenAiProviderNativeToolEvent::Completed {
+            blocks, details, ..
+        } = event
+        else {
+            panic!("expected completed event");
+        };
+        assert!(blocks.is_empty());
+        assert_eq!(details.to_json_payload(), Some(item));
+    }
 }
 
 pub(super) fn openai_web_search_result(

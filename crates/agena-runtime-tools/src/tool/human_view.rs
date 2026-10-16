@@ -798,6 +798,18 @@ impl BuiltinHumanRenderer {
         }
     }
 
+    fn attachment_source_label(attachment: &agena_domain::AttachmentItem) -> String {
+        match &attachment.source {
+            // The bytes belong to the media preview, not the metadata table.
+            AttachmentSource::DataUrl { .. } => format!("data:{}", attachment.mime),
+            _ => attachment
+                .source
+                .summary_hint()
+                .map(Self::bounded_generic_text)
+                .unwrap_or_default(),
+        }
+    }
+
     fn raw_attachment_blocks(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
         if raw.attachments.is_empty()
             || blocks.iter().any(|block| {
@@ -815,14 +827,7 @@ impl BuiltinHumanRenderer {
                 ("Kind", attachment.kind.to_string()),
                 ("Label", attachment.summary_label()),
                 ("MIME", attachment.mime.clone()),
-                (
-                    "Source",
-                    attachment
-                        .source
-                        .summary_hint()
-                        .map(Self::bounded_generic_text)
-                        .unwrap_or_default(),
-                ),
+                ("Source", Self::attachment_source_label(attachment)),
                 (
                     "Size",
                     attachment
@@ -865,13 +870,7 @@ impl BuiltinHumanRenderer {
                     Value::String(attachment.kind.to_string()),
                     Value::String(attachment.summary_label()),
                     Value::String(attachment.mime.clone()),
-                    Value::String(
-                        attachment
-                            .source
-                            .summary_hint()
-                            .map(Self::bounded_generic_text)
-                            .unwrap_or_default(),
-                    ),
+                    Value::String(Self::attachment_source_label(attachment)),
                     attachment
                         .size_bytes
                         .map(|size| Value::String(format!("{size} bytes")))
@@ -6131,6 +6130,51 @@ mod tests {
         ToolRenderContext {
             workspace_root: PathBuf::from("/tmp"),
             command: None,
+        }
+    }
+
+    #[test]
+    fn media_bytes_belong_only_to_the_preview_and_not_attachment_metadata() {
+        let attachment: agena_domain::AttachmentItem = serde_json::from_value(json!({
+            "kind":"image", "mime":"image/png", "filename":"generated-image.png",
+            "source":{"source":"data_url", "url":"data:image/png;base64,aW1hZ2U="}
+        }))
+        .unwrap();
+        for attachments in [
+            vec![attachment.clone()],
+            vec![attachment.clone(), attachment],
+        ] {
+            let count = attachments.len();
+            let blocks = BuiltinHumanRenderer::new("image_generation")
+                .render_human(
+                    &ctx(),
+                    &RawOutput {
+                        attachments,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                blocks
+                    .iter()
+                    .filter(|block| matches!(block, ViewBlock::Media { .. }))
+                    .count(),
+                count
+            );
+            for block in blocks
+                .iter()
+                .filter(|block| !matches!(block, ViewBlock::Media { .. }))
+            {
+                let text = serde_json::to_string(block).unwrap();
+                assert!(
+                    !text.contains("aW1hZ2U="),
+                    "metadata must not repeat binary bytes"
+                );
+                assert!(
+                    !text.contains("base64,"),
+                    "metadata must not display a data URL"
+                );
+            }
         }
     }
 

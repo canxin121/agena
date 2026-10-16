@@ -5,6 +5,10 @@ import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
 import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
+import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
+import { useChatStore } from '@/stores/chat'
+import { useDirectoryStore } from '@/stores/directory'
+import { useUiStore } from '@/stores/ui'
 import type { ContentFormat, ContentRef } from '@/lib/content'
 import {
   jsonArray,
@@ -13,11 +17,29 @@ import {
   prettyJson,
   stringValue,
   structuredValueMarkdown,
+  mediaAttachmentPresentation,
   type JsonRecord,
 } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
 
 const props = defineProps<{ block: JsonRecord; sessionId?: string | null }>()
+const chat = useChatStore()
+const directory = useDirectoryStore()
+const ui = useUiStore()
+const mediaAttachment = computed(() => mediaAttachmentPresentation(props.block))
+const workspaceRoot = computed(() => chat.getSessionDirectory(props.sessionId) || directory.currentDirectory || '')
+
+function openMedia(path: string, url: string) {
+  const attachment = mediaAttachment.value
+  if (attachment?.mime.startsWith('image/') && url) {
+    ui.openImageViewer([{ src: url, alt: attachment.label, title: attachment.label, key: attachment.key }])
+  } else if (path) {
+    ui.requestWorkspaceDockFile(path, 'open')
+  } else if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
 const contentResource = computed(() => jsonRecord(props.block.resource) as unknown as ContentRef)
 const contentFormat = computed(
   () =>
@@ -233,6 +255,13 @@ const progressCount = computed(() =>
         <span v-if="change.deletions !== null" class="text-rose-600 dark:text-rose-400">-{{ change.deletions }}</span>
       </div>
     </div>
+
+    <AgenaAttachmentPreview
+      v-else-if="mediaAttachment"
+      :attachment="mediaAttachment"
+      :workspace-root="workspaceRoot"
+      @open="openMedia"
+    />
 
     <div v-else-if="kind === 'media' && mediaUrl" class="space-y-1">
       <img

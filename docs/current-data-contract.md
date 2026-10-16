@@ -154,6 +154,8 @@ Plugin SDK 的通用参数 alias DSL 是当前插件开发能力，不是 Agena 
 
 每个 part 的正文只有一份持久化事实源，不把正文或派生摘要复制到通用 `summary` 列。工具的 `output.payload` 保存工具定义的完整原始结果，纯文本结果也放在这个 payload 中；退出码、耗时、分页与文件内容等结果属性属于同一个结果对象，不另设 `output.text` 预览副本或 `output.metadata`。AI 序列化和人类展示在读取时分别交给插件/工具处理，模型文本、人类摘要与视图块不落盘。客户端的 Output 详情展示完整原始输出，Presentation 展示工具提供的人类视图。调用层 `metadata` 仅保存调用身份、provider 协议上下文与运行控制信息。
 
+工具图片、音频与视频通过 `output.attachments` 保存资源事实，统一投影为 `ViewBlock::Media { artifact: { uri, mime, name, ... } }`。Web 使用同一附件预览显示内联图片、远端媒体与本地文件；本地 `file://` 资源通过所属会话工作区的文件 API 读取，图片可打开查看器。OpenAI 原生图片生成在协议边界将 `result` 图片编码归入附件，结果元信息与 provider 调试记录不重复保存该编码。当前数据中已经同时包含图片附件与 `/result` 编码文本资源的记录，在读取展示时只排除对应编码资源，保留其他文字资源和显式 Output 原始详情。provider 调试资源只作为 metadata 引用，不进入普通正文的资源列表或客户端兜底展示；附件元信息也不展示图片编码。
+
 provider 回放状态只保存在 run 的对应 round 中，不同时复制到 run 的独立 provider-state 列；其中与 think 正文或 encrypted content 重复的文本保存为 part 内容引用，在发送请求前恢复原始协议值，签名、顺序和不同的 opaque 事实保留。Web 与 TUI 的默认策略仅展开 answer 和 text，think、工具、附件及待答交互默认折叠；用户显式配置和手动展开优先。
 
 ## Commands 与项目指导

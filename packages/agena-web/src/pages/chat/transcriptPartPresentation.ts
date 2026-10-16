@@ -343,6 +343,23 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   }
 }
 
+/** Media blocks carry the shared ArtifactRef, including inline and local images. */
+export function mediaAttachmentPresentation(block: JsonRecord): AttachmentPresentation | null {
+  if (block.type !== 'media') return null
+  const artifact = jsonRecord(block.artifact)
+  const uri = stringValue(artifact.uri)
+  if (!uri) return null
+  const path = uri.startsWith('file://') ? uri.slice('file://'.length) : ''
+  return attachmentFromRecord(
+    {
+      ...artifact,
+      filename: artifact.name ?? null,
+      source: path ? { source: 'local_path', path } : { source: 'url', url: uri },
+    },
+    0,
+  )
+}
+
 function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRecord {
   const presentation = jsonRecord(presentationValue)
   const title = firstString(presentation, ['title'])

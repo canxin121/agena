@@ -48,12 +48,12 @@ impl InteractionPlugin {
     #[tool(
         tags(interactive),
         summary = "Ask the user for short structured input.",
-        help = "Use for a decision that belongs to the user: a preference, an ambiguous requirement, authorization for a specific dangerous action, or whether to squash a concrete commit range before an authorized push. Show the target, consequences, and distinct options including a safe decline/defer choice. Reuse authorization already given for the same action and scope. If a sensible default exists within that authorization or you can verify the answer yourself, proceed. Ask all necessary questions together through this tool, never by ending the turn with a plain-text question. A timeout, cancellation, or empty answer is not approval; continue only independent, already-authorized work. Do not ask a generic 'should I proceed?' or seek plan approval here; use plan.review for plan approval.",
+        help = "Use for a decision that belongs to the user: a preference, an ambiguous requirement, authorization for a specific dangerous action, or whether to squash a concrete commit range before an authorized push. Show the target, consequences, and distinct options including a safe decline/defer choice. For a written answer, include an option with custom: true; that option may be the only choice. Reuse authorization already given for the same action and scope. If a sensible default exists within that authorization or you can verify the answer yourself, proceed. Ask all necessary questions together through this tool, never by ending the turn with a plain-text question. A timeout, cancellation, or empty answer is not approval; continue only independent, already-authorized work. Do not ask a generic 'should I proceed?' or seek plan approval here; use plan.review for plan approval.",
         translations(
             locale(
                 "zh-CN",
                 summary = "向用户询问简短、结构化的问题。",
-                help = "仅在决定确实属于用户时提问，例如偏好、含糊需求、某项具体高风险操作的授权，或在已获准推送前是否压缩明确的提交范围。说明目标和后果，列出清楚不同的选项，并提供安全的拒绝或暂缓选项。同一操作和范围已获授权时沿用该授权。若授权范围内有合理默认值，或你能自行核实答案，就直接继续。需要询问的内容应一次通过此工具提出，不要在普通回复结尾只留一个问题。超时、取消或空回答都不代表批准；只能继续处理独立且已获授权的工作。不要泛泛询问“要继续吗”，也不要在此征求计划批准；计划批准请使用 plan.review。"
+                help = "仅在决定确实属于用户时提问，例如偏好、含糊需求、某项具体高风险操作的授权，或在已获准推送前是否压缩明确的提交范围。说明目标和后果，列出清楚不同的选项，并提供安全的拒绝或暂缓选项。需要用户填写内容时，在 options 中提供 custom: true 的选项；它可以是唯一选项，不需要占位的固定选项。同一操作和范围已获授权时沿用该授权。若授权范围内有合理默认值，或你能自行核实答案，就直接继续。需要询问的内容应一次通过此工具提出，不要在普通回复结尾只留一个问题。超时、取消或空回答都不代表批准；只能继续处理独立且已获授权的工作。不要泛泛询问“要继续吗”，也不要在此征求计划批准；计划批准请使用 plan.review。"
             ),
             locale(
                 "zh-TW",
@@ -226,6 +226,42 @@ mod tests {
         .expect_err("sub-minute auto resolution must be rejected");
         assert!(err.diagnostic_message().contains("auto_resolution_ms"));
         assert!(err.to_string().contains("auto_resolution_ms"));
+    }
+
+    #[test]
+    fn ask_accepts_a_custom_option_without_any_fixed_choices() {
+        let parsed = AskUserToolInput::parse_input(serde_json::json!({
+            "questions": [{ "question": "Tell us more", "options": [
+                { "label": "Write an answer", "custom": true }
+            ] }]
+        }))
+        .unwrap();
+        assert!(parsed.questions[0].options[0].custom);
+        assert!(!parsed.questions[0].allow_custom);
+        let schema = AskUserToolInput::input_schema();
+        assert_eq!(
+            schema["$defs"]["UserInputOption"]["properties"]["custom"]["type"],
+            "boolean"
+        );
+        assert!(
+            AskUserToolInput::parse_input(serde_json::json!({
+                "questions": [{ "question": "Legacy text input", "allow_custom": true }]
+            }))
+            .is_ok()
+        );
+        for options in [
+            serde_json::json!([]),
+            serde_json::json!([
+                {"label": "A", "custom": true}, {"label": "B", "custom": true}
+            ]),
+        ] {
+            assert!(
+                AskUserToolInput::parse_input(serde_json::json!({
+                    "questions": [{"question": "Invalid", "options": options}]
+                }))
+                .is_err()
+            );
+        }
     }
 
     #[test]

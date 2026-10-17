@@ -4562,7 +4562,7 @@ User interaction tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use for a decision that belongs to the user: a preference, an ambiguous requirement, authorization for a specific dangerous action, or whether to squash a concrete commit range before an authorized push. Show the target, consequences, and distinct options including a safe decline/defer choice. Reuse authorization already given for the same action and scope. If a sensible default exists within that authorization or you can verify the answer yourself, proceed. Ask all necessary questions together through this tool, never by ending the turn with a plain-text question. A timeout, cancellation, or empty answer is not approval; continue only independent, already-authorized work. Do not ask a generic 'should I proceed?' or seek plan approval here; use plan.review for plan approval.
+> Use for a decision that belongs to the user: a preference, an ambiguous requirement, authorization for a specific dangerous action, or whether to squash a concrete commit range before an authorized push. Show the target, consequences, and distinct options including a safe decline/defer choice. For a written answer, include an option with custom: true; that option may be the only choice. Reuse authorization already given for the same action and scope. If a sensible default exists within that authorization or you can verify the answer yourself, proceed. Ask all necessary questions together through this tool, never by ending the turn with a plain-text question. A timeout, cancellation, or empty answer is not approval; continue only independent, already-authorized work. Do not ask a generic 'should I proceed?' or seek plan approval here; use plan.review for plan approval.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4570,7 +4570,7 @@ User interaction tools.
 | `auto_resolution_ms` | `integer / null` | — | — | Automatically continue without an answer after this many milliseconds.<br>Values are limited to 60 seconds through 10 minutes.<br>A timeout is not approval; only independent, already-authorized work may continue. |
 | `body_markdown` | `string` | — | — | Optional Markdown body shown in the review dialog. Only the plan<br>approval review (`kind == "review"`) sets it to the full plan document;<br>other ask_user requests leave it empty. |
 | `kind` | `string` | — | — |  |
-| `questions` | `array<UserInputQuestion>` | — | — |  |
+| `questions` | `array<UserInputQuestion>` | — | — | One to three questions. Each option is a normal choice unless `custom: true`,<br>which lets the user select it and write an answer. A custom option may be<br>the only option; do not invent a fixed choice for free-text questions. |
 | `title` | `string` | — | — |  |
 
 **Input schema**:
@@ -4580,6 +4580,10 @@ User interaction tools.
     "UserInputOption": {
       "description": "Option offered in a user input question.",
       "properties": {
+        "custom": {
+          "description": "This option accepts a user-written answer instead of its label.\nA question may contain only this option. At most one custom option is supported.",
+          "type": "boolean"
+        },
         "description": {
           "type": "string"
         },
@@ -4597,6 +4601,7 @@ User interaction tools.
       "description": "Question asked to the user with selectable options.",
       "properties": {
         "allow_custom": {
+          "description": "Compatibility for older requests. New questions use an option with `custom: true`.",
           "type": "boolean"
         },
         "header": {
@@ -4648,6 +4653,7 @@ User interaction tools.
       "x-agena-order": "000001"
     },
     "questions": {
+      "description": "One to three questions. Each option is a normal choice unless `custom: true`,\nwhich lets the user select it and write an answer. A custom option may be\nthe only option; do not invent a fixed choice for free-text questions.",
       "items": {
         "$ref": "#/$defs/UserInputQuestion"
       },
@@ -4663,7 +4669,6 @@ User interaction tools.
   },
   "type": "object",
   "x-agena-relations": [
-    "required_unless_present `questions[].allow_custom` unless `questions[].options` present",
     "distinct_trimmed_within `questions[].options[].label` within `questions[]`"
   ]
 }

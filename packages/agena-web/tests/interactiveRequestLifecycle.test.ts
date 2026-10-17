@@ -3,8 +3,10 @@ import test, { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
-import { createRenderer, h, nextTick, reactive, ssrContextKey } from 'vue'
+import { createRenderer, createSSRApp, h, nextTick, reactive, ssrContextKey } from 'vue'
+import { renderToString } from 'vue/server-renderer'
 import { createI18n } from 'vue-i18n'
+import type { JsonValue } from '../src/types/json'
 import { ensureBrowserTestRuntime } from './testRuntime'
 
 ensureBrowserTestRuntime()
@@ -27,6 +29,7 @@ const { projectLocalPart, partHasPendingInteraction } = await vite.ssrLoadModule
   '/src/pages/chat/transcriptProjection.ts',
 )
 const { default: interactionComponent } = await vite.ssrLoadModule('/src/components/chat/AgenaInteractionPart.vue')
+const { transcriptNativeControl } = await vite.ssrLoadModule('/src/pages/chat/transcriptControls.ts')
 const requestId = 'host-input:7:2:0'
 const question = { header: 'Plan', question: 'Approve?', options: [{ label: 'Approve' }] }
 const request = { request_id: requestId, session_id: 7, kind: 'review', questions: [question] }
@@ -61,14 +64,16 @@ const deferred = <T>() => {
   return { promise, resolve }
 }
 
-async function withChat(run: (chat: ReturnType<typeof useChatStore>) => Promise<void>) {
+async function withChat(
+  run: (chat: ReturnType<typeof useChatStore>, pinia: ReturnType<typeof createPinia>) => Promise<void>,
+) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const original = globalThis.fetch
   const chat = useChatStore()
   chat.retainSession('7')
   try {
-    await run(chat)
+    await run(chat, pinia)
   } finally {
     disposePinia(pinia)
     globalThis.fetch = original
@@ -79,6 +84,23 @@ function installPending(chat: ReturnType<typeof useChatStore>) {
   for (const part of [marker, tool()])
     chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part } })
 }
+
+test('option labels and descriptions own pointer gestures while ordinary transcript text remains selectable', () => {
+  const input = { type: 'checkbox' }
+  const label = {
+    querySelector(selector: string) {
+      assert.equal(selector, 'input[type="radio"], input[type="checkbox"]')
+      return input
+    },
+  }
+  for (const content of ['label', 'description', 'nested icon']) {
+    const target = { closest: (selector: string) => (selector === 'label' ? label : null), content }
+    assert.equal(transcriptNativeControl(target as any), input)
+  }
+  assert.equal(transcriptNativeControl({ closest: () => null } as any), null)
+  const button = { tagName: 'BUTTON' }
+  assert.equal(transcriptNativeControl({ closest: () => button } as any), button)
+})
 
 test('status recovery refreshes an old pending owner by id even outside the recent transcript window', async () =>
   withChat(async (chat) => {
@@ -429,4 +451,547 @@ test('reply preflight revalidates a reusable HTTP state cache even when no resol
     assert.equal(await chat.replyQuestion('7', requestId, [['Approve']]), false)
     assert.equal(reads, 2, 'preflight performs a server validation instead of reusing an unverified cache')
     assert.equal(posts, 0)
+  }))
+
+function actionInteractionProps(kind: string, multiple = false) {
+  return {
+    sessionId: '7',
+    interaction: {
+      requestId,
+      title: 'Decide',
+      kind,
+      pending: true,
+      reply: null as JsonValue | null,
+      bodyMarkdown: '',
+      questions: [
+        {
+          questionId: '0',
+          header: '',
+          question: 'Choose',
+          multiple,
+          allowCustom: true,
+          options: [
+            { label: 'First', description: 'Long description' },
+            { label: 'Second', description: '' },
+          ],
+        },
+      ],
+    },
+  }
+}
+
+async function renderActionHistory(
+  pinia: ReturnType<typeof createPinia>,
+  kind: string,
+  reply: JsonValue | null,
+  multiple = false,
+) {
+  const props = actionInteractionProps(kind, multiple)
+  props.interaction.pending = false
+  props.interaction.reply = reply
+  const app = createSSRApp(interactionComponent, props)
+  const { default: messages } = await vite.ssrLoadModule('/src/i18n/messages/en-US.ts')
+  app.use(pinia)
+  app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': messages } }))
+  return renderToString(app)
+}
+
+async function renderPermission(pinia: ReturnType<typeof createPinia>, pending: boolean, replyReason = '') {
+  const app = createSSRApp(interactionComponent, {
+    sessionId: '7',
+    permission: {
+      requestId,
+      pending,
+      status: pending ? 'Awaiting user approval' : 'Denied once',
+      action: 'shell.exec · cargo test',
+      reason: 'Validate the current change',
+      explanation: 'Execute in the project workspace',
+      provenance: 'tool · workspace',
+      replyReason,
+    },
+  })
+  const { default: messages } = await vite.ssrLoadModule('/src/i18n/messages/en-US.ts')
+  app.use(pinia)
+  app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': messages } }))
+  return renderToString(app)
+}
+
+test('pending permissions expose exactly three explicit decisions and disable them together while replying', async () =>
+  withChat(async (chat, pinia) => {
+    let sends = 0
+    chat.getPendingInteraction = () => ({ requestId }) as any
+    chat.replyPermission = async () => {
+      sends++
+      return true
+    }
+    const html = await renderPermission(pinia, true)
+    assert.deepEqual(
+      [...html.matchAll(/data-interaction-control-key="([^"]+)"/g)].map((match) => match[1]),
+      ['permission:once', 'permission:always', 'permission:reject'],
+    )
+    assert.match(html, /shell\.exec · cargo test/)
+    assert.match(html, /Validate the current change/)
+    assert.match(html, /Execute in the project workspace/)
+    assert.doesNotMatch(html, /<button[^>]*\sdisabled(?:\s|[=>])|data-selected="true"/)
+    chat.getInteractionDraft('7', requestId).busy = true
+    const busyHtml = await renderPermission(pinia, true)
+    assert.equal((busyHtml.match(/<button[^>]*\sdisabled(?:\s|[=>])/g) || []).length, 3)
+    assert.equal(sends, 0, 'rendering and status updates never submit a decision')
+  }))
+
+test('permission history keeps the outcome and multiline reason without any old decision buttons', async () =>
+  withChat(async (_chat, pinia) => {
+    const html = await renderPermission(pinia, false, '请先修改命令\n保留当前工作区')
+    assert.match(html, /Denied once/)
+    assert.match(html, /请先修改命令\n保留当前工作区/)
+    assert.doesNotMatch(html, /<button|data-interaction-control|Allow once|Always allow/)
+  }))
+
+function mountActionInteraction(chat: ReturnType<typeof useChatStore>, kind: string, multiple = false) {
+  chat.getPendingInteraction = () => ({ requestId }) as any
+  chat.hasInteractionSnapshot = () => true
+  const props = reactive(actionInteractionProps(kind, multiple))
+  let ui: any
+  const subject = {
+    ...interactionComponent,
+    setup(props: any, context: any) {
+      ui = interactionComponent.setup(props, context)
+      return () => null
+    },
+  }
+  const app = renderer.createApp({ render: () => h(subject, props) })
+  app.provide(ssrContextKey, {})
+  app.use(
+    createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': {} }, missingWarn: false, fallbackWarn: false }),
+  )
+  app.mount({})
+  const option = (label: string, index = 0) =>
+    ({
+      getAttribute: (name: string) =>
+        ({
+          'data-interaction-question-index': String(index),
+          'data-interaction-control-kind': 'option',
+          'data-interaction-control-value': label,
+        })[name] || null,
+    }) as unknown as Element
+  return { app, ui, props, option }
+}
+
+test('completed review renders only the committed decision, without obsolete controls or unsent drafts', async () =>
+  withChat(async (chat, pinia) => {
+    const draft = chat.getInteractionDraft('7', requestId)
+    draft.selected = [['Second']]
+    draft.customDrafts = ['Unsubmitted feedback']
+    draft.customOpen = [true]
+    const html = await renderActionHistory(pinia, 'review', { kind: 'submit', answers: { '0': ['First'] } })
+    assert.match(html, /data-interaction-result/)
+    assert.match(html, /First/)
+    assert.match(html, /Long description/)
+    assert.match(html, /Answered/)
+    assert.doesNotMatch(html, /Second|Unsubmitted feedback/)
+    assert.doesNotMatch(html, /<button|<textarea|data-interaction-control|data-interaction-options/)
+  }))
+
+test('completed custom feedback is readable text and preserves line breaks without an old editor', async () =>
+  withChat(async (_chat, pinia) => {
+    const html = await renderActionHistory(pinia, 'review', {
+      kind: 'submit',
+      answers: { '0': ['请修改第二步\n保留其他步骤'] },
+    })
+    assert.match(html, /请修改第二步\n保留其他步骤/)
+    assert.doesNotMatch(html, /First|Second|<textarea|<button|data-interaction-control/)
+  }))
+
+test('completed multi-choice history shows every submitted answer and the full question', async () =>
+  withChat(async (_chat, pinia) => {
+    const html = await renderActionHistory(
+      pinia,
+      'ask_user',
+      { answers: { '0': ['Second', 'Additional context'] } },
+      true,
+    )
+    assert.match(html, /Choose/)
+    assert.match(html, /Second/)
+    assert.match(html, /Additional context/)
+    assert.doesNotMatch(html, /First|<input|<button|<textarea|data-interaction-control/)
+  }))
+
+test('cancelled and unanswered history never presents a local draft as a submitted result', async () =>
+  withChat(async (chat, pinia) => {
+    const draft = chat.getInteractionDraft('7', requestId)
+    draft.selected = [['First']]
+    draft.customDrafts = ['Still a draft']
+    draft.customOpen = [true]
+    for (const [reply, status] of [
+      [{ kind: 'cancel' }, 'Cancelled'],
+      [null, 'Unanswered'],
+    ] as const) {
+      const html = await renderActionHistory(pinia, 'review', reply)
+      assert.match(html, new RegExp(status))
+      assert.doesNotMatch(html, /First|Second|Still a draft|<button|<input|<textarea|data-interaction-control/)
+    }
+    assert.deepEqual(JSON.parse(JSON.stringify(draft.customDrafts)), ['Still a draft'])
+  }))
+
+test('review cards submit the activated decision once and block repeated activation while busy', async () =>
+  withChat(async (chat) => {
+    globalThis.fetch = (async () => Response.json(state(true))) as typeof fetch
+    await chat.refreshExecutionStatus('7')
+    const reply = deferred<boolean>()
+    const answers: string[][][] = []
+    chat.replyQuestion = async (_session, _id, value) => {
+      answers.push(value)
+      return reply.promise
+    }
+    const { app, ui, option } = mountActionInteraction(chat, 'review')
+    try {
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [[]])
+      const first = ui.confirmCurrentOption(option('Second'))
+      await nextTick()
+      assert.equal(ui.busy.value, true)
+      await ui.confirmCurrentOption(option('First'))
+      assert.deepEqual(JSON.parse(JSON.stringify(answers)), [[['Second']]])
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [['Second']])
+      reply.resolve(true)
+      await first
+      assert.equal(ui.busy.value, false)
+    } finally {
+      app.unmount()
+    }
+  }))
+
+async function pressInteractionKey(
+  ui: any,
+  key: string,
+  kind: string,
+  label = '',
+  index = 0,
+  overrides: Record<string, unknown> = {},
+) {
+  const original = globalThis.HTMLElement
+  class Control {
+    closest(selector: string) {
+      if (selector.includes('data-interaction-control')) return this
+      return kind === 'textarea' && selector.startsWith('textarea') ? this : null
+    }
+    getAttribute(name: string) {
+      return (
+        {
+          'data-interaction-control-kind': kind,
+          'data-interaction-question-index': String(index),
+          'data-interaction-control-value': label,
+        }[name] || null
+      )
+    }
+  }
+  Object.assign(globalThis, { HTMLElement: Control })
+  const event = {
+    key,
+    target: new Control(),
+    defaultPrevented: false,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    preventDefault() {
+      this.defaultPrevented = true
+    },
+    stopPropagation() {},
+    ...overrides,
+  }
+  try {
+    await ui.handleKeydown(event)
+    return event
+  } finally {
+    globalThis.HTMLElement = original
+  }
+}
+
+test('Space chooses and Enter submits the selected multi-choice answers without toggling the focused option', async () =>
+  withChat(async (chat) => {
+    const answers: string[][][] = []
+    chat.replyQuestion = async (_session, _id, value) => {
+      answers.push(value)
+      return true
+    }
+    const { app, ui } = mountActionInteraction(chat, 'ask_user', true)
+    try {
+      await pressInteractionKey(ui, 'Enter', 'option', 'First')
+      assert.deepEqual(answers, [], 'Enter on an unanswered question must not select or submit')
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [[]])
+      for (const label of ['First', 'Second', 'Second']) await pressInteractionKey(ui, ' ', 'option', label)
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [['First']])
+      await pressInteractionKey(ui, 'Enter', 'option', 'Second')
+      assert.deepEqual(JSON.parse(JSON.stringify(answers)), [[['First']]])
+      assert.equal(ui.questionPage.value, 0, 'the final question submits without requiring the summary')
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('horizontal keys switch questions, preserve answers and stop at the first and last question', async () =>
+  withChat(async (chat) => {
+    const { app, ui, props } = mountActionInteraction(chat, 'ask_user')
+    props.interaction.questions.push({ ...props.interaction.questions[0], questionId: '1', multiple: true })
+    await nextTick()
+    try {
+      await pressInteractionKey(ui, ' ', 'option', 'Second')
+      for (const key of ['h', 'ArrowLeft']) {
+        await pressInteractionKey(ui, key, 'option', 'Second')
+        assert.equal(ui.questionPage.value, 0)
+      }
+      for (const key of ['l', 'ArrowRight']) {
+        await pressInteractionKey(ui, key, 'option', 'Second')
+        assert.equal(ui.questionPage.value, 1)
+        await pressInteractionKey(ui, 'ArrowLeft', 'option', 'First', 1)
+        assert.equal(ui.questionPage.value, 0)
+      }
+      await pressInteractionKey(ui, 'Enter', 'option', 'First')
+      assert.equal(ui.questionPage.value, 1, 'Enter confirms Second without selecting focused First')
+      await pressInteractionKey(ui, 'ArrowRight', 'option', 'First', 1)
+      assert.equal(ui.questionPage.value, 1, 'Right on the final question neither submits nor opens summary')
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [['Second'], []])
+      await pressInteractionKey(ui, 'Enter', 'option', 'First', 1)
+      assert.equal(ui.questionPage.value, 1, 'an unanswered question stays in place')
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('final Enter validates earlier questions before sending and retains all selected answers', async () =>
+  withChat(async (chat) => {
+    const answers: string[][][] = []
+    chat.replyQuestion = async (_session, _id, value) => {
+      answers.push(value)
+      return true
+    }
+    const { app, ui, props } = mountActionInteraction(chat, 'ask_user')
+    props.interaction.questions.push({ ...props.interaction.questions[0], questionId: '1', multiple: true })
+    await nextTick()
+    try {
+      ui.moveQuestionPage(1)
+      ui.toggleOption(1, 'First')
+      await ui.confirmQuestion(1)
+      assert.equal(ui.questionPage.value, 0, 'validation returns to the first unanswered question')
+      assert.equal(answers.length, 0)
+      ui.toggleOption(0, 'Second')
+      await ui.confirmQuestion(0)
+      await ui.confirmQuestion(1)
+      assert.deepEqual(JSON.parse(JSON.stringify(answers)), [[['Second'], ['First']]])
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('final-question submission blocks duplicate Enter and retains answers for a failed-send retry', async () =>
+  withChat(async (chat) => {
+    const reply = deferred<boolean>()
+    let sends = 0
+    chat.replyQuestion = async () => {
+      sends++
+      return reply.promise
+    }
+    const { app, ui, option } = mountActionInteraction(chat, 'ask_user')
+    try {
+      ui.toggleOption(0, 'Second')
+      const first = ui.confirmCurrentOption(option('First'))
+      await nextTick()
+      await ui.confirmCurrentOption(option('First'))
+      assert.equal(sends, 1)
+      reply.resolve(false)
+      await first
+      assert.equal(ui.busy.value, false)
+      assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [['Second']])
+      await ui.confirmCurrentOption(option('First'))
+      assert.equal(sends, 2)
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('custom editor keeps arrows, Space, Shift+Enter and IME native; plain Enter submits the final answer', async () =>
+  withChat(async (chat) => {
+    const answers: string[][][] = []
+    chat.replyQuestion = async (_session, _id, value) => {
+      answers.push(value)
+      return true
+    }
+    const { app, ui } = mountActionInteraction(chat, 'ask_user')
+    try {
+      ui.openCustomEditor(0)
+      ui.customDrafts.value[0] = '中文补充\n第二行'
+      for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'h', 'j', 'k', 'l', ' ']) {
+        assert.equal((await pressInteractionKey(ui, key, 'textarea')).defaultPrevented, false)
+      }
+      for (const overrides of [{ shiftKey: true }, { isComposing: true }, { keyCode: 229 }]) {
+        assert.equal((await pressInteractionKey(ui, 'Enter', 'textarea', '', 0, overrides)).defaultPrevented, false)
+      }
+      assert.equal(answers.length, 0)
+      await pressInteractionKey(ui, 'Enter', 'textarea')
+      assert.deepEqual(JSON.parse(JSON.stringify(answers)), [[['中文补充\n第二行']]])
+    } finally {
+      app.unmount()
+    }
+  }))
+
+for (const multiple of [false, true]) {
+  test(`a custom-only ${multiple ? 'multi' : 'single'} choice uses native option selection and sends its text`, async () =>
+    withChat(async (chat) => {
+      const answers: string[][][] = []
+      chat.replyQuestion = async (_session, _id, value) => {
+        answers.push(value)
+        return true
+      }
+      const { app, ui, props } = mountActionInteraction(chat, 'ask_user', multiple)
+      Object.assign(props.interaction.questions[0], {
+        allowCustom: false,
+        options: [{ label: 'Write an answer', description: 'Use your own words', custom: true }],
+      })
+      await nextTick()
+      try {
+        assert.equal(ui.customAllowed(0), true)
+        assert.equal(ui.questionOptions(0).length, 1)
+        await pressInteractionKey(ui, 'Enter', 'custom')
+        assert.deepEqual(JSON.parse(JSON.stringify(ui.selected.value)), [[]])
+        assert.equal(answers.length, 0)
+        await pressInteractionKey(ui, ' ', 'custom')
+        assert.equal(ui.isCustomSelected(0), true)
+        assert.equal(ui.customOpen.value[0], true)
+        assert.equal(ui.canSubmit.value, false, 'selected custom options require text')
+        ui.customDrafts.value[0] = '中文, answer\n第二行'
+        await pressInteractionKey(ui, 'Escape', 'textarea')
+        assert.equal(ui.isCustomSelected(0), true, 'closing the editor keeps the chosen option')
+        assert.equal(ui.canSubmit.value, true)
+        await pressInteractionKey(ui, 'Enter', 'custom')
+        assert.deepEqual(JSON.parse(JSON.stringify(answers)), [[['中文, answer\n第二行']]])
+      } finally {
+        app.unmount()
+      }
+    }))
+}
+
+test('custom single choice is exclusive and switching choices preserves the editable draft', async () =>
+  withChat(async (chat) => {
+    const { app, ui, props } = mountActionInteraction(chat, 'ask_user')
+    Object.assign(props.interaction.questions[0], {
+      allowCustom: false,
+      options: [
+        { label: 'Fixed', description: '' },
+        { label: 'Other', description: '', custom: true },
+      ],
+    })
+    await nextTick()
+    try {
+      ui.toggleOption(0, 'Other')
+      ui.customDrafts.value[0] = 'My answer'
+      ui.toggleOption(0, 'Fixed')
+      assert.equal(ui.isCustomSelected(0), false)
+      assert.deepEqual(ui.answerFor(0), ['Fixed'])
+      assert.equal(ui.customDrafts.value[0], 'My answer')
+      ui.toggleOption(0, 'Other')
+      assert.deepEqual(ui.answerFor(0), ['My answer'])
+      assert.equal(ui.isOptionChecked(0, 'Fixed'), false)
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('custom multi choice can be combined or deselected and an empty selected custom option blocks confirmation', async () =>
+  withChat(async (chat) => {
+    let sends = 0
+    chat.replyQuestion = async () => {
+      sends++
+      return true
+    }
+    const { app, ui, props } = mountActionInteraction(chat, 'ask_user', true)
+    Object.assign(props.interaction.questions[0], {
+      allowCustom: false,
+      options: [
+        { label: 'Fixed', description: '' },
+        { label: 'Other', description: '', custom: true },
+      ],
+    })
+    await nextTick()
+    try {
+      ui.toggleOption(0, 'Fixed')
+      ui.toggleOption(0, 'Other')
+      assert.equal(ui.canSubmit.value, false)
+      await ui.confirmQuestion()
+      assert.equal(sends, 0)
+      ui.customDrafts.value[0] = 'My answer'
+      assert.deepEqual(ui.answerFor(0), ['Fixed', 'My answer'])
+      ui.toggleOption(0, 'Other')
+      assert.deepEqual(ui.answerFor(0), ['Fixed'])
+      assert.equal(ui.customDrafts.value[0], 'My answer')
+      assert.equal(ui.canSubmit.value, true)
+      ui.toggleOption(0, 'Other')
+      assert.deepEqual(ui.answerFor(0), ['Fixed', 'My answer'])
+    } finally {
+      app.unmount()
+    }
+  }))
+
+test('custom-only requests render one radio option with its own label instead of a separate editing button', async () =>
+  withChat(async (chat, pinia) => {
+    chat.getPendingInteraction = () => ({ requestId }) as any
+    const props = actionInteractionProps('ask_user')
+    Object.assign(props.interaction.questions[0], {
+      allowCustom: false,
+      options: [{ label: 'Write an answer', description: 'Use your own words', custom: true }],
+    })
+    const app = createSSRApp(interactionComponent, props)
+    app.use(pinia)
+    app.use(
+      createI18n({
+        legacy: false,
+        locale: 'en-US',
+        messages: { 'en-US': {} },
+        missingWarn: false,
+        fallbackWarn: false,
+      }),
+    )
+    const html = await renderToString(app)
+    assert.equal((html.match(/type="radio"/g) || []).length, 1)
+    assert.match(html, /<input[^>]*data-interaction-control-kind="custom"/)
+    assert.match(html, /Write an answer/)
+    assert.match(html, /Use your own words/)
+    assert.doesNotMatch(html, /<button[^>]*data-interaction-control-kind="custom"/)
+  }))
+
+test('a custom editor follows its own option when mixed with fixed choices and the legacy flag adds no duplicate', async () =>
+  withChat(async (chat, pinia) => {
+    chat.getPendingInteraction = () => ({ requestId }) as any
+    const props = actionInteractionProps('ask_user')
+    Object.assign(props.interaction.questions[0], {
+      allowCustom: true,
+      options: [
+        { label: 'Other', description: 'Use your own words', custom: true },
+        { label: 'Fixed', description: '' },
+        { label: 'Custom', description: 'A fixed value with a reserved legacy name' },
+      ],
+    })
+    const draft = chat.getInteractionDraft('7', requestId)
+    draft.selected = [['Other']]
+    draft.customOpen = [true]
+    draft.customDrafts = ['My answer']
+    const app = createSSRApp(interactionComponent, props)
+    app.use(pinia)
+    app.use(
+      createI18n({
+        legacy: false,
+        locale: 'en-US',
+        messages: { 'en-US': {} },
+        missingWarn: false,
+        fallbackWarn: false,
+      }),
+    )
+    const html = await renderToString(app)
+    assert.equal((html.match(/type="radio"/g) || []).length, 3)
+    assert.equal((html.match(/data-interaction-control-kind="custom"/g) || []).length, 1)
+    assert.match(html, /data-interaction-control-key="question:0:option:Custom"/)
+    const custom = html.indexOf('data-interaction-control-key="question:0:custom"')
+    const editor = html.indexOf('<textarea')
+    const fixed = html.indexOf('data-interaction-control-key="question:0:option:Fixed"')
+    assert.ok(custom >= 0 && custom < editor && editor < fixed)
+    assert.match(html, /My answer<\/textarea>/)
   }))

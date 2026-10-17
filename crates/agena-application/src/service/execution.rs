@@ -675,6 +675,7 @@ pub(crate) fn pending_interactive_request_from_domain(
                                 .options
                                 .into_iter()
                                 .map(|option| wire::UserInputOption {
+                                    custom: option.custom,
                                     label: option.label,
                                     description: option.description,
                                 })

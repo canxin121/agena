@@ -1,6 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
-import { RiCheckLine, RiCloseLine, RiShieldKeyholeLine } from '@remixicon/vue'
+import {
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
+  RiChat3Line,
+  RiCheckLine,
+  RiCloseCircleLine,
+  RiEditLine,
+  RiLoader4Line,
+  RiPauseCircleLine,
+  RiPlayCircleLine,
+  RiShieldKeyholeLine,
+  RiStopCircleLine,
+  RiTimeLine,
+} from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
@@ -8,6 +21,11 @@ import Button from '@/components/ui/Button.vue'
 import { isImeComposing } from '@/lib/imeKeyboard'
 import { hasOpenKeyboardOverlay, isVisibleKeyboardTarget } from '@/lib/keyboardNavigation'
 import { interactionText } from '@/pages/chat/interactionText'
+import {
+  actionCursorNeighbour,
+  transcriptActionRect,
+  type ActionCursorDirection,
+} from '@/pages/chat/transcriptActionCursor'
 import type { JsonValue } from '@/types/json'
 import {
   jsonArray,
@@ -117,7 +135,12 @@ const permissionStatusLabel = computed(() => {
 const isReviewDecision = computed(() => {
   const question = questions.value[0]
   return Boolean(
-    isReview.value && questions.value.length === 1 && question && !question.multiple && question.options.length,
+    isReview.value &&
+    questions.value.length === 1 &&
+    question &&
+    !question.multiple &&
+    question.options.length &&
+    !question.options.some((option) => option.custom),
   )
 })
 
@@ -134,6 +157,13 @@ function goToQuestionPage(index: number) {
   questionPage.value = Math.max(0, Math.min(index, questions.value.length))
   activeControlKey.value = ''
   focusFirstControl()
+}
+
+function moveQuestionPage(delta: number) {
+  if (!isQuestionFlow.value || !questions.value.length) return
+  if (isSummaryPage.value && delta > 0) return
+  const page = Math.max(0, Math.min(questionPage.value + delta, questions.value.length - 1))
+  if (page !== questionPage.value) goToQuestionPage(page)
 }
 
 function answersFromReply(reply: JsonValue | null, index: number, questionId: string): string[] {
@@ -164,18 +194,60 @@ const replyState = computed(() => {
   const reply = interaction.value?.reply || null
   const selected = questions.value.map((question, index) => {
     const values = answersFromReply(reply, index, question.questionId || String(index))
-    return values.filter(
-      (value) => !hasExplicitCustomOption(value) && question.options.some((option) => option.label === value),
-    )
+    return values.filter((value) => question.options.some((option) => !option.custom && option.label === value))
   })
   const customDrafts = questions.value.map((question, index) => {
     const values = answersFromReply(reply, index, question.questionId || String(index))
     return values
-      .filter((value) => hasExplicitCustomOption(value) || !question.options.some((option) => option.label === value))
+      .filter((value) => !question.options.some((option) => !option.custom && option.label === value))
       .join(', ')
   })
   return { selected, customDrafts, customOpen: customDrafts.map(Boolean) }
 })
+
+const replyCancelled = computed(() => {
+  const reply = jsonRecord(interaction.value?.reply)
+  return reply.kind === 'cancel' || reply.cancelled === true
+})
+const replyStatusLabel = computed(() =>
+  replyCancelled.value
+    ? t('chat.partStatus.cancelled')
+    : t(interaction.value?.reply ? 'chat.attention.ui.answered' : 'chat.attention.ui.unanswered'),
+)
+const committedAnswers = computed(() =>
+  questions.value.map((question, index) => ({
+    question,
+    answers: answersFromReply(interaction.value?.reply || null, index, question.questionId || String(index)).map(
+      (value) => {
+        const option = question.options.find((option) => !option.custom && option.label === value)
+        return { value, description: option?.description || '', custom: !option }
+      },
+    ),
+  })),
+)
+
+// Protocol values determine the icon, never a translated label or its position.
+// Unknown producer-defined decisions retain a neutral action affordance.
+function reviewOptionAppearance(label: string) {
+  switch (label) {
+    case 'Approve with autorun on':
+      return { icon: RiPlayCircleLine, tone: 'accent' }
+    case 'Approve with autorun off':
+    case 'Approve requested status with auto-continue off':
+      return { icon: RiPauseCircleLine, tone: 'accent' }
+    case 'Approve':
+    case 'Approve requested status':
+      return { icon: RiCheckLine, tone: 'accent' }
+    case 'Keep in planning':
+      return { icon: RiEditLine, tone: 'neutral' }
+    case 'Reject':
+      return { icon: RiCloseCircleLine, tone: 'destructive' }
+    case 'Cancel plan':
+      return { icon: RiStopCircleLine, tone: 'destructive' }
+    default:
+      return { icon: RiArrowRightSLine, tone: 'neutral' }
+  }
+}
 
 watch(
   () => [requestId.value, questions.value.length, interaction.value?.pending],
@@ -191,7 +263,16 @@ function isOptionChecked(index: number, label: string): boolean {
 
 function customAllowed(index: number): boolean {
   const question = questions.value[index]
-  return Boolean(question?.allowCustom || question?.options.some((option) => hasExplicitCustomOption(option.label)))
+  return Boolean(question?.allowCustom || question?.options.some((option) => option.custom))
+}
+
+function customOption(index: number) {
+  return questionOptions(index).find((option) => option.custom)
+}
+
+function isCustomSelected(index: number) {
+  const option = customOption(index)
+  return Boolean(option && isOptionChecked(index, option.label))
 }
 
 function optionControlKey(index: number, label: string): string {
@@ -297,35 +378,53 @@ function focusQuestionEntry(index: number, reverse = false) {
 }
 
 function visibleOptions(index: number) {
+  return questionOptions(index).filter((option) => !option.custom)
+}
+
+function questionOptions(index: number) {
   const question = questions.value[index]
   if (!question) return []
-  // Older request producers sometimes included a literal "Custom" option in
-  // addition to allow_custom. Treat that label as the canonical custom slot so
-  // it does not appear twice in the Web transcript.
-  return question.options.filter((option) => !(customAllowed(index) && hasExplicitCustomOption(option.label)))
+  // Older producers included a literal Custom choice alongside allow_custom.
+  // An explicit option type takes precedence over that legacy label convention.
+  const legacyCustomIndex =
+    question.allowCustom && !question.options.some((option) => option.custom)
+      ? question.options.findIndex((option) => hasExplicitCustomOption(option.label))
+      : -1
+  const options = question.options.map((option, optionIndex) => ({
+    ...option,
+    custom: Boolean(option.custom || optionIndex === legacyCustomIndex),
+    synthetic: false,
+  }))
+  if (question.allowCustom && !options.some((option) => option.custom))
+    options.push({ label: 'Custom', description: '', custom: true, synthetic: true })
+  return options
 }
 
 function toggleOption(index: number, label: string) {
   const question = questions.value[index]
   if (!question || !interaction.value?.pending || busy.value) return
-  if (hasExplicitCustomOption(label)) {
-    customOpen.value[index] = !customOpen.value[index]
-    if (!question.multiple) selected.value[index] = []
-    return
-  }
+  const option = questionOptions(index).find((option) => option.label === label)
+  if (!option) return
   const current = selected.value[index] || []
   if (question.multiple) {
     selected.value[index] = current.includes(label) ? current.filter((value) => value !== label) : [...current, label]
   } else {
     selected.value[index] = [label]
-    customOpen.value[index] = false
-    customDrafts.value[index] = ''
   }
+  if (option.custom) {
+    customOpen.value[index] = isCustomSelected(index)
+    if (customOpen.value[index]) focusControlByKey(textareaControlKey(index))
+  } else if (!question.multiple) customOpen.value[index] = false
 }
 
 function toggleCustom(index: number) {
   const question = questions.value[index]
   if (!question || !customAllowed(index) || !interaction.value?.pending || busy.value) return
+  if (!isReviewDecision.value) {
+    const option = customOption(index)
+    if (option) toggleOption(index, option.label)
+    return
+  }
   customOpen.value[index] = !customOpen.value[index]
   if (!question.multiple) selected.value[index] = []
   if (customOpen.value[index]) {
@@ -338,11 +437,17 @@ function toggleCustom(index: number) {
 function answerFor(index: number): string[] {
   const question = questions.value[index]
   if (!question) return []
-  const options = (selected.value[index] || []).filter(
-    (label) => !hasExplicitCustomOption(label) && question.options.some((option) => option.label === label),
+  const options = (selected.value[index] || []).filter((label) =>
+    questionOptions(index).some((option) => !option.custom && option.label === label),
   )
-  const custom = customOpen.value[index] ? (customDrafts.value[index] || '').trim() : ''
+  const custom = (isReviewDecision.value ? customOpen.value[index] : isCustomSelected(index))
+    ? (customDrafts.value[index] || '').trim()
+    : ''
   return custom ? [...options, custom] : options
+}
+
+function questionAnswered(index: number) {
+  return answerFor(index).length > 0 && (!isCustomSelected(index) || Boolean((customDrafts.value[index] || '').trim()))
 }
 
 const answerState = computed(() => questions.value.map((_, index) => answerFor(index)))
@@ -351,7 +456,7 @@ const canSubmit = computed(
     Boolean(props.sessionId && requestId.value) &&
     !busy.value &&
     questions.value.length > 0 &&
-    answerState.value.every((answer) => answer.length > 0),
+    questions.value.every((_, index) => questionAnswered(index)),
 )
 
 function retainReplyFocus(): string | null {
@@ -395,14 +500,10 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
 
 async function submitAnswers() {
   if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
-  if (isQuestionFlow.value && !isSummaryPage.value) {
-    goToQuestionPage(questions.value.length)
-    return
-  }
   const answers = answerState.value
-  if (!answers.length || !answers.every((answer) => answer.length > 0)) {
+  if (!answers.length || !questions.value.every((_, index) => questionAnswered(index))) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
-    goToQuestionPage(answers.findIndex((answer) => !answer.length))
+    goToQuestionPage(questions.value.findIndex((_, index) => !questionAnswered(index)))
     return
   }
   const focusKey = retainReplyFocus()
@@ -443,18 +544,25 @@ function openCustomEditor(index: number) {
   const question = questions.value[index]
   if (!question || !customAllowed(index) || !interaction.value?.pending || busy.value) return
   customOpen.value[index] = true
-  if (!question.multiple) selected.value[index] = []
+  if (isReviewDecision.value) selected.value[index] = []
+  else {
+    const option = customOption(index)
+    if (!option) return
+    selected.value[index] = question.multiple
+      ? [...new Set([...(selected.value[index] || []), option.label])]
+      : [option.label]
+  }
   focusControlByKey(textareaControlKey(index))
 }
 
 async function confirmCurrentOption(target: Element | null) {
+  if (!interaction.value?.pending || busy.value) return
   const index = currentQuestionIndex(target)
   if (index < 0) return
   const question = questions.value[index]
   if (!question) return
 
-  const kind = controlKind(target)
-  if (kind === 'option') {
+  if (isReviewDecision.value && controlKind(target) === 'option') {
     const label = target?.getAttribute('data-interaction-control-value') || ''
     if (label && !isOptionChecked(index, label)) toggleOption(index, label)
   }
@@ -462,54 +570,34 @@ async function confirmCurrentOption(target: Element | null) {
   if (isReviewDecision.value) {
     await submitAnswers()
   } else {
-    goToQuestionPage(index + 1)
+    await confirmQuestion(index)
   }
 }
 
-function moveArrowFocus(target: Element | null, direction: 1 | -1) {
-  const kind = controlKind(target)
-  if (kind === 'textarea') return
-
-  if (isPermission.value) {
-    const controls = interactionControls().filter((element) => controlKind(element) === 'permission')
-    const currentIndex = Math.max(0, controls.indexOf(target as HTMLElement))
-    const nextIndex = (currentIndex + direction + controls.length) % controls.length
-    if (controls.length) {
-      focusControlElement(controls[nextIndex])
-      return
-    }
-  }
-
-  if (kind === 'option' || kind === 'custom') {
-    const index = currentQuestionIndex(target)
-    const controls = questionControls(index)
-    const currentIndex = Math.max(0, controls.indexOf(target as HTMLElement))
-    if (controls.length) {
-      if (
-        !isQuestionFlow.value &&
-        direction > 0 &&
-        currentIndex === controls.length - 1 &&
-        index < questions.value.length - 1
-      ) {
-        focusQuestionEntry(index + 1)
-        return
-      }
-      if (!isQuestionFlow.value && direction < 0 && currentIndex === 0 && index > 0) {
-        focusQuestionEntry(index - 1, true)
-        return
-      }
-      const nextIndex = (currentIndex + direction + controls.length) % controls.length
-      focusControlElement(controls[nextIndex])
-    }
+async function confirmQuestion(index = questionPage.value) {
+  if (!isQuestionFlow.value || busy.value || !questions.value[index]) return
+  if (!questionAnswered(index)) {
+    toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
+    if (isCustomSelected(index)) openCustomEditor(index)
     return
   }
+  if (index + 1 < questions.value.length) goToQuestionPage(index + 1)
+  else await submitAnswers()
+}
 
-  const controls = interactionControls()
-  const currentIndex = Math.max(0, controls.indexOf(target as HTMLElement))
-  if (controls.length) {
-    const nextIndex = (currentIndex + direction + controls.length) % controls.length
-    focusControlElement(controls[nextIndex])
-  }
+function moveArrowFocus(target: Element | null, direction: ActionCursorDirection) {
+  const controls = interactionControls().filter((element) => controlKind(element) !== 'textarea')
+  const current = target instanceof HTMLElement ? target : controls[0]
+  if (!current) return
+  let next = actionCursorNeighbour(
+    transcriptActionRect(current),
+    controls.filter((element) => element !== current).map((value) => ({ value, rect: transcriptActionRect(value) })),
+    direction,
+  )
+  if (!next && (direction === 'left' || direction === 'right'))
+    next = controls[controls.indexOf(current) + (direction === 'right' ? 1 : -1)] || null
+  if (next) focusControlElement(next)
+  else if (direction === 'up' || direction === 'left') returnToTranscript()
 }
 
 function clearCustomDraft(target: Element | null) {
@@ -591,7 +679,7 @@ async function handleKeydown(event: KeyboardEvent) {
       const index = currentQuestionIndex(control)
       if (index >= 0 && (customDrafts.value[index] || '').trim()) {
         if (isReviewDecision.value) await submitAnswers()
-        else goToQuestionPage(index + 1)
+        else await confirmQuestion(index)
       } else if (index >= 0) {
         customOpen.value[index] = false
         focusControlByKey(customControlKey(index))
@@ -610,18 +698,21 @@ async function handleKeydown(event: KeyboardEvent) {
     return
   }
   if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
-  if (isQuestionFlow.value && (key === 'ArrowLeft' || key === 'ArrowRight')) {
-    consumeKey(event)
-    goToQuestionPage(questionPage.value + (key === 'ArrowRight' ? 1 : -1))
-    return
+  const directions: Record<string, ActionCursorDirection> = {
+    ArrowUp: 'up',
+    k: 'up',
+    ArrowDown: 'down',
+    j: 'down',
+    ArrowLeft: 'left',
+    h: 'left',
+    ArrowRight: 'right',
+    l: 'right',
   }
-  if (
-    key === 'ArrowUp' ||
-    key === 'ArrowDown' ||
-    (isReview.value && (key === 'ArrowLeft' || key === 'ArrowRight' || lowerKey === 'k' || lowerKey === 'j'))
-  ) {
+  if (directions[key]) {
     consumeKey(event)
-    moveArrowFocus(control, key === 'ArrowUp' || key === 'ArrowLeft' || lowerKey === 'k' ? -1 : 1)
+    if (isQuestionFlow.value && (directions[key] === 'left' || directions[key] === 'right'))
+      moveQuestionPage(directions[key] === 'right' ? 1 : -1)
+    else moveArrowFocus(control, directions[key]!)
     return
   }
   if (key === 'Home' || key === 'End') {
@@ -642,9 +733,12 @@ async function handleKeydown(event: KeyboardEvent) {
   if (key === ' ' || key === 'Spacebar') {
     if (kind === 'option') {
       consumeKey(event)
-      const index = currentQuestionIndex(control)
-      const label = control?.getAttribute('data-interaction-control-value') || ''
-      if (index >= 0 && label) toggleOption(index, label)
+      if (isReviewDecision.value) await confirmCurrentOption(control)
+      else {
+        const index = currentQuestionIndex(control)
+        const label = control?.getAttribute('data-interaction-control-value') || ''
+        if (index >= 0 && label) toggleOption(index, label)
+      }
     } else if (kind === 'custom') {
       consumeKey(event)
       const index = currentQuestionIndex(control)
@@ -659,7 +753,10 @@ async function handleKeydown(event: KeyboardEvent) {
     } else if (kind === 'custom') {
       consumeKey(event)
       const index = currentQuestionIndex(control)
-      if (index >= 0) toggleCustom(index)
+      if (index >= 0) {
+        if (isReviewDecision.value) toggleCustom(index)
+        else await confirmQuestion(index)
+      }
     } else if (!control && target === rootEl.value) {
       consumeKey(event)
       focusFirstControl()
@@ -709,11 +806,11 @@ onBeforeUnmount(() => {
   <section
     v-if="interaction || permission"
     ref="rootEl"
-    class="min-w-0 border-y border-border/55 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+    class="interaction-part min-w-0 py-1"
     data-transcript-interaction-part="true"
+    :data-interaction-question-flow="isQuestionFlow || undefined"
     :data-interaction-request-id="requestId"
     :data-interaction-session-id="sessionId || ''"
-    data-transcript-chrome="true"
     :tabindex="isPendingInteraction ? -1 : 0"
     :aria-label="
       permission
@@ -726,389 +823,455 @@ onBeforeUnmount(() => {
     @keydown="handleKeydown"
   >
     <template v-if="permission">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="text-xs font-semibold">{{ t('chat.attention.ui.permissionLabel') }}</div>
-          <div class="mt-0.5 break-words font-mono text-[11px] text-foreground/90">{{ permission.action }}</div>
+      <div class="interaction-header">
+        <div class="flex min-w-0 items-center gap-2 text-[13px] font-semibold">
+          <RiShieldKeyholeLine class="h-4 w-4 text-primary" aria-hidden="true" />
+          {{ t('chat.attention.ui.permissionLabel') }}
         </div>
-        <span
-          class="shrink-0 font-mono text-[10px]"
-          :class="isPendingPermission ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
-        >
+        <span class="interaction-status" :data-pending="isPendingPermission || undefined" data-interaction-status>
           {{ permissionStatusLabel }}
         </span>
       </div>
-      <div v-if="permission.reason" class="mt-2 text-xs text-muted-foreground">{{ permission.reason }}</div>
-      <div
-        v-if="permission.explanation && permission.explanation !== permission.reason"
-        class="mt-1 text-xs text-muted-foreground"
-      >
-        {{ permission.explanation }}
-      </div>
-      <div v-if="permission.provenance" class="mt-1 font-mono text-[10px] text-muted-foreground/75">
-        {{ permission.provenance }}
-      </div>
-      <div v-if="permission.replyReason" class="mt-2 text-xs text-muted-foreground">
-        <span class="font-semibold">{{ t('chat.attention.ui.replyReasonLabel') }}:</span>
-        {{ permission.replyReason }}
-      </div>
-      <div v-if="isPendingPermission" class="mt-1.5 flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          :disabled="busy"
-          data-interaction-control="true"
-          data-interaction-control-kind="permission"
-          data-interaction-control-key="permission:reject"
-          @focus="markControlFocus"
-          @click="replyPermission('reject')"
+      <div class="interaction-width">
+        <p class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{{ permission.action }}</p>
+        <p v-if="permission.reason" class="mt-2 text-[13px] leading-relaxed">{{ permission.reason }}</p>
+        <p
+          v-if="permission.explanation && permission.explanation !== permission.reason"
+          class="mt-1 text-xs leading-relaxed text-muted-foreground"
         >
-          <RiCloseLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('chat.attention.ui.rejectPermission') }}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          :disabled="busy"
-          data-interaction-control="true"
-          data-interaction-control-kind="permission"
-          data-interaction-control-key="permission:once"
-          @focus="markControlFocus"
-          @click="replyPermission('once')"
-        >
-          <RiCheckLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('chat.attention.ui.allowOnce') }}
-        </Button>
-        <Button
-          size="sm"
-          variant="default"
-          :disabled="busy"
-          data-interaction-control="true"
-          data-interaction-control-kind="permission"
-          data-interaction-control-key="permission:always"
-          @focus="markControlFocus"
-          @click="replyPermission('always')"
-        >
-          <RiShieldKeyholeLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('chat.attention.ui.alwaysAllow') }}
-        </Button>
+          {{ permission.explanation }}
+        </p>
+        <p v-if="permission.provenance" class="mt-1 text-[10px] text-muted-foreground/75">
+          {{ permission.provenance }}
+        </p>
+        <div v-if="permission.replyReason" class="interaction-result mt-2" data-interaction-result>
+          <span class="interaction-section-label">{{ t('chat.attention.ui.replyReasonLabel') }}</span>
+          <p class="interaction-result-value">{{ permission.replyReason }}</p>
+        </div>
+        <div v-if="isPendingPermission" class="interaction-workspace" data-transcript-chrome="true">
+          <div class="part-actionbar">
+            <Button
+              size="xs"
+              variant="outline"
+              class="part-action"
+              :disabled="busy"
+              data-interaction-control="true"
+              data-interaction-control-kind="permission"
+              data-interaction-control-key="permission:once"
+              @focus="markControlFocus"
+              @click="replyPermission('once')"
+            >
+              <RiLoader4Line
+                v-if="busy && activeControlKey === 'permission:once'"
+                class="animate-spin"
+                aria-hidden="true"
+              />
+              <RiCheckLine v-else aria-hidden="true" />{{ t('chat.attention.ui.allowOnce') }}
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              class="part-action"
+              :disabled="busy"
+              data-interaction-control="true"
+              data-interaction-control-kind="permission"
+              data-interaction-control-key="permission:always"
+              @focus="markControlFocus"
+              @click="replyPermission('always')"
+            >
+              <RiLoader4Line
+                v-if="busy && activeControlKey === 'permission:always'"
+                class="animate-spin"
+                aria-hidden="true"
+              />
+              <RiShieldKeyholeLine v-else aria-hidden="true" />
+              {{ t('chat.attention.ui.alwaysAllow') }}
+            </Button>
+            <Button
+              size="xs"
+              variant="outline"
+              class="part-action"
+              data-tone="destructive"
+              :disabled="busy"
+              data-interaction-control="true"
+              data-interaction-control-kind="permission"
+              data-interaction-control-key="permission:reject"
+              @focus="markControlFocus"
+              @click="replyPermission('reject')"
+            >
+              <RiLoader4Line
+                v-if="busy && activeControlKey === 'permission:reject'"
+                class="animate-spin"
+                aria-hidden="true"
+              />
+              <RiCloseCircleLine v-else aria-hidden="true" />
+              {{ t('chat.attention.ui.rejectPermission') }}
+            </Button>
+          </div>
+        </div>
       </div>
     </template>
 
     <template v-else-if="interaction">
-      <div
+      <p
         v-if="props.interaction?.pending && !interaction.pending"
         class="mb-2 text-xs text-muted-foreground"
         role="status"
       >
         {{ unavailableStatus }}
-      </div>
-      <div v-if="interaction.title" class="mb-2 text-xs font-semibold">
-        {{ displayText(interaction.title) }}
-      </div>
-      <MarkdownRenderer
-        v-if="interaction.bodyMarkdown && (!isQuestionFlow || questionPage === 0)"
-        :content="interaction.bodyMarkdown"
-        mode="markdown"
-        :stream="false"
-      />
-      <div
-        v-if="hasBody && questions.length && (!isQuestionFlow || questionPage === 0)"
-        class="my-1.5 border-t border-border/60"
-        aria-hidden="true"
-      />
-
-      <div
-        v-if="isQuestionFlow"
-        class="mb-1.5 text-xs font-medium text-muted-foreground"
-        aria-live="polite"
-        data-interaction-page
-      >
-        {{
-          isSummaryPage
-            ? t('chat.attention.ui.reviewAnswers')
-            : t('chat.attention.ui.questionPager', { current: questionPage + 1, total: questions.length })
-        }}
-      </div>
-
-      <div v-if="isReviewDecision" class="space-y-1.5">
-        <fieldset
-          v-if="questions[0]"
-          class="space-y-1"
-          :aria-label="displayText(questions[0].question)"
-          :aria-describedby="isPendingInteraction ? hintId : undefined"
+      </p>
+      <div class="interaction-header">
+        <div v-if="interaction.title" class="min-w-0 text-[13px] font-semibold">
+          {{ displayText(interaction.title) }}
+        </div>
+        <span v-if="isQuestionFlow" class="interaction-status" aria-live="polite" data-interaction-page>
+          {{
+            isSummaryPage
+              ? t('chat.attention.ui.reviewAnswers')
+              : t('chat.attention.ui.questionPager', { current: questionPage + 1, total: questions.length })
+          }}
+        </span>
+        <span
+          v-else
+          class="interaction-status"
+          :data-pending="interaction.pending || undefined"
+          data-interaction-status
         >
-          <legend v-if="questions[0].question && !hasBody" class="mb-2 text-xs font-medium">
-            {{ displayText(questions[0].question) }}
-          </legend>
-          <label
-            v-for="option in visibleOptions(0)"
-            :key="option.label"
-            class="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted/40"
-            :class="isOptionChecked(0, option.label) ? 'bg-muted/55' : ''"
-          >
-            <input
-              type="radio"
-              :name="`${instanceId}-review-${requestId}`"
-              :checked="isOptionChecked(0, option.label)"
-              :disabled="!interaction.pending || busy"
-              tabindex="0"
-              data-interaction-control="true"
-              data-interaction-control-kind="option"
-              :data-interaction-control-key="optionControlKey(0, option.label)"
-              :data-interaction-control-value="option.label"
-              data-interaction-question-index="0"
-              @focus="markControlFocus"
-              class="mt-0.5 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              @change="toggleOption(0, option.label)"
-            />
-            <span class="min-w-0">
-              <span class="font-medium">{{ displayText(option.label) }}</span>
-              <span v-if="option.description" class="ml-2 text-muted-foreground">{{
-                displayText(option.description)
-              }}</span>
-            </span>
-          </label>
-          <button
-            tabindex="0"
-            v-if="questions[0] && customAllowed(0) && (interaction.pending || customDrafts[0])"
-            type="button"
-            class="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-            :class="customOpen[0] ? 'bg-muted/55' : ''"
-            :aria-expanded="Boolean(customOpen[0])"
-            :disabled="!interaction.pending || busy"
-            data-interaction-control="true"
-            data-interaction-control-kind="custom"
-            :data-interaction-control-key="customControlKey(0)"
-            data-interaction-question-index="0"
-            @focus="markControlFocus"
-            @click="toggleCustom(0)"
-          >
-            <span class="mt-0.5 font-mono text-primary">{{ customOpen[0] ? '(x)' : '( )' }}</span>
-            <span class="font-medium">{{ t('chat.attention.ui.custom') }}</span>
-          </button>
-        </fieldset>
+          <RiChat3Line v-if="interaction.pending" aria-hidden="true" />
+          <RiCheckLine v-else-if="interaction.reply && !replyCancelled" aria-hidden="true" />
+          {{ interaction.pending ? t('chat.attention.ui.awaitingUserInput') : replyStatusLabel }}
+        </span>
+      </div>
+      <div v-if="interaction.bodyMarkdown && (!isQuestionFlow || questionPage === 0)" class="mb-2 min-w-0">
+        <MarkdownRenderer :content="interaction.bodyMarkdown" mode="markdown" :stream="false" />
+      </div>
+
+      <div v-if="!interaction.pending" class="interaction-results interaction-width" data-interaction-result>
+        <section
+          v-for="({ question, answers }, questionIndex) in committedAnswers"
+          :key="question.questionId || questionIndex"
+          class="interaction-result"
+        >
+          <div class="interaction-section-label">
+            {{
+              isReviewDecision
+                ? t('chat.planReview.decision')
+                : displayText(question.header) || t('chat.attention.ui.numberedQuestion', { count: questionIndex + 1 })
+            }}
+          </div>
+          <p v-if="!isReviewDecision" class="interaction-result-question">{{ displayText(question.question) }}</p>
+          <ul v-if="answers.length" class="interaction-result-answers">
+            <li v-for="answer in answers" :key="answer.value" class="interaction-result-answer">
+              <span class="interaction-result-marker" aria-hidden="true">
+                <component
+                  :is="
+                    answer.custom
+                      ? RiChat3Line
+                      : isReviewDecision
+                        ? reviewOptionAppearance(answer.value).icon
+                        : RiCheckLine
+                  "
+                />
+              </span>
+              <div class="min-w-0">
+                <p class="interaction-result-value">{{ displayText(answer.value) }}</p>
+                <p v-if="answer.description" class="interaction-result-description">
+                  {{ displayText(answer.description) }}
+                </p>
+              </div>
+            </li>
+          </ul>
+          <p v-if="!answers.length" class="interaction-result-description">{{ replyStatusLabel }}</p>
+        </section>
+      </div>
+
+      <div
+        v-else-if="isReviewDecision"
+        class="interaction-workspace interaction-width"
+        role="group"
+        :aria-label="displayText(questions[0]?.question || '')"
+        data-interaction-options
+      >
+        <div class="interaction-section-label">{{ t('chat.planReview.decision') }}</div>
+        <p v-if="questions[0]?.question && !hasBody" class="text-xs text-muted-foreground">
+          {{ displayText(questions[0].question) }}
+        </p>
+        <button
+          v-for="option in visibleOptions(0)"
+          :key="option.label"
+          type="button"
+          class="interaction-choice"
+          :title="[displayText(option.label), displayText(option.description)].filter(Boolean).join(' — ')"
+          :aria-label="displayText(option.label)"
+          :aria-description="option.description ? displayText(option.description) : undefined"
+          :data-selected="isOptionChecked(0, option.label) || undefined"
+          :data-tone="reviewOptionAppearance(option.label).tone"
+          :disabled="busy"
+          data-interaction-control="true"
+          data-interaction-control-kind="option"
+          :data-interaction-control-key="optionControlKey(0, option.label)"
+          :data-interaction-control-value="option.label"
+          data-interaction-question-index="0"
+          @focus="markControlFocus"
+          @click="confirmCurrentOption($event.currentTarget as Element)"
+        >
+          <span class="interaction-choice-marker" aria-hidden="true">
+            <component :is="reviewOptionAppearance(option.label).icon" />
+          </span>
+          <span class="interaction-choice-copy">
+            <span class="interaction-choice-label">{{ displayText(option.label) }}</span>
+            <span v-if="option.description" class="interaction-choice-description">{{
+              displayText(option.description)
+            }}</span>
+          </span>
+          <RiLoader4Line
+            v-if="busy && isOptionChecked(0, option.label)"
+            class="animate-spin text-primary"
+            aria-hidden="true"
+          />
+          <RiArrowRightSLine v-else class="interaction-choice-arrow" aria-hidden="true" />
+        </button>
+        <button
+          v-if="questions[0] && customAllowed(0)"
+          type="button"
+          class="interaction-choice interaction-choice-secondary"
+          :aria-expanded="Boolean(customOpen[0])"
+          :disabled="busy"
+          data-interaction-control="true"
+          data-interaction-control-kind="custom"
+          :data-interaction-control-key="customControlKey(0)"
+          data-interaction-question-index="0"
+          @focus="markControlFocus"
+          @click="toggleCustom(0)"
+        >
+          <RiChat3Line aria-hidden="true" />
+          <span class="interaction-choice-label">{{ t('chat.attention.ui.sendFeedback') }}</span>
+          <RiArrowRightSLine :class="customOpen[0] ? 'rotate-90' : ''" aria-hidden="true" />
+        </button>
         <textarea
           v-if="questions[0] && customAllowed(0) && customOpen[0]"
           v-model="customDrafts[0]"
           rows="3"
-          :disabled="!interaction.pending || busy"
-          tabindex="0"
+          :disabled="busy"
           data-interaction-control="true"
           data-interaction-control-kind="textarea"
           :data-interaction-control-key="textareaControlKey(0)"
           data-interaction-question-index="0"
           @focus="markControlFocus"
-          class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          class="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
           :aria-label="t('chat.attention.ui.customAnswerFor', { question: displayText(questions[0]?.question || '') })"
         />
-        <div v-if="!interaction.pending && answerFor(0).length" class="text-[11px] text-muted-foreground">
-          <span class="font-semibold">{{ t('chat.attention.ui.answerLabel') }}:</span>
-          {{ answerFor(0).map(displayText).join(', ') }}
-        </div>
       </div>
 
-      <div v-else-if="isSummaryPage" class="space-y-1.5" data-interaction-summary>
-        <div
+      <div v-else-if="isSummaryPage" class="interaction-workspace interaction-width" data-interaction-summary>
+        <button
           v-for="(question, questionIndex) in questions"
           :key="question.questionId || questionIndex"
-          class="flex items-start justify-between gap-3 rounded-md border border-border/60 p-2"
+          type="button"
+          class="interaction-choice"
+          :disabled="busy"
+          :title="`${displayText(question.header || question.question)}: ${answerState[questionIndex]?.map(displayText).join(', ') || t('chat.attention.ui.unanswered')}`"
+          data-interaction-control="true"
+          data-interaction-control-kind="summary"
+          :data-interaction-control-key="`summary:${questionIndex}`"
+          :aria-label="`${t('chat.attention.ui.editAnswer')}: ${displayText(question.header || question.question)}`"
+          @focus="markControlFocus"
+          @click="goToQuestionPage(questionIndex)"
         >
-          <div class="min-w-0 text-xs">
-            <div class="font-medium break-words">{{ displayText(question.header || question.question) }}</div>
-            <div
-              class="mt-1 whitespace-pre-wrap break-words"
-              :class="answerState[questionIndex]?.length ? 'text-foreground' : 'text-muted-foreground'"
-            >
-              {{ answerState[questionIndex]?.map(displayText).join(', ') || t('chat.attention.ui.unanswered') }}
-            </div>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            :disabled="busy"
-            data-interaction-control="true"
-            data-interaction-control-kind="summary"
-            :data-interaction-control-key="`summary:${questionIndex}`"
-            :aria-label="`${t('chat.attention.ui.editAnswer')}: ${displayText(question.header || question.question)}`"
-            @focus="markControlFocus"
-            @click="goToQuestionPage(questionIndex)"
-          >
-            {{ t('chat.attention.ui.editAnswer') }}
-          </Button>
-        </div>
+          <span class="interaction-choice-marker font-mono text-[11px]" aria-hidden="true">{{
+            questionIndex + 1
+          }}</span>
+          <span class="interaction-choice-copy">
+            <span class="interaction-choice-label">{{ displayText(question.header || question.question) }}</span>
+            <span class="interaction-choice-description">{{
+              answerState[questionIndex]?.map(displayText).join(', ') || t('chat.attention.ui.unanswered')
+            }}</span>
+          </span>
+          <RiEditLine class="text-muted-foreground" aria-hidden="true" />
+          <span class="shrink-0 text-[11px] text-muted-foreground">{{ t('chat.attention.ui.editAnswer') }}</span>
+        </button>
       </div>
 
-      <div v-else class="space-y-1.5">
-        <div v-if="!questions.length" class="text-xs text-muted-foreground">
+      <div v-else class="interaction-width space-y-2">
+        <p v-if="!questions.length" class="text-xs text-muted-foreground">
           {{ t('chat.attention.ui.noQuestionsAvailable') }}
-        </div>
+        </p>
         <section
           v-for="{ question, questionIndex } in visibleQuestions"
           :key="question.questionId || questionIndex"
           role="group"
           :aria-label="displayText(question.question)"
           :aria-describedby="isPendingInteraction ? hintId : undefined"
-          class="space-y-1.5"
+          class="interaction-workspace"
+          data-interaction-options
         >
-          <div class="flex items-start justify-between gap-3">
+          <div class="mb-1.5 flex items-start justify-between gap-2">
             <div class="min-w-0">
-              <div class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {{
-                  question.header
-                    ? displayText(question.header)
-                    : t('chat.attention.ui.numberedQuestion', { count: questionIndex + 1 })
-                }}
+              <div v-if="question.header" class="mb-1 text-[10px] font-medium text-muted-foreground">
+                {{ displayText(question.header) }}
               </div>
-              <div class="mt-1 text-xs font-medium">{{ displayText(question.question) }}</div>
+              <div class="text-[13px] font-medium leading-snug">{{ displayText(question.question) }}</div>
             </div>
-            <span class="shrink-0 font-mono text-[10px] text-muted-foreground">
-              {{ question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single') }}
-            </span>
+            <span class="shrink-0 text-[10px] text-muted-foreground">{{
+              question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single')
+            }}</span>
           </div>
-          <div class="divide-y divide-border/35 border-y border-border/50">
+          <template v-for="option in questionOptions(questionIndex)" :key="option.label">
             <label
-              v-for="option in visibleOptions(questionIndex)"
-              :key="option.label"
-              class="flex cursor-pointer items-start gap-2 px-2 py-1 text-xs transition-colors hover:bg-muted/40"
-              :class="isOptionChecked(questionIndex, option.label) ? 'bg-muted/55' : ''"
+              class="interaction-choice"
+              :title="
+                [
+                  option.synthetic ? t('chat.attention.ui.typeYourOwnAnswer') : displayText(option.label),
+                  displayText(option.description),
+                ]
+                  .filter(Boolean)
+                  .join(' — ')
+              "
+              :aria-disabled="busy || undefined"
+              :data-selected="isOptionChecked(questionIndex, option.label) || undefined"
             >
               <input
                 :type="question.multiple ? 'checkbox' : 'radio'"
                 :name="`${instanceId}-question-${requestId}-${questionIndex}`"
                 :checked="isOptionChecked(questionIndex, option.label)"
-                :disabled="!interaction.pending || busy"
-                tabindex="0"
+                :aria-label="option.synthetic ? t('chat.attention.ui.typeYourOwnAnswer') : displayText(option.label)"
+                :aria-description="option.description ? displayText(option.description) : undefined"
+                :disabled="busy"
                 data-interaction-control="true"
-                data-interaction-control-kind="option"
-                :data-interaction-control-key="optionControlKey(questionIndex, option.label)"
+                :data-interaction-control-kind="option.custom ? 'custom' : 'option'"
+                :data-interaction-control-key="
+                  option.custom ? customControlKey(questionIndex) : optionControlKey(questionIndex, option.label)
+                "
                 :data-interaction-control-value="option.label"
                 :data-interaction-question-index="questionIndex"
                 @focus="markControlFocus"
-                class="mt-0.5 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                class="h-3.5 w-3.5 shrink-0 accent-primary"
+                @click="
+                  option.custom &&
+                  !question.multiple &&
+                  isCustomSelected(questionIndex) &&
+                  openCustomEditor(questionIndex)
+                "
                 @change="toggleOption(questionIndex, option.label)"
               />
-              <span class="min-w-0">
-                <span class="font-medium">{{ displayText(option.label) }}</span>
-                <span v-if="option.description" class="ml-2 text-muted-foreground">{{
+              <span class="interaction-choice-copy"
+                ><span class="interaction-choice-label">{{
+                  option.synthetic ? t('chat.attention.ui.typeYourOwnAnswer') : displayText(option.label)
+                }}</span
+                ><span v-if="option.description" class="interaction-choice-description">{{
                   displayText(option.description)
-                }}</span>
-              </span>
+                }}</span></span
+              >
             </label>
-          </div>
-          <button
-            tabindex="0"
-            v-if="customAllowed(questionIndex) && (interaction.pending || customDrafts[questionIndex])"
-            type="button"
-            class="rounded text-left text-[11px] text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-            :aria-expanded="Boolean(customOpen[questionIndex])"
-            :disabled="!interaction.pending || busy"
-            data-interaction-control="true"
-            data-interaction-control-kind="custom"
-            :data-interaction-control-key="customControlKey(questionIndex)"
-            :data-interaction-question-index="questionIndex"
-            @focus="markControlFocus"
-            @click="toggleCustom(questionIndex)"
-          >
-            {{ customOpen[questionIndex] ? t('chat.attention.ui.custom') : t('chat.attention.ui.typeYourOwnAnswer') }}
-          </button>
-          <textarea
-            v-if="customAllowed(questionIndex) && customOpen[questionIndex]"
-            v-model="customDrafts[questionIndex]"
-            rows="2"
-            :disabled="!interaction.pending || busy"
-            tabindex="0"
-            data-interaction-control="true"
-            data-interaction-control-kind="textarea"
-            :data-interaction-control-key="textareaControlKey(questionIndex)"
-            :data-interaction-question-index="questionIndex"
-            @focus="markControlFocus"
-            class="w-full resize-y rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
-            :aria-label="t('chat.attention.ui.customAnswerFor', { question: displayText(question.question) })"
-          />
-          <div v-if="!interaction.pending && answerFor(questionIndex).length" class="text-[11px] text-muted-foreground">
-            <span class="font-semibold">{{ t('chat.attention.ui.answerLabel') }}:</span>
-            {{ answerFor(questionIndex).map(displayText).join(', ') }}
-          </div>
+            <textarea
+              v-if="option.custom && customOpen[questionIndex]"
+              v-model="customDrafts[questionIndex]"
+              rows="3"
+              :disabled="busy"
+              data-interaction-control="true"
+              data-interaction-control-kind="textarea"
+              :data-interaction-control-key="textareaControlKey(questionIndex)"
+              :data-interaction-question-index="questionIndex"
+              @focus="markControlFocus"
+              class="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              :placeholder="t('chat.attention.ui.typeYourOwnAnswer')"
+              :aria-label="t('chat.attention.ui.customAnswerFor', { question: displayText(question.question) })"
+            />
+          </template>
         </section>
       </div>
 
       <div
         v-if="isQuestionFlow"
-        class="mt-1.5 flex items-center justify-between gap-2 border-t border-border/55 pt-1.5"
+        class="interaction-width mt-2 flex flex-wrap items-center justify-between gap-1.5 border-t border-border/60 pt-2"
+        data-transcript-chrome="true"
       >
         <Button
-          size="sm"
+          size="xs"
           variant="ghost"
+          class="part-action"
           :disabled="busy || questionPage === 0"
           data-interaction-control="true"
           data-interaction-control-kind="navigation"
           data-interaction-control-key="page:previous"
           @focus="markControlFocus"
           @click="goToQuestionPage(questionPage - 1)"
+          ><RiArrowLeftSLine aria-hidden="true" />{{ t('chat.attention.ui.previousQuestion') }}</Button
         >
-          ‹ {{ t('chat.attention.ui.previousQuestion') }}
-        </Button>
+        <Button
+          v-if="!isSummaryPage && questionPage + 1 === questions.length"
+          size="xs"
+          variant="ghost"
+          class="part-action"
+          :disabled="busy"
+          data-interaction-control="true"
+          data-interaction-control-kind="navigation"
+          data-interaction-control-key="page:review"
+          @focus="markControlFocus"
+          @click="goToQuestionPage(questions.length)"
+          >{{ t('chat.attention.ui.reviewAnswers') }}</Button
+        >
         <Button
           v-if="!isSummaryPage"
-          size="sm"
+          size="xs"
           variant="outline"
+          class="part-action"
           :disabled="busy"
           data-interaction-control="true"
           data-interaction-control-kind="navigation"
           data-interaction-control-key="page:next"
           @focus="markControlFocus"
-          @click="goToQuestionPage(questionPage + 1)"
-        >
-          {{
+          @click="confirmQuestion()"
+          >{{
             questionPage + 1 === questions.length
-              ? t('chat.attention.ui.reviewAnswers')
+              ? t('chat.attention.ui.sendAnswers')
               : t('chat.attention.ui.nextQuestion')
           }}
-          ›
-        </Button>
+          <RiArrowRightSLine aria-hidden="true"
+        /></Button>
       </div>
       <div
         v-if="interaction.pending && (isReviewDecision || isSummaryPage)"
-        class="mt-1.5 flex flex-wrap items-center gap-2 border-t border-border/55 pt-1.5"
+        class="interaction-width mt-2 flex flex-wrap items-center gap-1.5"
+        data-transcript-chrome="true"
       >
         <Button
-          size="sm"
-          variant="ghost"
+          size="xs"
+          variant="outline"
+          class="part-action"
           :disabled="busy"
           data-interaction-control="true"
           data-interaction-control-kind="action"
           data-interaction-control-key="action:reject"
           @focus="markControlFocus"
           @click="rejectAnswers"
+          ><RiTimeLine aria-hidden="true" />{{ t('chat.attention.ui.dismissRequest') }}</Button
         >
-          <RiCloseLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('common.cancel') }}
-        </Button>
         <Button
-          size="sm"
-          variant="default"
+          v-if="!isReviewDecision || customOpen[0]"
+          size="xs"
+          class="part-action"
+          data-variant="primary"
           :disabled="!canSubmit"
           data-interaction-control="true"
           data-interaction-control-kind="action"
           data-interaction-control-key="action:submit"
           @focus="markControlFocus"
           @click="submitAnswers"
+          ><RiLoader4Line v-if="busy" class="animate-spin" aria-hidden="true" /><RiCheckLine
+            v-else
+            aria-hidden="true"
+          />{{ t(isReviewDecision ? 'chat.attention.ui.sendFeedback' : 'chat.attention.ui.sendAnswers') }}</Button
         >
-          <RiCheckLine class="mr-1 h-3.5 w-3.5" />
-          {{ t('chat.attention.ui.sendAnswers') }}
-        </Button>
-        <span v-if="!canSubmit" class="text-[10px] text-muted-foreground">
-          {{ t('chat.attention.subtitle.answerAllToEnableSend') }}
-        </span>
-      </div>
-      <div v-else-if="!interaction.pending" class="mt-1.5 font-mono text-[10px] text-muted-foreground">
-        {{ interaction.reply ? t('chat.attention.ui.answered') : t('chat.attention.ui.unanswered') }}
       </div>
     </template>
-    <p v-if="isPendingInteraction" :id="hintId" class="mt-2 text-[10px] text-muted-foreground">
+    <p
+      v-if="isPendingInteraction"
+      :id="hintId"
+      class="interaction-width mt-2 text-[10px] leading-snug text-muted-foreground"
+      data-transcript-chrome="true"
+    >
       {{
         t(
           isPermission

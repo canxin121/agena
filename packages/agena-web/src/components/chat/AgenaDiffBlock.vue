@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RiArrowDownSLine, RiCheckLine, RiClipboardLine } from '@remixicon/vue'
 import { transcriptDiffFiles } from '@/pages/chat/transcriptDiff'
 import { highlightCodeToHtml } from '@/lib/highlight'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -118,23 +119,21 @@ const visibleFiles = computed(() => {
         </div>
       </section>
     </template>
-    <div class="flex flex-wrap items-center gap-3">
-      <button
-        tabindex="0"
-        type="button"
-        class="min-h-8 rounded px-2 text-xs text-muted-foreground hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
-        @click="copyDiff"
-      >
+    <div class="part-actionbar">
+      <button tabindex="0" type="button" class="part-action" @click="copyDiff">
+        <RiCheckLine v-if="copied" class="text-primary" aria-hidden="true" />
+        <RiClipboardLine v-else aria-hidden="true" />
         {{ copied ? t('common.copied') : t('chat.toolDetails.copyDiff') }}
       </button>
       <button
         tabindex="0"
         v-if="totalRows > previewLimit"
         type="button"
-        class="flex min-h-8 items-center gap-2 rounded px-2 text-xs text-primary hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+        class="part-action"
         :aria-expanded="expanded"
         @click="expanded = !expanded"
       >
+        <RiArrowDownSLine :class="expanded ? 'rotate-180' : ''" aria-hidden="true" />
         {{
           expanded
             ? t('chat.toolDetails.collapseDiff')

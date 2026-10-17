@@ -123,6 +123,7 @@ impl WorkflowPlugin {
                     .options
                     .iter()
                     .map(|option| HostAskUserOption {
+                        custom: option.custom,
                         label: option.label.clone(),
                         description: option.description.clone(),
                     })
@@ -1185,11 +1186,13 @@ impl WorkflowPlugin {
         let requested_auto = requested_autorun.unwrap_or(plan.autorun);
         let mut options = if phase == WorkflowPlanPhase::Active {
             let approve_on = HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun on."
                     .to_string(),
             };
             let approve_off = HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun off."
                     .to_string(),
@@ -1201,6 +1204,7 @@ impl WorkflowPlugin {
             }
         } else {
             vec![HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_APPROVE.to_string(),
                 description: match phase {
                     WorkflowPlanPhase::Blocked => {
@@ -1219,14 +1223,17 @@ impl WorkflowPlugin {
         };
         options.extend([
             HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
                 description: "Return to planning so the plan can be edited further.".to_string(),
             },
             HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_REJECT.to_string(),
                 description: "Reject the current plan and mark the review as rejected.".to_string(),
             },
             HostAskUserOption {
+                custom: false,
                 label: PLAN_REVIEW_DECISION_CANCELLED.to_string(),
                 description: "Cancel the plan entirely and stop work on it.".to_string(),
             },

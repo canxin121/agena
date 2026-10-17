@@ -298,6 +298,12 @@ impl App {
         scope: Option<PermissionScope>,
         label: String,
     ) {
+        if self.run_activity.has_operation(
+            crate::RunActivityTarget::Session(session_id),
+            crate::RunOperation::PermissionReply,
+        ) {
+            return;
+        }
         self.seen_permission_request_ids
             .insert(request.request_id.clone());
         self.request_permission_reply(session_id, request.request_id, kind, scope, label);

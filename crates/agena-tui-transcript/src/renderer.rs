@@ -644,6 +644,8 @@ mod tests {
 
     fn pending_input_operation() -> ToolCallView {
         let mut tool = fixture_operation(3, "interaction.ask", "Resume?");
+        tool.operation.state = ToolResultState::Running;
+        tool.operation.output = None;
         tool.operation.user_input = serde_json::from_value(serde_json::json!({
             "requests": [{ "request": {
                 "request_id": "ask", "session_id": 7, "title": "Resume?", "body_markdown": "",
@@ -653,6 +655,59 @@ mod tests {
         }))
         .unwrap();
         tool
+    }
+
+    #[test]
+    fn answered_questions_do_not_hide_a_later_permission_on_the_same_operation() {
+        let mut tool = pending_input_operation();
+        tool.operation.user_input.requests[0].reply = Some(
+            serde_json::from_value(serde_json::json!({
+                "request_id": "ask", "kind": "submit", "answers": {}
+            }))
+            .unwrap(),
+        );
+        tool.operation.authorization = serde_json::from_value(serde_json::json!({
+            "permissions": [{ "request": {
+                "request_id": "approve", "session_id": 7,
+                "action": { "kind": "tool", "tool_name": "shell.exec" },
+                "reason": "Run the approved plan", "created_at": "2026-10-08T00:00:00Z"
+            }, "reply": null }]
+        }))
+        .unwrap();
+        let message = entry(
+            7,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
+            Utc::now(),
+            vec![TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(3),
+                status: PartExecutionStatusResource::InProgress,
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                    Box::new(tool),
+                )),
+            }],
+        );
+        let rendered = render_entry_detailed(
+            &message,
+            40,
+            &I18n::english(),
+            &TranscriptDetailDefaults::default(),
+            &Default::default(),
+        );
+        let controls = rendered
+            .lines
+            .iter()
+            .flat_map(|line| &line.controls)
+            .collect::<Vec<_>>();
+        assert_eq!(controls.len(), 4);
+        assert!(controls.iter().all(|control| control.enabled && matches!(&control.action,
+            crate::TranscriptControlAction::Permission { request_id, .. } if request_id == "approve")));
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Run the approved plan"))
+        );
     }
 
     #[test]

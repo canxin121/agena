@@ -428,6 +428,7 @@ mod interaction_reply_building_tests {
                 header: "Decision".to_owned(),
                 question: "Choose whether this plan should move to active.".to_owned(),
                 options: vec![agena_domain::UserInputOption {
+                    custom: false,
                     label: "Approve".to_owned(),
                     description: "Move it to active.".to_owned(),
                 }],
@@ -452,6 +453,7 @@ mod interaction_reply_building_tests {
                 header: "Choice".to_owned(),
                 question: "Pick one.".to_owned(),
                 options: vec![agena_domain::UserInputOption {
+                    custom: false,
                     label: "yes".to_owned(),
                     description: String::new(),
                 }],
@@ -503,14 +505,34 @@ mod interaction_reply_building_tests {
     }
 
     #[test]
+    fn activating_a_review_decision_does_not_submit_an_abandoned_feedback_draft() {
+        let mut dialog = App::build_user_input_overlay(7, review_request());
+        assert!(dialog.presentation.insert_custom_text("please revise this"));
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, Some(0))
+            .expect("the explicit decision owns the submitted answer");
+        assert_eq!(reply.answers["0"], ["Approve"]);
+        assert_eq!(
+            dialog.presentation.review().custom_text(),
+            "please revise this"
+        );
+    }
+
+    #[test]
     fn ask_user_option_submit_maps_to_answers_zero() {
         let mut dialog = App::build_user_input_overlay(7, ask_user_request(false));
         assert!(!dialog.presentation.is_review_decision());
 
-        // Enter selects the first option and opens the explicit summary.
+        // Space selects the option; Enter confirms and submits the final question.
         assert_eq!(
             dialog.presentation.handle_key(enter(), 10),
             UserInputEffect::KeepOpen
+        );
+        dialog
+            .presentation
+            .handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 10);
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::Submit
         );
 
         let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
@@ -533,7 +555,7 @@ mod interaction_reply_building_tests {
         let mut dialog = App::build_user_input_overlay(7, ask_user_request(true));
 
         // `e` opens the question-flow custom editor, paste fills it, Enter
-        // commits the draft and opens the summary.
+        // commits the draft and submits the final question.
         assert_eq!(
             dialog.presentation.handle_key(edit(), 10),
             UserInputEffect::KeepOpen
@@ -541,7 +563,7 @@ mod interaction_reply_building_tests {
         assert!(dialog.presentation.insert_custom_text("custom answer"));
         assert_eq!(
             dialog.presentation.handle_key(enter(), 10),
-            UserInputEffect::KeepOpen
+            UserInputEffect::Submit
         );
 
         let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
@@ -572,11 +594,11 @@ macro_rules! api_message_part {
 
 /// The "everything is a part" interaction routing tests: the transcript cursor
 /// IS the review cursor, and a thin context-aware action layer owns only
-/// Enter-on-decision-row / Ctrl+X / `e`-on-custom / Esc-to-collapse while every
+/// Enter-on-decision-row / Ctrl+X / `e`-on-custom / Esc-to-title while every
 /// other key falls through to normal chat navigation. These tests pin the
 /// plan's contract end-to-end through the real `App` (bootstrapped against an
 /// in-memory runtime): key routing, decision-row submit/cancel, the inline
-/// custom editor, auto-expand + focus with the revealed guard, selection sync,
+/// custom editor, initial reveal with its guard, atomic control navigation,
 /// and the reply handler's cleanup.
 #[cfg(test)]
 mod interaction_part_routing_tests {
@@ -641,6 +663,7 @@ mod interaction_part_routing_tests {
                 header: "Decision".to_owned(),
                 question: "Choose whether this plan should move to active.".to_owned(),
                 options: vec![agena_api::resource::UserInputOption {
+                    custom: false,
                     label: "Approve".to_owned(),
                     description: "Move it to active.".to_owned(),
                 }],
@@ -665,6 +688,7 @@ mod interaction_part_routing_tests {
                 header: "Decision".to_owned(),
                 question: "Choose whether this plan should move to active.".to_owned(),
                 options: vec![agena_domain::UserInputOption {
+                    custom: false,
                     label: "Approve".to_owned(),
                     description: "Move it to active.".to_owned(),
                 }],
@@ -927,8 +951,13 @@ mod interaction_part_routing_tests {
             body_markdown: plan_markdown.to_owned(),
             ..domain_request()
         };
-        app.transcript
-            .apply_execution(execution_with(vec![pending_user_input_resource()], parts()));
+        app.transcript.apply_execution(execution_with(
+            vec![pending_user_input_resource()],
+            vec![
+                run_marker(),
+                operation_tool_call_part_with_request(request.clone()),
+            ],
+        ));
         app.user_input_interactions.insert(
             REQUEST_ID.to_owned(),
             App::build_user_input_overlay(SESSION_ID, request),
@@ -965,9 +994,8 @@ mod interaction_part_routing_tests {
 
     /// A two-question ask-user request: Q0 "Flavor" (single-pick, 2 options,
     /// custom slot) and Q1 "Toppings" (multi-pick, 2 options, no custom). The
-    /// ask-user wizard owns the page + option cursor, so the option rows are
-    /// NOT cursor-driven — the `PendingInteractionView` only needs the headline
-    /// to be under the cursor for the wizard to activate.
+    /// ask-user flow owns its page while option focus follows the shared
+    /// transcript cursor and the rendered control metadata.
     fn ask_user_wire_request() -> agena_api::resource::UserInputRequest {
         agena_api::resource::UserInputRequest {
             request_id: REQUEST_ID.to_owned(),
@@ -984,10 +1012,12 @@ mod interaction_part_routing_tests {
                     question: "Pick one.".to_owned(),
                     options: vec![
                         agena_api::resource::UserInputOption {
+                            custom: false,
                             label: "Vanilla".to_owned(),
                             description: "Classic.".to_owned(),
                         },
                         agena_api::resource::UserInputOption {
+                            custom: false,
                             label: "Chocolate".to_owned(),
                             description: "Rich.".to_owned(),
                         },
@@ -1000,10 +1030,12 @@ mod interaction_part_routing_tests {
                     question: "Choose any.".to_owned(),
                     options: vec![
                         agena_api::resource::UserInputOption {
+                            custom: false,
                             label: "Sprinkles".to_owned(),
                             description: String::new(),
                         },
                         agena_api::resource::UserInputOption {
+                            custom: false,
                             label: "Nuts".to_owned(),
                             description: String::new(),
                         },
@@ -1032,10 +1064,12 @@ mod interaction_part_routing_tests {
                     question: "Pick one.".to_owned(),
                     options: vec![
                         agena_domain::UserInputOption {
+                            custom: false,
                             label: "Vanilla".to_owned(),
                             description: "Classic.".to_owned(),
                         },
                         agena_domain::UserInputOption {
+                            custom: false,
                             label: "Chocolate".to_owned(),
                             description: "Rich.".to_owned(),
                         },
@@ -1048,10 +1082,12 @@ mod interaction_part_routing_tests {
                     question: "Choose any.".to_owned(),
                     options: vec![
                         agena_domain::UserInputOption {
+                            custom: false,
                             label: "Sprinkles".to_owned(),
                             description: String::new(),
                         },
                         agena_domain::UserInputOption {
+                            custom: false,
                             label: "Nuts".to_owned(),
                             description: String::new(),
                         },
@@ -1099,10 +1135,8 @@ mod interaction_part_routing_tests {
         app.transcript.invalidate_render();
     }
 
-    /// Position the transcript cursor on the interaction part's headline —
-    /// the wizard activation boundary ("展开即可交互"): an expanded part whose
-    /// headline is under the cursor is the active wizard, regardless of which
-    /// body row the cursor would otherwise sit on.
+    /// Position the transcript cursor on the disclosure title. Only this row
+    /// owns expansion; rendered body controls own their separate actions.
     fn move_cursor_to_part_headline(app: &mut App) {
         let start_line = interaction_node_start(app);
         app.transcript
@@ -1124,27 +1158,46 @@ mod interaction_part_routing_tests {
             .expect("the ask-user view is projected")
     }
 
-    /// Body offset of a question's first option row (its header row when it
-    /// has no options) in the LIVE rendered continuous body. Computed from the
-    /// projected layout so answered-preview rows growing earlier question
-    /// blocks never drift the tests.
-    fn q_landing_offset(app: &App, question_index: usize) -> usize {
-        let view = wizard_view(app);
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
-        agena_tui_transcript::ask_user_page_landing_offset(
-            view.plan_body_lines,
-            &layouts,
-            question_index,
+    fn focus_control(app: &mut App, kind: agena_tui_transcript::InteractionLineKind) {
+        let (line, column) = app.transcript.rendered(WIDTH).lines.iter().enumerate()
+            .find_map(|(line, row)| row.controls.iter().find(|control| control.enabled && matches!(&control.action,
+                agena_tui_transcript::TranscriptControlAction::UserInput { request_id, kind: target } if request_id == REQUEST_ID && *target == kind))
+                .map(|control| (line, control.columns.start))).expect("the action is rendered and enabled");
+        assert!(app.transcript.focus_pointer_control(
+            WIDTH,
+            HEIGHT,
+            crate::TranscriptTextPosition { line, column }
+        ));
+    }
+
+    fn activate(app: &mut App, kind: agena_tui_transcript::InteractionLineKind) {
+        focus_control(app, kind);
+        assert!(app.handle_active_interaction_action(enter()));
+    }
+
+    fn control_body_offset(
+        app: &mut App,
+        kind: agena_tui_transcript::InteractionLineKind,
+    ) -> usize {
+        focus_control(app, kind);
+        app.transcript.navigation_cursor_line().unwrap() - interaction_node_start(app) - 1
+    }
+
+    fn q_landing_offset(app: &mut App, question_index: usize) -> usize {
+        control_body_offset(
+            app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index,
+                option_index: 0,
+            },
         )
     }
 
-    /// Body offset of a question's 其他 (custom) row in the live body.
-    fn q_custom_row_offset(app: &App, question_index: usize) -> usize {
-        let view = wizard_view(app);
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
-        view.plan_body_lines + 4 + layouts[question_index].options_len
+    fn q_custom_row_offset(app: &mut App, question_index: usize) -> usize {
+        control_body_offset(
+            app,
+            agena_tui_transcript::InteractionLineKind::AskCustomRow { question_index },
+        )
     }
 
     #[tokio::test]
@@ -1152,15 +1205,14 @@ mod interaction_part_routing_tests {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
         // Sit on a decision row (body offset 2 = the option label).
-        move_cursor_to_body_offset(&mut app, 2);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
 
-        // Line-wise motion (`j`/`k`/arrows) is deliberately OWNED while the
-        // review part is pending: the decision cursor stays confined inside the
-        // part block (see j_and_k_stay_within_the_pending_review_part). Every
-        // other navigation key must NOT be intercepted — the chat keeps owning
-        // horizontal motion, paging, jumps and prefixes ("everything is a
-        // part", no injected review component). `g`/`G` are the motion/end
-        // prefixes; `Space` pages.
+        // The shared transcript owns motion, paging, jumps and prefixes even
+        // on pending review controls. Space on a review card keeps its normal
+        // paging meaning; Enter is the explicit decision action.
         for key in [
             char_key('h'),
             char_key('l'),
@@ -1181,56 +1233,44 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn j_and_k_stay_within_the_pending_review_part() {
+    async fn j_and_k_leave_the_pending_review_without_mutating_it() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 0);
-        let (start_line, end_line) = {
-            let node = app
-                .transcript
-                .rendered(WIDTH)
-                .nodes
-                .iter()
-                .find(|node| node.key == node_key())
-                .expect("the interaction part renders a node");
-            (node.start_line, node.end_line)
-        };
-
-        // `k` from the first plan row must never escape onto the message
-        // header's role-label column ("用户 / 助手"): the decision cursor stops
-        // at the part headline (the part's own top boundary).
+        move_cursor_to_part_headline(&mut app);
+        let start = interaction_node_start(&mut app);
         app.handle_transcript_key(char_key('k'));
-        assert!(
-            app.transcript
-                .navigation_cursor_line()
-                .is_some_and(|line| line >= start_line),
-            "k must not move the cursor above the part headline"
+        assert!(app.transcript.navigation_cursor_line().unwrap() < start);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
         );
-
-        // `j` from anywhere inside the part must never leave the block: the
-        // cursor stops at the last decision/footer row before the next part.
-        for _ in 0..10 {
+        let end = app
+            .transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .find(|node| node.key == node_key())
+            .unwrap()
+            .end_line;
+        for _ in 0..100 {
             app.handle_transcript_key(char_key('j'));
-            assert!(
-                app.transcript
-                    .navigation_cursor_line()
-                    .is_some_and(|line| line < end_line),
-                "j must keep the cursor inside the part block"
-            );
         }
-        // The part stays pending and interactive after all that motion.
+        assert!(app.transcript.navigation_cursor_line().unwrap() >= end);
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
     }
 
     #[tokio::test]
-    async fn enter_on_a_plan_row_collapses_instead_of_submitting() {
+    async fn enter_on_a_plan_row_does_not_collapse_or_submit() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
         move_cursor_to_body_offset(&mut app, 0);
 
-        // Enter on the plan body is a plain Toggle: the thin layer declines it
-        // (returns false), so the normal dispatch collapses the part. No
-        // decision was taken.
+        // Prose has no activation and never owns the enclosing disclosure.
         assert!(
             !app.handle_active_interaction_action(enter()),
             "Enter on a plan row must not be intercepted"
@@ -1242,25 +1282,36 @@ mod interaction_part_routing_tests {
         app.handle_transcript_key(enter());
         assert_eq!(
             app.transcript.node_expansions.get(&node_key()),
-            Some(&false),
-            "Enter on a plan row toggles the part collapsed (normal chat behavior)"
+            Some(&true),
+            "Enter on prose leaves the enclosing part expanded"
         );
+        move_cursor_to_part_headline(&mut app);
+        app.handle_transcript_key(enter());
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false)
+        );
+        app.handle_transcript_key(enter());
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
     }
 
     #[tokio::test]
     async fn enter_on_a_decision_row_submits_that_option() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 2);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
 
         assert!(
             app.handle_active_interaction_action(enter()),
             "Enter on the option row submits"
         );
-        // The reply was sent: the interaction map is cleared (keep = false on
-        // success) and the reply operation is in flight.
-        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
-        assert!(!app.transcript.interaction_views.contains_key(REQUEST_ID));
+        // Keep the draft until acknowledgement; the in-flight guard prevents
+        // any competing reply while the user continues browsing the part.
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(app.transcript.interaction_views.contains_key(REQUEST_ID));
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply,
@@ -1271,7 +1322,10 @@ mod interaction_part_routing_tests {
     async fn ctrl_x_cancels_and_keeps_the_part_pending() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 2);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
 
         assert!(
             app.handle_active_interaction_action(ctrl_x()),
@@ -1287,10 +1341,71 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
+    async fn an_in_flight_deferral_blocks_competing_actions_but_keeps_navigation() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskCancel,
+        );
+        assert!(app.handle_active_interaction_action(enter()));
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewCustomLabel,
+        );
+        assert!(app.handle_active_interaction_action(edit()));
+        assert!(app.paste_into_active_interaction("do not replace the pending reply"));
+        assert!(
+            dialog(&app)
+                .presentation
+                .review()
+                .custom_input()
+                .text()
+                .is_empty()
+        );
+        assert!(app.interaction_editing.is_none());
+        assert!(!app.handle_active_interaction_action(char_key('j')));
+        assert!(app.handle_active_interaction_action(esc()));
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(interaction_node_start(&mut app))
+        );
+        app.handle_transcript_key(enter());
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false)
+        );
+
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(ctrl_x()));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(wizard_view(&app).answers.is_empty());
+    }
+
+    #[tokio::test]
     async fn e_on_the_custom_label_opens_the_inline_editor_and_esc_exits_it() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 3);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewCustomLabel,
+        );
 
         assert!(
             app.handle_active_interaction_action(edit()),
@@ -1322,24 +1437,20 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn esc_on_the_part_collapses_it_back_to_the_configured_state() {
+    async fn esc_returns_to_title_without_collapsing_or_cancelling() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 2);
-
-        assert!(
-            app.handle_active_interaction_action(esc()),
-            "Esc with no pending motion prefix collapses the part"
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
         );
+        assert!(app.handle_active_interaction_action(esc()));
         assert_eq!(
-            app.transcript.node_expansions.get(&node_key()),
-            Some(&false),
-            "the expansion override is cleared so the part falls back to its configured default"
+            app.transcript.navigation_cursor_line(),
+            Some(interaction_node_start(&mut app))
         );
-        assert!(
-            app.user_input_interactions.contains_key(REQUEST_ID),
-            "the request stays reachable by re-expanding the part"
-        );
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 
     #[tokio::test]
@@ -1376,7 +1487,7 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn reveal_scrolls_so_the_whole_question_page_is_visible() {
+    async fn revealing_a_tall_plan_keeps_the_focused_title_visible() {
         let mut app = seeded_app().await;
         // A plan body tall enough to overflow the 24-row viewport: the reveal
         // must fit-scroll the ENTIRE expanded part, not just show its top.
@@ -1404,18 +1515,9 @@ mod interaction_part_routing_tests {
             Some(start_line),
             "the reveal lands the cursor on the part headline"
         );
-        // The whole question page fits: the part's last body row is inside the
-        // viewport (bottom-anchored for a page taller than the screen), and
-        // the viewport never scrolls past the part's top.
-        let height = usize::from(HEIGHT);
-        assert!(
-            end_line <= app.transcript.viewport_top() + height,
-            "the entire expanded page must fit in the viewport"
-        );
-        assert!(
-            app.transcript.viewport_top() <= start_line,
-            "the fit-scroll must not push the part's top above the viewport"
-        );
+        assert!(end_line - start_line > usize::from(HEIGHT));
+        assert!(app.transcript.viewport_top() <= start_line);
+        assert!(start_line < app.transcript.viewport_top() + usize::from(HEIGHT));
     }
 
     #[tokio::test]
@@ -1524,69 +1626,112 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn moving_the_cursor_onto_decision_rows_syncs_the_selection() {
+    async fn a_failed_answer_preserves_choices_and_custom_feedback_for_retry() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
+        move_cursor_to_part_headline(&mut app);
+        assert!(app.paste_into_active_interaction("请保留这份反馈🙂"));
+        assert!(app.handle_active_interaction_action(enter()));
+        app.handle_user_input_replied(
+            SESSION_ID,
+            REQUEST_ID.to_owned(),
+            Err(crate::UiFailure::message("offline")),
+        );
+        assert_eq!(
+            dialog(&app).presentation.review().custom_text(),
+            "请保留这份反馈🙂"
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+        activate(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewCustomLabel,
+        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
 
-        // Cursor on the plan body: plan rows are inert (Enter collapses, not
-        // submits — covered by the routing test), so the selection keeps the
-        // presentation's default rather than deriving a new decision.
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert!(app.handle_active_interaction_action(enter()));
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 1,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(space_key()));
+        activate(&mut app, agena_tui_transcript::InteractionLineKind::AskNext);
+        let before = wizard_view(&app).answers.clone();
+        activate(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskSubmit,
+        );
+        app.handle_user_input_replied(
+            SESSION_ID,
+            REQUEST_ID.to_owned(),
+            Err(crate::UiFailure::message("offline")),
+        );
+        assert_eq!(wizard_view(&app).question_page, 2);
+        assert_eq!(wizard_view(&app).answers, before);
+        activate(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskSubmit,
+        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+    }
+
+    #[tokio::test]
+    async fn focus_highlights_the_entire_control_and_prose_keeps_its_text_cursor() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
         move_cursor_to_body_offset(&mut app, 0);
-        app.refresh_interaction_selection(WIDTH);
-        assert_eq!(
-            app.transcript
-                .interaction_views
-                .get(REQUEST_ID)
-                .and_then(|view| view.selected_option),
-            Some(0),
-            "plan rows are not decision rows; the seeded default is untouched"
+        assert!(app.transcript.action_cursor_ranges(WIDTH).is_empty());
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
         );
-        assert!(
-            app.transcript.rendered.is_some(),
-            "no selection change on a plan row means no re-render"
-        );
-
-        // Cursor onto the custom feedback label (body offset 3 = the custom
-        // label, the option detail row was removed by the one-row-per-option
-        // layout contract): the selection follows the cursor to the custom
-        // slot (options_len == 1), and the render cache is invalidated so the
-        // marker moves.
-        move_cursor_to_body_offset(&mut app, 3);
-        app.refresh_interaction_selection(WIDTH);
-        assert_eq!(
-            app.transcript
-                .interaction_views
-                .get(REQUEST_ID)
-                .and_then(|view| view.selected_option),
-            Some(1)
-        );
-        assert!(
-            app.transcript.rendered.is_none(),
-            "selection change invalidates the render cache"
-        );
-
-        // Moving back onto the option label (body offset 2) follows the cursor
-        // back to the first option and invalidates again.
-        move_cursor_to_body_offset(&mut app, 2);
-        app.refresh_interaction_selection(WIDTH);
-        assert_eq!(
-            app.transcript
-                .interaction_views
-                .get(REQUEST_ID)
-                .and_then(|view| view.selected_option),
-            Some(0)
-        );
-        assert!(
-            app.transcript.rendered.is_none(),
-            "selection change invalidates the render cache"
-        );
+        let ranges = app.transcript.action_cursor_ranges(WIDTH);
+        assert!(!ranges.is_empty());
+        assert!(ranges.values().all(|range| range.end > range.start + 1));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(!dialog(&app).presentation.review().is_editing_custom());
+        app.handle_transcript_key(char_key('l'));
+        let focused = app.transcript.control_at_cursor(WIDTH).unwrap();
+        assert!(matches!(
+            focused.action,
+            agena_tui_transcript::TranscriptControlAction::UserInput {
+                kind: agena_tui_transcript::InteractionLineKind::ReviewCustomLabel,
+                ..
+            }
+        ));
+        app.handle_transcript_key(char_key('h'));
+        assert_eq!(app.transcript.action_cursor_ranges(WIDTH), ranges);
     }
 
     #[tokio::test]
     async fn paste_into_the_part_begins_the_inline_edit_and_owns_the_stream() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 2);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
 
         assert!(app.paste_into_active_interaction("looks good"));
         assert_eq!(
@@ -1607,7 +1752,7 @@ mod interaction_part_routing_tests {
             app.handle_active_interaction_action(enter()),
             "Enter in the inline editor submits"
         );
-        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply,
@@ -1653,37 +1798,30 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_pages_preserve_answers_and_include_summary_without_wrapping() {
+    async fn horizontal_keys_switch_questions_and_preserve_answers_without_wrapping() {
+        use agena_tui_transcript::InteractionLineKind::*;
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let offset = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, offset);
-        app.handle_active_interaction_action(space_key());
-        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
-        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
-        let before = app.transcript.navigation_cursor_line();
-        assert!(app.handle_active_interaction_action(left));
-        assert_eq!(app.transcript.navigation_cursor_line(), before);
-        assert_eq!(wizard_view(&app).question_page, 0);
-        assert!(app.handle_active_interaction_action(right));
-        assert_eq!(wizard_view(&app).question_page, 1);
-        let body = app
-            .transcript
-            .rendered(WIDTH)
-            .lines
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(body.contains("Toppings"));
-        assert!(!body.contains("Pick one."));
-        assert!(app.handle_active_interaction_action(right));
-        assert_eq!(wizard_view(&app).question_page, 2);
-        assert!(app.handle_active_interaction_action(right));
-        assert_eq!(wizard_view(&app).question_page, 2);
-        assert!(app.handle_active_interaction_action(left));
-        assert!(app.handle_active_interaction_action(left));
-        assert_eq!(wizard_view(&app).question_page, 0);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(space_key()));
+        for (key, page) in [
+            (char_key('h'), 0),
+            (char_key('l'), 1),
+            (char_key('l'), 1),
+            (KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), 0),
+            (KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), 1),
+            (KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), 1),
+            (char_key('h'), 0),
+        ] {
+            app.handle_transcript_key(key);
+            assert_eq!(wizard_view(&app).question_page, page);
+        }
         assert!(
             dialog(&app)
                 .presentation
@@ -1692,6 +1830,51 @@ mod interaction_part_routing_tests {
                 .option_indexes
                 .contains(&0)
         );
+        assert!(dialog(&app).presentation.answer(1).is_none());
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+    }
+
+    #[tokio::test]
+    async fn up_down_reach_every_question_footer_action_after_horizontal_keys_change_pages() {
+        use agena_tui_transcript::{InteractionLineKind::*, TranscriptControlAction};
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        app.handle_transcript_key(char_key('l'));
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 1,
+                option_index: 1,
+            },
+        );
+        for kind in [AskPrevious, AskNext, AskSubmit] {
+            app.handle_transcript_key(char_key('j'));
+            assert!(
+                matches!(app.transcript.control_at_cursor(WIDTH).unwrap().action,
+                TranscriptControlAction::UserInput { kind: target, .. } if target == kind)
+            );
+        }
+        app.handle_transcript_key(char_key('k'));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(
+            wizard_view(&app).question_page,
+            2,
+            "the optional summary is reachable without a mouse"
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
     }
 
     #[tokio::test]
@@ -1701,6 +1884,7 @@ mod interaction_part_routing_tests {
         // taller than the 24-row viewport.
         let tall_options: Vec<agena_api::resource::UserInputOption> = (0..30)
             .map(|index| agena_api::resource::UserInputOption {
+                custom: false,
                 label: format!("Option {index}"),
                 description: String::new(),
             })
@@ -1711,6 +1895,7 @@ mod interaction_part_routing_tests {
         domain.questions[1].options = tall_options
             .iter()
             .map(|option| agena_domain::UserInputOption {
+                custom: option.custom,
                 label: option.label.clone(),
                 description: option.description.clone(),
             })
@@ -1718,7 +1903,14 @@ mod interaction_part_routing_tests {
         seed_pending_ask_user_with(&mut app, wire, domain);
         move_cursor_to_part_headline(&mut app);
 
-        app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        app.handle_transcript_key(char_key('l'));
         let height = usize::from(HEIGHT);
         let (start_line, end_line) = {
             let rendered = app.transcript.rendered(WIDTH);
@@ -1750,13 +1942,12 @@ mod interaction_part_routing_tests {
             cursor = next;
         }
         assert_eq!(cursor, end_line - 1, "free Down reaches the footer");
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-        );
+        activate(&mut app, agena_tui_transcript::InteractionLineKind::AskNext);
         assert_eq!(wizard_view(&app).question_page, 2);
         assert!(app.active_user_input_interaction_request_id().is_some());
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+        activate(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskPrevious,
         );
         assert_eq!(wizard_view(&app).question_page, 1);
         assert!(app.active_user_input_interaction_request_id().is_some());
@@ -1766,7 +1957,7 @@ mod interaction_part_routing_tests {
     async fn ask_user_space_toggles_the_option_under_the_cursor() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let q0_landing = q_landing_offset(&app, 0);
+        let q0_landing = q_landing_offset(&mut app, 0);
         move_cursor_to_body_offset(&mut app, q0_landing);
 
         // Space selects the option under the cursor (single-pick Q0 option 0).
@@ -1785,15 +1976,15 @@ mod interaction_part_routing_tests {
         );
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
 
-        // Space again (single-pick) unselects it: select/unselect.
+        // Space on a selected radio keeps the answer selected, matching Web.
         assert!(app.handle_active_interaction_action(space_key()));
         assert_eq!(
             dialog(&app)
                 .presentation
                 .answer(0)
                 .map(|answer| answer.option_indexes.len()),
-            Some(0),
-            "single-pick Space unselects the already-picked option"
+            Some(1),
+            "single-pick Space keeps the already-picked option selected"
         );
         assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
@@ -1808,66 +1999,112 @@ mod interaction_part_routing_tests {
     }
 
     fn move_to_summary_action(app: &mut App, cancel: bool) {
-        let view = wizard_view(app);
-        assert_eq!(view.question_page, dialog(app).request.questions.len());
-        let offset = view.plan_body_lines
-            + 2
-            + view.summary_rows.iter().sum::<usize>()
-            + 1
-            + usize::from(cancel);
-        move_cursor_to_body_offset(app, offset);
+        assert_eq!(
+            wizard_view(app).question_page,
+            dialog(app).request.questions.len()
+        );
+        focus_control(
+            app,
+            if cancel {
+                agena_tui_transcript::InteractionLineKind::AskCancel
+            } else {
+                agena_tui_transcript::InteractionLineKind::AskSubmit
+            },
+        );
     }
 
     #[tokio::test]
-    async fn ask_user_only_explicit_summary_submit_sends_the_request() {
+    async fn ask_user_enter_confirms_existing_answers_and_submits_from_the_last_question() {
+        use agena_tui_transcript::InteractionLineKind::*;
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let offset = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, offset);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(dialog(&app).presentation.answer(0).is_none());
+        assert!(app.handle_active_interaction_action(space_key()));
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 1,
+            },
+        );
         assert!(app.handle_active_interaction_action(enter()));
         assert_eq!(wizard_view(&app).question_page, 1);
-        app.handle_active_interaction_action(space_key());
-        assert!(app.handle_active_interaction_action(enter()));
-        assert_eq!(wizard_view(&app).question_page, 2);
+        assert_eq!(
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .unwrap()
+                .option_indexes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
         assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply
         ));
-        let text = app
-            .transcript
-            .rendered(WIDTH)
-            .lines
-            .iter()
-            .map(|l| l.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Vanilla") && text.contains("Sprinkles"));
-        // Enter on a summary answer returns to that question for editing.
+        assert!(app.handle_active_interaction_action(space_key()));
         assert!(app.handle_active_interaction_action(enter()));
-        assert_eq!(wizard_view(&app).question_page, 0);
-        for _ in 0..2 {
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        }
-        move_to_summary_action(&mut app, false);
-        assert!(app.handle_active_interaction_action(enter()));
-        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert_eq!(wizard_view(&app).question_page, 1);
+        assert!(
+            dialog(&app)
+                .presentation
+                .answer(1)
+                .unwrap()
+                .option_indexes
+                .contains(&0)
+        );
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply
         ));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert!(
+            dialog(&app)
+                .presentation
+                .answer(1)
+                .unwrap()
+                .option_indexes
+                .contains(&0),
+            "in-flight keys cannot edit the draft"
+        );
     }
 
     #[tokio::test]
-    async fn ask_user_summary_validation_jumps_to_first_unanswered_question() {
+    async fn ask_user_final_enter_validation_jumps_to_first_unanswered_question() {
+        use agena_tui_transcript::InteractionLineKind::*;
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let offset = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, offset);
-        app.handle_active_interaction_action(enter());
-        app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        move_to_summary_action(&mut app, false);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        app.handle_transcript_key(char_key('l'));
+        assert!(app.handle_active_interaction_action(space_key()));
         assert!(app.handle_active_interaction_action(enter()));
-        assert_eq!(wizard_view(&app).question_page, 1);
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(
+            dialog(&app)
+                .presentation
+                .answer(1)
+                .unwrap()
+                .option_indexes
+                .contains(&0)
+        );
         assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply
@@ -1876,24 +2113,34 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn single_question_ask_requires_summary_and_can_cancel() {
+    async fn single_question_ask_submits_directly_and_optional_summary_can_cancel() {
+        use agena_tui_transcript::InteractionLineKind::*;
         let mut app = seeded_app().await;
         let mut wire = ask_user_wire_request();
         wire.questions.truncate(1);
         let mut domain = ask_user_domain_request();
         domain.questions.truncate(1);
-        seed_pending_ask_user_with(&mut app, wire, domain);
-        let offset = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, offset);
+        seed_pending_ask_user_with(&mut app, wire.clone(), domain.clone());
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(space_key()));
         assert!(app.handle_active_interaction_action(enter()));
-        assert_eq!(wizard_view(&app).question_page, 1);
-        assert!(!app.run_activity.has_operation(
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply
         ));
+        let mut app = seeded_app().await;
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        activate(&mut app, AskNext);
+        assert_eq!(wizard_view(&app).question_page, 1);
         move_to_summary_action(&mut app, true);
         assert!(app.handle_active_interaction_action(enter()));
-        // Cancellation retains the draft until the server acknowledges it.
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
@@ -1902,14 +2149,12 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_enter_on_plan_row_collapses_instead_of_submitting() {
+    async fn ask_user_enter_on_plan_row_does_not_collapse_or_submit() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_body_offset(&mut app, 0);
 
-        // Enter on the plan body is a plain Toggle: the thin layer declines it
-        // (returns false), so the normal dispatch collapses the part. No
-        // answer was submitted.
+        // Prose has no activation and never owns the enclosing disclosure.
         assert!(
             !app.handle_active_interaction_action(enter()),
             "Enter on a plan row must not be intercepted"
@@ -1921,16 +2166,24 @@ mod interaction_part_routing_tests {
         app.handle_transcript_key(enter());
         assert_eq!(
             app.transcript.node_expansions.get(&node_key()),
-            Some(&false),
-            "Enter on a plan row toggles the part collapsed (normal chat behavior)"
+            Some(&true),
+            "Enter on prose leaves the enclosing part expanded"
         );
+        move_cursor_to_part_headline(&mut app);
+        app.handle_transcript_key(enter());
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false)
+        );
+        app.handle_transcript_key(enter());
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
     }
 
     #[tokio::test]
     async fn ask_user_space_on_the_custom_row_opens_the_inline_editor() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let custom_row = q_custom_row_offset(&app, 0);
+        let custom_row = q_custom_row_offset(&mut app, 0);
         move_cursor_to_body_offset(&mut app, custom_row);
 
         assert!(
@@ -1953,7 +2206,7 @@ mod interaction_part_routing_tests {
     async fn ask_user_e_does_not_open_the_custom_editor() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let custom_row = q_custom_row_offset(&app, 0);
+        let custom_row = q_custom_row_offset(&mut app, 0);
         move_cursor_to_body_offset(&mut app, custom_row);
 
         // `e` is deliberately NOT owned by the ask part: the hint is wrong and
@@ -1978,18 +2231,18 @@ mod interaction_part_routing_tests {
     async fn ask_user_custom_answer_advances_and_survives_back_navigation() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        let custom_row = q_custom_row_offset(&app, 0);
+        let custom_row = q_custom_row_offset(&mut app, 0);
         move_cursor_to_body_offset(&mut app, custom_row);
 
-        // Empty custom: Enter opens the inline editor (no submit yet).
+        // Space selects the custom option and opens the inline editor (no submit yet).
         assert!(
-            app.handle_active_interaction_action(enter()),
-            "Enter on an empty custom row is owned"
+            app.handle_active_interaction_action(space_key()),
+            "Space selects the custom option"
         );
         assert_eq!(
             app.interaction_editing.as_deref(),
             Some(REQUEST_ID),
-            "Enter on an empty custom row opens the editor"
+            "selecting a custom option opens its editor"
         );
         // Type into the editor, then Enter commits the custom text and closes
         // the editor (single-pick advances the presentation to Q1).
@@ -2010,14 +2263,17 @@ mod interaction_part_routing_tests {
         ));
 
         assert_eq!(wizard_view(&app).question_page, 1);
-        app.handle_active_interaction_action(enter());
+        activate(&mut app, agena_tui_transcript::InteractionLineKind::AskNext);
         assert_eq!(wizard_view(&app).question_page, 2);
         for _ in 0..2 {
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+            activate(
+                &mut app,
+                agena_tui_transcript::InteractionLineKind::AskPrevious,
+            );
         }
-        let custom_row = q_custom_row_offset(&app, 0);
+        let custom_row = q_custom_row_offset(&mut app, 0);
         move_cursor_to_body_offset(&mut app, custom_row);
-        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.handle_active_interaction_action(space_key()));
         assert_eq!(app.interaction_editing.as_deref(), Some(REQUEST_ID));
         assert_eq!(dialog(&app).presentation.custom_input().text(), "mint");
         assert!(!app.run_activity.has_operation(
@@ -2027,60 +2283,359 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn active_ask_part_cursor_line_highlights_only_the_expanded_ask_body() {
-        // Ask part: the cursor line inside the body is the whole-line highlight.
+    async fn custom_only_choice_selects_edits_and_submits_its_text_end_to_end() {
+        use agena_tui_transcript::InteractionLineKind::*;
         let mut app = seeded_app().await;
-        seed_pending_ask_user(&mut app);
-        let q0_landing = q_landing_offset(&app, 0);
-        move_cursor_to_body_offset(&mut app, q0_landing);
-        let start_line = interaction_node_start(&mut app);
-        let highlighted = app.active_ask_part_cursor_line(WIDTH);
-        assert_eq!(
-            highlighted,
-            Some(start_line + 1 + q0_landing),
-            "the cursor line inside the ask body is the whole-line highlight"
+        let mut wire = ask_user_wire_request();
+        wire.questions.truncate(1);
+        wire.questions[0].allow_custom = false;
+        wire.questions[0].options = vec![agena_api::resource::UserInputOption {
+            label: "Write an answer".into(),
+            description: "Use your own words".into(),
+            custom: true,
+        }];
+        let mut domain = ask_user_domain_request();
+        domain.questions.truncate(1);
+        domain.questions[0].allow_custom = false;
+        domain.questions[0].options = vec![agena_domain::UserInputOption {
+            label: "Write an answer".into(),
+            description: "Use your own words".into(),
+            custom: true,
+        }];
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        focus_control(&mut app, AskCustomRow { question_index: 0 });
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(
+            dialog(&app).presentation.answer(0).is_none(),
+            "Enter does not choose an unselected option"
         );
-        // Off the part: no whole-line highlight.
-        app.transcript
-            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(1));
-        assert_eq!(
-            app.active_ask_part_cursor_line(WIDTH),
-            None,
-            "off the part there is no whole-line highlight"
-        );
-        // Review part: the whole-line highlight does NOT apply — it keeps the
-        // normal single-cell cursor.
-        let mut review_app = seeded_app().await;
-        seed_pending_review(&mut review_app);
-        move_cursor_to_body_offset(&mut review_app, 2);
-        assert_eq!(
-            review_app.active_ask_part_cursor_line(WIDTH),
-            None,
-            "review keeps the normal single-cell cursor"
-        );
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert!(dialog(&app).presentation.custom_option_selected(0));
+        assert_eq!(app.interaction_editing.as_deref(), Some(REQUEST_ID));
+        assert!(app.paste_into_active_interaction("中文, answer\n第二行"));
+        assert!(app.handle_active_interaction_action(esc()));
+        assert_eq!(app.interaction_editing, None);
+        assert!(dialog(&app).presentation.custom_option_selected(0));
+        let mut draft = dialog(&app).clone();
+        let reply = App::build_structured_user_input_reply(&app.i18n, &mut draft, None).unwrap();
+        assert_eq!(reply.answers["0"], vec!["中文, answer\n第二行"]);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
     }
 
     #[tokio::test]
-    async fn ask_user_esc_falls_through_out_of_wizard_mode() {
+    async fn custom_answer_enter_on_the_final_question_submits_without_summary() {
+        use agena_tui_transcript::InteractionLineKind::*;
+        let mut app = seeded_app().await;
+        let mut wire = ask_user_wire_request();
+        wire.questions.truncate(1);
+        let mut domain = ask_user_domain_request();
+        domain.questions.truncate(1);
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        focus_control(&mut app, AskCustomRow { question_index: 0 });
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert!(app.paste_into_active_interaction("中文补充"));
+        for key in [
+            char_key('h'),
+            char_key('j'),
+            char_key('k'),
+            char_key('l'),
+            space_key(),
+        ] {
+            assert!(app.handle_active_interaction_action(key));
+            assert_eq!(wizard_view(&app).question_page, 0);
+            assert_eq!(app.interaction_editing.as_deref(), Some(REQUEST_ID));
+        }
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(app.interaction_editing, None);
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert_eq!(
+            dialog(&app).presentation.answer(0).unwrap().custom_values,
+            vec!["中文补充hjkl"]
+        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+    }
+
+    #[tokio::test]
+    async fn pointer_click_selects_an_ask_option_without_advancing_or_submitting() {
+        use agena_tui_transcript::InteractionLineKind::*;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        move_cursor_to_part_headline(&mut app);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        let position = app.transcript.cursor_text_position(WIDTH).unwrap();
+        let body = app.layout.transcript_body;
+        let row = body.y + (position.line - app.transcript.viewport_top()) as u16;
+        let column = body.x + position.column as u16;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse_event(MouseEvent {
+                kind,
+                row,
+                column,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        assert_eq!(wizard_view(&app).question_page, 0);
+        assert!(
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .unwrap()
+                .option_indexes
+                .contains(&0)
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+    }
 
-        // Esc is deliberately NOT owned by the ask-user wizard: it falls
-        // through to the normal transcript dispatch, so the part stays
-        // expanded, the wizard stays active, and the request stays pending.
-        assert!(
-            !app.handle_active_interaction_action(esc()),
-            "Esc must not be intercepted by the ask-user wizard"
+    #[tokio::test]
+    async fn question_and_review_controls_share_atomic_focus_highlights() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
         );
-        assert_ne!(
-            app.transcript.node_expansions.get(&node_key()),
-            Some(&false),
-            "Esc must not collapse the expanded part out from under the wizard"
-        );
         assert!(
-            app.user_input_interactions.contains_key(REQUEST_ID),
-            "the request stays pending"
+            app.transcript.action_cursor_ranges(WIDTH).len() >= 2,
+            "the label and description share one highlight"
+        );
+        move_cursor_to_body_offset(&mut app, 0);
+        assert!(app.transcript.action_cursor_ranges(WIDTH).is_empty());
+        move_cursor_to_part_headline(&mut app);
+        assert!(app.transcript.action_cursor_ranges(WIDTH).is_empty());
+        let mut review = seeded_app().await;
+        seed_pending_review(&mut review);
+        focus_control(
+            &mut review,
+            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index: 0 },
+        );
+        assert!(!review.transcript.action_cursor_ranges(WIDTH).is_empty());
+    }
+
+    #[tokio::test]
+    async fn ask_user_esc_returns_to_title_and_keeps_the_draft() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            agena_tui_transcript::InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(esc()));
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(interaction_node_start(&mut app))
+        );
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+    }
+
+    #[tokio::test]
+    async fn wrapped_options_are_one_stop_and_keep_their_identity_through_resize() {
+        use agena_tui_transcript::{InteractionLineKind::*, TranscriptControlAction};
+        let mut app = seeded_app().await;
+        let mut wire = ask_user_wire_request();
+        let mut domain = ask_user_domain_request();
+        let long = "中文说明与 emoji 🙂 abcdef ".repeat(12);
+        wire.questions[0].options[0].description = long.clone();
+        domain.questions[0].options[0].description = long;
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        let first = app.transcript.control_at_cursor(WIDTH).unwrap().action;
+        let rows = app.transcript.action_cursor_ranges(WIDTH);
+        assert!(rows.len() > 3);
+        app.handle_transcript_key(char_key('j'));
+        assert!(matches!(
+            app.transcript.control_at_cursor(WIDTH).unwrap().action,
+            TranscriptControlAction::UserInput {
+                kind: AskOption {
+                    question_index: 0,
+                    option_index: 1
+                },
+                ..
+            }
+        ));
+        app.handle_transcript_key(char_key('k'));
+        assert_eq!(
+            app.transcript.control_at_cursor(WIDTH).unwrap().action,
+            first
+        );
+        app.transcript.ensure_visual_focus(28, HEIGHT);
+        assert_eq!(app.transcript.control_at_cursor(28).unwrap().action, first);
+        assert!(app.transcript.action_cursor_ranges(28).len() > rows.len());
+        app.transcript.ensure_visual_focus(WIDTH, HEIGHT);
+        assert_eq!(
+            app.transcript.control_at_cursor(WIDTH).unwrap().action,
+            first
+        );
+        assert!(dialog(&app).presentation.answer(0).is_none());
+    }
+
+    #[tokio::test]
+    async fn multiple_space_toggles_and_final_enter_preserves_answers_with_no_whitespace_activation()
+     {
+        use agena_tui_transcript::InteractionLineKind::*;
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 0,
+                option_index: 0,
+            },
+        );
+        assert!(app.handle_active_interaction_action(space_key()));
+        assert!(app.handle_active_interaction_action(enter()));
+        focus_control(
+            &mut app,
+            AskOption {
+                question_index: 1,
+                option_index: 0,
+            },
+        );
+        for expected in [true, false, true] {
+            assert!(app.handle_active_interaction_action(space_key()));
+            assert_eq!(wizard_view(&app).question_page, 1);
+            assert_eq!(
+                dialog(&app)
+                    .presentation
+                    .answer(1)
+                    .unwrap()
+                    .option_indexes
+                    .contains(&0),
+                expected
+            );
+        }
+        let line = app.transcript.navigation_cursor_line().unwrap();
+        assert!(!app.transcript.focus_pointer_control(
+            WIDTH,
+            HEIGHT,
+            crate::TranscriptTextPosition { line, column: 0 }
+        ));
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(
+            dialog(&app)
+                .presentation
+                .answer(1)
+                .unwrap()
+                .option_indexes
+                .contains(&0)
+        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply
+        ));
+    }
+
+    fn seed_permission(app: &mut App) -> String {
+        let request: agena_domain::PermissionRequest = serde_json::from_value(serde_json::json!({
+            "request_id": "permission:cursor", "session_id": SESSION_ID,
+            "action": {"kind": "tool", "tool_name": "fs.write", "qualifier": "output.txt"},
+            "reason": "Write the requested file", "created_at": Utc::now()
+        }))
+        .unwrap();
+        let wire = serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        let mut part = operation_tool_call_part();
+        part.content["user_input"] = serde_json::json!({});
+        part.content["authorization"] =
+            serde_json::json!({"permissions": [{"request": request, "reply": null}]});
+        app.transcript.apply_execution(execution_with(
+            vec![PendingInteractiveRequestResource {
+                session_id: SESSION_ID,
+                parent_session_id: None,
+                task_id: None,
+                request: PendingInteractiveRequest::Permission { request: wire },
+            }],
+            vec![run_marker(), part],
+        ));
+        app.transcript.node_expansions.insert(node_key(), true);
+        app.transcript.invalidate_render();
+        "permission:cursor".to_owned()
+    }
+
+    #[tokio::test]
+    async fn permissions_arrive_inline_and_navigation_never_replies() {
+        let mut app = seeded_app().await;
+        let id = seed_permission(&mut app);
+        app.maybe_auto_open_pending_interactive_overlay();
+        assert!(app.overlay.is_none());
+        assert!(app.seen_permission_request_ids.contains(&id));
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(interaction_node_start(&mut app))
+        );
+        app.transcript.focus_request_control(WIDTH, HEIGHT, &id);
+        for key in [char_key('j'), char_key('k'), char_key('h'), char_key('l')] {
+            app.handle_transcript_key(key);
+        }
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::PermissionReply
+        ));
+        app.transcript.focus_request_control(WIDTH, HEIGHT, &id);
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::PermissionReply
+        ));
+    }
+
+    #[tokio::test]
+    async fn persistent_permission_opens_scope_and_details_remain_explicit() {
+        let mut app = seeded_app().await;
+        let id = seed_permission(&mut app);
+        app.transcript.focus_request_control(WIDTH, HEIGHT, &id);
+        app.handle_transcript_key(char_key('l'));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(
+            matches!(app.overlay.as_ref(), Some(crate::Overlay::Permission(dialog))
+            if dialog.presentation.page() == agena_tui::permission_prompt::PermissionPromptPage::Scope(agena_tui::permission_prompt::PermissionPromptDecision::Allow))
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::PermissionReply
+        ));
+        app.overlay = None;
+        app.transcript.focus_request_control(WIDTH, HEIGHT, &id);
+        for _ in 0..3 {
+            app.handle_transcript_key(char_key('l'));
+        }
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(
+            matches!(app.overlay.as_ref(), Some(crate::Overlay::Permission(dialog)) if dialog.presentation.page().is_details())
         );
     }
 
@@ -4364,7 +4919,7 @@ mod transcript_expansion_tests {
     }
 
     #[test]
-    fn collapsing_from_inside_an_activity_keeps_the_cursor_on_that_activity() {
+    fn prose_enter_preserves_expansion_and_title_enter_collapses() {
         let now = Utc::now();
         let message_id = 17;
         let part_id = 23;
@@ -4419,6 +4974,12 @@ mod transcript_expansion_tests {
             Some(key.clone())
         );
 
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion_by(80, 10, None),
+            None
+        );
+        assert_eq!(transcript.node_expansions.get(&key), Some(&true));
+        transcript.focus_part_headline(80, 10);
         let (_, expanded) = transcript
             .toggle_cursor_node_expansion_by(80, 10, None)
             .expect("reasoning should be toggleable");

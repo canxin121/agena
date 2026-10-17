@@ -277,15 +277,27 @@ pub fn handle_key(
     key: KeyEvent,
 ) -> PermissionPromptEffect {
     if key.modifiers == KeyModifiers::NONE {
+        let direction = match key.code {
+            KeyCode::Up | KeyCode::Left | KeyCode::Char('k' | 'h') => Some(-1),
+            KeyCode::Down | KeyCode::Right | KeyCode::Char('j' | 'l') => Some(1),
+            _ => None,
+        };
         let delta = match key.code {
             KeyCode::PageUp => Some(-10),
             KeyCode::PageDown => Some(10),
-            KeyCode::Up if presentation.page.is_details() => Some(-1),
-            KeyCode::Down if presentation.page.is_details() => Some(1),
+            _ if presentation.page.is_details() => direction,
             _ => None,
         };
         if let Some(delta) = delta {
             presentation.scroll_by(delta);
+            return PermissionPromptEffect::KeepOpen;
+        }
+        if let Some(delta) = direction {
+            presentation.selection.selected = presentation
+                .selection
+                .selected
+                .saturating_add_signed(isize::from(delta))
+                .min(presentation.page.choice_count().saturating_sub(1));
             return PermissionPromptEffect::KeepOpen;
         }
     }
@@ -592,6 +604,70 @@ mod tests {
                 selected: 0,
             }
         );
+    }
+
+    #[test]
+    fn every_arrow_and_vim_direction_moves_without_activating_or_wrapping() {
+        let mut presentation =
+            PermissionPromptPresentation::new(PermissionPromptContent::default());
+        for page in [
+            PermissionPromptPage::Action,
+            PermissionPromptPage::Scope(PermissionPromptDecision::Allow),
+        ] {
+            presentation.page = page;
+            presentation.selection.selected = 0;
+            for key in [
+                KeyCode::Up,
+                KeyCode::Left,
+                KeyCode::Char('k'),
+                KeyCode::Char('h'),
+            ] {
+                assert_eq!(
+                    handle_key(&mut presentation, KeyEvent::new(key, KeyModifiers::NONE)),
+                    PermissionPromptEffect::KeepOpen
+                );
+                assert_eq!(presentation.selected(), 0);
+            }
+            for key in [
+                KeyCode::Down,
+                KeyCode::Right,
+                KeyCode::Char('j'),
+                KeyCode::Char('l'),
+            ] {
+                let before = presentation.selected();
+                assert_eq!(
+                    handle_key(&mut presentation, KeyEvent::new(key, KeyModifiers::NONE)),
+                    PermissionPromptEffect::KeepOpen
+                );
+                assert_eq!(presentation.selected(), before + 1);
+            }
+            assert_eq!(presentation.selected(), 4);
+            assert_eq!(
+                handle_key(
+                    &mut presentation,
+                    KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)
+                ),
+                PermissionPromptEffect::KeepOpen
+            );
+            assert_eq!(presentation.selected(), 4);
+            assert_eq!(
+                handle_key(
+                    &mut presentation,
+                    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+                ),
+                PermissionPromptEffect::Activate { page, selected: 4 }
+            );
+        }
+        presentation.open_details();
+        presentation.max_scroll.set(20);
+        assert_eq!(
+            handle_key(
+                &mut presentation,
+                KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
+            ),
+            PermissionPromptEffect::KeepOpen
+        );
+        assert_eq!(presentation.scroll.get(), 1);
     }
 
     #[test]

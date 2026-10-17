@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {
+  RiArrowRightSLine,
+  RiExternalLinkLine,
+  RiFileTextLine,
+  RiImageLine,
+  RiVideoLine,
+  RiVolumeUpLine,
+} from '@remixicon/vue'
 
 import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
 import type { AttachmentPresentation } from '@/pages/chat/transcriptPartPresentation'
@@ -77,6 +85,10 @@ const facts = computed(() =>
     .filter(Boolean)
     .join(' · '),
 )
+const attachmentIcon = computed(() =>
+  isImage.value ? RiImageLine : isVideo.value ? RiVideoLine : isAudio.value ? RiVolumeUpLine : RiFileTextLine,
+)
+const fullTitle = computed(() => [props.attachment.label, facts.value].filter(Boolean).join(' — '))
 
 function openAttachment() {
   emit('open', props.attachment.path, href.value || props.attachment.url)
@@ -84,18 +96,24 @@ function openAttachment() {
 </script>
 
 <template>
-  <section class="min-w-0 border-y border-border/50 py-1.5">
-    <div class="flex min-w-0 items-start gap-2">
+  <section class="min-w-0 space-y-2 py-1">
+    <div class="interaction-width">
       <button
         tabindex="0"
         v-if="attachment.path"
         type="button"
-        class="min-w-0 flex-1 truncate text-left font-mono text-xs text-foreground hover:text-primary"
-        :title="attachment.label"
+        class="part-link"
+        :title="fullTitle"
+        :aria-label="`${t('common.open')}: ${attachment.label}`"
+        :aria-description="facts || undefined"
         @click="openAttachment"
       >
-        <span aria-hidden="true">›</span>
-        {{ attachment.label }}
+        <span class="interaction-choice-marker" aria-hidden="true"><component :is="attachmentIcon" /></span>
+        <span class="interaction-choice-copy">
+          <span class="interaction-choice-label font-mono">{{ attachment.label }}</span>
+          <span v-if="facts" class="interaction-choice-description">{{ facts }}</span>
+        </span>
+        <RiArrowRightSLine class="interaction-choice-arrow" aria-hidden="true" />
       </button>
       <a
         tabindex="0"
@@ -103,28 +121,42 @@ function openAttachment() {
         :href="href"
         target="_blank"
         rel="noopener noreferrer"
-        class="min-w-0 flex-1 truncate font-mono text-xs text-foreground hover:text-primary"
-        :title="attachment.label"
+        class="part-link"
+        :title="fullTitle"
+        :aria-label="`${t('common.open')}: ${attachment.label}`"
+        :aria-description="facts || undefined"
       >
-        <span aria-hidden="true">›</span>
-        {{ attachment.label }}
+        <span class="interaction-choice-marker" aria-hidden="true"><component :is="attachmentIcon" /></span>
+        <span class="interaction-choice-copy">
+          <span class="interaction-choice-label font-mono">{{ attachment.label }}</span>
+          <span v-if="facts" class="interaction-choice-description">{{ facts }}</span>
+        </span>
+        <RiExternalLinkLine class="interaction-choice-arrow" aria-hidden="true" />
       </a>
-      <span v-else class="min-w-0 flex-1 truncate font-mono text-xs" :title="attachment.label">
-        <span aria-hidden="true">›</span>
-        {{ attachment.label }}
-      </span>
-      <span v-if="facts" class="shrink-0 text-right text-[10px] text-muted-foreground">{{ facts }}</span>
+      <div v-else class="flex min-w-0 items-center gap-2 py-1.5" :title="fullTitle">
+        <component :is="attachmentIcon" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div class="min-w-0">
+          <p class="truncate font-mono text-xs font-medium">{{ attachment.label }}</p>
+          <p v-if="facts" class="text-[11px] text-muted-foreground">{{ facts }}</p>
+        </div>
+      </div>
     </div>
 
     <button
       tabindex="0"
       v-if="isImage && href"
       type="button"
-      class="mt-2 block max-w-full overflow-hidden rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      class="relative block max-w-full overflow-hidden rounded-md border border-border bg-card outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :aria-label="`${t('common.open')}: ${attachment.label}`"
       @click="openAttachment"
     >
       <img :src="href" alt="" aria-hidden="true" class="max-h-96 max-w-full cursor-zoom-in object-contain" />
+      <span
+        class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded border border-border bg-background/90 px-1.5 py-1 text-[11px]"
+        aria-hidden="true"
+      >
+        <RiImageLine class="h-3 w-3" />{{ t('common.open') }}
+      </span>
     </button>
     <video
       v-else-if="isVideo && href"

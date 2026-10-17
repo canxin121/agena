@@ -107,6 +107,7 @@ fn ask_user_tool_input(
                 .options
                 .into_iter()
                 .map(|option| UserInputOption {
+                    custom: option.custom,
                     label: option.label,
                     description: option.description,
                 })
@@ -167,6 +168,7 @@ impl AskFixture {
                     header: String::new(),
                     question: question.to_owned(),
                     options: vec![AskUserOption {
+                        custom: false,
                         label: option.to_owned(),
                         description: String::new(),
                     }],
@@ -471,7 +473,7 @@ async fn two_asks_in_one_batch_project_their_own_answers() {
         crate::SessionExecutionReplyRequest::new(
             session.id,
             agena_runtime::SessionRunOptions {
-            model_supports_parallel_tool_calls: None,
+                model_supports_parallel_tool_calls: None,
                 model: ModelRef::new("batched-ask", "batched-ask-model"),
                 thinking_mode: None,
                 speed_mode: None,

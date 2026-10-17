@@ -903,7 +903,8 @@ overlay-user-input-unanswered = unanswered
 overlay-user-input-custom-empty = Press Space to type a custom answer
 overlay-user-input-review-feedback = Feedback to agent
 overlay-user-input-review-feedback-empty = Press Enter or e to type feedback, or pick a decision
-overlay-user-input-review-footer-hint = Enter on option = submit · Enter on title = collapse/expand
+overlay-user-input-review-footer-hint = H J K L / arrows: move · Enter: act · Esc: title
+overlay-user-input-question-footer-hint = ↑/↓ J/K: options · ←/→ H/L: questions · Space: select · Enter: next / submit · Esc: title
 overlay-user-input-missing-answer = missing answer for {$label}
 overlay-user-input-footer-review = j/k ↑/↓ move | Enter choose | e edit | Ctrl+Y/Ctrl+E line scroll | PgUp/PgDn pages | Ctrl+X cancel
 overlay-user-input-footer-question = Tab/Shift+Tab pages | Space toggle | Ctrl+D clear | Ctrl+Y/Ctrl+E line scroll | PgUp/PgDn pages | Ctrl+X cancel
@@ -2587,3 +2588,5 @@ usage-filter-subagents-excluded = excluded
 
 transcript-rich-fallback = Preview unavailable: {$reason}. Original source follows.
 transcript-interactive-app = Open this interactive app in Agena Web to use the UI and run its services.
+
+overlay-user-input-defer = Defer request

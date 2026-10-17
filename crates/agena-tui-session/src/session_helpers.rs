@@ -70,16 +70,22 @@ pub fn user_input_answer_values(
         .option_indexes
         .iter()
         .filter_map(|index| question.options.get(*index))
+        .filter(|option| !option.custom)
         .map(|option| option.label.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    values.extend(
-        draft
-            .custom_values
-            .iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-    );
+    if question
+        .custom_option_index()
+        .is_some_and(|custom| draft.option_indexes.contains(&custom))
+    {
+        values.extend(
+            draft
+                .custom_values
+                .iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        );
+    }
     if question.multiple {
         values
     } else {

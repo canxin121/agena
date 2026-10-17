@@ -134,7 +134,8 @@ overlay-user-input-unanswered = unbeantwortet
 overlay-user-input-custom-empty = Leertaste drücken, um eine eigene Antwort einzugeben
 overlay-user-input-review-feedback = Rückmeldung an den Agenten
 overlay-user-input-review-feedback-empty = Enter oder e drücken, um Rückmeldung einzugeben oder eine Entscheidung auszuwählen
-overlay-user-input-review-footer-hint = Enter auf einer Option = absenden · Enter auf dem Titel = ein-/ausklappen
+overlay-user-input-review-footer-hint = H J K L / Pfeile: bewegen · Enter: ausführen · Esc: Titel
+overlay-user-input-question-footer-hint = ↑/↓ J/K: Optionen · ←/→ H/L: Fragen · Leertaste: auswählen · Enter: weiter / senden · Esc: Titel
 overlay-user-input-missing-answer = Antwort für {$label} fehlt
 overlay-user-input-footer-review = j/k ↑/↓ bewegen | Enter auswählen | e bearbeiten | Ctrl+Y/Ctrl+E zeilenweise scrollen | PgUp/PgDn blättern | Ctrl+X abbrechen
 overlay-user-input-footer-question = Tab/Shift+Tab Seiten | Leertaste umschalten | Ctrl+D löschen | Ctrl+Y/Ctrl+E zeilenweise scrollen | PgUp/PgDn blättern | Ctrl+X abbrechen
@@ -3102,3 +3103,5 @@ btw-stopped = Angehalten · Teilantwort bleibt erhalten
 
 transcript-rich-fallback = Vorschau nicht verfügbar: {$reason}. Der Quelltext folgt.
 transcript-interactive-app = Öffnen Sie diese App in Agena Web, um Oberfläche und Dienste zu verwenden.
+
+overlay-user-input-defer = Später bearbeiten

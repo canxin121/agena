@@ -8,6 +8,8 @@ import MessageItem from '../../src/components/chat/MessageItem.vue'
 import PlanSection from '../../src/components/chat/PlanSection.vue'
 import AgenaInteractionPart from '../../src/components/chat/AgenaInteractionPart.vue'
 import AgenaDiffBlock from '../../src/components/chat/AgenaDiffBlock.vue'
+import AgenaOperationBlock from '../../src/components/chat/AgenaOperationBlock.vue'
+import AgenaAttachmentPreview from '../../src/components/chat/AgenaAttachmentPreview.vue'
 import CodeBlock from '../../src/components/ui/CodeBlock.vue'
 import { installImeCompositionGuard } from '../../src/lib/imeKeyboard'
 import '../../src/style.css'
@@ -16,7 +18,7 @@ installImeCompositionGuard()
 i18n.global.locale.value = 'zh-CN'
 const pinia = createPinia()
 const chat = useChatStore(pinia)
-const state = reactive({ replies: [], failNext: false, clone: false, help: 0, viewKey: 0, clipboard: '' })
+const state = reactive({ replies: [], failNext: false, clone: false, help: 0, viewKey: 0, clipboard: '', opened: [] })
 Object.defineProperty(navigator, 'clipboard', {
   configurable: true,
   value: {
@@ -31,13 +33,13 @@ const code = Array.from({ length: 40 }, (_, i) => `console.log('Keyboard line ${
 const diff =
   'diff --git a/keyboard.ts b/keyboard.ts\n--- a/keyboard.ts\n+++ b/keyboard.ts\n@@ -0,0 +1,240 @@\n' +
   Array.from({ length: 240 }, (_, i) => `+const line${i} = ${i}`).join('\n')
-const option = (label, description = '') => ({ label, description })
-const question = (text, options = [], multiple = false) => ({
+const option = (label, description = '', custom = false) => ({ label, description, custom })
+const question = (text, options = [], multiple = false, allow_custom = true) => ({
   question: text,
   header: '',
   options,
   multiple,
-  allow_custom: true,
+  allow_custom,
 })
 const requests = [
   {
@@ -45,9 +47,14 @@ const requests = [
     title: 'Ask fixture',
     input_kind: 'ask_user',
     questions: [
-      question('选择部署环境', [option('Staging'), option('Production')]),
-      question('选择需要执行的检查', [option('Types'), option('Build'), option('Lint')], true),
-      question('补充说明'),
+      question('选择部署环境', [option('Staging'), option('Production'), option('自定义回答', '', true)], false, false),
+      question(
+        '选择需要执行的检查',
+        [option('Types', '检查 TypeScript 类型'), option('Build'), option('Lint'), option('自定义检查', '', true)],
+        true,
+        false,
+      ),
+      question('补充说明', [option('自定义回答', '请填写补充说明', true)], false, false),
     ],
   },
   {
@@ -244,6 +251,37 @@ createApp({
         }),
         h('section', { 'data-fixture-code': 'true' }, h(CodeBlock, { code, lang: 'js' })),
         h('section', { 'data-fixture-diff': 'true' }, h(AgenaDiffBlock, { diff })),
+        h('section', { 'data-fixture-resources': 'true', class: 'space-y-1.5' }, [
+          h(AgenaOperationBlock, {
+            block: {
+              type: 'search_results',
+              results: [
+                {
+                  title: '交互部件导航参考与设计说明 Keyboard navigation reference'.repeat(4),
+                  uri: 'https://example.test/reference/keyboard-navigation',
+                  snippet: '可操作的资源具有独立边界，说明文字继续保持可读。',
+                },
+                { title: '无链接的上下文', snippet: '没有目标地址时，不显示假的操作入口。' },
+              ],
+            },
+          }),
+          h(AgenaAttachmentPreview, {
+            attachment: {
+              key: 'keyboard-reference',
+              label: '交互部件键盘导航设计参考 keyboard-navigation-reference.md',
+              kind: 'file',
+              mime: 'text/markdown',
+              path: 'docs/keyboard-navigation-reference.md',
+              url: '',
+              sizeBytes: 4096,
+              width: null,
+              height: null,
+              durationMs: null,
+              pageCount: null,
+            },
+            onOpen: (path, url) => state.opened.push({ path, url }),
+          }),
+        ]),
         state.clone
           ? h(AgenaInteractionPart, {
               interaction: render.renderBlocks.value[0].displayParts[1] && {

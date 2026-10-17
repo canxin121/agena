@@ -276,6 +276,33 @@ impl App {
             self.last_transcript_click = None;
             self.transcript
                 .set_text_selection(self.layout.transcript_body.width, gesture.selection());
+        } else if self.transcript.focus_pointer_control(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            position,
+        ) {
+            self.last_transcript_click = None;
+            let option = self
+                .transcript
+                .control_at_cursor(self.layout.transcript_body.width)
+                .is_some_and(|control| {
+                    matches!(
+                        control.action,
+                        agena_tui_transcript::TranscriptControlAction::UserInput {
+                            kind: agena_tui_transcript::InteractionLineKind::AskOption { .. }
+                                | agena_tui_transcript::InteractionLineKind::AskCustomRow { .. },
+                            ..
+                        }
+                    )
+                });
+            self.handle_active_interaction_action(crossterm::event::KeyEvent::new(
+                if option {
+                    crossterm::event::KeyCode::Char(' ')
+                } else {
+                    crossterm::event::KeyCode::Enter
+                },
+                crossterm::event::KeyModifiers::NONE,
+            ));
         } else {
             self.select_completed_transcript_click(position);
         }

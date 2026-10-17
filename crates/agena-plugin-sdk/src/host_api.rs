@@ -687,6 +687,9 @@ pub struct AskUserOption {
     pub label: String,
     #[serde(default)]
     pub description: String,
+    /// Select this option to enter a custom answer; no other options are required.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

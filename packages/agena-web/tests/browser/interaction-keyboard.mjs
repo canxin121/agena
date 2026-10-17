@@ -42,14 +42,162 @@ function check(name) {
   checks.push(name)
   console.log(`PASS ${name}`)
 }
+async function assertCompactChoices() {
+  const layout = await page.evaluate(() => {
+    const rowHeight =
+      parseFloat(getComputedStyle(document.documentElement).fontSize) *
+      (matchMedia('(pointer: coarse)').matches ? 2.25 : 2)
+    const rows = Array.from(
+      document.querySelectorAll('.interaction-choice, .part-action, .part-disclosure, .part-link, .part-toggle'),
+    )
+      .filter((row) => row.getBoundingClientRect().height > 0)
+      .map((row) => {
+        const style = getComputedStyle(row)
+        return {
+          height: row.getBoundingClientRect().height,
+          width: row.getBoundingClientRect().width,
+          available: row.parentElement.clientWidth,
+          border: parseFloat(style.borderTopWidth),
+          background: style.backgroundColor,
+          outlined: row.matches('.interaction-choice, .part-action'),
+          iconOnly: row.classList.contains('part-action-icon'),
+          label: row.textContent.trim().slice(0, 80),
+        }
+      })
+    const workspaces = Array.from(document.querySelectorAll('.interaction-workspace')).map((workspace) => ({
+      width: workspace.getBoundingClientRect().width,
+      gap: parseFloat(getComputedStyle(workspace).rowGap),
+    }))
+    return {
+      rowHeight,
+      rows,
+      workspaces,
+      maxWidth: parseFloat(getComputedStyle(document.documentElement).fontSize) * 48,
+    }
+  })
+  assert.ok(layout.rows.length >= 8)
+  for (const row of layout.rows) {
+    assert.ok(Math.abs(row.height - layout.rowHeight) <= 1, `Choice grew to ${row.height}px: ${row.label}`)
+    assert.ok(row.width <= row.available + 1, `Choice overflows its pane: ${row.label}`)
+    if (row.outlined) {
+      assert.ok(row.border >= 1, `Choice lacks its visible boundary: ${row.label}`)
+      assert.notEqual(row.background, 'rgba(0, 0, 0, 0)', `Choice lacks its button surface: ${row.label}`)
+    }
+    if (row.iconOnly) assert.ok(Math.abs(row.width - layout.rowHeight) <= 1, 'Icon controls keep square targets')
+  }
+  for (const workspace of layout.workspaces) {
+    assert.ok(workspace.width <= layout.maxWidth + 1, 'Action list stretches beyond its reading width')
+    assert.ok(workspace.gap >= 4, 'Options need visible space between their boundaries')
+  }
+}
+async function assertPlainTextFlow() {
+  const surfaces = await page.evaluate(() =>
+    Array.from(
+      document.querySelectorAll(
+        '[data-transcript-interaction-part], .interaction-result, .part-disclosure, .part-link, .part-toggle, .part-toolbar, [data-content-output], [data-activity-output]',
+      ),
+    )
+      .filter((element) => element.getBoundingClientRect().height > 0)
+      .map((element) => {
+        const style = getComputedStyle(element)
+        return {
+          label: element.textContent.trim().slice(0, 80),
+          borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+          background: style.backgroundColor,
+        }
+      }),
+  )
+  assert.ok(surfaces.length > 0)
+  for (const surface of surfaces) {
+    assert.ok(
+      surface.borders.every((border) => parseFloat(border) === 0),
+      `Content gained a nested frame: ${surface.label}`,
+    )
+    assert.equal(surface.background, 'rgba(0, 0, 0, 0)', `Content gained a panel fill: ${surface.label}`)
+  }
+}
+async function stressChoiceCopy() {
+  await page.evaluate(async () => {
+    for (const part of interactionKeyboardFixture.message.parts) {
+      const choice = part.agenaContent.user_input?.requests[0]?.request.questions[0]?.options[0]
+      if (!choice) continue
+      choice.label = '超长选项中文🙂LongLabel'.repeat(80)
+      choice.description = Array.from({ length: 80 }, (_, i) => `第 ${i + 1} 段说明 ${'long-text-'.repeat(20)}`).join(
+        '\n',
+      )
+    }
+    await interactionKeyboardFixture.revise()
+  })
+  await page.waitForFunction(() =>
+    document
+      .querySelector('[data-interaction-request-id="review"] .interaction-choice-label')
+      ?.textContent.includes('超长选项'),
+  )
+}
 try {
   await mkdir(output, { recursive: true })
   await reset()
+  await assertCompactChoices()
+  await assertPlainTextFlow()
+  assert.equal(await page.locator('[data-fixture-resources] a').count(), 1)
+  assert.equal(
+    await page.locator('[data-fixture-resources] a').getAttribute('href'),
+    'https://example.test/reference/keyboard-navigation',
+  )
+  await tabTo('[data-fixture-resources] button')
+  await page.keyboard.press('Enter')
+  assert.deepEqual(await page.evaluate(() => interactionKeyboardFixture.state.opened), [
+    { path: 'docs/keyboard-navigation-reference.md', url: '' },
+  ])
+  await page.evaluate(() => document.documentElement.classList.add('dark'))
+  await assertCompactChoices()
+  await assertPlainTextFlow()
+  await page.evaluate(() => document.documentElement.classList.remove('dark'))
+  await tabTo('[data-part-id="1"] [data-tool-details-toggle]')
+  await page.keyboard.press('Enter')
+  await page.locator('[data-part-id="1"] [data-tool-detail-section="input"]').waitFor()
+  await assertCompactChoices()
+  await assertPlainTextFlow()
+  await page.keyboard.press('Enter')
+  check('context, resources and technical disclosures stay unframed while their native controls remain reachable')
+  await stressChoiceCopy()
+  await assertCompactChoices()
+  check('desktop choices retain one-row height with long labels, multiline descriptions and emoji')
+  await reset()
   assert.ok(await activeMatches('body'))
+  // Drag a few pixels within the choice text, then release on the same row.
+  // Native labels must remain controls instead of starting transcript selection.
+  for (const key of ['question:0:option:Production', 'question:0:option:Staging']) {
+    const input = page.locator(control(ask, key))
+    const label = input.locator('..').locator('.interaction-choice-label')
+    const box = await label.boundingBox()
+    await page.mouse.move(box.x + 4, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + 9, box.y + box.height / 2 + 1, { steps: 3 })
+    await page.mouse.up()
+    assert.equal(await input.isChecked(), true)
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString() || ''), '')
+  }
+  assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.length), 0)
+  await page.locator(control(ask, 'question:0:option:Production')).focus()
+  await page.keyboard.press('ArrowRight')
+  const multiInput = page.locator(control(ask, 'question:1:option:Types'))
+  const multiBox = await multiInput.locator('..').locator('.interaction-choice-description').boundingBox()
+  for (const expected of [true, false]) {
+    await page.mouse.move(multiBox.x + 4, multiBox.y + multiBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(multiBox.x + 10, multiBox.y + multiBox.height / 2 + 1, { steps: 3 })
+    await page.mouse.up()
+    assert.equal(await multiInput.isChecked(), expected, 'a slight drag activates the option exactly once')
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString() || ''), '')
+  }
+  check('clicks with slight pointer movement over labels and descriptions select reliably exactly once')
+  await reset()
   await tabTo(`${ask} input`)
   check('pending interactions are reachable with Tab without taking focus on mount')
   await page.keyboard.press('ArrowDown')
   await focused(control(ask, 'question:0:option:Production'))
+  await page.keyboard.press('Space')
   await page.keyboard.press('Enter')
   await focused(control(ask, 'question:1:option:Types'))
   assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.length), 0)
@@ -60,9 +208,13 @@ try {
   assert.equal(await page.locator(control(ask, 'question:1:option:Build')).isChecked(), false)
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Space')
+  await focused(control(ask, 'question:1:option:Lint'))
+  assert.equal(await page.locator(control(ask, 'question:1:option:Lint')).isChecked(), true)
   await page.keyboard.press('Enter')
   await focused(control(ask, 'question:2:custom'))
-  await page.keyboard.press('Enter')
+  assert.equal(await page.locator(`${ask} input[type="radio"]`).count(), 1)
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator(control(ask, 'question:2:custom')).isChecked(), true)
   await focused(`${ask} textarea`)
   await page.keyboard.insertText('中文补充')
   await page.keyboard.press('Shift+Enter')
@@ -95,33 +247,47 @@ try {
   // Ctrl+D may edit text on macOS; restore the intended answer using keyboard input.
   await page.keyboard.press('Meta+a')
   await page.keyboard.insertText('中文补充\n第二行')
+  await tabTo(control(ask, 'page:review'))
   await page.keyboard.press('Enter')
   await focused(control(ask, 'summary:0'))
-  assert.equal(await page.locator(`${ask} [data-interaction-summary] > div`).count(), 3)
+  assert.equal(await page.locator(`${ask} [data-interaction-summary] > button`).count(), 3)
   await page.keyboard.press('Enter')
   await focused(control(ask, 'question:0:option:Staging'))
   assert.equal(await page.locator(control(ask, 'question:0:option:Production')).isChecked(), true)
+  await page.keyboard.press('ArrowLeft')
+  await focused(control(ask, 'question:0:option:Staging'))
   await page.keyboard.press('ArrowRight')
+  await focused(control(ask, 'question:1:option:Types'))
   assert.equal(await page.locator(control(ask, 'question:1:option:Types')).isChecked(), true)
   assert.equal(await page.locator(control(ask, 'question:1:option:Lint')).isChecked(), true)
+  await page.keyboard.press('h')
+  await focused(control(ask, 'question:0:option:Staging'))
+  await page.keyboard.press('l')
+  await focused(control(ask, 'question:1:option:Types'))
+  await page.keyboard.press('Enter')
+  await focused(control(ask, 'question:2:custom'))
   await page.keyboard.press('ArrowRight')
-  await page.keyboard.press('ArrowRight')
-  await focused(control(ask, 'summary:0'))
-  await tabTo(control(ask, 'action:submit'))
+  await focused(control(ask, 'question:2:custom'))
+  assert.equal(await page.locator(`${ask} input[type="radio"]`).count(), 1)
+  await page.keyboard.press('Space')
+  assert.equal(await page.locator(control(ask, 'question:2:custom')).isChecked(), true)
+  await focused(`${ask} textarea`)
+  assert.equal(await page.locator(`${ask} textarea`).inputValue(), '中文补充\n第二行')
   await page.keyboard.press('Enter')
   await focused('[data-part-id="1"] [data-transcript-vim-toggle="true"]')
   assert.deepEqual(await page.evaluate(() => interactionKeyboardFixture.state.replies[0]), {
     id: 'ask',
     payload: { answers: { 0: ['Production'], 1: ['Types', 'Lint'], 2: ['中文补充\n第二行'] } },
   })
-  check('summary editing preserves answers and submission returns focus to the owning part')
+  await assertPlainTextFlow()
+  check('horizontal question navigation preserves answers; final Enter submits directly and restores part focus')
 
   await reset()
   await tabTo(`${ask} input`)
   await page.keyboard.press('Control+Enter')
-  await focused(control(ask, 'summary:0'))
-  assert.equal(await page.locator(control(ask, 'action:submit')).isDisabled(), true)
-  await page.keyboard.press('Control+Enter')
+  await focused(`${ask} input`)
+  assert.equal(await page.locator(`${ask} [data-interaction-summary]`).count(), 0)
+  await page.keyboard.press('Enter')
   await focused(`${ask} input`)
   assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.length), 0)
   check('incomplete answers cannot be submitted and keyboard validation returns to the unanswered question')
@@ -160,13 +326,14 @@ try {
   await page.keyboard.press('Control+Enter')
   assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.length), 0)
   check('review Markdown controls keep their keys without opening the answer editor or submitting a decision')
-  await tabTo(`${review} input`)
+  const approveOn = control(review, 'question:0:option:Approve with autorun on')
+  const approveOff = control(review, 'question:0:option:Approve with autorun off')
+  await tabTo(approveOn)
   assert.match(await page.locator(review).innerText(), /批准并开启自动执行/)
   assert.doesNotMatch(
     await page.locator(review).innerText(),
     /Approve with|Return to planning|Reject the current|Cancel the plan entirely/,
   )
-  await page.keyboard.press('Space')
   for (const locale of ['en-US', 'es-ES', 'fr-FR', 'hi-IN', 'pt-BR', 'ar-SA', 'zh-CN']) {
     await page.evaluate((locale) => interactionKeyboardFixture.locale(locale), locale)
     await page.waitForFunction(
@@ -176,37 +343,43 @@ try {
       locale,
     )
     if (locale !== 'en-US') assert.doesNotMatch(await page.locator(review).innerText(), /Approve with autorun on/)
-    assert.equal(await page.locator(`${review} input`).first().isChecked(), true)
+    assert.equal(await page.locator(review).locator('input[type="radio"]').count(), 0)
+    assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.length), 0)
   }
   await page.evaluate(() => {
     interactionKeyboardFixture.state.clone = true
   })
   await page.locator(review).nth(1).waitFor()
-  assert.notEqual(
-    await page.locator(`${review} input`).first().getAttribute('name'),
-    await page.locator(review).nth(1).locator('input').first().getAttribute('name'),
-  )
-  assert.equal(await page.locator(review).nth(1).locator('input').first().isChecked(), true)
+  assert.equal(await page.locator(approveOn).count(), 2)
+  assert.equal(await page.locator(review).nth(1).locator('[data-selected="true"]').count(), 0)
   await page.evaluate(() => {
     interactionKeyboardFixture.state.clone = false
   })
-  await page.keyboard.press('ArrowDown')
+  await focused(approveOn)
+  await page.keyboard.press('j')
+  await focused(approveOff)
   await page.keyboard.press('Enter')
   await focused('[data-part-id="2"] [data-transcript-vim-toggle="true"]')
   assert.deepEqual(await page.evaluate(() => interactionKeyboardFixture.state.replies.at(-1)), {
     id: 'review',
     payload: { answers: { 0: ['Approve with autorun off'] } },
   })
-  assert.match(await page.locator(review).innerText(), /答案: 批准并关闭自动执行/)
+  assert.equal(await page.locator(`${review} [data-interaction-control]`).count(), 0)
+  assert.equal(
+    await page.locator(`${review} [data-interaction-result] .interaction-result-value`).textContent(),
+    '批准并关闭自动执行',
+  )
+  assert.equal(await page.locator(`${review} .interaction-choice`).count(), 0)
+  await assertPlainTextFlow()
   check('all seven locales translate review options live while replies keep the original protocol values')
-  check('duplicate request views use independent native radio groups')
+  check('review cards activate directly and moving their cursor never records an answer')
 
-  await tabTo(control(permission, 'permission:reject'))
-  await page.keyboard.press('End')
+  await tabTo(control(permission, 'permission:once'))
+  await page.keyboard.press('l')
   await focused(control(permission, 'permission:always'))
-  await page.keyboard.press('Home')
+  await page.keyboard.press('End')
   await focused(control(permission, 'permission:reject'))
-  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Home')
   await focused(control(permission, 'permission:once'))
   await page.evaluate(() => {
     interactionKeyboardFixture.state.failNext = true
@@ -218,7 +391,7 @@ try {
   await page.keyboard.press('Enter')
   await focused('[data-part-id="3"] [data-transcript-vim-toggle="true"]')
   assert.equal(await page.evaluate(() => interactionKeyboardFixture.state.replies.at(-1).payload.decision), 'once')
-  check('permission arrows, Home/End, API failure retry and successful focus restoration work')
+  check('permission action movement, Home/End, API failure retry and successful focus restoration work')
 
   await tabTo('#composer')
   await page.keyboard.press('Control+p')
@@ -329,7 +502,7 @@ try {
   check('expanded diff viewports retain keyboard ownership while scrolling')
 
   await reset()
-  await tabTo(`${review} input`)
+  await tabTo(approveOn)
   await page.keyboard.press('e')
   await focused(`${review} textarea`)
   await page.keyboard.insertText('请修改步骤二')
@@ -337,11 +510,19 @@ try {
   await focused('[data-part-id="2"] [data-transcript-vim-toggle="true"]')
   await tabTo(review)
   await page.keyboard.press('Escape')
-  assert.equal(await page.locator(`${review} textarea`).inputValue(), '请修改步骤二')
-  assert.match(await page.locator(review).innerText(), /答案: 请修改步骤二/)
+  assert.equal(
+    await page.locator(`${review} [data-interaction-result] .interaction-result-value`).textContent(),
+    '请修改步骤二',
+  )
+  assert.equal(await page.locator(`${review} textarea, ${review} [data-interaction-control]`).count(), 0)
   check('Escape on a completed custom review preserves the committed answer')
 
   await page.setViewportSize({ width: 390, height: 844 })
+  await reset()
+  await stressChoiceCopy()
+  await assertCompactChoices()
+  await assertPlainTextFlow()
+  check('narrow panes keep every option compact without horizontal overflow')
   await reset()
   await tabTo(`${ask} input`)
   await page.keyboard.press('Enter')

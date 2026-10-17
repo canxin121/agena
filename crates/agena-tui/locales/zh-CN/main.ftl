@@ -931,7 +931,8 @@ overlay-user-input-unanswered = 未回答
 overlay-user-input-custom-empty = 按 Space 输入自定义回答
 overlay-user-input-review-feedback = 给 Agent 的反馈
 overlay-user-input-review-feedback-empty = 按 Enter 或 e 输入反馈，或选择一个决定
-overlay-user-input-review-footer-hint = 选项上 Enter 提交 · 标题上 Enter 收起/展开
+overlay-user-input-review-footer-hint = H J K L / 方向键移动 · Enter 操作 · Esc 返回标题
+overlay-user-input-question-footer-hint = ↑/↓ J/K 选项 · ←/→ H/L 切题 · 空格选择 · Enter 下一题 / 提交 · Esc 回标题
 overlay-user-input-missing-answer = {$label} 还没有回答
 overlay-user-input-footer-review = j/k ↑/↓ 移动 | Enter 选择 | e 编辑 | Ctrl+Y/Ctrl+E 逐行滚动 | PgUp/PgDn 翻页 | Ctrl+X 取消
 overlay-user-input-footer-question = Tab/Shift+Tab 页面 | Space 切换 | Ctrl+D 清除 | Ctrl+Y/Ctrl+E 逐行滚动 | PgUp/PgDn 翻页 | Ctrl+X 取消
@@ -2587,3 +2588,5 @@ usage-filter-subagents-excluded = 排除
 
 transcript-rich-fallback = 无法预览：{$reason}。下方保留原始源码。
 transcript-interactive-app = 在 Agena Web 中打开此交互应用，即可操作界面和运行后端服务。
+
+overlay-user-input-defer = 稍后处理

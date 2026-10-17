@@ -509,6 +509,9 @@ pub struct RenderedTranscript {
 #[derive(Debug, Clone)]
 /// A rendered line of the transcript.
 pub struct RenderedLine {
+    /// Actions at their actual terminal columns. Wrapped labels and details
+    /// repeat the same action so they remain one navigation stop.
+    pub controls: Vec<RenderedTranscriptControl>,
     /// Network images that become eligible for loading when this row is visible.
     pub remote_image_sources: Vec<String>,
     pub text: String,
@@ -572,6 +575,7 @@ impl RenderedLine {
     pub fn plain(text: impl Into<String>, style: Style) -> Self {
         let text = text.into();
         Self {
+            controls: Vec::new(),
             rich_line: Some(Line::from(Span::styled(text.clone(), style))),
             copy_text: stable_copy_text(&text),
             text,
@@ -594,6 +598,7 @@ impl RenderedLine {
             .collect::<String>();
         let style = line.style;
         Self {
+            controls: Vec::new(),
             copy_text: stable_copy_text(&text),
             text,
             copy_column: 0,
@@ -652,6 +657,26 @@ impl RenderedLine {
             Style::default().fg(agena_tui_components::theme::muted_color()),
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedTranscriptControl {
+    pub columns: std::ops::Range<usize>,
+    pub action: TranscriptControlAction,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptControlAction {
+    Permission {
+        request_id: String,
+        /// None opens the full permission controls, including scope and rules.
+        decision: Option<agena_domain::PermissionReplyKind>,
+    },
+    UserInput {
+        request_id: String,
+        kind: crate::interaction_view::InteractionLineKind,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -721,6 +746,8 @@ pub struct TranscriptClick {
 pub struct TranscriptCursorAnchor {
     pub key: crate::TranscriptNodeKey,
     pub line_offset: usize,
+    /// Keep the same action through wrapping, resize and streamed updates.
+    pub action: Option<TranscriptControlAction>,
 }
 
 /// The cursor is the transcript's primary navigation state. The viewport is a

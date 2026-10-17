@@ -5,7 +5,11 @@ const NATIVE_CONTROL_SELECTOR =
 
 /** Native controls and terminal selection own their pointer gestures. */
 export function transcriptNativeControl(target: Element): Element | null {
-  return target.closest(NATIVE_CONTROL_SELECTOR)
+  return (
+    target.closest(NATIVE_CONTROL_SELECTOR) ||
+    target.closest('label')?.querySelector('input[type="radio"], input[type="checkbox"]') ||
+    null
+  )
 }
 
 /** Move through a reply's loading controls in their visible DOM order. */

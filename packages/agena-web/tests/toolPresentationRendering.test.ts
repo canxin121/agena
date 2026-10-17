@@ -104,6 +104,65 @@ function controlTimers() {
 
 const diff = '--- a/src/a.rs\n+++ b/src/a.rs\n@@ -99,2 +99,2 @@\n-old\n+new\n context\n'
 
+test('search and citation resources expose real links only when they have a destination', async () => {
+  const html = await render('/src/components/chat/AgenaOperationBlock.vue', {
+    block: {
+      type: 'search_results',
+      results: [
+        { title: 'Agena reference', uri: 'https://example.test/reference', snippet: 'Full result description' },
+        { title: 'Local context', snippet: 'A result without a link remains readable' },
+        { title: 'Empty destination', uri: '  ', snippet: 'Whitespace is not an actionable resource' },
+      ],
+    },
+  })
+  assert.equal((html.match(/<a\s/g) || []).length, 1)
+  assert.match(html, /href="https:\/\/example\.test\/reference"/)
+  assert.match(html, /aria-label="Agena reference"/)
+  assert.match(html, /rel="noopener noreferrer"/)
+  assert.match(html, /Full result description/)
+  assert.match(html, /Local context/)
+  assert.match(html, /A result without a link remains readable/)
+  assert.match(html, /Empty destination/)
+  const citation = await render('/src/components/chat/AgenaOperationBlock.vue', {
+    block: { type: 'citation', title: 'Unlinked citation', text: 'Keep the quoted context' },
+  })
+  assert.match(citation, /Unlinked citation/)
+  assert.match(citation, /Keep the quoted context/)
+  assert.doesNotMatch(citation, /<a\s|<button\s/)
+})
+
+test('attachment rows preserve native file opening, URL links and noninteractive unavailable resources', async () => {
+  const attachment = {
+    key: 'preview',
+    label: 'preview.png',
+    kind: 'image',
+    mime: 'image/png',
+    path: '',
+    url: 'https://example.test/preview.png',
+    sizeBytes: 2048,
+    width: 640,
+    height: 480,
+    durationMs: null,
+    pageCount: null,
+  }
+  const remote = await render('/src/components/chat/AgenaAttachmentPreview.vue', { attachment })
+  assert.equal((remote.match(/<a\s/g) || []).length, 1)
+  assert.equal((remote.match(/<button\s/g) || []).length, 1)
+  assert.match(remote, /aria-label="Open: preview.png"/)
+  assert.match(remote, /aria-description="image\/png · 2.0 KB · 640×480"/)
+  const local = await render('/src/components/chat/AgenaAttachmentPreview.vue', {
+    attachment: { ...attachment, path: 'images/preview.png' },
+    workspaceRoot: '/project',
+  })
+  assert.equal((local.match(/<button\s/g) || []).length, 2)
+  assert.doesNotMatch(local, /<a\s/)
+  const unavailable = await render('/src/components/chat/AgenaAttachmentPreview.vue', {
+    attachment: { ...attachment, url: '' },
+  })
+  assert.match(unavailable, /preview.png/)
+  assert.doesNotMatch(unavailable, /<a\s|<button\s|<img\s/)
+})
+
 test('human output and actual diff remain visible while both technical levels are closed', async () => {
   const html = await render('/src/components/chat/AgenaOperationPart.vue', {
     expanded: true,

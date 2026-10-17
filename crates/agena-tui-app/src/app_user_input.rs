@@ -72,136 +72,27 @@ impl App {
             })
     }
 
-    /// Derive the review decision selection from the transcript cursor — the
-    /// cursor IS the review cursor — and stage the derived marker on the
-    /// interaction views before the renderer draws. Called just before every
-    /// render, so every navigation path (j/k, PgUp/PgDn, Space, Ctrl+U/D,
-    /// gg/G, h/l, mouse) keeps the decision selection in sync through one call
-    /// site. Only invalidates the render cache when the derived value changed,
-    /// so plain cursor movement over non-interaction content stays cheap.
-    ///
-    /// Ask-user parts are skipped entirely: their wizard page and option cursor
-    /// are presentation state, rebuilt by [`Self::sync_interaction_documents`]
-    /// after every wizard mutation — never overwritten by the cursor.
-    pub(crate) fn refresh_interaction_selection(&mut self, width: u16) {
-        if self.user_input_interactions.is_empty() {
-            return;
-        }
-        if self
-            .transcript
-            .interaction_views
-            .values()
-            .any(|view| view.plan_width != width)
-        {
-            self.transcript.interaction_views = self
-                .user_input_interactions
-                .iter()
-                .map(|(id, dialog)| {
-                    (
-                        id.clone(),
-                        Self::interaction_view_for(&dialog.request, &dialog.presentation, width),
-                    )
-                })
-                .collect();
-            self.transcript.invalidate_render();
-        }
-        let Some(hit) = self.interaction_cursor_hit(width) else {
-            return;
-        };
-        let Some(mut view) = self
-            .transcript
-            .interaction_views
-            .get(&hit.request_id)
-            .cloned()
-        else {
-            return;
-        };
-        let Some(dialog) = self.user_input_interactions.get(&hit.request_id) else {
-            return;
-        };
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let changed = match hit.line_kind {
-            agena_tui_transcript::InteractionLineKind::ReviewOption { option_index } => {
-                if view.selected_option == Some(option_index) {
-                    false
-                } else {
-                    view.selected_option = Some(option_index);
-                    true
-                }
-            }
-            agena_tui_transcript::InteractionLineKind::ReviewCustomLabel
-            | agena_tui_transcript::InteractionLineKind::ReviewEditor => {
-                let custom_index = layouts
-                    .first()
-                    .map(|layout| layout.options_len)
-                    .unwrap_or(0);
-                if view.selected_option == Some(custom_index) {
-                    false
-                } else {
-                    view.selected_option = Some(custom_index);
-                    true
-                }
-            }
-            _ => false,
-        };
-        if changed {
-            self.transcript
-                .interaction_views
-                .insert(hit.request_id, view);
-            self.transcript.invalidate_render();
-        }
-    }
-
     /// Derive the review decision hit under the transcript cursor. The
-    /// transcript cursor IS the review cursor: the body offset and row kind
-    /// come from where the cursor sits on the rendered part, using the exact
-    /// layout arithmetic the renderer draws. Ask-user parts return `None` —
-    /// the wizard is presentation-driven, not cursor-row-driven.
+    /// renderer records the action on every wrapped row of a control.
     fn interaction_cursor_hit(&mut self, width: u16) -> Option<InteractionCursorHit> {
-        let node = self.transcript.current_cursor_node_cloned(width)?;
-        if !node.expanded {
+        let control = self.transcript.control_at_cursor(width)?;
+        let agena_tui_transcript::TranscriptControlAction::UserInput { request_id, kind } =
+            control.action
+        else {
             return None;
-        }
-        let request_id = self.interaction_request_id_for_node_key(&node.key)?;
-        let cursor_line = self.transcript.navigation_cursor_line()?;
-        if cursor_line < node.start_line || cursor_line >= node.end_line {
-            return None;
-        }
+        };
         let dialog = self.user_input_interactions.get(&request_id)?;
-        if !agena_tui_transcript::request_is_review_decision(&dialog.request) {
-            return None;
-        }
-        let view = self.transcript.interaction_views.get(&request_id)?;
-        // Body offset: the headline row precedes the body.
-        let body_offset = cursor_line
-            .saturating_sub(node.start_line)
-            .saturating_sub(1);
-        let editing_custom = dialog.presentation.review().is_editing_custom();
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let line_kind = agena_tui_transcript::classify_interaction_line(
-            &layouts,
-            view.plan_body_lines,
-            body_offset,
-            editing_custom,
-        );
-        Some(InteractionCursorHit {
-            request_id,
-            line_kind,
-        })
+        agena_tui_transcript::request_is_review_decision(&dialog.request).then_some(
+            InteractionCursorHit {
+                request_id,
+                line_kind: kind,
+            },
+        )
     }
 
-    /// Route a transcript key into the active pending user-input interaction.
-    /// This is a **thin context-aware action layer**. Plan review only
-    /// intercepts `Enter` on a decision row,
-    /// `Ctrl+X` to cancel, `e` on the custom-feedback label, and `Esc` to
-    /// collapse — every other key falls through to the normal transcript
-    /// dispatch. Ask-user is a paged wizard: while the cursor is on the
-    /// expanded part, Up/Down/Left/Right/Enter/Esc drive the presentation page
-    /// and option cursor, and everything else still falls through (the chat
-    /// keeps owning paging and navigation — "everything is a part", no
-    /// injected review component).
+    /// Actions belong to the control under the transcript cursor. All motion
+    /// uses the shared text/control cursor. Questionnaire controls reserve
+    /// horizontal keys for pages; vertical motion can still leave the part.
     pub(crate) fn handle_active_interaction_action(&mut self, key: KeyEvent) -> bool {
         if self.overlay.is_some()
             || self.focus != Focus::Transcript
@@ -209,95 +100,72 @@ impl App {
         {
             return false;
         }
-        // While the inline custom editor is open it owns the whole key stream.
         if self.interaction_editing.is_some() {
             return self.handle_interaction_edit_key(key);
         }
-        // The transcript cursor marks which pending part is active; the row
-        // kind below derives the review decision, or the ask-user wizard takes
-        // over the arrows/Enter for the whole part.
+        if !self.transcript.has_visual_selection()
+            && !self.transcript_yank_pending
+            && self.handle_inline_permission_key(key)
+        {
+            return true;
+        }
         let Some(request_id) = self.active_user_input_interaction_request_id() else {
             return false;
         };
+        if matches!(key.code, KeyCode::Char('x')) && key.modifiers == KeyModifiers::CONTROL {
+            self.cancel_active_interaction(&request_id);
+            return true;
+        }
+        if self.transcript.has_visual_selection()
+            || self.transcript_yank_pending
+            || self.transcript_goto_pending
+            || self.transcript_viewport_pending
+            || self.transcript_find_pending.is_some()
+            || self.transcript_text_object_pending.is_some()
+        {
+            return false;
+        }
         let review = self
             .user_input_interactions
             .get(&request_id)
             .is_some_and(|dialog| {
                 agena_tui_transcript::request_is_review_decision(&dialog.request)
             });
-        // Ctrl+X cancels the request; it is unbound in the Transcript context,
-        // so it is safe to own it while the cursor is on a pending part.
-        if matches!(key.code, KeyCode::Char('x')) && key.modifiers == KeyModifiers::CONTROL {
-            self.cancel_active_interaction(&request_id);
+        let width = self.layout.transcript_body.width;
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            self.transcript
+                .focus_part_headline(width, self.layout.transcript_body.height);
             return true;
+        }
+        if self.interaction_reply_in_flight(&request_id)
+            && self
+                .transcript
+                .control_at_cursor(width)
+                .is_some_and(|control| {
+                    matches!(control.action,
+                    agena_tui_transcript::TranscriptControlAction::UserInput { request_id: id, .. }
+                        if id == request_id)
+                })
+        {
+            // A deferred request retains its draft until acknowledgement. It
+            // may still be browsed, but cannot send a competing answer.
+            return key.modifiers.is_empty()
+                && (matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
+                    || (review && key.code == KeyCode::Char('e')));
         }
         if !review {
-            // Ask-user has one visible page: the transcript cursor IS the
-            // option cursor. Left/Right, Space and Enter are owned only
-            // because the cursor sits on the part; Up/Down, `e`, paging and
-            // everything else fall through to the normal transcript dispatch.
             return self.handle_ask_user_key(key);
         }
-        // Review: the transcript cursor IS the decision cursor — the hit
-        // derives the active request and the row kind from where the cursor
-        // sits on the rendered decision rows.
-        let Some(hit) = self.interaction_cursor_hit(self.layout.transcript_body.width) else {
+        let Some(hit) = self.interaction_cursor_hit(width) else {
             return false;
         };
-        // While the review part is pending, the decision cursor stays confined
-        // INSIDE the expanded part block: `j`/`k` (and the arrow keys) are
-        // owned so the cursor roams only across the plan body and decision
-        // rows, never off onto the message header's role-label column or a
-        // neighbouring part. Plain motions only — a pending operator or
-        // prefix (`3j`, `yj`, `g`, `z`, search, visual selection) still falls
-        // through to the normal transcript dispatch.
-        let action = resolve_tui_key(KeyContext::Transcript, key);
-        if matches!(action, Some(KeyAction::MoveUp | KeyAction::MoveDown))
-            && self.transcript_motion_prefix.is_none()
-            && !self.transcript_yank_pending
-            && !self.transcript_goto_pending
-            && !self.transcript_viewport_pending
-            && self.transcript_find_pending.is_none()
-            && self.transcript_text_object_pending.is_none()
-            && !self.transcript.has_visual_selection()
-        {
-            let width = self.layout.transcript_body.width;
-            let height = self.layout.transcript_body.height;
-            let node = self
-                .transcript
-                .current_cursor_node_cloned(width)
-                .expect("the hit derived a cursor node");
-            let direction = if action == Some(KeyAction::MoveUp) {
-                TranscriptMoveDirection::Up
-            } else {
-                TranscriptMoveDirection::Down
-            };
-            let count = self.transcript_motion_count();
-            let Some(cursor_line) = self.transcript.navigation_cursor_line() else {
-                return false;
-            };
-            // Walk the requested number of rows, stopping at the part
-            // boundary: the headline (part top) is the closest row above, the
-            // last decision/footer row the closest row below.
-            let mut target = cursor_line;
-            for _ in 0..count {
-                let next = match direction {
-                    TranscriptMoveDirection::Up => target.saturating_sub(1),
-                    TranscriptMoveDirection::Down => target.saturating_add(1),
-                };
-                if next < node.start_line || next >= node.end_line {
-                    break;
-                }
-                target = next;
+        match resolve_tui_key(KeyContext::Transcript, key) {
+            Some(KeyAction::Toggle)
+                if hit.line_kind == agena_tui_transcript::InteractionLineKind::AskCancel =>
+            {
+                self.cancel_active_interaction(&hit.request_id);
+                true
             }
-            if target != cursor_line {
-                self.transcript
-                    .move_cursor_to_visual_line_number(width, height, Some(target + 1));
-                self.transcript.invalidate_render();
-            }
-            return true;
-        }
-        match action {
             Some(KeyAction::Toggle) if hit.line_kind.is_submit_eligible() => {
                 self.handle_decision_row_enter(&hit.request_id, hit.line_kind);
                 true
@@ -308,110 +176,159 @@ impl App {
                     agena_tui_transcript::InteractionLineKind::ReviewCustomLabel
                 ) =>
             {
-                // `e` opens the inline custom-feedback editor ("展开即可交互").
                 self.begin_interaction_custom_edit(&hit.request_id);
-                true
-            }
-            Some(KeyAction::CancelSelection)
-                if self.transcript_motion_prefix.is_none()
-                    && !self.transcript_yank_pending
-                    && !self.transcript_goto_pending
-                    && !self.transcript_viewport_pending =>
-            {
-                // Esc with no pending motion prefix collapses the part back to
-                // its configured state; the request stays reachable by
-                // re-expanding the part.
-                self.collapse_active_interaction(&hit.request_id);
                 true
             }
             _ => false,
         }
     }
 
-    /// Route a key while the cursor is on an expanded pending ask-user part
-    /// (the current page). Up/Down and `j`/`k` are NOT owned — the
-    /// transcript cursor is a normal line-by-line cursor and can always leave
-    /// the part (this is the two-cursor bug fix). Left/Right jump the cursor
-    /// to the previous/next question's first option row; Space toggles the
-    /// option under the cursor (or opens the inline custom editor on the 其他
-    /// row); Enter confirms the answer and advances. The summary owns explicit
-    /// submit/cancel actions and jumps to the first missing answer on validation. `e`, Esc, PgUp/PgDn,
-    /// Shift+Space and Ctrl+f are deliberately NOT owned: they fall through to
-    /// the normal transcript dispatch.
+    fn handle_inline_permission_key(&mut self, key: KeyEvent) -> bool {
+        use agena_tui_transcript::TranscriptControlAction;
+        let width = self.layout.transcript_body.width;
+        let Some(control) = self.transcript.control_at_cursor(width) else {
+            return false;
+        };
+        let TranscriptControlAction::Permission {
+            request_id,
+            decision,
+        } = control.action
+        else {
+            return false;
+        };
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            self.transcript
+                .focus_part_headline(width, self.layout.transcript_body.height);
+            return true;
+        }
+        if key.code != KeyCode::Enter || !key.modifiers.is_empty() {
+            return false;
+        }
+        let pending = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| {
+                execution
+                    .session
+                    .state
+                    .pending_interactive_requests()
+                    .iter()
+                    .find(|pending| {
+                        pending
+                            .request
+                            .as_permission()
+                            .is_some_and(|request| request.request_id == request_id)
+                    })
+            })
+            .map(|pending| pending.session_id);
+        let Some(session_id) = pending else {
+            return true;
+        };
+        let request = agena_tui_transcript::parts_entries(&self.transcript.parts)
+            .into_iter()
+            .flat_map(|entry| entry.parts.into_iter())
+            .find_map(|part| match part.content {
+                agena_tui_transcript::TranscriptPartContent::Activity(
+                    agena_tui_transcript::TranscriptActivityContent::Operation(tool),
+                ) => tool
+                    .operation
+                    .authorization
+                    .permissions
+                    .iter()
+                    .find(|record| {
+                        record.reply.is_none() && record.request.request_id == request_id
+                    })
+                    .map(|record| record.request.clone()),
+                _ => None,
+            });
+        let Some(request) = request else {
+            return true;
+        };
+        if decision == Some(crate::PermissionReplyKind::AllowAlways) {
+            let mut dialog = self.build_permission_overlay(session_id, request);
+            dialog
+                .presentation
+                .open_scope(agena_tui::permission_prompt::PermissionPromptDecision::Allow);
+            self.overlay = Some(Overlay::Permission(dialog));
+        } else if let Some(kind) = decision {
+            self.submit_permission_reply(
+                session_id,
+                request,
+                kind,
+                None,
+                ui_text::permission_reply_label(&self.i18n, kind),
+            );
+        } else {
+            let mut dialog = self.build_permission_overlay(session_id, request);
+            let _ = dialog.presentation.open_details();
+            self.overlay = Some(Overlay::Permission(dialog));
+        }
+        true
+    }
+
     fn handle_ask_user_key(&mut self, key: KeyEvent) -> bool {
         let Some(hit) = self.ask_user_cursor_hit(self.layout.transcript_body.width) else {
             return false;
         };
-        if key.modifiers != KeyModifiers::NONE {
+        if !key.modifiers.is_empty() {
             return false;
         }
-        // Left/Right are owned only for plain motions: a pending operator or
-        // prefix (`3l`, `yj`, `g`, `z`, search, visual selection) still falls
-        // through, mirroring the review Up/Down guard.
-        let plain_motion = self.transcript_motion_prefix.is_none()
-            && !self.transcript_yank_pending
-            && !self.transcript_goto_pending
-            && !self.transcript_viewport_pending
-            && self.transcript_find_pending.is_none()
-            && self.transcript_text_object_pending.is_none()
-            && !self.transcript.has_visual_selection();
-        if plain_motion {
-            match resolve_tui_key(KeyContext::Transcript, key) {
-                Some(KeyAction::MoveLeft) => {
-                    return self.ask_jump_question(&hit.request_id, hit.line_kind, -1);
-                }
-                Some(KeyAction::MoveRight) => {
-                    return self.ask_jump_question(&hit.request_id, hit.line_kind, 1);
-                }
-                _ => {}
-            }
-        }
-        // Space is matched on the RAW key (never via the keymap, which maps an
-        // unmodified Space to PageDown) so a plain space toggles while PgDn /
-        // Ctrl+f / Shift+Space still page normally. Enter is raw too.
         match key.code {
+            KeyCode::Left | KeyCode::Char('h') => self.ask_move_question(&hit.request_id, -1),
+            KeyCode::Right | KeyCode::Char('l') => self.ask_move_question(&hit.request_id, 1),
             KeyCode::Char(' ') => self.ask_space(&hit.request_id, hit.line_kind),
             KeyCode::Enter => self.ask_enter(&hit.request_id, hit.line_kind),
             _ => false,
         }
     }
 
+    /// Horizontal keys browse questions without changing answers or submitting.
+    /// The optional summary remains an explicit action on the last page.
+    fn ask_move_question(&mut self, request_id: &str, delta: isize) -> bool {
+        let Some(dialog) = self.user_input_interactions.get_mut(request_id) else {
+            return false;
+        };
+        let count = dialog.request.questions.len();
+        if count == 0 {
+            return true;
+        }
+        let summary =
+            dialog.presentation.screen() == agena_tui::user_input::QuestionFlowScreen::Review;
+        let page = if summary {
+            count
+        } else {
+            dialog.presentation.selected_question()
+        };
+        if summary && delta > 0 {
+            return true;
+        }
+        let target = (page as isize + delta).clamp(0, count.saturating_sub(1) as isize) as usize;
+        if target != page {
+            dialog.presentation.focus_question(target);
+            self.sync_interaction_documents();
+            self.ask_focus_page(request_id);
+        }
+        true
+    }
+
     /// Derive the ask-user row under the transcript cursor — the cursor IS the
     /// option cursor on the current page. Review parts return `None`; the
-    /// ask classifier maps the cursor's body offset to a concrete row kind.
+    /// renderer records the question/action identity on the visible rows.
     fn ask_user_cursor_hit(&mut self, width: u16) -> Option<InteractionCursorHit> {
-        let node = self.transcript.current_cursor_node_cloned(width)?;
-        if !node.expanded {
+        let control = self.transcript.control_at_cursor(width)?;
+        let agena_tui_transcript::TranscriptControlAction::UserInput { request_id, kind } =
+            control.action
+        else {
             return None;
-        }
-        let request_id = self.interaction_request_id_for_node_key(&node.key)?;
-        let cursor_line = self.transcript.navigation_cursor_line()?;
-        if cursor_line < node.start_line || cursor_line >= node.end_line {
-            return None;
-        }
+        };
         let dialog = self.user_input_interactions.get(&request_id)?;
-        if agena_tui_transcript::request_is_review_decision(&dialog.request) {
-            return None;
-        }
-        let view = self.transcript.interaction_views.get(&request_id)?;
-        let body_offset = cursor_line
-            .saturating_sub(node.start_line)
-            .saturating_sub(1);
-        let editing_custom = dialog.presentation.is_editing_custom();
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let line_kind = agena_tui_transcript::classify_ask_user_page(
-            &layouts,
-            view.plan_body_lines,
-            view.question_page,
-            body_offset,
-            editing_custom,
-            &view.summary_rows,
-        );
-        Some(InteractionCursorHit {
-            request_id,
-            line_kind,
-        })
+        (!agena_tui_transcript::request_is_review_decision(&dialog.request)).then_some(
+            InteractionCursorHit {
+                request_id,
+                line_kind: kind,
+            },
+        )
     }
 
     /// Change the page without discarding any answers. Boundaries do not wrap.
@@ -470,7 +387,20 @@ impl App {
                 let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
                     return false;
                 };
-                if dialog.presentation.begin_custom_edit_for(question_index) {
+                let Some(option_index) = dialog
+                    .request
+                    .questions
+                    .get(question_index)
+                    .and_then(|question| question.custom_option_index())
+                else {
+                    self.user_input_interactions
+                        .insert(request_id.to_string(), dialog);
+                    return false;
+                };
+                dialog
+                    .presentation
+                    .toggle_option_index(question_index, option_index);
+                if dialog.presentation.is_editing_custom() {
                     self.interaction_editing = Some(request_id.to_string());
                 }
                 self.user_input_interactions
@@ -482,7 +412,44 @@ impl App {
         }
     }
 
-    /// Answers advance to the next page; only the summary's Submit row sends.
+    /// Confirm the existing answer without selecting the focused option.
+    /// The last question submits directly; earlier questions advance.
+    fn ask_confirm_question(&mut self, request_id: &str, question_index: usize) -> bool {
+        let Some(dialog) = self.user_input_interactions.get_mut(request_id) else {
+            return false;
+        };
+        let Some(question) = dialog.request.questions.get(question_index) else {
+            return false;
+        };
+        let answered = dialog.presentation.question_is_answered(question_index);
+        if !answered {
+            let label = user_input_question_label(question).to_owned();
+            if dialog.presentation.custom_option_selected(question_index)
+                && dialog.presentation.begin_custom_edit_for(question_index)
+            {
+                self.interaction_editing = Some(request_id.to_string());
+            }
+            self.flash_warning(self.i18n.text_args(
+                "overlay-user-input-missing-answer",
+                &agena_tui::fl_args!("label" => label),
+            ));
+            self.sync_interaction_documents();
+            return true;
+        }
+        if question_index + 1 == dialog.request.questions.len() {
+            return self.ask_enter(
+                request_id,
+                agena_tui_transcript::InteractionLineKind::AskSubmit,
+            );
+        }
+        dialog.presentation.focus_question(question_index + 1);
+        self.sync_interaction_documents();
+        self.ask_focus_page(request_id);
+        true
+    }
+
+    /// Explicit navigation, editing, confirmation and submission share the
+    /// same paths for pointer and keyboard activation.
     fn ask_enter(
         &mut self,
         request_id: &str,
@@ -491,33 +458,38 @@ impl App {
         use agena_tui_transcript::InteractionLineKind::*;
         match line_kind {
             AskPrevious => return self.ask_jump_question(request_id, line_kind, -1),
-            AskNext => return self.ask_jump_question(request_id, line_kind, 1),
+            AskNext => {
+                let Some(dialog) = self.user_input_interactions.get(request_id) else {
+                    return false;
+                };
+                let index = dialog.presentation.selected_question();
+                if index + 1 < dialog.request.questions.len() {
+                    return self.ask_confirm_question(request_id, index);
+                }
+                return self.ask_jump_question(request_id, line_kind, 1);
+            }
             AskCancel => {
                 self.cancel_active_interaction(request_id);
                 return true;
             }
-            AskCustomRow { .. } => return self.ask_space(request_id, line_kind),
-            AskOption { .. } | AskSummary { .. } | AskSubmit => {}
+            AskCustomRow { question_index } | AskOption { question_index, .. } => {
+                return self.ask_confirm_question(request_id, question_index);
+            }
+            AskSummary { .. } | AskSubmit => {}
             _ => return false,
         }
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
             return false;
         };
         match line_kind {
-            AskOption {
-                question_index,
-                option_index,
-            } => {
-                dialog
-                    .presentation
-                    .commit_option_index(question_index, option_index);
-                dialog.presentation.move_wizard_tab(1);
-            }
             AskSummary { question_index } => dialog.presentation.focus_question(question_index),
             AskSubmit => {
                 match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
                     Ok(reply) => {
-                        self.request_user_input_reply(dialog.session_id, reply);
+                        let session_id = dialog.session_id;
+                        self.user_input_interactions
+                            .insert(request_id.to_owned(), dialog);
+                        self.request_user_input_reply(session_id, reply);
                         self.sync_interaction_documents();
                         return true;
                     }
@@ -533,59 +505,14 @@ impl App {
         true
     }
 
-    /// Re-anchor using the part's stable key: a page change may shrink the
-    /// body enough that the previous cursor line belongs to a different part.
+    /// Page mutations land on an actual rendered control, even when long
+    /// questions or option descriptions wrap to several terminal rows.
     fn ask_focus_page(&mut self, request_id: &str) {
-        let Some(key) = self.pending_interaction_part_node_key(request_id) else {
-            return;
-        };
-        let Some(dialog) = self.user_input_interactions.get(request_id) else {
-            return;
-        };
-        let Some(view) = self.transcript.interaction_views.get(request_id) else {
-            return;
-        };
-        let layouts =
-            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
-        let body_offset = agena_tui_transcript::ask_user_page_landing_offset(
-            view.plan_body_lines,
-            &layouts,
-            view.question_page,
+        self.transcript.focus_request_control(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            request_id,
         );
-        let width = self.layout.transcript_body.width;
-        let height = self.layout.transcript_body.height;
-        let start = self
-            .transcript
-            .rendered(width)
-            .nodes
-            .iter()
-            .find(|node| node.key == key)
-            .map(|node| node.start_line);
-        if let Some(start) = start {
-            self.transcript.move_cursor_to_visual_line_number(
-                width,
-                height,
-                Some(start + 2 + body_offset),
-            );
-            self.transcript.invalidate_render();
-        }
-    }
-
-    /// The transcript cursor line when it sits inside an expanded pending
-    /// ask-user part, for the whole-line cursor highlight. Review parts return
-    /// `None` — they keep the normal single-grapheme cursor.
-    pub(crate) fn active_ask_part_cursor_line(&mut self, width: u16) -> Option<usize> {
-        let node = self.transcript.current_cursor_node_cloned(width)?;
-        if !node.expanded {
-            return None;
-        }
-        let request_id = self.interaction_request_id_for_node_key(&node.key)?;
-        let dialog = self.user_input_interactions.get(&request_id)?;
-        if agena_tui_transcript::request_is_review_decision(&dialog.request) {
-            return None;
-        }
-        let cursor_line = self.transcript.navigation_cursor_line()?;
-        (cursor_line >= node.start_line && cursor_line < node.end_line).then_some(cursor_line)
     }
 
     /// Enter on a decision row of the pending interaction part. The line kind
@@ -598,12 +525,11 @@ impl App {
     ) {
         use agena_tui_transcript::InteractionLineKind;
         // Take the dialog out of the map so the arms can drive `&mut self`
-        // effects (sending the reply, beginning the editor) without a live
-        // borrow on the map. Reinserted unless the reply was sent.
+        // effects without a live borrow on the map. Keep the draft until the
+        // server acknowledges the reply so a failed send remains editable.
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
             return;
         };
-        let mut keep = true;
         match line_kind {
             InteractionLineKind::ReviewOption { option_index } => {
                 match Self::build_structured_user_input_reply(
@@ -614,7 +540,6 @@ impl App {
                     Ok(reply) => {
                         let session_id = dialog.session_id;
                         self.request_user_input_reply(session_id, reply);
-                        keep = false;
                     }
                     Err(error) => self.flash_warning(error),
                 }
@@ -630,16 +555,24 @@ impl App {
                 {
                     let session_id = dialog.session_id;
                     self.request_user_input_reply(session_id, reply);
-                    keep = false;
                 }
             }
             _ => {}
         }
-        if keep {
-            self.user_input_interactions
-                .insert(request_id.to_string(), dialog);
-        }
+        self.user_input_interactions
+            .insert(request_id.to_string(), dialog);
         self.sync_interaction_documents();
+    }
+
+    fn interaction_reply_in_flight(&self, request_id: &str) -> bool {
+        self.user_input_interactions
+            .get(request_id)
+            .is_some_and(|dialog| {
+                self.run_activity.has_operation(
+                    crate::RunActivityTarget::Session(dialog.session_id),
+                    crate::RunOperation::UserInputReply,
+                )
+            })
     }
 
     /// Cancel the pending user-input interaction and send the cancellation
@@ -650,6 +583,9 @@ impl App {
             return;
         };
         let session_id = dialog.session_id;
+        if self.interaction_reply_in_flight(request_id) {
+            return;
+        }
         let reply = UserInputReply {
             request_id: dialog.request.request_id.clone(),
             kind: UserInputReplyKind::Cancel,
@@ -657,16 +593,6 @@ impl App {
             reason: None,
         };
         self.request_user_input_reply(session_id, reply);
-    }
-
-    /// Collapse the pending interaction part back to its configured state; the
-    /// request stays reachable by re-expanding the part.
-    fn collapse_active_interaction(&mut self, request_id: &str) {
-        let Some(node_key) = self.pending_interaction_part_node_key(request_id) else {
-            return;
-        };
-        self.transcript.node_expansions.insert(node_key, false);
-        self.transcript.invalidate_render();
     }
 
     /// Open the inline custom-feedback editor for the pending interaction part
@@ -707,16 +633,16 @@ impl App {
                 self.user_input_interactions.insert(request_id, dialog);
             }
             agena_tui::user_input::UserInputEffect::Submit => {
-                // Enter committed non-empty custom feedback: submit the reply.
+                // Enter on final-question text or review feedback submits.
                 self.interaction_editing = None;
-                if let Ok(reply) =
-                    Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None)
-                {
-                    let session_id = dialog.session_id;
-                    self.request_user_input_reply(session_id, reply);
-                } else {
-                    self.user_input_interactions.insert(request_id, dialog);
+                match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
+                    Ok(reply) => {
+                        let session_id = dialog.session_id;
+                        self.request_user_input_reply(session_id, reply);
+                    }
+                    Err(error) => self.flash_warning(error),
                 }
+                self.user_input_interactions.insert(request_id, dialog);
             }
             agena_tui::user_input::UserInputEffect::Cancel => {
                 self.interaction_editing = None;
@@ -728,6 +654,7 @@ impl App {
                     reason: None,
                 };
                 self.request_user_input_reply(session_id, reply);
+                self.user_input_interactions.insert(request_id, dialog);
             }
             agena_tui::user_input::UserInputEffect::KeepOpen => {
                 // The editor may still be open (typing) or may have just
@@ -757,6 +684,9 @@ impl App {
         let Some(request_id) = self.active_user_input_interaction_request_id() else {
             return false;
         };
+        if self.interaction_reply_in_flight(&request_id) {
+            return true;
+        }
         let Some(dialog) = self.user_input_interactions.get_mut(&request_id) else {
             return false;
         };
@@ -782,7 +712,7 @@ impl App {
     ) -> std::result::Result<UserInputReply, String> {
         if let Some(question) = Self::user_input_review_question(&dialog.request) {
             let custom_text = dialog.presentation.review().custom_text();
-            if !custom_text.is_empty() {
+            if review_selection.is_none() && !custom_text.is_empty() {
                 return Ok(UserInputReply {
                     request_id: dialog.request.request_id.clone(),
                     kind: UserInputReplyKind::Submit,
@@ -811,7 +741,7 @@ impl App {
                 .answer(index)
                 .map(|draft| user_input_answer_values(question, draft))
                 .unwrap_or_default();
-            if values.is_empty() {
+            if values.is_empty() || !dialog.presentation.question_is_answered(index) {
                 let label = user_input_question_label(question).to_string();
                 dialog.presentation.focus_question(index);
                 return Err(i18n.text_args(
@@ -831,19 +761,16 @@ impl App {
     }
 }
 use crate::{
-    App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay,
-    OverlayCommit, TranscriptContentId, TranscriptMoveDirection, TranscriptNodeKey,
-    UserInputOverlay, UserInputReply, UserInputReplyKind, drive_input_dialog_key, ui_text,
-    user_input_answer_values, user_input_question_label,
+    App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay, Overlay,
+    OverlayCommit, TranscriptContentId, TranscriptNodeKey, UserInputOverlay, UserInputReply,
+    UserInputReplyKind, drive_input_dialog_key, ui_text, user_input_answer_values,
+    user_input_question_label,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 use crossterm::event::{KeyCode, KeyModifiers};
 
-/// A hit on the shared "transcript cursor is on an expanded pending
-/// interaction part" computation: the derived body offset and the semantic
-/// kind of the row under the cursor. Both the selection sync and the key
-/// router derive from this one path so they cannot drift.
+/// An actual rendered action under the shared transcript cursor.
 struct InteractionCursorHit {
     request_id: String,
     line_kind: agena_tui_transcript::InteractionLineKind,

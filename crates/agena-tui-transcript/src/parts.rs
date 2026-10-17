@@ -616,6 +616,7 @@ pub(crate) fn user_input_request_resource(
                     .options
                     .into_iter()
                     .map(|option| UserInputOption {
+                        custom: option.custom,
                         label: option.label,
                         description: option.description,
                     })

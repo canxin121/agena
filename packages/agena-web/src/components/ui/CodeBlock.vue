@@ -65,18 +65,15 @@ async function copyCode() {
     :class="props.compact ? 'my-1' : 'my-2'"
     data-code-block
   >
-    <div
-      class="flex items-center justify-between bg-muted/50 border-b border-border"
-      :class="props.compact ? 'px-2 py-0.5' : 'px-3 py-1'"
-    >
+    <div class="part-toolbar px-2">
       <span class="text-xs font-mono text-muted-foreground">{{ lang || 'text' }}</span>
-      <div class="flex items-center gap-1">
+      <div class="part-actionbar">
         <button
           ref="toggleEl"
           tabindex="0"
           v-if="isLarge"
           type="button"
-          class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition"
+          class="part-action part-action-icon"
           :title="expanded ? t('codeBlock.collapse') : t('codeBlock.expandLines', { lines })"
           :aria-label="expanded ? t('codeBlock.collapseAria') : t('codeBlock.expandAria')"
           :aria-expanded="expanded"
@@ -89,7 +86,7 @@ async function copyCode() {
           tabindex="0"
           type="button"
           @click="copyCode"
-          class="h-6 w-6 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/40 active:scale-95 transition opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+          class="part-action part-action-icon"
           :title="t('codeBlock.copy')"
           :aria-label="t('codeBlock.copyAria')"
         >
@@ -117,7 +114,7 @@ async function copyCode() {
         <button
           tabindex="0"
           type="button"
-          class="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-background/70 backdrop-blur text-muted-foreground hover:text-foreground active:scale-95 transition"
+          class="part-action part-action-icon pointer-events-auto"
           @click="expandCode"
           :title="t('codeBlock.expand')"
           :aria-label="t('codeBlock.expand')"

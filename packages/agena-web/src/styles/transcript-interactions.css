@@ -1,0 +1,350 @@
+/* Shared controls for transcript decisions, resources, details and toolbars.
+   Keep the native control as the cursor target; styling adds no focus layer. */
+.interaction-width {
+  width: 100%;
+  max-width: 48rem;
+  min-width: 0;
+}
+.interaction-workspace {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+}
+.interaction-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+  min-width: 0;
+  margin-bottom: 0.375rem;
+}
+.interaction-section-label {
+  color: oklch(var(--muted-foreground));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1rem;
+}
+.interaction-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: oklch(var(--muted-foreground));
+  font-size: 0.6875rem;
+  line-height: 1.25rem;
+}
+.interaction-status > svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+.interaction-status[data-pending='true'] {
+  color: oklch(var(--primary));
+}
+/* Every option has a visible boundary before hover. Height remains bounded
+   even when a producer sends a paragraph as its label or description. */
+.interaction-choice,
+.part-action {
+  --choice-accent: var(--primary);
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  height: 2rem;
+  min-height: 2rem;
+  max-height: 2rem;
+  overflow: hidden;
+  border: 1px solid oklch(var(--border));
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  background: oklch(var(--card));
+  color: oklch(var(--card-foreground));
+  cursor: pointer;
+  box-shadow: none;
+  text-align: start;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+.interaction-choice {
+  width: 100%;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.part-action {
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  white-space: nowrap;
+}
+.part-action-icon {
+  width: 2rem;
+  padding: 0;
+}
+.part-actionbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+.part-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  min-width: 0;
+  border: 0;
+  padding-block: 0.25rem;
+  background: transparent;
+}
+/* Disclosure titles and resource links belong to the text flow. Their native
+   targets remain large enough to navigate without adding another card. */
+.part-disclosure,
+.part-link,
+.part-toggle {
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  height: 2rem;
+  min-height: 2rem;
+  max-height: 2rem;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.125rem;
+  background: transparent;
+  color: oklch(var(--foreground));
+  cursor: pointer;
+  text-align: start;
+}
+.part-disclosure {
+  justify-content: flex-start;
+  width: fit-content;
+  color: oklch(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  white-space: nowrap;
+}
+.part-disclosure:not(:disabled):hover {
+  background: oklch(var(--muted) / 0.3);
+  color: oklch(var(--foreground));
+}
+.part-disclosure > svg,
+.part-link > svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.part-link {
+  width: 100%;
+  max-width: 48rem;
+  text-decoration: none;
+}
+.part-link .interaction-choice-label {
+  color: oklch(var(--primary));
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: oklch(var(--primary) / 0.35);
+  text-underline-offset: 0.2em;
+}
+.part-link:hover .interaction-choice-label {
+  text-decoration-color: currentColor;
+}
+.part-toggle {
+  width: fit-content;
+}
+.part-toggle .interaction-choice-label {
+  font-weight: 500;
+}
+.part-action[data-tone='destructive'] {
+  --choice-accent: var(--destructive);
+  color: oklch(var(--destructive));
+}
+.interaction-choice:not(:disabled, [aria-disabled='true']):hover,
+.part-action:not(:disabled, [aria-disabled='true']):hover {
+  border-color: oklch(var(--choice-accent) / 0.65);
+  background: color-mix(in oklch, oklch(var(--choice-accent)) 7%, oklch(var(--card)));
+}
+.interaction-choice:not(:disabled, [aria-disabled='true']):active,
+.part-action:not(:disabled, [aria-disabled='true']):active {
+  background: color-mix(in oklch, oklch(var(--choice-accent)) 12%, oklch(var(--card)));
+}
+.part-action[data-variant='primary'] {
+  border-color: oklch(var(--primary));
+  background: oklch(var(--primary));
+  color: oklch(var(--primary-foreground));
+}
+.part-action[data-variant='primary']:not(:disabled, [aria-disabled='true']):hover {
+  background: oklch(var(--primary) / 0.9);
+}
+.interaction-choice-marker {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  color: oklch(var(--muted-foreground));
+}
+.interaction-choice-marker > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.interaction-choice[data-tone='accent'] .interaction-choice-marker {
+  color: oklch(var(--primary));
+}
+.interaction-choice[data-tone='destructive'] {
+  --choice-accent: var(--destructive);
+}
+.interaction-choice[data-tone='destructive'] .interaction-choice-marker {
+  color: oklch(var(--destructive));
+}
+.interaction-choice-copy {
+  display: flex;
+  flex: 1 1 0;
+  align-items: baseline;
+  gap: 0.625rem;
+  min-width: 0;
+  overflow: hidden;
+}
+.interaction-choice-label,
+.interaction-choice-description {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.25rem;
+}
+.interaction-choice-label {
+  flex: 0 1 auto;
+  max-width: 100%;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.interaction-choice-description {
+  flex: 1 1 0;
+  border-inline-start: 1px solid oklch(var(--border));
+  padding-inline-start: 0.625rem;
+  color: oklch(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+.interaction-choice-arrow {
+  color: oklch(var(--muted-foreground));
+}
+.interaction-choice > svg,
+.part-action > svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.interaction-choice-secondary {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 0.125rem;
+  border-style: dashed;
+  background: oklch(var(--background) / 0.5);
+  color: oklch(var(--muted-foreground));
+}
+.interaction-choice-secondary .interaction-choice-label {
+  max-width: 100%;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.interaction-choice[data-selected='true'] {
+  border-color: oklch(var(--primary) / 0.7);
+  background: color-mix(in oklch, oklch(var(--primary)) 10%, oklch(var(--card)));
+}
+.part-action:focus-visible,
+.part-action[data-transcript-action-cursor='true'],
+.interaction-choice:focus-visible,
+.interaction-choice[data-transcript-action-cursor='true'],
+.interaction-choice:has(input:focus-visible, [data-transcript-action-cursor='true']) {
+  border-color: oklch(var(--primary));
+}
+.interaction-choice:disabled,
+.interaction-choice[aria-disabled='true'],
+.part-action:disabled,
+.part-action[aria-disabled='true'],
+.part-disclosure:disabled,
+.part-toggle[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.6;
+}
+.interaction-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  margin-top: 0.5rem;
+}
+.interaction-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.interaction-result-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.interaction-result-answer {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.interaction-result-marker {
+  flex: none;
+  color: oklch(var(--muted-foreground));
+}
+.interaction-result-marker > svg {
+  width: 1rem;
+  height: 1.25rem;
+}
+.interaction-result-value {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.interaction-result-question {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.interaction-result-description {
+  margin-top: 0.125rem;
+  color: oklch(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .interaction-choice,
+  .part-action,
+  .part-disclosure,
+  .part-link,
+  .part-toggle {
+    height: 2.25rem;
+    min-height: 2.25rem;
+    max-height: 2.25rem;
+  }
+  .part-action-icon {
+    width: 2.25rem;
+  }
+}

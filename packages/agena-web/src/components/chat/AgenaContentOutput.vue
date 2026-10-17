@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { useI18n } from 'vue-i18n'
+import { RiArrowDownLine, RiClipboardLine, RiLoader4Line } from '@remixicon/vue'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
@@ -438,16 +439,9 @@ watch(
 </script>
 
 <template>
-  <div
-    ref="outputRoot"
-    class="my-1 overflow-hidden rounded-md border border-border/60 bg-background"
-    data-content-output
-    :aria-busy="loading"
-  >
-    <div
-      class="flex min-h-6 items-center justify-between border-b border-border/40 px-2 py-0.5 text-[11px] text-muted-foreground"
-    >
-      <div class="flex items-center gap-2">
+  <div ref="outputRoot" class="my-1 min-w-0" data-content-output :aria-busy="loading">
+    <div class="part-toolbar text-[11px] text-muted-foreground">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
         <PartLoadingIndicator v-if="loading && resource.kind !== 'text'" />
         <template v-else>
           <span
@@ -460,23 +454,14 @@ watch(
         </template>
         <span v-if="hasStderr" class="rounded bg-amber-500/10 px-1.5 text-amber-600">stderr</span>
       </div>
-      <div class="flex items-center gap-3">
-        <button
-          tabindex="0"
-          v-if="paused || selectionActive"
-          class="text-primary hover:underline"
-          type="button"
-          @click="follow"
-        >
-          {{ t('content.follow') }}<span v-if="unseen" class="ml-1">+{{ unseen }}</span> ↓
+      <div class="part-actionbar">
+        <button tabindex="0" v-if="paused || selectionActive" class="part-action" type="button" @click="follow">
+          <RiArrowDownLine aria-hidden="true" />{{ t('content.follow')
+          }}<span v-if="unseen" class="rounded bg-muted px-1 text-[10px]">+{{ unseen }}</span>
         </button>
-        <button
-          tabindex="0"
-          type="button"
-          class="hover:text-foreground disabled:opacity-50"
-          :disabled="copying"
-          @click="copy"
-        >
+        <button tabindex="0" type="button" class="part-action" :disabled="copying" :aria-busy="copying" @click="copy">
+          <RiLoader4Line v-if="copying" class="animate-spin" aria-hidden="true" />
+          <RiClipboardLine v-else aria-hidden="true" />
           {{ t('content.copy') }}
         </button>
       </div>

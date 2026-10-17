@@ -1,5 +1,7 @@
 @import 'tailwindcss';
+
 @import './styles/typography.css';
+@import './styles/transcript-interactions.css';
 @import './styles/mobile.css';
 @plugin "@tailwindcss/typography";
 
@@ -8,6 +10,27 @@
 
 /* Tailwind v4 dark variant uses a custom selector. */
 @custom-variant dark (&:is(.dark *));
+
+/* The action cursor denotes focus; checked state denotes a committed choice. */
+[data-transcript-root] [data-transcript-action-cursor='true'],
+.part-action:focus-visible,
+.part-action:has(input:focus-visible),
+.part-disclosure:focus-visible,
+.part-link:focus-visible,
+.part-toggle:has(input:focus-visible),
+.interaction-choice:focus-visible,
+.interaction-choice:has(input:focus-visible),
+.interaction-choice:has([data-transcript-action-cursor='true']) {
+  outline: 2px solid oklch(var(--primary) / 0.85);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+.interaction-choice input[data-transcript-action-cursor='true'] {
+  outline: none;
+}
+.interaction-part[aria-busy='true'] {
+  cursor: progress;
+}
 
 @layer base {
   :root {

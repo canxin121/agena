@@ -3,7 +3,7 @@
 // chip only inspects the durable plan and controls its autorun setting.
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiCheckboxMultipleLine, RiRefreshLine } from '@remixicon/vue'
+import { RiCheckboxMultipleLine, RiLoader4Line, RiRefreshLine } from '@remixicon/vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SessionChip from './SessionChip.vue'
 import type { usePlanViewer } from '@/pages/chat/usePlanViewer'
@@ -35,29 +35,27 @@ const hint = computed(() => {
     </template>
     <template #actions>
       <IconButton
-        class="h-7 w-7"
+        class="part-action part-action-icon"
         :tooltip="t('chat.planViewer.refresh')"
         :aria-label="t('chat.planViewer.refresh')"
         :aria-disabled="busy"
         @click="!busy && state.refresh()"
       >
-        <RiRefreshLine class="h-3.5 w-3.5" />
+        <RiRefreshLine class="h-3.5 w-3.5" :class="state.loading.value ? 'animate-spin' : ''" />
       </IconButton>
     </template>
     <div class="min-w-0" :aria-busy="busy">
-      <label
-        v-if="state.autorun.value !== null"
-        class="mb-1 inline-flex min-h-7 cursor-pointer items-center gap-2 text-xs"
-      >
+      <label v-if="state.autorun.value !== null" class="part-toggle mb-2" :aria-disabled="busy || undefined">
         <input
           type="checkbox"
           tabindex="0"
           :checked="state.autorun.value"
           :aria-disabled="busy"
-          class="h-4 w-4"
-          @click.prevent="state.toggleAutorun"
+          class="h-3.5 w-3.5 shrink-0 accent-primary"
+          @click.prevent="!busy && state.toggleAutorun()"
         />
-        {{ t('chat.planViewer.autorun') }}
+        <span class="interaction-choice-label">{{ t('chat.planViewer.autorun') }}</span>
+        <RiLoader4Line v-if="state.toggling.value" class="ml-auto animate-spin text-primary" aria-hidden="true" />
       </label>
       <p v-if="state.error.value" role="alert" class="mb-2 text-sm text-destructive [overflow-wrap:anywhere]">
         {{ state.error.value }}

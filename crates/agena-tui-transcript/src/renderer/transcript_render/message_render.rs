@@ -6,7 +6,7 @@ use super::super::{
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
     markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
     push_label_value, push_markdown_document, push_markdown_rule, push_section_heading,
-    push_single_line, push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
+    push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
     render_markdown_block, should_suppress_markdown_block, strip_terminal_ansi_sequences,
     style_for_role, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
@@ -1336,6 +1336,16 @@ pub(crate) fn render_part_node(
             let interaction_start = out.len();
             let user_input_rendered =
                 render_operation_user_input(part, tool, out, width, i18n, expanded, interactions);
+            let permission_rendered = render_operation_permission(
+                part,
+                tool,
+                out,
+                width,
+                i18n,
+                expanded,
+                !user_input_rendered,
+            );
+            let user_input_rendered = user_input_rendered || permission_rendered;
 
             let details_key = TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,
@@ -1827,16 +1837,8 @@ pub(crate) fn render_part_node(
     }
 }
 
-/// Renders the expanded body of a pending interaction part natively. Plan
-/// review draws the plan body through the standard Markdown pipeline at the
-/// activity detail indent, a separator rule, and the decision rows whose
-/// markers track the live [`PendingInteractionView`] — the transcript cursor IS
-/// the review cursor, so the App derives row semantics from the same
-/// [`crate::interaction_view::classify_interaction_line`] arithmetic.
-///
-/// Ask-user shows one question per page followed by a summary with explicit
-/// Submit/Cancel actions. The shared page classifier routes the transcript
-/// cursor to the action actually drawn under it.
+/// Draw interaction content and attach actions to the rows actually rendered.
+/// Descriptions wrap freely; keyboard and pointer routing share the metadata.
 fn render_pending_interaction_body(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -1854,6 +1856,146 @@ fn render_pending_interaction_body(
         // The transcript cursor owns both option selection and page actions.
         render_ask_user_body(out, request, view, width, i18n);
     }
+}
+
+/// Pending permission decisions use the same inline cursor as questions.
+/// The detailed permission surface remains available for scope/rule editing.
+#[allow(clippy::too_many_arguments)]
+fn render_operation_permission(
+    part: &TranscriptEntryPart,
+    tool: &ToolCallView,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+    with_headline: bool,
+) -> bool {
+    use agena_domain::{PermissionAction, PermissionReplyKind};
+    if part.status.is_terminal() || tool.operation.status().is_terminal() {
+        return false;
+    }
+    let pending: Vec<_> = tool
+        .operation
+        .authorization
+        .permissions
+        .iter()
+        .filter(|record| record.reply.is_none())
+        .collect();
+    if pending.is_empty() {
+        return false;
+    }
+    if with_headline {
+        push_activity_headline(
+            out,
+            part.status,
+            expanded,
+            true,
+            &tool.operation.invocation.name,
+            &i18n.text("overlay-permission-title"),
+            width,
+            i18n,
+        );
+    }
+    if !expanded {
+        return true;
+    }
+    for record in pending {
+        let request = &record.request;
+        let actions = std::iter::once(&request.action)
+            .chain(
+                request
+                    .requested_actions
+                    .iter()
+                    .filter(|action| **action != request.action),
+            )
+            .collect::<Vec<_>>();
+        for action in actions {
+            let label = match action {
+                PermissionAction::Tool {
+                    tool_name,
+                    qualifier,
+                } => qualifier
+                    .as_ref()
+                    .map(|qualifier| format!("{tool_name} · {qualifier}"))
+                    .unwrap_or_else(|| tool_name.clone()),
+                PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => format!("{access_kind} · {target_path}"),
+                PermissionAction::NetworkAccess { target, .. } => target.clone(),
+            };
+            push_expanded_tool_text(
+                out,
+                "    ",
+                &label,
+                Style::default().add_modifier(Modifier::BOLD),
+                width,
+            );
+        }
+        let reason = if request.reason.trim().is_empty() {
+            &request.explanation
+        } else {
+            &request.reason
+        };
+        push_expanded_tool_text(
+            out,
+            "    ",
+            reason,
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+            width,
+        );
+        for decision in [
+            Some(PermissionReplyKind::AllowOnce),
+            Some(PermissionReplyKind::AllowAlways),
+            Some(PermissionReplyKind::DenyOnce),
+            None,
+        ] {
+            let label = decision
+                .map(|kind| {
+                    let label = ui_text::permission_reply_label(i18n, kind);
+                    if kind == PermissionReplyKind::AllowAlways {
+                        format!("{label}…")
+                    } else {
+                        label
+                    }
+                })
+                .unwrap_or_else(|| i18n.text("overlay-permission-details-title"));
+            let start = out.len();
+            push_expanded_tool_text(
+                out,
+                "    ",
+                &format!("[ {label} ]"),
+                Style::default().fg(if matches!(decision, Some(PermissionReplyKind::DenyOnce)) {
+                    agena_tui_components::theme::danger_color()
+                } else {
+                    agena_tui_components::theme::accent_color()
+                }),
+                width,
+            );
+            for row in &mut out[start..] {
+                let end = UnicodeWidthStr::width(row.text.as_str())
+                    .min(usize::from(width))
+                    .max(1);
+                row.controls.push(crate::RenderedTranscriptControl {
+                    columns: 4.min(end - 1)..end,
+                    action: crate::TranscriptControlAction::Permission {
+                        request_id: request.request_id.clone(),
+                        decision,
+                    },
+                    enabled: true,
+                });
+            }
+        }
+    }
+    push_expanded_tool_text(
+        out,
+        "    ",
+        &i18n.text("overlay-user-input-review-footer-hint"),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
+    true
 }
 
 /// Renders the canonical single-activity user-input surface on a `tool_call`
@@ -1978,6 +2120,28 @@ fn render_user_input_history_body(
         push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
         push_markdown_rule(out, "    ", width);
     }
+    if let Some(reply) = reply {
+        let status = match reply.kind {
+            agena_api::resource::UserInputReplyKind::Cancel => {
+                Some("session-work-status-cancelled")
+            }
+            agena_api::resource::UserInputReplyKind::Timeout => Some("failure-category-timeout"),
+            agena_api::resource::UserInputReplyKind::Submit => None,
+        };
+        if let Some(status) = status {
+            push_expanded_tool_text(
+                out,
+                "    ",
+                &i18n.text(status),
+                Style::default().add_modifier(Modifier::BOLD),
+                width,
+            );
+            if let Some(reason) = &reply.reason {
+                push_interaction_detail_row(out, reason, width);
+            }
+            return;
+        }
+    }
     let answers = reply.map(|reply| &reply.answers);
     if crate::interaction_view::request_is_review_decision(request) {
         render_answered_review_rows(out, request, answers, width, i18n);
@@ -1992,8 +2156,7 @@ fn render_user_input_history_body(
     }
 }
 
-/// Read-only review decision rows: each option on ONE row with `(x)` on the
-/// answered one, then the custom feedback when the answer is free text.
+/// Read-only decisions contain only committed values, never old choices.
 fn render_answered_review_rows(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -2008,55 +2171,17 @@ fn render_answered_review_rows(
     let Some(question) = request.questions.first() else {
         return;
     };
-    for option in &question.options {
-        let answered = values.iter().any(|value| value == &option.label);
-        let marker = if answered { "(x)" } else { "( )" };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                option.label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
-    }
-    if question.allow_custom {
-        let custom: Vec<&String> = values
-            .iter()
-            .filter(|value| {
-                !question
-                    .options
-                    .iter()
-                    .any(|option| &option.label == *value)
-            })
-            .collect();
-        if !custom.is_empty() {
-            let marker = "(x)";
-            out.push(RenderedLine::rich(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(format!("{marker} "), Style::default()),
-                Span::styled(
-                    i18n.text("overlay-user-input-review-feedback"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])));
-            push_interaction_detail_row(out, &join_answer_values(&custom), width);
-        }
-    }
+    render_committed_answers(
+        out,
+        question,
+        values,
+        "overlay-user-input-review-feedback",
+        width,
+        i18n,
+    );
 }
 
-/// Join committed answer values (which may be `&String`) into a comma list.
-fn join_answer_values(values: &[&String]) -> String {
-    values
-        .iter()
-        .map(|value| value.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Read-only ask-user question block: header with its answered marker, the
-/// question text, each option on its (label + detail) rows with picked
-/// options marked, and the custom values when present.
+/// Question history preserves the full question and its submitted answers.
 fn render_answered_question_block(
     out: &mut Vec<RenderedLine>,
     index: usize,
@@ -2070,61 +2195,164 @@ fn render_answered_question_block(
     } else {
         question.header.clone()
     };
-    let answered = !values.is_empty();
-    let header_marker = if answered { "[x]" } else { "[ ]" };
     out.push(RenderedLine::rich(Line::from(vec![
         Span::raw("    "),
-        Span::styled(format!("{header_marker} "), Style::default()),
         Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
     ])));
     push_interaction_detail_row(out, question.question.as_str(), width);
-    for option in &question.options {
-        let picked = values.iter().any(|value| value == &option.label);
-        let marker = if question.multiple {
-            if picked { "[x]" } else { "[ ]" }
-        } else if picked {
-            "(x)"
-        } else {
-            "( )"
-        };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                option.label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
-        push_interaction_detail_row(out, option.description.as_str(), width);
+    render_committed_answers(
+        out,
+        question,
+        values,
+        "overlay-user-input-other",
+        width,
+        i18n,
+    );
+}
+
+fn render_committed_answers(
+    out: &mut Vec<RenderedLine>,
+    question: &agena_api::resource::UserInputQuestion,
+    values: &[String],
+    custom_label: &str,
+    width: u16,
+    i18n: &I18n,
+) {
+    if values.is_empty() {
+        push_interaction_detail_row(out, &i18n.text("overlay-user-input-unanswered"), width);
     }
-    if question.allow_custom {
-        let custom: Vec<&String> = values
+    for value in values {
+        let option = question
+            .options
             .iter()
-            .filter(|value| {
-                !question
-                    .options
-                    .iter()
-                    .any(|option| &option.label == *value)
-            })
-            .collect();
-        if !custom.is_empty() {
-            out.push(RenderedLine::rich(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(
-                    i18n.text("overlay-user-input-other"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])));
-            push_interaction_detail_row(out, &join_answer_values(&custom), width);
+            .find(|option| &option.label == value);
+        let label = option
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| i18n.text(custom_label));
+        push_expanded_tool_text(
+            out,
+            "    ✓ ",
+            &label,
+            Style::default().add_modifier(Modifier::BOLD),
+            width,
+        );
+        if let Some(option) = option {
+            push_interaction_detail_row(out, &option.description, width);
+        } else {
+            push_interaction_detail_row(out, value, width);
         }
     }
 }
 
-/// Review decision rows: ONE row per option (marker + label — the description
-/// detail line is gone), then the custom feedback slot, then a muted localized
-/// footer hint. Markers `(x)`/`( )` track `view.selected_option`. The row
-/// budget matches [`crate::interaction_view::review_decision_rows_count`] plus
-/// the footer row.
+/// Each action owns its wrapped label and description. Input routing reads
+/// this metadata directly, so changing the layout never changes the action.
+fn mark_interaction_control(
+    lines: &mut [RenderedLine],
+    request_id: &str,
+    kind: crate::InteractionLineKind,
+    enabled: bool,
+    width: u16,
+) {
+    for line in lines {
+        let end = UnicodeWidthStr::width(line.text.as_str())
+            .min(usize::from(width))
+            .max(1);
+        line.controls.push(crate::RenderedTranscriptControl {
+            columns: 4.min(end - 1)..end,
+            action: crate::TranscriptControlAction::UserInput {
+                request_id: request_id.to_owned(),
+                kind,
+            },
+            enabled,
+        });
+    }
+}
+
+fn push_interaction_control(
+    out: &mut Vec<RenderedLine>,
+    request_id: &str,
+    kind: crate::InteractionLineKind,
+    label: &str,
+    detail: &str,
+    width: u16,
+) {
+    let start = out.len();
+    push_expanded_tool_text(
+        out,
+        "    ",
+        label,
+        Style::default().add_modifier(Modifier::BOLD),
+        width,
+    );
+    if !detail.trim().is_empty() {
+        push_expanded_tool_text(
+            out,
+            "      ",
+            detail,
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+            width,
+        );
+    }
+    mark_interaction_control(&mut out[start..], request_id, kind, true, width);
+}
+
+/// A compact action bar wraps whole buttons on small terminals. Columns are
+/// measured in display cells, including wide CJK labels.
+fn push_interaction_actions(
+    out: &mut Vec<RenderedLine>,
+    request_id: &str,
+    actions: &[(crate::InteractionLineKind, String, bool)],
+    width: u16,
+) {
+    let mut line = RenderedLine::plain("    ", Style::default());
+    let mut column = 4;
+    for (kind, label, enabled) in actions {
+        let text = format!("[ {label} ]");
+        let style = Style::default().fg(if *enabled {
+            agena_tui_components::theme::accent_color()
+        } else {
+            agena_tui_components::theme::muted_color()
+        });
+        let cells = UnicodeWidthStr::width(text.as_str());
+        if column > 4 && column + cells > usize::from(width) {
+            out.push(line);
+            line = RenderedLine::plain("    ", Style::default());
+            column = 4;
+        }
+        if cells + 4 > usize::from(width) {
+            if !line.controls.is_empty() {
+                out.push(line);
+                line = RenderedLine::plain("    ", Style::default());
+                column = 4;
+            }
+            let start = out.len();
+            push_expanded_tool_text(out, "    ", &text, style, width);
+            mark_interaction_control(&mut out[start..], request_id, *kind, *enabled, width);
+            continue;
+        }
+        line.text.push_str(&text);
+        line.text.push_str("  ");
+        line.copy_text = line.text.trim().to_owned();
+        line.rich_line
+            .as_mut()
+            .expect("plain lines have rich text")
+            .spans
+            .extend([Span::styled(text, style), Span::raw("  ")]);
+        line.controls.push(crate::RenderedTranscriptControl {
+            columns: column..column + cells,
+            action: crate::TranscriptControlAction::UserInput {
+                request_id: request_id.to_owned(),
+                kind: *kind,
+            },
+            enabled: *enabled,
+        });
+        column += cells + 2;
+    }
+    if !line.controls.is_empty() {
+        out.push(line);
+    }
+}
+
 fn render_review_decision_rows(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -2132,62 +2360,64 @@ fn render_review_decision_rows(
     width: u16,
     i18n: &I18n,
 ) {
+    use crate::InteractionLineKind::*;
     let Some(question) = request.questions.first() else {
         return;
     };
     for (index, option) in question.options.iter().enumerate() {
-        let marker = if view.selected_option == Some(index) {
-            "(x)"
-        } else {
-            "( )"
-        };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                option.label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
+        push_interaction_control(
+            out,
+            &request.request_id,
+            ReviewOption {
+                option_index: index,
+            },
+            &format!("› {}", option.label),
+            &option.description,
+            width,
+        );
     }
     if question.allow_custom {
-        let custom_index = question.options.len();
+        push_interaction_control(
+            out,
+            &request.request_id,
+            ReviewCustomLabel,
+            &format!("＋ {}", i18n.text("overlay-user-input-review-feedback")),
+            &view.custom_text,
+            width,
+        );
         if view.editing_custom {
-            // The inline editor replaces the custom label row (one row, so the
-            // fixed budget `review_decision_rows_count` counts it exactly).
+            let start = out.len();
             push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
-        } else {
-            let marker = if view.selected_option == Some(custom_index) {
-                "(x)"
-            } else {
-                "( )"
-            };
-            out.push(RenderedLine::rich(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(format!("{marker} "), Style::default()),
-                Span::styled(
-                    i18n.text("overlay-user-input-review-feedback"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])));
+            mark_interaction_control(
+                &mut out[start..],
+                &request.request_id,
+                ReviewEditor,
+                true,
+                width,
+            );
         }
     }
-    // Localized footer hint: Enter on an option submits, Enter on the title
-    // collapses/expands. This row is never a submit target.
-    out.push(RenderedLine::plain(
-        format!("    {}", i18n.text("overlay-user-input-review-footer-hint")),
+    push_interaction_actions(
+        out,
+        &request.request_id,
+        &[(AskCancel, i18n.text("overlay-user-input-defer"), true)],
+        width,
+    );
+    push_expanded_tool_text(
+        out,
+        "    ",
+        &i18n.text("overlay-user-input-review-footer-hint"),
         Style::default().fg(agena_tui_components::theme::muted_color()),
-    ));
+        width,
+    );
 }
 
-/// One muted detail row below a decision label. Always pushed (even when
-/// empty) so the fixed 2-rows-per-option budget the classifier uses holds.
+/// A compact read-only detail row for an answered interaction.
 fn push_interaction_detail_row(out: &mut Vec<RenderedLine>, text: &str, width: u16) {
     if text.trim().is_empty() {
-        out.push(RenderedLine::plain("        ", Style::default()));
         return;
     }
-    push_single_line(
+    push_expanded_tool_text(
         out,
         "        ",
         text,
@@ -2196,52 +2426,77 @@ fn push_interaction_detail_row(out: &mut Vec<RenderedLine>, text: &str, width: u
     );
 }
 
-/// The inline custom-feedback editor row: the live draft with a visible caret
-/// at `cursor` (a byte offset into `draft`).
+/// A bounded, soft-wrapped draft viewport that follows its byte-offset caret.
+/// Graphemes stay intact and widths are terminal cells, including CJK/emoji.
 fn push_interaction_editor_row(
     out: &mut Vec<RenderedLine>,
     draft: &str,
     cursor: usize,
     width: u16,
 ) {
-    let available = (width.max(1) as usize).saturating_sub(8);
-    // Visible draft clamped to the row width.
-    let visible: String = draft.chars().take(available).collect();
-    // Cursor position measured in visible chars, clamped to the visible range.
-    let caret_column = visible
-        .char_indices()
-        .take_while(|(offset, _)| *offset < cursor)
-        .count()
-        .min(visible.chars().count());
-    let caret_at_end = caret_column == visible.chars().count();
-    let mut spans = vec![Span::raw("        ")];
-    for (index, ch) in visible.chars().enumerate() {
-        if index == caret_column {
-            if caret_at_end {
-                spans.push(Span::styled(
-                    "▏",
-                    agena_tui_components::theme::selection_style(),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    ch.to_string(),
-                    agena_tui_components::theme::selection_style(),
-                ));
-                continue;
-            }
+    let width = usize::from(width.max(1));
+    let indent = width.saturating_sub(1).min(8);
+    let available = width - indent;
+    let cursor = draft
+        .grapheme_indices(true)
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(draft.len()))
+        .take_while(|offset| *offset <= cursor.min(draft.len()))
+        .last()
+        .unwrap_or(0);
+    let mut glyphs = Vec::new();
+    for (offset, grapheme) in draft
+        .grapheme_indices(true)
+        .chain(std::iter::once((draft.len(), "")))
+    {
+        if offset == cursor {
+            glyphs.push(("▏", true));
         }
-        spans.push(Span::raw(ch.to_string()));
+        if !grapheme.is_empty() {
+            glyphs.push((grapheme, false));
+        }
     }
-    if caret_at_end {
+    let mut rows = Vec::new();
+    let mut spans = Vec::new();
+    let mut column = 0;
+    let mut caret_row = 0;
+    for (grapheme, caret) in glyphs {
+        if grapheme.contains('\n') {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            column = 0;
+            continue;
+        }
+        let grapheme = if UnicodeWidthStr::width(grapheme) > available {
+            "…"
+        } else {
+            grapheme
+        };
+        let cells = UnicodeWidthStr::width(grapheme);
+        if column + cells > available {
+            rows.push(Line::from(std::mem::take(&mut spans)));
+            column = 0;
+        }
+        if caret {
+            caret_row = rows.len();
+        }
         spans.push(Span::styled(
-            "▏",
-            agena_tui_components::theme::selection_style(),
+            grapheme.to_owned(),
+            if caret {
+                agena_tui_components::theme::selection_style()
+            } else {
+                Style::default()
+            },
         ));
+        column += cells;
     }
-    out.push(RenderedLine::rich(Line::from(spans)));
+    rows.push(Line::from(spans));
+    for mut row in rows.into_iter().skip(caret_row.saturating_sub(3)).take(4) {
+        row.spans.insert(0, Span::raw(" ".repeat(indent)));
+        out.push(RenderedLine::rich(row));
+    }
 }
 
-/// Render the current question page or the fully wrapped answer summary.
+/// Render one question and its navigation, or an optional editable summary.
 fn render_ask_user_body(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -2249,9 +2504,10 @@ fn render_ask_user_body(
     width: u16,
     i18n: &I18n,
 ) {
+    use crate::InteractionLineKind::*;
     let page = view.question_page.min(request.questions.len());
     if page == 0 {
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
+        push_markdown_document(out, "    ", &request.body_markdown, width, i18n);
     }
     push_markdown_rule(out, "    ", width);
     let summary = page == request.questions.len();
@@ -2260,64 +2516,80 @@ fn render_ask_user_body(
     } else {
         i18n.text_args("overlay-user-input-page", &agena_tui::fl_args!("current" => (page + 1) as i64, "total" => request.questions.len() as i64))
     };
-    push_single_line(out, "    ", &title, Style::default(), width);
+    push_expanded_tool_text(
+        out,
+        "    ",
+        &title,
+        Style::default()
+            .fg(agena_tui_components::theme::accent_color())
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
     if let Some(question) = request.questions.get(page) {
         render_ask_user_question_block(out, request, page, question, view, width, i18n);
     } else {
         for index in 0..request.questions.len() {
+            let start = out.len();
             for line in crate::interaction_view::ask_user_summary_lines(
                 request,
                 index,
                 view.answers.get(&index),
                 width,
             ) {
-                out.push(RenderedLine::plain(format!("    {line}"), Style::default()));
+                out.push(
+                    RenderedLine::plain(format!("    {line}"), Style::default())
+                        .with_copy_projection(line, 4),
+                );
             }
+            mark_interaction_control(
+                &mut out[start..],
+                &request.request_id,
+                AskSummary {
+                    question_index: index,
+                },
+                true,
+                width,
+            );
         }
     }
-    push_single_line(
-        out,
-        "    ",
-        &format!("‹ {}", i18n.text("overlay-user-input-previous")),
-        Style::default(),
-        width,
-    );
+    let mut actions = vec![(
+        AskPrevious,
+        format!("‹ {}", i18n.text("overlay-user-input-previous")),
+        page > 0,
+    )];
     if summary {
-        push_single_line(
-            out,
-            "    ",
-            &i18n.text("overlay-user-input-submit"),
-            Style::default(),
-            width,
-        );
-        push_single_line(
-            out,
-            "    ",
-            &i18n.text("overlay-user-input-cancel"),
-            Style::default(),
-            width,
-        );
+        actions.push((AskSubmit, i18n.text("overlay-user-input-submit"), true));
+        actions.push((AskCancel, i18n.text("overlay-user-input-defer"), true));
     } else {
         let next = if page + 1 == request.questions.len() {
             "overlay-user-input-summary"
         } else {
             "overlay-user-input-next"
         };
-        push_single_line(
+        actions.push((AskNext, format!("{} ›", i18n.text(next)), true));
+        if page + 1 == request.questions.len() {
+            actions.push((AskSubmit, i18n.text("overlay-user-input-submit"), true));
+        }
+    }
+    // Horizontal keys now change questions. Keep every footer action on its
+    // own row so the shared Up/Down cursor can reach all of them.
+    for action in &actions {
+        push_interaction_actions(
             out,
-            "    ",
-            &format!("{} ›", i18n.text(next)),
-            Style::default(),
+            &request.request_id,
+            std::slice::from_ref(action),
             width,
         );
     }
+    push_expanded_tool_text(
+        out,
+        "    ",
+        &i18n.text("overlay-user-input-question-footer-hint"),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
 }
 
-/// One ask-user question block on the current page: header row, muted
-/// question-text row, ONE row per option, 2 per custom slot, and an
-/// answered-preview row — the exact budget
-/// [`crate::interaction_view::ask_user_question_block_rows`] counts. No cursor
-/// rendering: the whole-line highlight is the App's job.
 fn render_ask_user_question_block(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -2327,96 +2599,85 @@ fn render_ask_user_question_block(
     width: u16,
     i18n: &I18n,
 ) {
+    use crate::InteractionLineKind::*;
     let answer = view.answers.get(&index);
-    let answered = answer.is_some_and(|answer| answer.is_answered());
-    let header = if question.header.trim().is_empty() {
-        format!("Q{}", index + 1)
-    } else {
-        question.header.clone()
-    };
-    let header_marker = if answered { "[x]" } else { "[ ]" };
-    out.push(RenderedLine::rich(Line::from(vec![
-        Span::raw("    "),
-        Span::styled(format!("{header_marker} "), Style::default()),
-        Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
-    ])));
-    push_interaction_detail_row(out, question.question.as_str(), width);
-    for (option_index, option) in question.options.iter().enumerate() {
+    if !question.header.trim().is_empty() {
+        push_expanded_tool_text(
+            out,
+            "    ",
+            &question.header,
+            Style::default().add_modifier(Modifier::BOLD),
+            width,
+        );
+    }
+    push_expanded_tool_text(out, "    ", &question.question, Style::default(), width);
+    let legacy_custom =
+        question.allow_custom && !question.options.iter().any(|option| option.custom);
+    let options = question
+        .options
+        .iter()
+        .map(Some)
+        .chain(legacy_custom.then_some(None));
+    for (option_index, option) in options.enumerate() {
+        let custom = option.is_none_or(|option| option.custom);
         let picked = answer.is_some_and(|answer| answer.picked.contains(&option_index));
         let marker = if question.multiple {
-            if picked { "[x]" } else { "[ ]" }
+            if picked { "[✓]" } else { "[ ]" }
         } else if picked {
-            "(x)"
+            "(●)"
         } else {
             "( )"
         };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                option.label.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
-    }
-    if question.allow_custom {
-        let custom_values = answer
-            .map(|answer| answer.custom_values.as_slice())
+        let label = option
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| i18n.text("overlay-user-input-other"));
+        let description = option
+            .map(|option| option.description.as_str())
             .unwrap_or_default();
-        let picked = !custom_values.is_empty();
-        let marker = if question.multiple {
-            if picked { "[x]" } else { "[ ]" }
-        } else if picked {
-            "(x)"
+        let custom_values = if custom && picked {
+            answer
+                .map(|answer| answer.custom_values.join("\n"))
+                .unwrap_or_default()
         } else {
-            "( )"
+            String::new()
         };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                i18n.text("overlay-user-input-other"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
-        if view.editing_custom && view.editing_question == Some(index) {
-            // The inline editor replaces the custom detail row, so the fixed
-            // 2-row custom budget is unchanged.
-            push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
+        let detail = if custom_values.is_empty() {
+            description
         } else {
-            let text = if custom_values.is_empty() {
-                i18n.text("overlay-user-input-custom-empty")
-            } else {
-                custom_values.join(", ")
-            };
-            push_interaction_detail_row(out, &text, width);
-        }
-    }
-    if answered {
-        let summary = answer
-            .map(|answer| ask_user_answer_summary(request, index, answer))
-            .unwrap_or_default();
-        push_interaction_detail_row(out, &summary, width);
-    }
-}
-
-/// Joins one question's committed answer into a single summary string: the
-/// picked option labels followed by the custom values.
-fn ask_user_answer_summary(
-    request: &agena_api::resource::UserInputRequest,
-    index: usize,
-    answer: &crate::interaction_view::PendingInteractionAnswerView,
-) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(question) = request.questions.get(index) {
-        for &picked in &answer.picked {
-            if let Some(option) = question.options.get(picked) {
-                parts.push(option.label.clone());
+            &custom_values
+        };
+        let kind = if custom {
+            AskCustomRow {
+                question_index: index,
             }
+        } else {
+            AskOption {
+                question_index: index,
+                option_index,
+            }
+        };
+        push_interaction_control(
+            out,
+            &request.request_id,
+            kind,
+            &format!("{marker} {label}"),
+            detail,
+            width,
+        );
+        if custom && view.editing_custom && view.editing_question == Some(index) {
+            let start = out.len();
+            push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
+            mark_interaction_control(
+                &mut out[start..],
+                &request.request_id,
+                AskCustomEditor {
+                    question_index: index,
+                },
+                true,
+                width,
+            );
         }
     }
-    parts.extend(answer.custom_values.iter().cloned());
-    parts.join(", ")
 }
 
 /// Render one notification-class activity. Notices, hooks, compactions, and
@@ -2448,8 +2709,7 @@ fn render_notice_row(
 /// Shared renderer for canonical Activity payloads. Tool-call operations,
 /// resources, reasoning and errors all flow through this single path so the
 /// transcript keeps one headline/expandable-section contract. The canonical
-/// `Error` part and a failed reply lifecycle both project into
-/// `ActivityPayload::Error` here instead of owning separate renderers.
+/// `Error` part projects into `ActivityPayload::Error` here.
 #[allow(clippy::too_many_arguments)]
 fn render_activity_canonical(
     message: &TranscriptEntry,
@@ -2767,6 +3027,234 @@ mod ask_wizard_tests {
     use super::*;
     use crate::interaction_view::*;
 
+    fn history_request(kind: &str) -> agena_api::resource::UserInputRequest {
+        serde_json::from_value(serde_json::json!({
+            "request_id": "history", "session_id": 1, "title": "Question", "body_markdown": "",
+            "kind": kind, "source": "host", "created_at": "2026-10-05T00:00:00Z",
+            "questions": [{"header": "Environment", "question": "Choose a deployment environment",
+                "options": [{"label": "Staging", "description": "Test before deployment"},
+                    {"label": "Production", "description": "Unselected description"}],
+                "allow_custom": true, "multiple": false}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn history_shows_only_submitted_answers_and_preserves_complete_feedback() {
+        for kind in ["review", "ask_user"] {
+            let request = history_request(kind);
+            let reply = agena_api::resource::UserInputReply {
+                request_id: "history".to_owned(),
+                kind: agena_api::resource::UserInputReplyKind::Submit,
+                answers: [(
+                    "0".to_owned(),
+                    vec![
+                        "Staging".to_owned(),
+                        "请先部署到测试环境\n保留第二行 END-OF-FEEDBACK".to_owned(),
+                    ],
+                )]
+                .into(),
+                reason: None,
+            };
+            let mut out = Vec::new();
+            render_user_input_history_body(&mut out, &request, Some(&reply), 48, &I18n::english());
+            let text = out
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("Staging") && text.contains("Test before deployment"));
+            assert!(text.contains("保留第二行") && text.contains("END-OF-FEEDBACK"));
+            assert!(!text.contains("Production") && !text.contains("Unselected description"));
+            assert!(out.iter().all(|row| row.controls.is_empty()));
+            if kind == "ask_user" {
+                assert!(text.contains("Choose a deployment environment"));
+            }
+        }
+    }
+
+    #[test]
+    fn cancelled_and_timed_out_history_never_renders_old_decisions() {
+        let request = history_request("review");
+        for (kind, label) in [
+            (agena_api::resource::UserInputReplyKind::Cancel, "Cancelled"),
+            (
+                agena_api::resource::UserInputReplyKind::Timeout,
+                "Timed out",
+            ),
+        ] {
+            let reply = agena_api::resource::UserInputReply {
+                request_id: "history".to_owned(),
+                kind,
+                answers: Default::default(),
+                reason: Some("Keep this explanation".to_owned()),
+            };
+            let mut out = Vec::new();
+            render_user_input_history_body(&mut out, &request, Some(&reply), 48, &I18n::english());
+            let text = out
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(label) && text.contains("Keep this explanation"));
+            assert!(!text.contains("Staging") && !text.contains("Production"));
+            assert!(out.iter().all(|row| row.controls.is_empty()));
+        }
+    }
+
+    #[test]
+    fn flat_options_keep_action_identity_and_clean_copy_across_wrapping() {
+        let mut out = Vec::new();
+        push_interaction_control(
+            &mut out,
+            "ask",
+            InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 1,
+            },
+            "( ) 中文选项",
+            "A long explanation with several wrapped lines and emoji 🙂",
+            28,
+        );
+        assert!(out.len() > 2);
+        for row in &out {
+            assert!(row.text.starts_with("    "));
+            assert!(!row.text.contains('│'));
+            assert!(!row.copy_text.contains('│'));
+            assert!(row.style.bg.is_none());
+            assert!(
+                row.rich_line
+                    .as_ref()
+                    .unwrap()
+                    .spans
+                    .iter()
+                    .all(|span| span.style.bg.is_none())
+            );
+            assert_eq!(
+                row.rich_line
+                    .as_ref()
+                    .unwrap()
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>(),
+                row.text
+            );
+            assert_eq!(row.controls.len(), 1);
+            assert!(
+                matches!(&row.controls[0].action, crate::TranscriptControlAction::UserInput {
+                request_id, kind: InteractionLineKind::AskOption { question_index: 0, option_index: 1 }
+            } if request_id == "ask")
+            );
+            assert!(row.controls[0].columns.start == 4 && row.controls[0].columns.end <= 28);
+        }
+        let copied = out
+            .iter()
+            .map(|row| row.copy_text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(copied.contains("中文选项") && copied.contains("emoji 🙂"));
+    }
+
+    #[test]
+    fn explicit_custom_choice_uses_native_markers_without_a_duplicate_legacy_row() {
+        for multiple in [false, true] {
+            for allow_custom in [false, true] {
+                let mut request = history_request("review");
+                let question = &mut request.questions[0];
+                question.multiple = multiple;
+                question.allow_custom = allow_custom;
+                question.options = vec![agena_api::resource::UserInputOption {
+                    label: "Write an answer".into(),
+                    description: "Use your own words".into(),
+                    custom: true,
+                }];
+                assert!(!request_is_review_decision(&request));
+                let mut view = PendingInteractionView::default();
+                for selected in [false, true] {
+                    if selected {
+                        view.answers.insert(
+                            0,
+                            PendingInteractionAnswerView {
+                                picked: vec![0],
+                                custom_values: vec!["My custom answer".into()],
+                            },
+                        );
+                    }
+                    let mut out = Vec::new();
+                    render_ask_user_question_block(
+                        &mut out,
+                        &request,
+                        0,
+                        &request.questions[0],
+                        &view,
+                        80,
+                        &I18n::english(),
+                    );
+                    let marker = match (multiple, selected) {
+                        (false, false) => "( )",
+                        (false, true) => "(●)",
+                        (true, false) => "[ ]",
+                        (true, true) => "[✓]",
+                    };
+                    let text = out
+                        .iter()
+                        .map(|row| row.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert_eq!(text.matches("Write an answer").count(), 1, "{text}");
+                    assert!(
+                        text.contains(&format!("{marker} Write an answer")),
+                        "{text}"
+                    );
+                    assert!(text.contains(if selected {
+                        "My custom answer"
+                    } else {
+                        "Use your own words"
+                    }));
+                    assert!(
+                        out.iter()
+                            .flat_map(|row| &row.controls)
+                            .all(|control| matches!(
+                                control.action,
+                                crate::TranscriptControlAction::UserInput {
+                                    kind: InteractionLineKind::AskCustomRow { question_index: 0 },
+                                    ..
+                                }
+                            ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn custom_editor_keeps_long_unicode_drafts_and_their_caret_visible() {
+        let draft = format!("{}\nEND-OF-DRAFT", "中文👩‍💻e\u{301}".repeat(30));
+        for width in [12, 24, 56] {
+            let mut out = Vec::new();
+            push_interaction_editor_row(&mut out, &draft, draft.len(), width);
+            assert!(out.len() <= 4);
+            assert!(
+                out.iter()
+                    .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= usize::from(width))
+            );
+            let text = out.iter().map(|line| line.text.trim()).collect::<String>();
+            assert!(text.contains("END-OF-DRAFT▏"), "{text}");
+
+            let mut out = Vec::new();
+            let cursor = draft.find('👩').unwrap();
+            push_interaction_editor_row(&mut out, &draft, cursor, width);
+            let text = out.iter().map(|line| line.text.trim()).collect::<String>();
+            assert!(text.contains("中文▏👩‍💻"), "{text}");
+            assert_eq!(text.matches('▏').count(), 1);
+            assert!(
+                out.iter()
+                    .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= usize::from(width))
+            );
+        }
+    }
+
     #[test]
     fn rendered_pages_match_cursor_actions_and_summary_wraps_every_answer() {
         let request: agena_api::resource::UserInputRequest = serde_json::from_value(serde_json::json!({
@@ -2789,48 +3277,75 @@ mod ask_wizard_tests {
         view.answers.insert(
             1,
             PendingInteractionAnswerView {
-                picked: vec![],
+                picked: vec![0],
                 custom_values: vec![long_answer.clone()],
             },
         );
-        let layouts = interaction_question_layouts(&request, &view.answers);
         for width in [28, 80] {
-            view.summary_rows = (0..2)
-                .map(|i| ask_user_summary_lines(&request, i, view.answers.get(&i), width).len())
-                .collect();
             for page in 0..=2 {
                 view.question_page = page;
-                view.plan_body_lines = if page == 0 {
-                    interaction_plan_body_lines(&request.body_markdown, width)
-                } else {
-                    0
-                };
                 let mut out = Vec::new();
                 render_ask_user_body(&mut out, &request, &view, width, &I18n::english());
+                let controls: Vec<_> = out.iter().flat_map(|row| &row.controls).collect();
                 assert_eq!(
-                    out.len(),
-                    ask_user_page_rows(view.plan_body_lines, &layouts, page, &view.summary_rows)
+                    controls.iter().any(|control| matches!(
+                        control.action,
+                        crate::TranscriptControlAction::UserInput {
+                            kind: InteractionLineKind::AskSubmit,
+                            ..
+                        }
+                    )),
+                    page >= 1,
+                    "the last question and optional summary both expose Submit"
                 );
-                for (offset, row) in out.iter().enumerate() {
-                    let kind = classify_ask_user_page(
-                        &layouts,
-                        view.plan_body_lines,
-                        page,
-                        offset,
-                        false,
-                        &view.summary_rows,
-                    );
-                    match kind {
-                        InteractionLineKind::AskOption {
-                            option_index,
-                            question_index,
-                        } => assert!(row.text.contains(
-                            &request.questions[question_index].options[option_index].label
-                        )),
-                        InteractionLineKind::AskSubmit => assert!(row.text.contains("Submit")),
-                        InteractionLineKind::AskCancel => assert!(row.text.contains("Cancel")),
-                        _ => {}
+                assert!(controls.iter().any(|control| matches!(
+                    control.action,
+                    crate::TranscriptControlAction::UserInput {
+                        kind: InteractionLineKind::AskPrevious,
+                        ..
                     }
+                ) && control.enabled == (page > 0)));
+                if page < 2 {
+                    assert!(controls.iter().any(|control| matches!(
+                        control.action,
+                        crate::TranscriptControlAction::UserInput {
+                            kind: InteractionLineKind::AskNext,
+                            ..
+                        }
+                    )));
+                } else {
+                    for kind in [
+                        InteractionLineKind::AskSubmit,
+                        InteractionLineKind::AskCancel,
+                        InteractionLineKind::AskSummary { question_index: 1 },
+                    ] {
+                        assert!(controls.iter().any(|control| matches!(control.action,
+                            crate::TranscriptControlAction::UserInput { kind: target, .. } if target == kind)));
+                    }
+                    let answer_rows = out
+                        .iter()
+                        .filter(|row| {
+                            row.controls.iter().any(|control| {
+                                matches!(
+                                    control.action,
+                                    crate::TranscriptControlAction::UserInput {
+                                        kind: InteractionLineKind::AskSummary { question_index: 1 },
+                                        ..
+                                    }
+                                )
+                            })
+                        })
+                        .count();
+                    assert!(
+                        answer_rows > 3,
+                        "the full long answer remains one editable card"
+                    );
+                }
+                for control in &controls {
+                    assert!(
+                        control.columns.start < control.columns.end
+                            && control.columns.end <= usize::from(width)
+                    );
                 }
                 let text = out
                     .iter()

@@ -1,5 +1,7 @@
 use std::time::Instant;
 
+mod action_cursor;
+
 /// A source frame invalidates only the entry that observes it. Static Part
 /// projection and Markdown/tool layout survive every other resource update.
 pub(crate) struct CachedEntryRender {
@@ -1461,6 +1463,11 @@ impl TranscriptState {
         count: usize,
     ) {
         self.ensure_visual_focus(width, height);
+        if !self.has_visual_selection()
+            && self.move_action_cursor_horizontally(width, height, forward, count)
+        {
+            return;
+        }
         let Some(cursor) = self.interaction.cursor.clone() else {
             return;
         };
@@ -1800,8 +1807,8 @@ impl TranscriptState {
     }
 
     /// Move by rendered rows while retaining the target terminal column. This
-    /// deliberately bypasses the older semantic hierarchy used by mouse and
-    /// block selection: `j`/`k` behave like Vim's visual-line movement.
+    /// preserves text columns while treating every wrapped control as one
+    /// stop. Visual selection keeps character/line geometry.
     pub(crate) fn move_cursor_by_visual_lines(
         &mut self,
         width: u16,
@@ -1813,12 +1820,25 @@ impl TranscriptState {
         let Some(cursor) = self.interaction.cursor.clone() else {
             return;
         };
-        let target = self.focusable_line_after_steps(width, cursor.line, direction, count.max(1));
+        let (target, column) = if self.has_visual_selection() {
+            (
+                self.focusable_line_after_steps(width, cursor.line, direction, count.max(1)),
+                cursor.preferred_column,
+            )
+        } else {
+            self.action_cursor_vertical_target(
+                width,
+                cursor.line,
+                cursor.preferred_column,
+                direction,
+                count.max(1),
+            )
+        };
         self.set_cursor_position_with_reveal(
             width,
             height,
             target,
-            cursor.preferred_column,
+            column,
             cursor.preferred_column,
             TranscriptRevealPolicy::Minimal,
         );
@@ -3266,40 +3286,21 @@ impl TranscriptState {
         );
     }
 
-    /// Auto-scroll so the ENTIRE expanded node — the interaction part's
-    /// headline through its last body row (the whole ask-user question page,
-    /// or the review decision block) — is visible, and land the cursor on the
-    /// node's headline. The viewport is anchored to the node's first line when
-    /// it fits; when the node is taller than the viewport, its last line is
-    /// pinned to the viewport bottom so the interactive/footer rows stay on
-    /// screen instead of just showing the part's top. Unlike
-    /// [`Self::move_cursor_to_visual_line_number`] (minimal reveal), this
-    /// never lets the reveal step clobber the fit-scroll.
+    /// Reveal the title and preserve expansion. Short parts fit in view; tall
+    /// documents start at their title so the cursor is always visible.
     pub(crate) fn reveal_node_fully(&mut self, key: &TranscriptNodeKey, width: u16, height: u16) {
-        let (start_line, end_line, total_lines) = {
+        let (start_line, total_lines) = {
             let rendered = self.rendered(width);
             let Some(node) = rendered.nodes.iter().find(|node| node.key == *key) else {
                 return;
             };
-            (node.start_line, node.end_line, rendered.lines.len())
+            (node.start_line, rendered.lines.len())
         };
         if total_lines == 0 {
             return;
         }
-        let visible = usize::from(height.max(1));
         let max_scroll = self.max_scroll(width, height);
-        // Node shorter than the viewport: anchor the top (show the whole part).
-        // Node taller than the viewport: pin the LAST body row to the bottom so
-        // the interactive/footer rows stay on screen. A plain
-        // `start_line.min(end_line - visible)` chain is wrong here — for a tall
-        // node `end_line - visible` exceeds `start_line`, and `min` would pick
-        // the top anchor and cut the page's bottom off (the "翻页看不全" bug).
-        let target_top = if end_line.saturating_sub(start_line) > visible {
-            end_line.saturating_sub(visible)
-        } else {
-            start_line
-        }
-        .min(max_scroll);
+        let target_top = start_line.min(max_scroll);
         self.viewport.top = target_top;
         self.install_cursor_at_column(
             width,
@@ -3695,6 +3696,7 @@ impl TranscriptState {
             return;
         }
         let line = target.min(total_lines.saturating_sub(1));
+        let atomic = block_cursor.is_none() && !self.has_visual_selection();
         let (anchor, column) = {
             let rendered = self.rendered(width);
             let anchor = rendered
@@ -3705,6 +3707,25 @@ impl TranscriptState {
                 .map(|node| TranscriptCursorAnchor {
                     key: node.key.clone(),
                     line_offset: line.saturating_sub(node.start_line),
+                    action: atomic
+                        .then(|| {
+                            rendered.lines.get(line).and_then(|row| {
+                                row.controls
+                                    .iter()
+                                    .filter(|control| control.enabled)
+                                    .min_by_key(|control| {
+                                        if requested_column < control.columns.start {
+                                            control.columns.start - requested_column
+                                        } else {
+                                            requested_column.saturating_sub(
+                                                control.columns.end.saturating_sub(1),
+                                            )
+                                        }
+                                    })
+                                    .map(|control| control.action.clone())
+                            })
+                        })
+                        .flatten(),
                 });
             let column = rendered
                 .lines
@@ -3740,8 +3761,22 @@ impl TranscriptState {
             self.interaction.cursor = None;
             return;
         }
-        let (line, block_cursor) = {
+        let visual = self.has_visual_selection();
+        let (line, column, block_cursor) = {
             let rendered = self.rendered(width);
+            let action_target = cursor
+                .anchor
+                .as_ref()
+                .filter(|_| !visual)
+                .and_then(|anchor| anchor.action.as_ref())
+                .and_then(|action| {
+                    rendered.lines.iter().enumerate().find_map(|(line, row)| {
+                        row.controls
+                            .iter()
+                            .find(|control| control.enabled && &control.action == action)
+                            .map(|control| (line, control.columns.start))
+                    })
+                });
             let line = cursor
                 .anchor
                 .as_ref()
@@ -3764,13 +3799,14 @@ impl TranscriptState {
             let block_cursor = cursor
                 .block_cursor
                 .filter(|block| rendered.nodes.iter().any(|node| node.key == block.key));
-            (line, block_cursor)
+            let (line, column) = action_target.unwrap_or((line, cursor.column));
+            (line, column, block_cursor)
         };
         self.install_cursor_at_column(
             width,
             height,
             line,
-            cursor.column,
+            column,
             cursor.preferred_column,
             block_cursor,
             false,
@@ -3908,8 +3944,8 @@ impl TranscriptState {
     /// Toggle one ordinary part detail, or reveal a requested number of older
     /// parts when the cursor is on a list fold marker. The count affects only
     /// list visibility; it never changes any real part's detail expansion. A
-    /// cursor inside an ordinary expanded part remains attached to the same
-    /// part and relative row when that detail is collapsed.
+    /// Only the part headline toggles expansion; prose and actions keep their
+    /// own Enter behavior.
     pub(crate) fn toggle_cursor_node_expansion_by(
         &mut self,
         width: u16,
@@ -3922,6 +3958,11 @@ impl TranscriptState {
         }
 
         let (cursor_line, block_cursor) = self.navigation_parts()?;
+        // Only disclosure headlines own expansion. Enter in prose and in a
+        // tool detail body must never toggle the containing part.
+        if cursor_line != node.start_line {
+            return None;
+        }
         let cursor_offset = cursor_line.saturating_sub(node.start_line).min(
             node.end_line
                 .saturating_sub(node.start_line)

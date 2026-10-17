@@ -106,7 +106,7 @@ function renderMermaidBlock(code: string): string {
 
   const toggleBtn = large
     ? `
-<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleDiagramAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
+<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn part-action part-action-icon" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleDiagramAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
   ${inlineIcon('chevronDown')}
   ${inlineIcon('chevronUp')}
 </button>`.trim()
@@ -115,7 +115,7 @@ function renderMermaidBlock(code: string): string {
   const moreBtn = large
     ? `
 <div class="oc-md-mermaid__morewrap">
-  <button tabindex="0" type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandDiagramAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
+  <button tabindex="0" type="button" class="oc-md-codeblock__more part-action part-action-icon" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandDiagramAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
     ${inlineIcon('chevronDown')}
   </button>
 </div>`.trim()
@@ -123,11 +123,11 @@ function renderMermaidBlock(code: string): string {
 
   return `
 <div class="not-prose oc-md-mermaid" data-oc-mermaidblock="1" data-oc-expanded="${expanded ? '1' : '0'}" data-oc-large="${large ? '1' : '0'}" data-oc-lines="${linesEsc}" data-oc-mermaid-status="pending">
-  <div class="oc-md-codeblock__header">
+  <div class="oc-md-codeblock__header part-toolbar">
     <span class="oc-md-codeblock__lang" title="mermaid">mermaid</span>
-    <div class="oc-md-codeblock__actions">
+    <div class="oc-md-codeblock__actions part-actionbar">
       ${toggleBtn}
-      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyDiagramSourceAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
+      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn part-action part-action-icon" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyDiagramSourceAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
         ${inlineIcon('copy')}
         ${inlineIcon('check')}
       </button>
@@ -159,7 +159,7 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
 
   const toggleBtn = large
     ? `
-<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleCodeAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
+<button tabindex="0" type="button" class="oc-md-codeblock__iconbtn part-action part-action-icon" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.toggleCodeAria)}" title="${escapeHtml(currentLabels.expandLinesTitle(lines))}">
   ${inlineIcon('chevronDown')}
   ${inlineIcon('chevronUp')}
 </button>`.trim()
@@ -168,7 +168,7 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
   const moreBtn = large
     ? `
 <div class="oc-md-codeblock__morewrap">
-  <button tabindex="0" type="button" class="oc-md-codeblock__more" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandCodeAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
+  <button tabindex="0" type="button" class="oc-md-codeblock__more part-action part-action-icon" data-oc-code-action="toggle" aria-expanded="${expanded ? 'true' : 'false'}" aria-label="${escapeHtml(currentLabels.expandCodeAria)}" title="${escapeHtml(currentLabels.expandTitle)}">
     ${inlineIcon('chevronDown')}
   </button>
 </div>`.trim()
@@ -176,11 +176,11 @@ function renderFencedCodeBlock(code: string, lang?: string): string {
 
   return `
 <div class="not-prose oc-md-codeblock" data-oc-codeblock="1" data-oc-expanded="${expanded ? '1' : '0'}" data-oc-large="${large ? '1' : '0'}" data-oc-lang="${langEsc}" data-oc-lines="${linesEsc}">
-  <div class="oc-md-codeblock__header">
+  <div class="oc-md-codeblock__header part-toolbar">
     <span class="oc-md-codeblock__lang" title="${titleEsc}">${langEsc}</span>
-    <div class="oc-md-codeblock__actions">
+    <div class="oc-md-codeblock__actions part-actionbar">
       ${toggleBtn}
-      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyCodeAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
+      <button tabindex="0" type="button" class="oc-md-codeblock__iconbtn part-action part-action-icon" data-oc-code-action="copy" aria-label="${escapeHtml(currentLabels.copyCodeAria)}" title="${escapeHtml(currentLabels.copyTitle)}">
         ${inlineIcon('copy')}
         ${inlineIcon('check')}
       </button>
@@ -333,7 +333,9 @@ export class MarkdownStreamRenderer {
   private labelsKey = ''
   parsedBytes = 0
 
-  get retainedCharacters(): number { return this.source.length }
+  get retainedCharacters(): number {
+    return this.source.length
+  }
 
   render(content: string, labels?: Partial<MarkdownUiLabels>): string[] {
     const key = JSON.stringify({ ...labels, expandLinesTitle: labels?.expandLinesTitle?.(123) })
@@ -357,7 +359,9 @@ export class MarkdownStreamRenderer {
     try {
       const environment = {}
       const tokens = md.parse(tail, environment)
-      const blocks = tokens.flatMap((token, index) => token.level === 0 && token.nesting >= 0 && token.map ? [{ token, index }] : [])
+      const blocks = tokens.flatMap((token, index) =>
+        token.level === 0 && token.nesting >= 0 && token.map ? [{ token, index }] : [],
+      )
       const boundary = blocks.at(-2)
       if (!boundary || boundary.token.map![0] === 0) {
         return [...this.stable, md.renderer.render(tokens, md.options, environment)]
@@ -372,7 +376,9 @@ export class MarkdownStreamRenderer {
       this.stable.push(md.renderer.render(tokens.slice(0, boundary.index), md.options, environment))
       this.committedOffset += offset
       return [...this.stable, md.renderer.render(tokens.slice(boundary.index), md.options, environment)]
-    } finally { currentLabels = DEFAULT_LABELS }
+    } finally {
+      currentLabels = DEFAULT_LABELS
+    }
   }
 }
 

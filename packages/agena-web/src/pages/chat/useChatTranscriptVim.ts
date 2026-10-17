@@ -56,11 +56,15 @@ import {
   type TranscriptTextProjection,
   type TranscriptVisualRow,
 } from './transcriptDomCursor'
+import { transcriptNativeControl } from './transcriptControls'
 import {
-  focusTranscriptInteractionControl,
-  focusTranscriptPartControl,
-  transcriptNativeControl,
-} from './transcriptControls'
+  actionCursorNeighbour,
+  focusTranscriptAction,
+  transcriptActionControl,
+  transcriptActionControls,
+  transcriptActionRect,
+  type ActionCursorDirection,
+} from './transcriptActionCursor'
 
 type ToastsLike = { push: (kind: 'success' | 'error' | 'info', message: string, duration?: number) => void }
 
@@ -495,7 +499,14 @@ export function useChatTranscriptVim(opts: {
   function moveHorizontal(forward: boolean, count = takeCount()) {
     const entry = activeTextEntry()
     if (!entry) return
-    setCursorPoint({ key: entry.key, offset: moveTranscriptGrapheme(entry.text, cursorOffset.value, forward, count) })
+    const offset = moveTranscriptGrapheme(entry.text, cursorOffset.value, forward, count)
+    const boundary = transcriptDomBoundaryForOffset(entry.element, offset, 'forward', entry.projection)
+    const control = transcriptActionControl(boundary?.node.parentElement || null)
+    if (!mode.value.startsWith('VISUAL') && control && transcriptActionControls(entry.element).includes(control)) {
+      focusTranscriptAction(control)
+      return
+    }
+    setCursorPoint({ key: entry.key, offset })
   }
 
   function moveVisualLines(direction: 'up' | 'down', count = takeCount()) {
@@ -589,25 +600,193 @@ export function useChatTranscriptVim(opts: {
     else selectElement(message)
   }
 
-  function partForKey(key: string): TranscriptDisplayPart | null {
-    for (const block of opts.renderBlocks.value) {
-      if (block.kind !== 'message') continue
-      const part = block.displayParts.find((candidate) => candidate.key === key)
-      if (part) return part
-    }
-    return null
-  }
-
   function toggleCurrentPart() {
-    const part = partForKey(activeNodeKey.value)
-    if (part?.toggleable) {
-      opts.togglePart(part, !opts.isPartExpanded(part))
+    const entry = activeTextEntry()
+    const boundary = entry
+      ? transcriptDomBoundaryForOffset(entry.element, cursorOffset.value, 'forward', entry.projection)
+      : null
+    const control = transcriptActionControl(boundary?.node.parentElement || null)
+    // Enter belongs to the object under the cursor. In particular, prose in
+    // an expanded part must never collapse its containing operation.
+    if (control && !control.matches(':disabled, [aria-disabled="true"]')) {
+      control.click()
       return
     }
-    const control =
-      activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-toggle="true"]') ??
-      activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-vim-toggle="true"]')
-    control?.click()
+    if (activeElement()?.dataset.partKind === 'activity_summary')
+      activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-toggle="true"]')?.click()
+  }
+
+  function focusedAction(): HTMLElement | null {
+    const target = document.activeElement
+    if (!(target instanceof HTMLElement) || !opts.scrollEl.value?.contains(target)) return null
+    return transcriptActionControl(target)
+  }
+
+  type ActionStop = { control: HTMLElement } | { row: TranscriptVisualRow }
+
+  /** Text keeps its grapheme cursor; native actions are atomic spatial stops. */
+  function moveActionCursor(direction: ActionCursorDirection): boolean {
+    const focused = focusedAction()
+    const point = cursorPoint()
+    const entry = activeTextEntry()
+    const boundary =
+      entry && point ? transcriptDomBoundaryForOffset(entry.element, point.offset, 'forward', entry.projection) : null
+    const candidate = focused || transcriptActionControl(boundary?.node.parentElement || null)
+    const current = candidate && !candidate.matches(':disabled, [aria-disabled="true"]') ? candidate : null
+    const origin = current ? transcriptActionRect(current) : point ? cursorRectForPoint(point) : null
+    if (!origin) return false
+    const horizontal = direction === 'left' || direction === 'right'
+    if (horizontal && !current) return false
+
+    const elements = cursorElements()
+    const owner = current?.closest<HTMLElement>(NODE_SELECTOR) || activeElement()
+    const index = owner ? elements.indexOf(owner) : -1
+    const count = Math.max(1, Number.parseInt(countPrefix.value, 10) || 1)
+    const nearby =
+      index < 0
+        ? [opts.scrollEl.value].filter((el): el is HTMLElement => Boolean(el))
+        : elements.slice(Math.max(0, index - count - 2), index + count + 3)
+    const controls = [...new Set(nearby.flatMap(transcriptActionControls))]
+    const controlSet = new Set(controls)
+    const rows = transcriptVisualRows(nearby).flatMap((row) => {
+      const fragments = row.fragments.filter((fragment) => {
+        const control = transcriptActionControl(fragment.node.parentElement)
+        return !control || !controlSet.has(control)
+      })
+      if (!fragments.length) return []
+      return [
+        {
+          ...row,
+          fragments,
+          left: Math.min(...fragments.map((fragment) => fragment.rect.left)),
+          right: Math.max(...fragments.map((fragment) => fragment.rect.right)),
+        },
+      ]
+    })
+    const stops: { value: ActionStop; rect: DOMRect | TranscriptVisualRow }[] = [
+      ...controls
+        .filter((control) => control !== current)
+        .map((control) => ({ value: { control }, rect: transcriptActionRect(control) })),
+      ...rows.map((row) => ({ value: { row }, rect: row })),
+    ]
+    const x = preferredViewportX.value ?? origin.left
+    let target = actionCursorNeighbour(origin, stops, direction, x)
+    if (!target && horizontal && current) {
+      // A single-column choice list still supports h/l, one choice per step.
+      const position = controls.indexOf(current)
+      const next = controls[position + (direction === 'right' ? 1 : -1)]
+      if (next) target = { control: next }
+    }
+    if (!target) {
+      if (current) takeCount()
+      return Boolean(current)
+    }
+    takeCount()
+    let destination: ActionStop = target
+    for (let step = 1; step < count; step++) {
+      const currentStop: ActionStop = destination
+      const rect = 'control' in currentStop ? transcriptActionRect(currentStop.control) : currentStop.row
+      let next: ActionStop | null = actionCursorNeighbour(
+        rect,
+        stops.filter((stop) =>
+          'control' in currentStop && 'control' in stop.value
+            ? stop.value.control !== currentStop.control
+            : 'row' in currentStop && 'row' in stop.value
+              ? stop.value.row !== currentStop.row
+              : true,
+        ),
+        direction,
+        x,
+      )
+      if (!next && horizontal && 'control' in currentStop) {
+        const position = controls.indexOf(currentStop.control)
+        const control = controls[position + (direction === 'right' ? 1 : -1)]
+        if (control) next = { control }
+      }
+      if (!next) break
+      destination = next
+    }
+    if ('control' in destination) {
+      const part = destination.control.closest<HTMLElement>(NODE_SELECTOR)
+      if (part) activeNodeKey.value = keyForElement(part)
+      focusTranscriptAction(destination.control)
+      removeCursorOverlay()
+    } else {
+      setCursorPoint(pointForVisualRow(destination.row, x), { preserveX: true })
+    }
+    preferredViewportX.value = x
+    return true
+  }
+
+  function onActionCursorKeydown(event: KeyboardEvent) {
+    if (
+      !vimActive() ||
+      isImeComposing(event) ||
+      event.defaultPrevented ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      pendingFind.value ||
+      pendingCommand.value ||
+      mode.value.startsWith('VISUAL') ||
+      !(event.target instanceof Element) ||
+      !opts.scrollEl.value?.contains(event.target) ||
+      (isEditable(event.target) && !event.target.matches('input[type="radio"], input[type="checkbox"]')) ||
+      event.target.closest(
+        'select, .xterm, [data-transcript-native-keys="true"], [data-transcript-keyboard-owner="true"]',
+      )
+    )
+      return
+    if (focusedAction() && (/^[1-9]$/.test(event.key) || (event.key === '0' && countPrefix.value))) {
+      countPrefix.value += event.key
+      commandEcho.value = ''
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+    const directions: Record<string, ActionCursorDirection> = {
+      h: 'left',
+      ArrowLeft: 'left',
+      l: 'right',
+      ArrowRight: 'right',
+      k: 'up',
+      ArrowUp: 'up',
+      j: 'down',
+      ArrowDown: 'down',
+    }
+    const direction = directions[event.key]
+    // Questionnaires own horizontal page navigation. Keep the shared cursor
+    // for vertical movement so users can still move into and out of the prose.
+    if (
+      (direction === 'left' || direction === 'right') &&
+      event.target.closest('[data-interaction-question-flow="true"] [data-interaction-control="true"]')
+    ) {
+      countPrefix.value = ''
+      commandEcho.value = ''
+      return
+    }
+    if (direction && moveActionCursor(direction)) {
+      event.preventDefault()
+      event.stopPropagation()
+    } else if (!direction && focusedAction()) {
+      countPrefix.value = ''
+      commandEcho.value = ''
+    }
+  }
+
+  function onActionFocus(event: FocusEvent) {
+    if (!vimActive() || !(event.target instanceof Element)) return
+    countPrefix.value = ''
+    opts.scrollEl.value
+      ?.querySelectorAll('[data-transcript-action-cursor]')
+      .forEach((element) => element.removeAttribute('data-transcript-action-cursor'))
+    const control = transcriptActionControl(event.target)
+    if (!control) return
+    control.setAttribute('data-transcript-action-cursor', 'true')
+    const part = control.closest<HTMLElement>(NODE_SELECTOR)
+    if (part) activeNodeKey.value = keyForElement(part)
+    removeCursorOverlay()
   }
 
   function visibleVisualRows(): TranscriptVisualRow[] {
@@ -957,6 +1136,10 @@ export function useChatTranscriptVim(opts: {
     }
     if (typeof document === 'undefined' || mode.value === 'INSERT' || mode.value === 'SEARCH') {
       clearVisualBlockHighlight()
+      removeCursorOverlay()
+      return
+    }
+    if (focusedAction()) {
       removeCursorOverlay()
       return
     }
@@ -2202,29 +2385,6 @@ export function useChatTranscriptVim(opts: {
     if (mode.value === 'INSERT') mode.value = 'NAVIGATE'
     ensureActive()
 
-    if (
-      !pendingFind.value &&
-      !pendingCommand.value &&
-      !mode.value.startsWith('VISUAL') &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      !event.shiftKey &&
-      (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
-    ) {
-      const row = activeElement()
-      const direction = event.key === 'ArrowRight' ? 1 : -1
-      if (
-        row &&
-        ((row.dataset.partKind === 'activity_summary' && focusTranscriptPartControl(row, direction)) ||
-          focusTranscriptInteractionControl(row, direction))
-      ) {
-        event.preventDefault()
-        event.stopPropagation()
-        return
-      }
-    }
-
     if (pendingFind.value || pendingCommand.value) {
       const action = resolveTranscriptVimAction(event)
       event.preventDefault()
@@ -2382,6 +2542,8 @@ export function useChatTranscriptVim(opts: {
     }
     root?.addEventListener('pointerdown', onTranscriptPointerDown, true)
     root?.addEventListener('load', onTranscriptMediaLoad, true)
+    window.addEventListener('keydown', onActionCursorKeydown, true)
+    mountedScroll?.addEventListener('focusin', onActionFocus)
     window.addEventListener('keydown', onKeydown)
     window.addEventListener('resize', onTranscriptResize)
     document.addEventListener('copy', onTranscriptCopy)
@@ -2397,6 +2559,8 @@ export function useChatTranscriptVim(opts: {
     transcriptResizeObserver = null
     mountedRoot?.removeEventListener('pointerdown', onTranscriptPointerDown, true)
     mountedRoot?.removeEventListener('load', onTranscriptMediaLoad, true)
+    window.removeEventListener('keydown', onActionCursorKeydown, true)
+    mountedScroll?.removeEventListener('focusin', onActionFocus)
     window.removeEventListener('keydown', onKeydown)
     window.removeEventListener('resize', onTranscriptResize)
     document.removeEventListener('copy', onTranscriptCopy)

@@ -4544,6 +4544,7 @@ async fn host_ask_user_tool_call_born_in_progress_and_reply_completes() {
             header: String::new(),
             question: "Approve the new plan?".to_owned(),
             options: vec![UserInputOption {
+                custom: false,
                 label: "Approve".to_owned(),
                 description: String::new(),
             }],
@@ -4780,6 +4781,7 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
             header: "Decision".to_owned(),
             question: "Approve the new plan?".to_owned(),
             options: vec![UserInputOption {
+                custom: false,
                 label: "Approve".to_owned(),
                 description: String::new(),
             }],
@@ -4814,6 +4816,7 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
             header: "Question".to_owned(),
             question: "Which flavor?".to_owned(),
             options: vec![UserInputOption {
+                custom: false,
                 label: "Vanilla".to_owned(),
                 description: String::new(),
             }],

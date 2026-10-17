@@ -166,7 +166,8 @@ overlay-user-input-unanswered = 尚未回答
 overlay-user-input-custom-empty = 按 Space 輸入自訂回答
 overlay-user-input-review-feedback = 給代理的回饋
 overlay-user-input-review-feedback-empty = 按 Enter 或 e 輸入回饋，或選擇一項決定
-overlay-user-input-review-footer-hint = 在選項上按 Enter = 送出 · 在標題上按 Enter = 收合/展開
+overlay-user-input-review-footer-hint = H J K L / 方向鍵移動 · Enter 操作 · Esc 返回標題
+overlay-user-input-question-footer-hint = ↑/↓ J/K 選項 · ←/→ H/L 切題 · 空白鍵選擇 · Enter 下一題 / 提交 · Esc 回標題
 overlay-user-input-missing-answer = {$label} 尚未回答
 overlay-user-input-footer-review = j/k ↑/↓ 移動 | Enter 選擇 | e 編輯 | Ctrl+Y/Ctrl+E 逐行捲動 | PgUp/PgDn 翻頁 | Ctrl+X 取消
 overlay-user-input-footer-question = Tab/Shift+Tab 換頁 | Space 切換 | Ctrl+D 清除 | Ctrl+Y/Ctrl+E 逐行捲動 | PgUp/PgDn 翻頁 | Ctrl+X 取消
@@ -3007,3 +3008,5 @@ btw-stopped = 已停止 · 已保留部分回答
 
 transcript-rich-fallback = 無法預覽：{$reason}。下方保留原始原始碼。
 transcript-interactive-app = 在 Agena Web 中開啟此互動應用，即可操作介面和執行後端服務。
+
+overlay-user-input-defer = 稍後處理

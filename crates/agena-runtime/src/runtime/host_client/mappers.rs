@@ -163,6 +163,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                     .options
                     .into_iter()
                     .map(|option| UserInputOption {
+                        custom: option.custom,
                         label: option.label,
                         description: option.description,
                     })
@@ -188,6 +189,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         .options
         .into_iter()
         .map(|label| UserInputOption {
+            custom: false,
             label,
             description: String::new(),
         })

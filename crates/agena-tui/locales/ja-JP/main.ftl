@@ -280,7 +280,8 @@ overlay-user-input-unanswered = 未回答
 overlay-user-input-custom-empty = Space キーでカスタム回答を入力
 overlay-user-input-review-feedback = エージェントへのフィードバック
 overlay-user-input-review-feedback-empty = Enter または e でフィードバックを入力するか、判断を選択してください
-overlay-user-input-review-footer-hint = 選択肢で Enter = 送信 · タイトルで Enter = 折りたたみ/展開
+overlay-user-input-review-footer-hint = H J K L / 矢印: 移動 · Enter: 実行 · Esc: タイトル
+overlay-user-input-question-footer-hint = ↑/↓ J/K: 選択肢を移動 · ←/→ H/L: 質問を移動 · Space: 選択 · Enter: 次へ / 送信 · Esc: タイトル
 overlay-user-input-missing-answer = {$label} の回答がありません
 overlay-user-input-footer-review = j/k ↑/↓ 移動 | Enter 選択 | e 編集 | Ctrl+Y/Ctrl+E 行スクロール | PgUp/PgDn ページ | Ctrl+X キャンセル
 overlay-user-input-footer-question = Tab/Shift+Tab ページ | Space 切替 | Ctrl+D 消去 | Ctrl+Y/Ctrl+E 行スクロール | PgUp/PgDn ページ | Ctrl+X キャンセル
@@ -2956,3 +2957,5 @@ btw-stopped = 停止しました · 途中までの回答は保持されてい�
 
 transcript-rich-fallback = プレビューできません: {$reason}。元のソースを表示します。
 transcript-interactive-app = Agena Web でこのアプリを開くと、UI とバックエンドを操作できます。
+
+overlay-user-input-defer = 後で対応

@@ -297,7 +297,6 @@ pub(crate) struct PermissionOverlay {
 #[derive(Debug, Clone)]
 pub(crate) enum PendingInteractiveOverlayTarget {
     Permission {
-        session_id: i64,
         request: Box<PermissionRequest>,
     },
     UserInput {

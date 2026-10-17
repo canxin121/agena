@@ -807,6 +807,7 @@ pub enum MonitorToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
+    validate = validate_ask_user_questions,
     trim(
         "title",
         "kind",
@@ -823,7 +824,6 @@ pub enum MonitorToolInput {
     max_chars("body_markdown", 16000),
     minimum("auto_resolution_ms", 60000),
     maximum("auto_resolution_ms", 600000),
-    required_unless_present("questions[].allow_custom", "questions[].options"),
     non_empty("questions[].question"),
     non_empty_if_present("questions[].options[].label"),
     distinct_trimmed_within("questions[].options[].label", "questions[]")
@@ -844,8 +844,33 @@ pub struct AskUserToolInput {
     /// A timeout is not approval; only independent, already-authorized work may continue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
+    /// One to three questions. Each option is a normal choice unless `custom: true`,
+    /// which lets the user select it and write an answer. A custom option may be
+    /// the only option; do not invent a fixed choice for free-text questions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
+}
+
+fn validate_ask_user_questions(input: &AskUserToolInput) -> agena_plugin_sdk::Result<()> {
+    for (index, question) in input.questions.iter().enumerate() {
+        if question.options.is_empty() && !question.allow_custom {
+            return Err(agena_plugin_sdk::PluginError::invalid_params(format!(
+                "questions[{index}].options must include a choice or an option with custom: true"
+            )));
+        }
+        if question
+            .options
+            .iter()
+            .filter(|option| option.custom)
+            .count()
+            > 1
+        {
+            return Err(agena_plugin_sdk::PluginError::invalid_params(format!(
+                "questions[{index}].options supports at most one custom option"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

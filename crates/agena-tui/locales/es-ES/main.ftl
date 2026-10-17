@@ -168,7 +168,8 @@ overlay-user-input-unanswered = sin responder
 overlay-user-input-custom-empty = Pulsa Espacio para escribir una respuesta personalizada
 overlay-user-input-review-feedback = Comentarios para el agente
 overlay-user-input-review-feedback-empty = Pulsa Enter o e para escribir comentarios, o elige una decisión
-overlay-user-input-review-footer-hint = Enter sobre una opción = enviar · Enter sobre el título = contraer/expandir
+overlay-user-input-review-footer-hint = H J K L / flechas: mover · Enter: activar · Esc: título
+overlay-user-input-question-footer-hint = ↑/↓ J/K: opciones · ←/→ H/L: preguntas · Espacio: seleccionar · Intro: siguiente / enviar · Esc: título
 overlay-user-input-missing-answer = Falta responder {$label}
 overlay-user-input-footer-review = j/k ↑/↓ mover | Enter elegir | e editar | Ctrl+Y/Ctrl+E desplazar línea | PgUp/PgDn páginas | Ctrl+X cancelar
 overlay-user-input-footer-question = Tab/Shift+Tab páginas | Espacio alternar | Ctrl+D borrar | Ctrl+Y/Ctrl+E desplazar línea | PgUp/PgDn páginas | Ctrl+X cancelar
@@ -2958,3 +2959,5 @@ tool-technical-details = Detalles técnicos
 
 transcript-rich-fallback = Vista previa no disponible: {$reason}. Se muestra el código original.
 transcript-interactive-app = Abre esta aplicación en Agena Web para usar la interfaz y ejecutar sus servicios.
+
+overlay-user-input-defer = Posponer solicitud

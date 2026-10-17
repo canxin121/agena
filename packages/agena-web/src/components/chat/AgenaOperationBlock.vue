@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RiFileTextLine, RiGlobalLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
 import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
+import AgenaResourceLink from '@/components/chat/AgenaResourceLink.vue'
 import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
@@ -224,21 +226,10 @@ const progressCount = computed(() =>
       </table>
     </div>
 
-    <div v-else-if="kind === 'search_results'" class="divide-y divide-border/40 border-y border-border/60">
-      <div v-for="result in searchResults" :key="result.key" class="py-1 first:pt-0.5 last:pb-0.5">
-        <a
-          v-if="result.uri"
-          :href="result.uri"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="font-medium text-primary hover:underline"
-          >{{ result.title }}</a
-        >
-        <div v-else class="font-medium">{{ result.title }}</div>
-        <div v-if="result.snippet" class="mt-0.5 text-xs text-muted-foreground">{{ result.snippet }}</div>
-        <div v-if="result.uri" class="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/75">
-          {{ result.uri }}
-        </div>
+    <div v-else-if="kind === 'search_results'" class="interaction-width space-y-2">
+      <div v-for="result in searchResults" :key="result.key" class="space-y-1">
+        <AgenaResourceLink :href="result.uri" :label="result.title" :description="result.uri" :icon="RiGlobalLine" />
+        <p v-if="result.snippet" class="px-1 text-xs leading-relaxed text-muted-foreground">{{ result.snippet }}</p>
       </div>
     </div>
 
@@ -280,15 +271,13 @@ const progressCount = computed(() =>
         class="max-h-96 max-w-full"
       />
       <audio v-else-if="mediaMime.startsWith('audio/')" :src="mediaUrl" controls preload="none" class="w-full" />
-      <a
+      <AgenaResourceLink
         v-else
         :href="mediaUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="font-mono text-xs text-primary hover:underline"
-      >
-        {{ mediaUrl }}
-      </a>
+        :label="resourceTitle || mediaUrl"
+        :description="mediaUrl"
+        :icon="RiFileTextLine"
+      />
     </div>
 
     <div v-else-if="kind === 'image' || kind === 'audio' || kind === 'file' || kind === 'media'" class="space-y-1">
@@ -307,30 +296,18 @@ const progressCount = computed(() =>
         preload="none"
         class="w-full"
       />
-      <a
+      <AgenaResourceLink
         v-else-if="resourceUri"
         :href="resourceUri"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="break-all font-mono text-xs text-primary hover:underline"
-      >
-        {{ resourceTitle }}
-      </a>
+        :label="resourceTitle || resourceUri"
+        :description="resourceUri"
+        :icon="RiFileTextLine"
+      />
     </div>
 
-    <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="border-y border-border/50 py-1">
-      <a
-        :href="resourceUri || undefined"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="break-words font-medium text-primary hover:underline"
-      >
-        {{ resourceTitle }}
-      </a>
-      <div v-if="bodyText" class="mt-1 text-xs text-muted-foreground">{{ bodyText }}</div>
-      <div v-if="resourceUri" class="mt-1 break-all font-mono text-[10px] text-muted-foreground/75">
-        {{ resourceUri }}
-      </div>
+    <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="interaction-width space-y-1">
+      <AgenaResourceLink :href="resourceUri" :label="resourceTitle" :description="resourceUri" />
+      <p v-if="bodyText" class="px-1 text-xs leading-relaxed text-muted-foreground">{{ bodyText }}</p>
     </div>
 
     <div v-else-if="kind === 'embedded_resource'" class="space-y-1 border-y border-border/50 py-1">

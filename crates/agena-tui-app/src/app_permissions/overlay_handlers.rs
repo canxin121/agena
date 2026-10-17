@@ -6,11 +6,7 @@ impl App {
     ) -> bool {
         match agena_tui::permission_prompt::handle_key(&mut dialog.presentation, key) {
             PermissionPromptEffect::Close => {
-                // ESC Close must not permanently lose the request: drop the
-                // local guard so the request auto-popups again on the next
-                // sync (permissions have no persisted presented state).
-                self.seen_permission_request_ids
-                    .remove(&dialog.request.request_id);
+                // The pending request stays available on its transcript part.
                 true
             }
             PermissionPromptEffect::KeepOpen => false,

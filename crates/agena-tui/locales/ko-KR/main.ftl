@@ -168,7 +168,8 @@ overlay-user-input-unanswered = 미응답
 overlay-user-input-custom-empty = Space를 눌러 사용자 지정 답변 입력
 overlay-user-input-review-feedback = 에이전트에게 보낼 피드백
 overlay-user-input-review-feedback-empty = Enter 또는 e를 눌러 피드백을 입력하거나 결정을 선택하세요
-overlay-user-input-review-footer-hint = 선택 항목에서 Enter = 제출 · 제목에서 Enter = 접기/펼치기
+overlay-user-input-review-footer-hint = H J K L / 방향키: 이동 · Enter: 실행 · Esc: 제목
+overlay-user-input-question-footer-hint = ↑/↓ J/K: 옵션 이동 · ←/→ H/L: 질문 이동 · Space: 선택 · Enter: 다음 / 제출 · Esc: 제목
 overlay-user-input-missing-answer = {$label} 답변이 없습니다
 overlay-user-input-footer-review = j/k ↑/↓ 이동 | Enter 선택 | e 편집 | Ctrl+Y/Ctrl+E 줄 스크롤 | PgUp/PgDn 페이지 | Ctrl+X 취소
 overlay-user-input-footer-question = Tab/Shift+Tab 페이지 | Space 전환 | Ctrl+D 지우기 | Ctrl+Y/Ctrl+E 줄 스크롤 | PgUp/PgDn 페이지 | Ctrl+X 취소
@@ -2952,3 +2953,5 @@ session-work-no-recorded-diff = 기록된 텍스트 diff가 없습니다.
 
 transcript-rich-fallback = 미리보기 불가: {$reason}. 원본 소스를 표시합니다.
 transcript-interactive-app = Agena Web에서 이 앱을 열어 UI와 백엔드를 실행하세요.
+
+overlay-user-input-defer = 나중에 처리

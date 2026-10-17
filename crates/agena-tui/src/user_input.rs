@@ -17,6 +17,7 @@ pub use agena_tui_components::QuestionFlowScreen;
 pub struct UserInputOptionPresentation {
     pub label: String,
     pub description: String,
+    pub custom: bool,
 }
 
 /// A display-only interactive question used by the TUI reducer.
@@ -27,6 +28,15 @@ pub struct UserInputQuestionPresentation {
     pub options: Vec<UserInputOptionPresentation>,
     pub multiple: bool,
     pub allow_custom: bool,
+}
+
+impl UserInputQuestionPresentation {
+    pub fn custom_option_index(&self) -> Option<usize> {
+        self.options
+            .iter()
+            .position(|option| option.custom)
+            .or_else(|| self.allow_custom.then_some(self.options.len()))
+    }
 }
 
 /// Request-level display data. The App maps the Domain request into this
@@ -153,6 +163,39 @@ impl UserInputPresentation {
 
     pub fn answer(&self, index: usize) -> Option<&UserInputAnswerDraft> {
         self.answers.get(&index)
+    }
+
+    pub fn custom_option_selected(&self, index: usize) -> bool {
+        self.questions
+            .get(index)
+            .and_then(|question| question.custom_option_index())
+            .is_some_and(|custom| {
+                self.answers
+                    .get(&index)
+                    .is_some_and(|draft| draft.option_indexes.contains(&custom))
+            })
+    }
+
+    pub fn question_is_answered(&self, index: usize) -> bool {
+        let Some(question) = self.questions.get(index) else {
+            return false;
+        };
+        let Some(draft) = self.answers.get(&index) else {
+            return false;
+        };
+        let custom = question.custom_option_index();
+        if custom.is_some_and(|custom| draft.option_indexes.contains(&custom)) {
+            return draft
+                .custom_values
+                .iter()
+                .any(|value| !value.trim().is_empty());
+        }
+        draft.option_indexes.iter().any(|index| {
+            question
+                .options
+                .get(*index)
+                .is_some_and(|option| !option.custom)
+        })
     }
 
     pub fn screen(&self) -> QuestionFlowScreen {
@@ -577,7 +620,7 @@ impl UserInputPresentation {
     fn handle_custom_input_key(&mut self, key: KeyEvent) -> UserInputEffect {
         match resolve(KeyContext::UserInputQuestion, key) {
             Some(KeyAction::Close) => {
-                self.editing_custom = false;
+                self.commit_custom_values();
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::Accept) => {
@@ -585,8 +628,7 @@ impl UserInputPresentation {
                 if !committed {
                     return UserInputEffect::KeepOpen;
                 }
-                self.move_wizard_tab(1);
-                UserInputEffect::KeepOpen
+                self.advance_answered_question()
             }
             Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
             _ => {
@@ -726,15 +768,28 @@ impl UserInputPresentation {
         let Some(question) = self.questions.get(self.state.selected_question()) else {
             return UserInputEffect::KeepOpen;
         };
-        if self.selected_row_is_custom(question) {
+        if self.selected_row_is_custom(question)
+            && self.custom_option_selected(self.state.selected_question())
+            && !self.question_is_answered(self.state.selected_question())
+        {
             self.begin_custom_edit();
-        } else {
-            if !question.multiple {
-                self.select_option();
-            }
-            self.move_wizard_tab(1);
+            return UserInputEffect::KeepOpen;
         }
-        UserInputEffect::KeepOpen
+        let answered = self.question_is_answered(self.state.selected_question());
+        if answered {
+            self.advance_answered_question()
+        } else {
+            UserInputEffect::KeepOpen
+        }
+    }
+
+    fn advance_answered_question(&mut self) -> UserInputEffect {
+        if self.state.selected_question() + 1 == self.questions.len() {
+            UserInputEffect::Submit
+        } else {
+            self.move_wizard_tab(1);
+            UserInputEffect::KeepOpen
+        }
     }
 
     fn move_question(&mut self, delta: isize) {
@@ -828,8 +883,7 @@ impl UserInputPresentation {
 
     /// Toggle the option/custom row under the wizard's option cursor
     /// (`selected_option`): a `multiple` question adds/removes that option;
-    /// a single-pick question selects it, or clears it when it is the option
-    /// already picked (Enter selects/unselects). The custom row (or a question
+    /// a single-pick question selects it. The custom row (or a question
     /// with no options) opens the inline custom editor.
     pub fn toggle_option(&mut self) {
         let (is_custom, allow_custom, multiple, option_count) = {
@@ -844,7 +898,22 @@ impl UserInputPresentation {
             )
         };
         if is_custom || option_count == 0 {
-            if allow_custom {
+            let custom = self
+                .questions
+                .get(self.state.selected_question())
+                .and_then(|question| question.custom_option_index());
+            if multiple
+                && custom.is_some_and(|custom| {
+                    self.answers
+                        .get(&self.state.selected_question())
+                        .is_some_and(|draft| draft.option_indexes.contains(&custom))
+                })
+            {
+                if let Some(draft) = self.answers.get_mut(&self.state.selected_question()) {
+                    draft.option_indexes.remove(&custom.unwrap());
+                }
+                self.editing_custom = false;
+            } else if allow_custom || custom.is_some() {
                 self.begin_custom_edit();
             }
             return;
@@ -859,23 +928,16 @@ impl UserInputPresentation {
             }
         } else {
             let picked = self.state.selected_option();
-            let already = draft.option_indexes.len() == 1 && draft.option_indexes.contains(&picked);
-            if already {
-                draft.option_indexes.clear();
-            } else {
-                draft.option_indexes.clear();
-                draft.option_indexes.insert(picked);
-                draft.custom_values.clear();
-            }
+            draft.option_indexes.clear();
+            draft.option_indexes.insert(picked);
         }
     }
 
     /// Space on a specific option row of a specific question (the transcript
     /// cursor IS the option cursor on the current page). Focuses the
     /// question then toggles: a `multiple` question adds/removes that option,
-    /// a single-pick question selects it or clears it when it is already
-    /// picked. Delegates to [`Self::toggle_option`] so answer-draft semantics
-    /// stay single-sourced with the wizard.
+    /// a single-pick question selects it. Delegates to [`Self::toggle_option`]
+    /// so answer-draft semantics stay single-sourced with the wizard.
     pub fn toggle_option_index(&mut self, question_index: usize, option_index: usize) {
         if self.questions.get(question_index).is_none() {
             return;
@@ -886,8 +948,8 @@ impl UserInputPresentation {
         self.toggle_option();
     }
 
-    /// Enter confirms the option without unchecking it or clearing other
-    /// multi-select answers. Space remains the toggle action.
+    /// Explicitly record an option without unchecking it or clearing other
+    /// multi-select answers. Question confirmation leaves this selection alone.
     pub fn commit_option_index(&mut self, question_index: usize, option_index: usize) {
         if self.questions.get(question_index).is_none() {
             return;
@@ -937,27 +999,30 @@ impl UserInputPresentation {
             .or_default();
         draft.option_indexes.clear();
         draft.option_indexes.insert(self.state.selected_option());
-        draft.custom_values.clear();
     }
 
     fn begin_custom_edit(&mut self) -> bool {
         let Some(question) = self.questions.get(self.state.selected_question()) else {
             return false;
         };
-        let allow_custom = question.allow_custom;
         let question_index = self.state.selected_question();
-        let selected_option = question.options.len();
-        if !allow_custom {
+        let Some(selected_option) = question.custom_option_index() else {
             return false;
-        }
+        };
+        let multiple = question.multiple;
         self.state
             .focus_question(question_index, self.questions.len());
         self.state.set_selected_option(selected_option);
         let existing = self
             .answers
             .get(&question_index)
-            .map(|draft| draft.custom_values.join(", "))
+            .map(|draft| draft.custom_values.join("\n"))
             .unwrap_or_default();
+        let draft = self.answers.entry(question_index).or_default();
+        if !multiple {
+            draft.option_indexes.clear();
+        }
+        draft.option_indexes.insert(selected_option);
         self.custom_input.set_text(existing);
         self.editing_custom = true;
         true
@@ -972,26 +1037,18 @@ impl UserInputPresentation {
             (
                 self.state.selected_question(),
                 question.multiple,
-                question.options.len(),
+                question
+                    .custom_option_index()
+                    .unwrap_or(question.options.len()),
             )
         };
-        let parsed = self
-            .custom_input
-            .text()
-            .split([',', '\n'])
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
+        let text = self.custom_input.text().trim().to_owned();
         let draft = self.answers.entry(question_index).or_default();
-        draft.custom_values = if multiple {
-            parsed
-        } else {
-            parsed.into_iter().take(1).collect()
-        };
-        if !draft.custom_values.is_empty() && !multiple {
+        draft.custom_values = if text.is_empty() { vec![] } else { vec![text] };
+        if !multiple {
             draft.option_indexes.clear();
         }
+        draft.option_indexes.insert(custom_row);
         self.state.set_selected_option(custom_row);
         self.editing_custom = false;
         !draft.custom_values.is_empty()
@@ -1007,7 +1064,7 @@ impl UserInputPresentation {
     }
 
     fn selected_row_is_custom(&self, question: &UserInputQuestionPresentation) -> bool {
-        question.allow_custom && self.state.selected_option() >= question.options.len()
+        question.custom_option_index() == Some(self.state.selected_option())
     }
 }
 
@@ -1021,7 +1078,8 @@ pub enum UserInputEffect {
 }
 
 fn option_row_count(question: &UserInputQuestionPresentation) -> usize {
-    question.options.len() + usize::from(question.allow_custom)
+    question.options.len()
+        + usize::from(question.allow_custom && !question.options.iter().any(|option| option.custom))
 }
 
 fn preferred_option_row(
@@ -1029,10 +1087,7 @@ fn preferred_option_row(
     draft: &UserInputAnswerDraft,
 ) -> usize {
     if let Some(index) = draft.option_indexes.iter().next().copied() {
-        return index.min(question.options.len().saturating_sub(1));
-    }
-    if !draft.custom_values.is_empty() && question.allow_custom {
-        return question.options.len();
+        return index.min(option_row_count(question).saturating_sub(1));
     }
     0
 }
@@ -1096,6 +1151,7 @@ mod tests {
             header: String::new(),
             question: "Choose".into(),
             options: vec![UserInputOptionPresentation {
+                custom: false,
                 label: "One".into(),
                 description: String::new(),
             }],
@@ -1115,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn single_question_accept_records_answer_and_requires_summary() {
+    fn single_question_enter_requires_selection_and_submits_without_summary() {
         let mut presentation =
             UserInputPresentation::new(overlay(false), vec![question(false, false)]);
 
@@ -1123,7 +1179,13 @@ mod tests {
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::KeepOpen
         );
-        assert_eq!(presentation.screen(), super::QuestionFlowScreen::Review);
+        assert!(presentation.answer(0).is_none());
+        presentation.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), 10);
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
+        assert_eq!(presentation.screen(), super::QuestionFlowScreen::Question);
         assert!(
             presentation
                 .answer(0)
@@ -1135,6 +1197,7 @@ mod tests {
     fn confirming_multi_select_preserves_existing_options_and_custom_answers() {
         let mut q = question(true, true);
         q.options.push(UserInputOptionPresentation {
+            custom: false,
             label: "Two".into(),
             description: String::new(),
         });
@@ -1162,12 +1225,68 @@ mod tests {
         assert!(presentation.insert_custom_text("custom value"));
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
-            UserInputEffect::KeepOpen
+            UserInputEffect::Submit
         );
         assert_eq!(
             presentation.answer(0).expect("custom answer").custom_values,
             vec!["custom value".to_string()]
         );
+    }
+
+    #[test]
+    fn custom_option_is_selectable_without_fixed_choices_and_preserves_full_text() {
+        let mut q = question(false, false);
+        q.options[0].custom = true;
+        let mut presentation = UserInputPresentation::new(overlay(false), vec![q]);
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::KeepOpen
+        );
+        assert!(!presentation.custom_option_selected(0));
+        presentation.toggle_option_index(0, 0);
+        assert!(presentation.custom_option_selected(0));
+        assert!(!presentation.question_is_answered(0));
+        assert!(presentation.insert_custom_text("中文, answer\n第二行"));
+        presentation.handle_custom_edit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(
+            presentation.answer(0).unwrap().custom_values,
+            vec!["中文, answer\n第二行"]
+        );
+        assert!(presentation.question_is_answered(0));
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
+    }
+
+    #[test]
+    fn custom_multi_choice_can_be_combined_deselected_and_reopened_with_its_draft() {
+        let mut q = question(true, false);
+        q.options.push(UserInputOptionPresentation {
+            label: "Other".into(),
+            description: String::new(),
+            custom: true,
+        });
+        let mut presentation = UserInputPresentation::new(overlay(false), vec![q]);
+        presentation.toggle_option_index(0, 0);
+        presentation.toggle_option_index(0, 1);
+        assert!(
+            !presentation.question_is_answered(0),
+            "a selected empty custom option must be completed"
+        );
+        presentation.insert_custom_text("custom text");
+        presentation.handle_custom_edit_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(presentation.question_is_answered(0));
+        assert_eq!(presentation.answer(0).unwrap().option_indexes.len(), 2);
+        presentation.toggle_option_index(0, 1);
+        assert!(!presentation.custom_option_selected(0));
+        assert!(presentation.question_is_answered(0));
+        assert_eq!(
+            presentation.answer(0).unwrap().custom_values,
+            vec!["custom text"]
+        );
+        presentation.toggle_option_index(0, 1);
+        assert_eq!(presentation.custom_input().text(), "custom text");
     }
 
     #[test]

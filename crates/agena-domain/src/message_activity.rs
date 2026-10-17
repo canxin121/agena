@@ -82,6 +82,10 @@ pub struct UserInputOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// This option accepts a user-written answer instead of its label.
+    /// A question may contain only this option. At most one custom option is supported.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -95,7 +99,17 @@ pub struct UserInputQuestion {
     #[serde(default, skip_serializing_if = "is_false")]
     pub multiple: bool,
     #[serde(default, skip_serializing_if = "is_false")]
+    /// Compatibility for older requests. New questions use an option with `custom: true`.
     pub allow_custom: bool,
+}
+
+impl UserInputQuestion {
+    pub fn custom_option_index(&self) -> Option<usize> {
+        self.options
+            .iter()
+            .position(|option| option.custom)
+            .or_else(|| self.allow_custom.then_some(self.options.len()))
+    }
 }
 
 pub fn user_input_answers_is_empty(value: &BTreeMap<String, Vec<String>>) -> bool {

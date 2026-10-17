@@ -68,7 +68,7 @@ export type CommandPresentation = {
   contentHash: string
 }
 
-export type InteractionOptionPresentation = { label: string; description: string }
+export type InteractionOptionPresentation = { label: string; description: string; custom?: boolean }
 export type InteractionQuestionPresentation = {
   questionId: string
   header: string
@@ -603,10 +603,12 @@ function interactionQuestion(value: JsonValue, index: number): InteractionQuesti
     multiple: booleanValue(question, ['multiple']),
     allowCustom: booleanValue(question, ['allow_custom']),
     options: jsonArray(question.options)
-      .map((raw) => {
+      .map((raw): InteractionOptionPresentation | null => {
         const option = jsonRecord(raw)
         const label = firstString(option, ['label'])
-        return label ? { label, description: firstString(option, ['description']) } : null
+        return label
+          ? { label, description: firstString(option, ['description']), custom: option.custom === true }
+          : null
       })
       .filter((item): item is InteractionOptionPresentation => Boolean(item)),
   }

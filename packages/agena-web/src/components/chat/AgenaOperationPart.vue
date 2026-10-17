@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowRightSLine } from '@remixicon/vue'
+import { RiArrowRightSLine, RiRefreshLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
@@ -638,20 +638,20 @@ function toggleOuter() {
       <button
         tabindex="0"
         type="button"
-        class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+        class="part-disclosure my-1"
         :aria-expanded="detailsExpanded"
         data-tool-details-toggle
         @click="toggleDetails"
       >
-        <RiArrowRightSLine class="h-4 w-4 shrink-0" :class="detailsExpanded ? 'rotate-90' : ''" aria-hidden="true" />
+        <RiArrowRightSLine :class="detailsExpanded ? 'rotate-90' : ''" aria-hidden="true" />
         {{ t('chat.toolDetails.label') }}
       </button>
-      <div v-if="detailsExpanded" class="ml-2 border-l border-border/40 pl-2" data-tool-details>
-        <section v-for="section in toolDetailSections" :key="section" class="py-0.5">
+      <div v-if="detailsExpanded" class="min-w-0 space-y-0.5 pl-3" data-tool-details>
+        <section v-for="section in toolDetailSections" :key="section" class="min-w-0">
           <button
             tabindex="0"
             type="button"
-            class="flex min-h-6 items-center gap-2 rounded-md px-1 py-0.5 text-xs font-semibold text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-ring/50"
+            class="part-disclosure"
             :aria-expanded="sectionExpanded(section)"
             :aria-busy="sectionPending(section)"
             :data-tool-detail-section="section"
@@ -662,14 +662,21 @@ function toggleOuter() {
               :class="sectionExpanded(section) ? 'rotate-90' : ''"
               aria-hidden="true"
             />
-            {{ t(`chat.toolDetails.${section}`) }}
+            <span class="min-w-0 truncate">{{ t(`chat.toolDetails.${section}`) }}</span>
             <PartLoadingIndicator v-if="sectionPending(section)" />
           </button>
 
           <div v-if="sectionExpanded(section)" class="min-w-0 pl-3 pt-1" :aria-busy="sectionPending(section)">
-            <div v-if="sectionError(section)" role="alert" class="py-1 text-xs text-rose-700 dark:text-rose-300">
-              {{ sectionError(section) }}
-              <button tabindex="0" type="button" class="ml-2 underline" @click="loadSection(section)">
+            <div v-if="sectionError(section)" role="alert" class="interaction-width space-y-1 py-1 text-xs">
+              <p class="break-words text-destructive">{{ sectionError(section) }}</p>
+              <button
+                tabindex="0"
+                type="button"
+                class="part-action"
+                :disabled="sectionLoading(section)"
+                @click="loadSection(section)"
+              >
+                <RiRefreshLine aria-hidden="true" />
                 {{ t('common.retry') }}
               </button>
             </div>

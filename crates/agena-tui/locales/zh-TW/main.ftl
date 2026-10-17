@@ -3031,3 +3031,18 @@ error-part-stopped = 自動重試已停止
 error-part-seconds = { $count } 秒
 error-part-minutes = { $minutes } 分 { $seconds } 秒
 error-part-hours = { $hours } 小時 { $minutes } 分
+
+# Settings page navigation and search
+settings-search-placeholder = 搜尋設定…
+settings-search-empty = 沒有符合的設定
+settings-search-empty-hint = 試試其他名稱或設定路徑，按 Esc 清除搜尋。
+settings-key-results = 查看結果
+settings-key-clear = 清除搜尋
+settings-key-sections = 分類
+settings-key-items = 設定項
+settings-key-open = 開啟
+settings-key-search = 搜尋
+settings-key-details = 詳情
+settings-key-refresh = 重新整理
+settings-key-back = 返回
+settings-details-footer = ↑/↓ 捲動 · PgUp/PgDn 翻頁 · Esc 返回

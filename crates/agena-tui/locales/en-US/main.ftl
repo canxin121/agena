@@ -2611,3 +2611,18 @@ error-part-stopped = Automatic retry stopped
 error-part-seconds = { $count }s
 error-part-minutes = { $minutes }m { $seconds }s
 error-part-hours = { $hours }h { $minutes }m
+
+# Settings page navigation and search
+settings-search-placeholder = Search settings…
+settings-search-empty = No matching settings
+settings-search-empty-hint = Try a different name or configuration path. Press Esc to clear the search.
+settings-key-results = Results
+settings-key-clear = Clear
+settings-key-sections = Sections
+settings-key-items = Settings
+settings-key-open = Open
+settings-key-search = Search
+settings-key-details = Details
+settings-key-refresh = Refresh
+settings-key-back = Back
+settings-details-footer = ↑/↓ scroll · PgUp/PgDn page · Esc back

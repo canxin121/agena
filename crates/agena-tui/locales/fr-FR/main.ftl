@@ -2979,3 +2979,18 @@ error-part-stopped = Reprise automatique arrêtée
 error-part-seconds = { $count } s
 error-part-minutes = { $minutes } min { $seconds } s
 error-part-hours = { $hours } h { $minutes } min
+
+# Settings page navigation and search
+settings-search-placeholder = Rechercher un réglage…
+settings-search-empty = Aucun réglage correspondant
+settings-search-empty-hint = Essayez un autre nom ou chemin de configuration. Échap efface la recherche.
+settings-key-results = Résultats
+settings-key-clear = Effacer
+settings-key-sections = Rubriques
+settings-key-items = Réglages
+settings-key-open = Ouvrir
+settings-key-search = Chercher
+settings-key-details = Détails
+settings-key-refresh = Actualiser
+settings-key-back = Retour
+settings-details-footer = ↑/↓ défiler · PgUp/PgDn page · Esc retour

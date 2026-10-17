@@ -320,10 +320,15 @@ pub(crate) fn settings_studio_field_items(
             let effective_value = get_json_path(&sources.effective, Some(field.path.as_str()))
                 .unwrap_or(JsonValue::Null);
             let effective_summary = settings_field_effective_summary(&effective_value);
+            let display_value = match &effective_value {
+                JsonValue::Null => ui_text::t(i18n, "settings-source-unset"),
+                JsonValue::String(value) if !value.trim().is_empty() => value.clone(),
+                _ => effective_summary.clone(),
+            };
             let current_summary = if file_value.is_null() {
                 ui_text::t(i18n, "settings-source-unset")
             } else {
-                format_setting_value_inline(&file_value)
+                file_value.to_string()
             };
             let source_rows = settings_source_rows_for_config_path(
                 i18n,
@@ -334,7 +339,7 @@ pub(crate) fn settings_studio_field_items(
             );
             SettingsStudioItem::from_parts(
                 settings_field_display_label(i18n, &field),
-                effective_summary.clone(),
+                display_value,
                 settings_field_display_description(i18n, &field),
                 Some(field.path.clone()),
                 Some(current_summary),
@@ -347,7 +352,13 @@ pub(crate) fn settings_studio_field_items(
 }
 
 fn settings_field_effective_summary(value: &JsonValue) -> String {
-    format_setting_value_inline(value)
+    // The row renderer truncates to its viewport; the details view retains
+    // the complete value for inspecting long paths and configuration strings.
+    if value.is_null() {
+        "unset".to_owned()
+    } else {
+        value.to_string()
+    }
 }
 
 pub(crate) fn settings_studio_provider_items(

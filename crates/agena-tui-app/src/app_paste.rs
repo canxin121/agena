@@ -57,12 +57,11 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
-                Route::Usage(_)
-                | Route::Activities(_)
-                | Route::PlanViewer(_)
-                | Route::SettingsStudio(_)
-                | Route::ClientVersionsStudio(_)
-                | Route::Hub(_) => {
+                Route::Usage(_) | Route::Activities(_) | Route::PlanViewer(_) | Route::Hub(_) => {
+                    handled_route = true;
+                }
+                Route::SettingsStudio(dialog) | Route::ClientVersionsStudio(dialog) => {
+                    dialog.state.paste(&text);
                     handled_route = true;
                 }
                 Route::PermissionStudio(dialog) => {

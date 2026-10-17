@@ -216,6 +216,8 @@ pub enum KeyAction {
     PreviousTab,
     Clear,
     Refresh,
+    SettingsSearch,
+    SettingsDetails,
     PlanToggleAutorun,
     ProviderRefreshModels,
     ProviderAddModel,
@@ -933,6 +935,32 @@ mod tests {
             ),
             Some(KeyAction::Refresh)
         );
+        for (code, modifiers, action) in [
+            (
+                KeyCode::Char('/'),
+                KeyModifiers::NONE,
+                KeyAction::SettingsSearch,
+            ),
+            (
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+                KeyAction::SettingsSearch,
+            ),
+            (
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                KeyAction::SettingsDetails,
+            ),
+            (KeyCode::PageUp, KeyModifiers::NONE, KeyAction::PageUp),
+            (KeyCode::PageDown, KeyModifiers::NONE, KeyAction::PageDown),
+            (KeyCode::Home, KeyModifiers::NONE, KeyAction::Home),
+            (KeyCode::End, KeyModifiers::NONE, KeyAction::End),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::SettingsStudio, key(code, modifiers)),
+                Some(action)
+            );
+        }
     }
 
     #[test]
@@ -1348,7 +1376,11 @@ mod tests {
             for character in '!'..='~' {
                 assert_eq!(
                     resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
-                    None,
+                    if context == KeyContext::SettingsStudio && character == '/' {
+                        Some(KeyAction::SettingsSearch)
+                    } else {
+                        None
+                    },
                     "{context:?} still binds printable character {character:?}"
                 );
             }
@@ -1409,7 +1441,6 @@ mod tests {
         let contexts = [
             KeyContext::Help,
             KeyContext::Usage,
-            KeyContext::SettingsStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,

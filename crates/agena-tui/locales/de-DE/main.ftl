@@ -3126,3 +3126,18 @@ error-part-stopped = Automatische Wiederholung beendet
 error-part-seconds = { $count } s
 error-part-minutes = { $minutes } min { $seconds } s
 error-part-hours = { $hours } h { $minutes } min
+
+# Settings page navigation and search
+settings-search-placeholder = Einstellungen suchen…
+settings-search-empty = Keine passenden Einstellungen
+settings-search-empty-hint = Anderen Namen oder Konfigurationspfad versuchen. Esc löscht die Suche.
+settings-key-results = Ergebnisse
+settings-key-clear = Löschen
+settings-key-sections = Bereiche
+settings-key-items = Einträge
+settings-key-open = Öffnen
+settings-key-search = Suchen
+settings-key-details = Details
+settings-key-refresh = Aktualisieren
+settings-key-back = Zurück
+settings-details-footer = ↑/↓ scrollen · PgUp/PgDn blättern · Esc zurück

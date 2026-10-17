@@ -480,13 +480,21 @@ pub fn preset_specs(
         Settings => Some((
             "context-help-summary-panes",
             vec![
-                (actions, vec![("Ctrl+R", "context-help-key-refresh")]),
+                (
+                    actions,
+                    vec![
+                        ("/ · Ctrl+F", "settings-key-search"),
+                        ("Ctrl+D", "settings-key-details"),
+                        ("Ctrl+R", "context-help-key-refresh"),
+                    ],
+                ),
                 (
                     navigation,
                     vec![
                         ("← / →", "context-help-key-pane-horizontal"),
                         ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("↑ / ↓", "context-help-key-move"),
+                        ("PgUp / PgDn", "context-help-key-page"),
                         ("Enter", "context-help-key-activate"),
                         ("Esc", "context-help-key-back"),
                     ],

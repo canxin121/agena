@@ -2,15 +2,13 @@ use super::super::{
     App, BoundedListPanelHeight, DetailTextLine, DetailTextSpec, Frame, Line,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, PermissionRuleStudioOverlay,
     PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPaneFocus,
-    PermissionStudioSection, PermissionStudioSectionId, Rect, SectionedWorkbenchDialogSpec,
-    SettingsStudioFocus, SettingsStudioOverlay, Span, Style, SurfaceMode, Text, UnicodeWidthStr,
-    WorkbenchOverlayDialogSpec, WorkbenchTextSection, build_accented_two_line_list_item,
-    build_detail_text, panel_highlight_style, permission_rule_draft_label,
-    permission_rule_mode_label, permission_rule_studio_detail_text,
+    PermissionStudioSection, PermissionStudioSectionId, Rect, SettingsStudioOverlay, Span, Style,
+    SurfaceMode, Text, UnicodeWidthStr, WorkbenchOverlayDialogSpec, WorkbenchTextSection,
+    build_accented_two_line_list_item, build_detail_text, panel_highlight_style,
+    permission_rule_draft_label, permission_rule_mode_label, permission_rule_studio_detail_text,
     permission_rule_subject_kind_name, permission_studio_table_label, render_list_workbench_dialog,
-    render_sectioned_workbench_dialog, sanitize_display_text, selection_highlight_style,
-    settings_item_detail_text, settings_item_detail_title, settings_table_columns,
-    workbench_navigation_width,
+    sanitize_display_text, selection_highlight_style, settings_item_detail_text,
+    settings_item_detail_title, settings_table_columns, workbench_navigation_width,
 };
 use crate::ui_text;
 
@@ -22,95 +20,26 @@ impl App {
         dialog: &SettingsStudioOverlay,
         surface: SurfaceMode,
     ) {
-        let current_section = dialog.state.selected_section();
-        let nav_items = dialog
-            .state
-            .sections()
-            .iter()
-            .map(|section| {
-                build_accented_two_line_list_item(
-                    sanitize_display_text(section.label.as_str()).into(),
-                    Some(section.items.len().to_string().into()),
-                    None,
-                )
-            })
-            .collect::<Vec<_>>();
-        let item_rows = current_section
-            .map(|section| {
-                section
-                    .items
-                    .iter()
-                    .map(|item| {
-                        build_accented_two_line_list_item(
-                            sanitize_display_text(item.label.as_str()).into(),
-                            Some(sanitize_display_text(item.value.as_str()).into()),
-                            None,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let section_title = current_section
-            .map(|section| sanitize_display_text(section.label.as_str()))
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-default-section-title"));
-        let inspector_title = settings_item_detail_title(&self.i18n, dialog);
-        let inspector_text = settings_item_detail_text(&self.i18n, dialog);
-        let content_width = surface.content_width(area, 150);
-        let nav_width = workbench_navigation_width(content_width);
-        let spec = SectionedWorkbenchDialogSpec::new(
-            sanitize_display_text(dialog.title.as_str()).into(),
-            sanitize_display_text(dialog.footer.as_str()).into(),
-            ListWorkbenchPanelState::items(
-                BoundedListPanelHeight {
-                    lines_per_item: 1,
-                    min_body_height: 8,
-                    max_body_height: 30,
-                },
-                Some(ui_text::t(&self.i18n, "overlay-settings-sections").into()),
-                nav_items.as_slice(),
-                (!nav_items.is_empty()).then_some(dialog.state.selected_section_index()),
-                panel_highlight_style(dialog.state.focus() == SettingsStudioFocus::Navigation),
-                ">> ".into(),
-            ),
-            WorkbenchTextSection::new(
-                ui_text::t(&self.i18n, "overlay-workbench-overview").into(),
-                Text::default(),
-                0,
-                0,
-            ),
-            if item_rows.is_empty() {
-                ListWorkbenchPanelState::empty(
-                    Some(section_title.clone().into()),
-                    ui_text::t(&self.i18n, "overlay-settings-empty-items").into(),
-                    BoundedListPanelHeight {
-                        lines_per_item: 1,
-                        min_body_height: 6,
-                        max_body_height: 18,
-                    },
-                )
-            } else {
-                ListWorkbenchPanelState::items(
-                    BoundedListPanelHeight {
-                        lines_per_item: 1,
-                        min_body_height: 6,
-                        max_body_height: 18,
-                    },
-                    Some(section_title.clone().into()),
-                    item_rows.as_slice(),
-                    Some(dialog.state.selected_item_index()),
-                    panel_highlight_style(dialog.state.focus() == SettingsStudioFocus::Items),
-                    ">> ".into(),
-                )
+        let (detail_title, detail) = if dialog.state.details_open() {
+            (
+                settings_item_detail_title(&self.i18n, dialog),
+                settings_item_detail_text(&self.i18n, dialog),
+            )
+        } else {
+            (String::new(), Text::default())
+        };
+        agena_tui_settings::render_settings(
+            frame,
+            area,
+            surface,
+            &dialog.state,
+            &self.i18n,
+            &agena_tui_settings::SettingsViewSpec {
+                title: &dialog.title,
+                detail_title: &detail_title,
+                detail,
             },
-            WorkbenchTextSection::new(inspector_title.into(), inspector_text, 5, 14),
-        )
-        // The navigation panel already names the selected section, so the
-        // studio spends its height on the item list and the inspector instead
-        // of repeating the section heading above them.
-        .without_section_panel()
-        .target_width(150)
-        .navigation_width(nav_width);
-        render_sectioned_workbench_dialog(frame, area, surface, &spec);
+        );
     }
 
     pub(crate) fn render_permission_studio_overlay(

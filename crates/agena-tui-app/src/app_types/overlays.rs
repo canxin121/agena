@@ -28,7 +28,6 @@ use agena_tui::user_input::UserInputPresentation;
 #[derive(Debug, Clone)]
 pub(crate) struct SettingsStudioOverlay {
     pub(crate) title: String,
-    pub(crate) footer: String,
     pub(crate) state: SettingsStudioPresentation<SettingsPickerAction>,
 }
 

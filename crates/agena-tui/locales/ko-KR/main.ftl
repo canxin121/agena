@@ -2976,3 +2976,18 @@ error-part-stopped = 자동 재시도 중지됨
 error-part-seconds = { $count }초
 error-part-minutes = { $minutes }분 { $seconds }초
 error-part-hours = { $hours }시간 { $minutes }분
+
+# Settings page navigation and search
+settings-search-placeholder = 설정 검색…
+settings-search-empty = 일치하는 설정 없음
+settings-search-empty-hint = 다른 이름이나 설정 경로를 입력하세요. Esc 키로 검색을 지웁니다.
+settings-key-results = 결과
+settings-key-clear = 지우기
+settings-key-sections = 카테고리
+settings-key-items = 설정 항목
+settings-key-open = 열기
+settings-key-search = 검색
+settings-key-details = 상세
+settings-key-refresh = 새로 고침
+settings-key-back = 뒤로
+settings-details-footer = ↑/↓ 스크롤 · PgUp/PgDn 페이지 · Esc 뒤로

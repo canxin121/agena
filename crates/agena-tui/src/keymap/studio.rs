@@ -2,14 +2,21 @@ use crossterm::event::{KeyCode as K, KeyEvent};
 
 use super::{
     KeyAction as A, KeyContext, horizontal_pagination_action, only_ctrl, tab_navigation_action,
-    unmodified,
+    unmodified, unmodified_or_shift,
 };
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::SettingsStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
+            K::Char('/') if unmodified_or_shift(key) => Some(A::SettingsSearch),
+            K::Char('f') if only_ctrl(key) => Some(A::SettingsSearch),
+            K::Char('d') if only_ctrl(key) => Some(A::SettingsDetails),
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
+            K::PageUp if unmodified(key) => Some(A::PageUp),
+            K::PageDown if unmodified(key) => Some(A::PageDown),
+            K::Home if unmodified(key) => Some(A::Home),
+            K::End if unmodified(key) => Some(A::End),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up if unmodified(key) => Some(A::MoveUp),

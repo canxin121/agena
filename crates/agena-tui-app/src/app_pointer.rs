@@ -129,6 +129,27 @@ impl App {
                 index,
                 selected,
             } => {
+                if self.overlay.is_none()
+                    && self.context_help.is_none()
+                    && let Route::SettingsStudio(dialog) | Route::ClientVersionsStudio(dialog) =
+                        &mut self.current_route
+                {
+                    if activate {
+                        if dialog.state.select_visible(panel, index) {
+                            self.handle_key_event(KeyEvent::new(
+                                KeyCode::Enter,
+                                KeyModifiers::NONE,
+                            ));
+                        }
+                    } else {
+                        dialog.state.set_focus(if panel == 0 {
+                            SettingsStudioFocus::Navigation
+                        } else {
+                            SettingsStudioFocus::Items
+                        });
+                    }
+                    return;
+                }
                 if activate
                     && matches!(self.current_route, Route::PermissionStudio(_))
                     && self.overlay.is_none()
@@ -359,6 +380,109 @@ mod tests {
             }
         }
         panic!("missing visible pointer target: {wanted:?}");
+    }
+
+    fn settings_app() -> App {
+        let mut app = app();
+        app.launch.terminal_context = Some(agena_tui_platform::terminal::TerminalContext::detect());
+        app.current_route = Route::SettingsStudio(SettingsStudioOverlay {
+            title: "Settings".into(),
+            state: SettingsStudioPresentation::new(
+                vec![SettingsStudioSection {
+                    id: agena_tui_settings::SettingsStudioSectionId::Diagnostics,
+                    label: "Diagnostics".into(),
+                    summary: String::new(),
+                    description: "Terminal and configuration".into(),
+                    items: vec![
+                        SettingsStudioItem::new(
+                            "Config file",
+                            "Open",
+                            "",
+                            SettingsPickerAction::OpenConfigFile,
+                        ),
+                        SettingsStudioItem::new(
+                            "Terminal diagnostics",
+                            "Open",
+                            "",
+                            SettingsPickerAction::OpenTerminalDiagnostics,
+                        ),
+                    ],
+                }],
+                0,
+                0,
+                SettingsStudioFocus::Navigation,
+            ),
+        });
+        app
+    }
+
+    #[tokio::test]
+    async fn settings_filtered_pointer_opens_the_matching_action() {
+        let mut app = settings_app();
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        app.handle_paste("Terminal diagnostics".into());
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let target = find_target(
+            &app,
+            100,
+            28,
+            PointerAction::List {
+                panel: 1,
+                index: 0,
+                selected: 0,
+            },
+        );
+        app.handle_mouse_event(target);
+        assert!(
+            app.context_help.is_some(),
+            "the filtered diagnostics action should open its details"
+        );
+        let Route::SettingsStudio(dialog) = &app.current_route else {
+            panic!("settings route replaced");
+        };
+        assert_eq!(dialog.state.selected_item_index(), 1);
+        assert_eq!(dialog.state.query(), "Terminal diagnostics");
+    }
+
+    #[tokio::test]
+    async fn settings_narrow_category_click_and_details_return_to_same_setting() {
+        let mut app = settings_app();
+        let mut terminal = Terminal::new(TestBackend::new(60, 22)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let target = find_target(
+            &app,
+            60,
+            22,
+            PointerAction::List {
+                panel: 0,
+                index: 0,
+                selected: 0,
+            },
+        );
+        app.handle_mouse_event(target);
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let Route::SettingsStudio(dialog) = &app.current_route else {
+            panic!("settings route replaced");
+        };
+        assert_eq!(dialog.state.focus(), SettingsStudioFocus::Items);
+        assert!(dialog.state.details_open());
+        let close = find_target(
+            &app,
+            60,
+            22,
+            agena_tui_components::pointer::key(KeyCode::Esc),
+        );
+        app.handle_mouse_event(close);
+        let Route::SettingsStudio(dialog) = &app.current_route else {
+            panic!("settings route replaced");
+        };
+        assert!(!dialog.state.details_open());
+        assert_eq!(dialog.state.selected_item_index(), 1);
+        assert!(app.overlay.is_none());
     }
 
     #[tokio::test]

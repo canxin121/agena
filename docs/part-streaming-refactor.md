@@ -172,7 +172,7 @@ flowchart TD
 | 通用领域 | `crates/agena-domain/src/content.rs`、`content/document.rs`、`activity_view.rs` | cursor、resource、record、文档操作、终端字符与模式 |
 | 公共 Part | `crates/agena-api/src/part.rs`、`live.rs`、`content.rs` | 同一 Part envelope、sections/revision、资源读取请求 |
 | 活跃内容与归档抽象 | `crates/agena-storage/src/content.rs`、`content/text.rs` | 写入权、内存预算、replay、独立提交、资源内续读 |
-| 持久内容 | `crates/agena-storage-sqlite/src/content_backend.rs`、`database_content.rs` | 数据库身份绑定的通用文件归档、manifest、配额与恢复 |
+| 持久内容 | `crates/agena-storage-sqlite/src/content_backend.rs`、`database_content.rs` | 数据库身份绑定的通用文件归档、manifest、单资源保留与恢复 |
 | 模型生产 | `crates/agena-runtime-session/src/session/processor/parts.rs`、`tool_calls.rs` | 模型正文/思考、provider 工具稳定身份和资源收尾 |
 | 工具生产 | `crates/agena-runtime-session/src/session/manager/replies/replies_execution.rs`、runtime-tools 的 shell/monitor/terminal 模块 | 单一执行结果与中间事件、pipe drain、后台源、PTY |
 | 大型非流式结果 | `crates/agena-runtime-session/src/session/content_result.rs` | JSON pointer + ContentRef，保留小控制事实 |
@@ -226,7 +226,8 @@ provider trace 不再放进大 metadata，也不逐 start/progress 重写。完�
 | 普通记录 | 64 KiB 分块；记录开销也计入预算 |
 | 批量提交 | 64 KiB 触发；500 ms 时间触发；语义收尾强制提交 |
 | 文件 segment | 1 MiB；默认保留 startup 与近期 segment，最多 16 个 |
-| 单资源归档 / 全局归档 | 64 MiB / 1 GiB；受 checkpoint 与实际文件占用约束 |
+| 单资源归档 | 64 MiB；受 checkpoint 与 segment 保留策略约束 |
+| 全局归档 | 无总量配额；历史内容累计大小不阻断新资源、追加输出或归档导入 |
 | 语义文档 | 64 KiB、最多 128 blocks；依赖链有源端 checkpoint |
 | PTY 原子 frame | 最多 40,000 cells、16 MiB 原子预算；普通 pipe 记录仍小 |
 | 范围读取 | 字节和 record 数双重有界；text page 最多 32 records，支持 record 内 offset |
@@ -237,7 +238,7 @@ provider trace 不再放进大 metadata，也不逐 start/progress 重写。完�
 
 增加观察者只增加读取与传输/绘制，不创建第二个 writer、不重复持久化源内容。慢观察者不会反压子进程 pipe drain；资源配额不足会按 capture 策略记录损失。默认有限保留不是“所有日志永远完整保存”：保留范围之外需要明确呈现 gap。
 
-重启只恢复已发布的内容范围，并将未正常收尾的资源标记 Interrupted；内存尾部不冒充持久内容。旧 epoch/未来 cursor 不能覆盖当前资源。document/terminal 缺 dependency 时回读可重建 checkpoint，恢复期间保留可用画面。最后一个 writer 意外丢弃也进入收尾；永久存储失败释放活跃源和内存，不进行无上限重试。
+重启只恢复已发布的内容范围，并将未正常收尾的资源标记 Interrupted；内存尾部不冒充持久内容。首次写入重新加载的资源，以及写入失败或取消后的重试，只按该资源已发布的 manifest 恢复文件，不扫描全库或预留总量配额。旧 epoch/未来 cursor 不能覆盖当前资源。document/terminal 缺 dependency 时回读可重建 checkpoint，恢复期间保留可用画面。最后一个 writer 意外丢弃也进入收尾；永久存储失败释放活跃源和内存，不进行无上限重试。
 
 GC 保护所有 Part/fork 引用和活跃 writer。导入/导出携带资源 archive 并重映射 ContentRef、ContentField、provider trace 引用；不能把一个本机文件路径当远端内容契约。
 

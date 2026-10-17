@@ -3,6 +3,7 @@
 //! A manifest is published only after its record files are synced. Retrying a
 //! failed batch truncates files to the last published lengths first, so a
 //! partial append can never duplicate records or masquerade as committed.
+//! Aggregate store size does not limit new resources or ongoing output.
 
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
@@ -27,7 +28,6 @@ pub struct FileContentConfig {
     pub retained_segments: usize,
     pub cached_manifests: usize,
     pub max_retained_bytes: u64,
-    pub max_store_bytes: u64,
 }
 
 impl Default for FileContentConfig {
@@ -37,7 +37,6 @@ impl Default for FileContentConfig {
             retained_segments: 16,
             cached_manifests: 256,
             max_retained_bytes: 64 * 1024 * 1024,
-            max_store_bytes: 1024 * 1024 * 1024,
         }
     }
 }
@@ -46,16 +45,22 @@ pub struct FileContentBackend {
     root: PathBuf,
     config: FileContentConfig,
     manifests: Mutex<ManifestCache>,
-    quota: tokio::sync::OnceCell<Arc<quota::StoreQuota>>,
 }
 
-type ManifestHandle = Arc<tokio::sync::Mutex<Manifest>>;
+type ManifestHandle = Arc<tokio::sync::Mutex<ManifestState>>;
+
+struct ManifestState {
+    manifest: Manifest,
+    // Loading from disk or interrupting a commit requires reconciliation
+    // before the next write. This state shares the resource's commit gate.
+    needs_recovery: bool,
+}
 
 /// The LRU bounds idle manifests. Weak handles preserve one commit gate even
 /// when an in-use manifest is evicted by unrelated resource reads.
 struct ManifestCache {
     hot: LruCache<ContentId, ManifestHandle>,
-    handles: HashMap<ContentId, Weak<tokio::sync::Mutex<Manifest>>>,
+    handles: HashMap<ContentId, Weak<tokio::sync::Mutex<ManifestState>>>,
 }
 
 impl ManifestCache {
@@ -102,7 +107,6 @@ impl FileContentBackend {
     pub fn new(root: impl Into<PathBuf>, config: FileContentConfig) -> Self {
         assert!(config.segment_bytes > 0);
         assert!(config.max_retained_bytes > 0);
-        assert!(config.max_store_bytes > 0);
         assert!(
             config.retained_segments >= 2,
             "retain a startup segment and recent output"
@@ -111,7 +115,6 @@ impl FileContentBackend {
         Self {
             root: root.into(),
             config,
-            quota: tokio::sync::OnceCell::new(),
             manifests: Mutex::new(ManifestCache {
                 hot: LruCache::new(capacity),
                 handles: HashMap::new(),
@@ -127,17 +130,11 @@ impl FileContentBackend {
         directory.join(format!("records-{first:020}.jsonl"))
     }
 
-    async fn quota(&self) -> Result<&Arc<quota::StoreQuota>, StoreError> {
-        self.quota
-            .get_or_try_init(|| quota::StoreQuota::scan(&self.root, self.config.max_store_bytes))
-            .await
-    }
-
     async fn manifest(
         &self,
         id: ContentId,
         initial: Option<&ContentResource>,
-    ) -> Result<Arc<tokio::sync::Mutex<Manifest>>, StoreError> {
+    ) -> Result<ManifestHandle, StoreError> {
         if let Some(cached) = self.manifests.lock().expect("manifest cache lock").get(&id) {
             return Ok(cached);
         }
@@ -169,7 +166,10 @@ impl FileContentBackend {
         if let Some(cached) = cache.get(&id) {
             return Ok(cached);
         }
-        let loaded = Arc::new(tokio::sync::Mutex::new(loaded));
+        let loaded = Arc::new(tokio::sync::Mutex::new(ManifestState {
+            manifest: loaded,
+            needs_recovery: true,
+        }));
         cache.insert(id, loaded.clone());
         Ok(loaded)
     }
@@ -227,8 +227,8 @@ impl FileContentBackend {
             .collect()
     }
 
-    /// Only recovery scans the directory. Normal commits use the manifest and
-    /// byte reservations, without per-record filesystem or database queries.
+    /// Only recovery scans this resource's directory. Normal commits use the
+    /// manifest, without scanning other resources or querying the database.
     async fn recover_unpublished(
         &self,
         directory: &Path,
@@ -413,8 +413,6 @@ impl ContentBackend for FileContentBackend {
                     "content archive exceeds the retained-segment budget".into(),
                 ));
             }
-            let bytes = manifest.file_bytes()?;
-            let lease = self.quota().await?.reserve(id, bytes, &self.root).await?;
             for (first, bytes) in writes {
                 let mut file = tokio::fs::File::create(Self::segment_path(&directory, first))
                     .await
@@ -435,7 +433,6 @@ impl ContentBackend for FileContentBackend {
                     .map_err(|error| StoreError::Io(error.to_string()))?
                     .map_err(io_error)?;
             }
-            lease.finish(bytes);
             Ok(())
         }
         .await;
@@ -479,19 +476,6 @@ impl ContentBackend for FileContentBackend {
                     tokio::fs::remove_dir_all(entry.path())
                         .await
                         .map_err(io_error)?;
-                    if let (Some(quota), Some(id)) = (
-                        self.quota.get(),
-                        name.to_str()
-                            .and_then(|name| name.strip_prefix(".import-"))
-                            .and_then(|name| {
-                                serde_json::from_value::<ContentId>(serde_json::Value::String(
-                                    name.into(),
-                                ))
-                                .ok()
-                            }),
-                    ) {
-                        quota.mark_dirty(id);
-                    }
                     abandoned_imports += 1;
                 }
                 continue;
@@ -529,12 +513,7 @@ impl ContentBackend for FileContentBackend {
         // Readers and retention use the same per-resource gate.
         let handle = match self.manifest(id, None).await {
             Ok(handle) => handle,
-            Err(StoreError::NotFound(_)) => {
-                if let Some(quota) = self.quota.get() {
-                    quota.deleted(id);
-                }
-                return Ok(());
-            }
+            Err(StoreError::NotFound(_)) => return Ok(()),
             Err(error) => return Err(error),
         };
         let _gate = handle.lock().await;
@@ -546,15 +525,18 @@ impl ContentBackend for FileContentBackend {
         let mut cache = self.manifests.lock().expect("manifest cache lock");
         cache.hot.pop(&id);
         cache.handles.remove(&id);
-        drop(cache);
-        if let Some(quota) = self.quota.get() {
-            quota.deleted(id);
-        }
         Ok(())
     }
 
     async fn describe(&self, id: ContentId) -> Result<ContentResource, StoreError> {
-        Ok(self.manifest(id, None).await?.lock().await.resource.clone())
+        Ok(self
+            .manifest(id, None)
+            .await?
+            .lock()
+            .await
+            .manifest
+            .resource
+            .clone())
     }
 
     async fn commit(
@@ -563,13 +545,14 @@ impl ContentBackend for FileContentBackend {
         chunks: &[Arc<ContentChunk>],
     ) -> Result<ContentResource, StoreError> {
         let handle = self.manifest(resource.resource_id, Some(&resource)).await?;
-        let mut previous = handle.lock().await;
+        let mut state = handle.lock().await;
         let directory = self.directory(resource.resource_id);
-        let quota = self.quota().await?;
-        if quota.needs_reconciliation(resource.resource_id) {
-            self.recover_unpublished(&directory, &mut previous).await?;
-            quota.reconcile(resource.resource_id, &self.root).await?;
+        if state.needs_recovery {
+            self.recover_unpublished(&directory, &mut state.manifest)
+                .await?;
+            state.needs_recovery = false;
         }
+        let previous = &state.manifest;
         if previous.resource.cursor.epoch != resource.cursor.epoch
             || previous.resource.part_id != resource.part_id
             || previous.resource.owner_session_id != resource.owner_session_id
@@ -754,22 +737,9 @@ impl ContentBackend for FileContentBackend {
             );
         }
         next.resource = resource.clone();
-        let next_bytes = next.file_bytes()?;
-        let lease = if expected == previous.resource.committed_cursor.sequence
-            && resource.state != ContentState::Active
-            && resource
-                .capture_error
-                .as_ref()
-                .is_none_or(|error| error.len() <= 1024)
-        {
-            quota
-                .reserve_seal(resource.resource_id, next_bytes, &self.root)
-                .await?
-        } else {
-            quota
-                .reserve(resource.resource_id, next_bytes, &self.root)
-                .await?
-        };
+        // Set this before any filesystem mutation so errors and cancellation
+        // both leave the next commit responsible for recovering publication.
+        state.needs_recovery = true;
         tokio::fs::create_dir_all(&directory)
             .await
             .map_err(io_error)?;
@@ -777,7 +747,8 @@ impl ContentBackend for FileContentBackend {
             if !next.segments.iter().any(|segment| segment.first == first) {
                 continue;
             }
-            let published_length = previous
+            let published_length = state
+                .manifest
                 .segments
                 .iter()
                 .find(|segment| segment.first == first)
@@ -798,7 +769,7 @@ impl ContentBackend for FileContentBackend {
             file.sync_data().await.map_err(io_error)?;
         }
         Self::publish(&directory, &next).await?;
-        *previous = next;
+        state.manifest = next;
         let mut cleanup_failed = false;
         for segment in removed {
             if let Err(error) =
@@ -809,11 +780,7 @@ impl ContentBackend for FileContentBackend {
                 cleanup_failed = true;
             }
         }
-        if cleanup_failed {
-            lease.finish(quota::resource_bytes(&self.root, resource.resource_id).await?);
-        } else {
-            lease.finish(next_bytes);
-        }
+        state.needs_recovery = cleanup_failed;
         Ok(resource)
     }
 
@@ -826,7 +793,8 @@ impl ContentBackend for FileContentBackend {
         let handle = self.manifest(id, None).await?;
         // Hold the manifest gate while reading its bounded files so retention
         // cannot delete a range this read has already selected.
-        let manifest = handle.lock().await;
+        let state = handle.lock().await;
+        let manifest = &state.manifest;
         validate_cursor(&manifest.resource, after)?;
         let after = after.or_else(|| {
             manifest
@@ -890,19 +858,6 @@ fn io_error(error: std::io::Error) -> StoreError {
     StoreError::Io(error.to_string())
 }
 
-impl Manifest {
-    fn file_bytes(&self) -> Result<u64, StoreError> {
-        Ok(self
-            .segments
-            .iter()
-            .map(|segment| segment.file_bytes)
-            .sum::<u64>()
-            + serde_json::to_vec(self)
-                .map_err(|error| StoreError::Serialization(error.to_string()))?
-                .len() as u64)
-    }
-}
-
 fn mark_checkpoint_record(segment: &mut Segment, chunk: &ContentChunk) {
     match &chunk.payload {
         agena_domain::ContentPayload::Structured { .. }
@@ -917,6 +872,5 @@ fn mark_checkpoint_record(segment: &mut Segment, chunk: &ContentChunk) {
     }
 }
 
-mod quota;
 #[cfg(test)]
 mod tests;

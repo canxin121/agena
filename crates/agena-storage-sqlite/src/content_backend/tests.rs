@@ -15,58 +15,93 @@ fn text(value: &str) -> ContentInput {
     ContentInput::Text { text: value.into() }
 }
 
-#[tokio::test]
-async fn empty_creation_cannot_bypass_the_shared_store_budget() {
-    let root = tempfile::tempdir().unwrap();
-    let hub = ContentHub::new(
-        Arc::new(FileContentBackend::new(
-            root.path(),
-            FileContentConfig {
-                max_store_bytes: 1,
-                ..Default::default()
-            },
-        )),
-        quiet_config(),
-    );
-    assert!(matches!(
-        hub.open(7, 9, ContentKind::Text).await,
-        Err(StoreError::Constraint(_))
-    ));
-    assert!(
-        tokio::fs::read_dir(root.path())
-            .await
-            .unwrap()
-            .next_entry()
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    let backend = Arc::new(FileContentBackend::new(
-        root.path(),
-        FileContentConfig {
-            max_store_bytes: 1000,
-            ..Default::default()
-        },
-    ));
+async fn seed_store_above_one_gib(root: &Path) -> ContentArchive {
+    let backend = Arc::new(FileContentBackend::new(root, Default::default()));
     let hub = ContentHub::new(backend.clone(), quiet_config());
-    let first = hub.open(7, 9, ContentKind::Text).await.unwrap();
-    let mut created = vec![first];
-    while let Ok(writer) = hub.open(7, 10, ContentKind::Text).await {
-        created.push(writer);
-        assert!(
-            created.len() < 10,
-            "empty manifests must count towards the budget"
-        );
-    }
-    assert!(created.len() >= 2);
-    let id = created.pop().unwrap().finish().await.unwrap().resource_id;
-    backend.delete(id).await.unwrap();
-    hub.open(7, 11, ContentKind::Text).await.unwrap();
+    let writer = hub.open(7, 9, ContentKind::Text).await.unwrap();
+    writer.append(text("historical output")).await.unwrap();
+    let resource = writer.finish().await.unwrap();
+    let archive = hub.export_snapshot(resource.resource_id).await.unwrap();
+    // The former quota counted every file in a resource directory. Sparse
+    // padding reproduces that usage without allocating or writing 1 GiB.
+    let padding = tokio::fs::File::create(
+        backend
+            .directory(resource.resource_id)
+            .join("retained-size.fixture"),
+    )
+    .await
+    .unwrap();
+    padding.set_len(1024 * 1024 * 1024).await.unwrap();
+    archive
 }
 
 #[tokio::test]
-async fn restarted_accounting_reclaims_unpublished_files_before_reserving_growth() {
+async fn store_above_one_gib_allows_concurrent_sessions_and_reopening() {
+    let root = tempfile::tempdir().unwrap();
+    let history = seed_store_above_one_gib(root.path()).await;
+    let hub = ContentHub::new(
+        Arc::new(FileContentBackend::new(root.path(), Default::default())),
+        quiet_config(),
+    );
+    let (first, second) = tokio::try_join!(
+        hub.open(8, 10, ContentKind::Text),
+        hub.open(9, 11, ContentKind::Log),
+    )
+    .unwrap();
+    let first_payload = text("new model output");
+    let second_payload = ContentInput::Log {
+        stream: agena_domain::CommandOutputStream::Stdout,
+        text: "new tool output".into(),
+    };
+    tokio::try_join!(
+        first.append(first_payload.clone()),
+        second.append(second_payload.clone()),
+    )
+    .unwrap();
+    let (first, second) = tokio::try_join!(
+        first.finalize(ContentState::Complete),
+        second.finalize(ContentState::Complete),
+    )
+    .unwrap();
+    let reopened = FileContentBackend::new(root.path(), Default::default());
+    for (resource, payload) in [(first, first_payload), (second, second_payload)] {
+        assert_eq!(resource.state, ContentState::Complete);
+        assert_eq!(resource.dropped_bytes, 0);
+        assert!(resource.capture_error.is_none());
+        let page = reopened
+            .read(resource.resource_id, None, 1024)
+            .await
+            .unwrap();
+        assert_eq!(page.resource, resource);
+        assert_eq!(page.chunks.len(), 1);
+        assert_eq!(page.chunks[0].payload, payload.into_payload(None).unwrap());
+        assert!(!page.gap);
+    }
+    let page = reopened
+        .read(history.resource.resource_id, None, 1024)
+        .await
+        .unwrap();
+    assert_eq!(page.resource, history.resource);
+    assert_eq!(page.chunks, history.chunks);
+}
+
+#[tokio::test]
+async fn store_above_one_gib_allows_archive_restore() {
+    let root = tempfile::tempdir().unwrap();
+    let mut archive = seed_store_above_one_gib(root.path()).await;
+    let id = ContentId::new();
+    archive.remap(id, 8, 10);
+    let backend = FileContentBackend::new(root.path(), Default::default());
+    backend.restore(&archive).await.unwrap();
+    let reopened = FileContentBackend::new(root.path(), Default::default());
+    let page = reopened.read(id, None, 1024).await.unwrap();
+    assert_eq!(page.resource, archive.resource);
+    assert_eq!(page.chunks, archive.chunks);
+    assert!(!page.gap);
+}
+
+#[tokio::test]
+async fn restarting_recovers_unpublished_files_before_the_next_commit() {
     let root = tempfile::tempdir().unwrap();
     let backend = Arc::new(FileContentBackend::new(root.path(), Default::default()));
     let hub = ContentHub::new(backend.clone(), quiet_config());
@@ -82,13 +117,7 @@ async fn restarted_accounting_reclaims_unpublished_files_before_reserving_growth
     tokio::fs::write(directory.join("manifest-next.json"), vec![b'x'; 4096])
         .await
         .unwrap();
-    let reopened = FileContentBackend::new(
-        root.path(),
-        FileContentConfig {
-            max_store_bytes: 1000,
-            ..Default::default()
-        },
-    );
+    let reopened = FileContentBackend::new(root.path(), Default::default());
     let mut completed = resource;
     completed.state = ContentState::Complete;
     reopened.commit(completed, &[]).await.unwrap();
@@ -181,62 +210,82 @@ async fn document_checkpoint_chain_and_logs_reopen_under_segment_retention() {
 }
 
 #[tokio::test]
-async fn store_quota_is_shared_and_rejected_appends_leave_published_files_unchanged() {
+async fn failed_publication_recovers_unpublished_files_before_retrying() {
     let root = tempfile::tempdir().unwrap();
-    let backend = Arc::new(FileContentBackend::new(
-        root.path(),
-        FileContentConfig {
-            max_store_bytes: 3000,
-            ..Default::default()
-        },
-    ));
-    let hub = ContentHub::new(backend.clone(), quiet_config());
-    let first = hub.open(7, 9, ContentKind::Text).await.unwrap();
-    first.append(text(&"a".repeat(1500))).await.unwrap();
-    let complete = first.finish().await.unwrap();
-    let before = tokio::fs::read(
-        backend
-            .directory(complete.resource_id)
-            .join("manifest.json"),
-    )
-    .await
-    .unwrap();
-    let second = hub.open(7, 10, ContentKind::Text).await.unwrap();
-    second.append(text(&"b".repeat(1500))).await.unwrap();
-    assert!(second.finish().await.is_err());
-    assert_eq!(
-        tokio::fs::read(
-            backend
-                .directory(complete.resource_id)
-                .join("manifest.json")
-        )
-        .await
-        .unwrap(),
-        before
-    );
-    let second_before = backend
-        .describe(second.resource().resource_id)
+    let backend = FileContentBackend::new(root.path(), Default::default());
+    let id = ContentId::new();
+    let cursor = ContentCursor {
+        epoch: id.0,
+        sequence: 0,
+    };
+    let mut resource = ContentResource {
+        resource_id: id,
+        owner_session_id: 7,
+        part_id: 9,
+        kind: ContentKind::Text,
+        state: ContentState::Active,
+        cursor,
+        committed_cursor: cursor,
+        total_bytes: 0,
+        dropped_bytes: 0,
+        retained_ranges: Vec::new(),
+        capture_error: None,
+    };
+    backend.commit(resource.clone(), &[]).await.unwrap();
+    let directory = backend.directory(id);
+    let before = tokio::fs::read(directory.join("manifest.json"))
         .await
         .unwrap();
-    assert_eq!(second_before.cursor.sequence, 0);
-    let directory = backend.directory(second_before.resource_id);
-    let mut entries = tokio::fs::read_dir(&directory).await.unwrap();
-    while let Some(entry) = entries.next_entry().await.unwrap() {
-        assert!(!entry.file_name().to_string_lossy().starts_with("records-"));
-    }
-    backend.delete(complete.resource_id).await.unwrap();
-    let restored = second.finish().await.unwrap();
-    assert_eq!(restored.state, ContentState::Complete);
-    assert_eq!(restored.cursor.sequence, 1);
+    // Reject manifest publication after record bytes have reached disk.
+    let obstruction = directory.join("manifest-next.json");
+    tokio::fs::create_dir(&obstruction).await.unwrap();
+    resource.cursor.sequence = 1;
+    resource.committed_cursor = resource.cursor;
+    resource.total_bytes = "retry this batch".len() as u64;
+    resource.state = ContentState::Complete;
+    let chunks = [Arc::new(ContentChunk {
+        captured_at_ms: 1000,
+        cursor: resource.cursor,
+        payload: text("retry this batch").into_payload(None).unwrap(),
+    })];
+    assert!(matches!(
+        backend.commit(resource.clone(), &chunks).await,
+        Err(StoreError::Io(_))
+    ));
+    assert_eq!(
+        tokio::fs::read(directory.join("manifest.json"))
+            .await
+            .unwrap(),
+        before
+    );
+    tokio::fs::remove_dir(obstruction).await.unwrap();
+    let unpublished = FileContentBackend::segment_path(&directory, 20);
+    tokio::fs::write(&unpublished, b"incomplete batch")
+        .await
+        .unwrap();
+    let resource = backend.commit(resource, &chunks).await.unwrap();
+    assert_eq!(resource.state, ContentState::Complete);
+    assert_eq!(resource.cursor.sequence, 1);
+    assert!(!unpublished.exists());
+    let page = backend
+        .read(resource.resource_id, None, 1024)
+        .await
+        .unwrap();
+    assert_eq!(page.chunks.len(), 1);
+    assert_eq!(
+        page.chunks[0].payload,
+        text("retry this batch").into_payload(None).unwrap()
+    );
+    assert!(!page.gap);
 }
 
 #[tokio::test]
-async fn store_pressure_still_allows_a_bounded_loss_descriptor_to_be_sealed() {
+async fn resource_retention_failure_still_allows_a_loss_descriptor_to_be_sealed() {
     let root = tempfile::tempdir().unwrap();
     let backend = Arc::new(FileContentBackend::new(
         root.path(),
         FileContentConfig {
-            max_store_bytes: 1000,
+            max_retained_bytes: 1000,
             ..Default::default()
         },
     ));
@@ -399,7 +448,7 @@ async fn cache_eviction_preserves_the_gate_of_an_in_use_manifest() {
     assert!(Arc::ptr_eq(&held, &reloaded));
     first.append(text("after eviction")).await.unwrap();
     let complete = first.finish().await.unwrap();
-    assert_eq!(held.lock().await.resource, complete);
+    assert_eq!(held.lock().await.manifest.resource, complete);
     second.finish().await.unwrap();
 }
 

@@ -6,7 +6,7 @@ import { computed, onScopeDispose, ref } from 'vue'
 import * as chatApi from './chat/api'
 import { sessionWasDeleted } from './chat/sessionMutationSync'
 import { TranscriptCacheIndex } from './chat/transcriptCache'
-import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
+import { normalizeAgenaPart } from './chat/api'
 import {
   binarySearchById,
   compareChatIds,
@@ -48,7 +48,6 @@ import type {
   MessageInfo,
   MessagePart,
   Session,
-  SessionErrorEvent,
   SessionRunConfig,
   SessionState,
   SessionUsage,
@@ -85,14 +84,6 @@ function readString(value: JsonValue): string {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function firstNonEmpty(values: Array<string | null | undefined>): string {
-  for (const value of values) {
-    const text = typeof value === 'string' ? value.trim() : ''
-    if (text) return text
-  }
-  return ''
 }
 
 function loadStoredTranscriptPartPageSize(): number {
@@ -179,7 +170,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // Only a full execution snapshot enumerates all pending requests. List and
   // metadata resources may carry the same version with a compact state.
   const interactiveBySession = ref<Record<string, { version: number; requests: InteractiveRequest[] }>>({})
-  const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
   const interactionDrafts = ref<
     Record<
       string,
@@ -1521,12 +1511,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return attentionBySession.value[sid] ?? null
   })
 
-  const selectedSessionError = computed(() => {
-    const sid = selectedSessionId.value
-    if (!sid) return null
-    return sessionErrorBySession.value[sid] ?? null
-  })
-
   const selectedSessionRunConfig = computed(() => {
     const sid = selectedSessionId.value
     if (!sid) return null
@@ -1580,11 +1564,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return sid ? attentionBySession.value[sid] || null : null
   }
 
-  function getSessionError(sessionId: string | null | undefined): SessionErrorEvent | null {
-    const sid = String(sessionId || '').trim()
-    return sid ? sessionErrorBySession.value[sid] || null : null
-  }
-
   function getSessionRunConfig(sessionId: string | null | undefined): SessionRunConfig | null {
     const sid = String(sessionId || '').trim()
     return sid ? sessionRunConfigBySession.value[sid] || null : null
@@ -1611,15 +1590,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ): NonNullable<chatApi.AgenaExecutionState['execution']> | null {
     const sid = String(sessionId || '').trim()
     return sid ? sessionExecutionBySession.value[sid] || null : null
-  }
-
-  function clearSessionError(sessionId: string) {
-    const sid = (sessionId || '').trim()
-    if (!sid) return
-    if (!Object.prototype.hasOwnProperty.call(sessionErrorBySession.value, sid)) return
-    const next = { ...sessionErrorBySession.value }
-    delete next[sid]
-    sessionErrorBySession.value = next
   }
 
   // ─── session CRUD ─────────────────────────────────────────────────────────
@@ -1707,11 +1677,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...sessionDirectoryBySessionId.value }
       delete next[sid]
       sessionDirectoryBySessionId.value = next
-    }
-    {
-      const next = { ...sessionErrorBySession.value }
-      delete next[sid]
-      sessionErrorBySession.value = next
     }
     {
       const next = { ...sessionRunConfigBySession.value }
@@ -1868,7 +1833,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (document.length === 0) return null
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
-    clearSessionError(sid)
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
     if (generation !== transcriptCacheGeneration || sessionWasDeleted(sid)) return state
     applyExecutionResource(state, generation, activityGeneration)
@@ -2288,8 +2252,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
             } else {
               const existing = binarySearchById(list, key, (m) => m.info.id)
               if (existing.found && list[existing.index]) {
-                const messageError = messageErrorFromAgenaPart(part as JsonValue)
-                if (messageError) list[existing.index].info.error = messageError
                 const partOut = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
                 if (partOut) {
                   upsertPart(list[existing.index], partOut, '')
@@ -2303,8 +2265,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
                   runId,
                   time: { created: readNumber(part.created_at_ms) ?? Date.now() },
                 }
-                const messageError = messageErrorFromAgenaPart(part as JsonValue)
-                if (messageError) info.error = messageError
+
                 const entry = upsertMessageEntryIn(list, info)
                 const partOut = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
                 if (partOut) entry.parts.push(partOut)
@@ -2405,23 +2366,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       reconcileLiveState()
       return
     }
-
-    // session.error normalized to an agena failure envelope (problem.user.fallback).
-    if (t === 'session.error') {
-      const msg = firstNonEmpty([readString(props.message as JsonValue), readString(props.fallback as JsonValue)])
-      if (msg && sid) {
-        const at = Date.now()
-        sessionErrorBySession.value = {
-          ...sessionErrorBySession.value,
-          [sid]: {
-            at,
-            payload: evt,
-            error: { message: msg, rendered: msg, raw: props },
-          },
-        }
-        clearAttention(sid)
-      }
-    }
   }
 
   return {
@@ -2440,7 +2384,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     foldErrorByKey,
     historyErrorBySession,
     selectedAttention,
-    selectedSessionError,
     selectedSessionRunConfig,
     selectedSessionUsage,
     selectedSessionExecution,
@@ -2450,7 +2393,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     sessionActivityGeneration: (sid: string) => backgroundActivityGeneration.get(sid) ?? 0,
     applySessionActivity,
     refreshExecutionStatus,
-    sessionErrorBySession,
     sessionRunConfigBySession,
     attentionBySession,
     refreshSessions,
@@ -2487,13 +2429,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getInteractionDraft,
     getPendingInteraction,
     hasInteractionSnapshot,
-    getSessionError,
     getSessionRunConfig,
     getSessionUsage,
     cacheSessions,
     getComposerDraft,
     setComposerDraft,
-    clearSessionError,
     revertToMessage,
     applyEvent,
     retainSession,
@@ -2546,7 +2486,6 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       if (property === 'messagesError') return sid === target.selectedSessionId ? target.messagesError : null
       if (property === 'selectedHistory') return target.getSessionHistory(sid)
       if (property === 'selectedAttention') return target.getSessionAttention(sid)
-      if (property === 'selectedSessionError') return target.getSessionError(sid)
       if (property === 'selectedSessionRunConfig') return target.getSessionRunConfig(sid)
       if (property === 'selectedSessionUsage') return target.getSessionUsage(sid)
       if (property === 'selectedSessionExecution') return target.getSessionExecution(sid)

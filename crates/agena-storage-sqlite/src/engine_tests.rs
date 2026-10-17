@@ -1127,7 +1127,7 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
 }
 
 #[tokio::test]
-async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_runs() {
+async fn retry_transitions_failed_parts_and_runs_without_changing_identity() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     // A tool_call created `in_progress` (not `pending`), so
@@ -1184,7 +1184,7 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     assert_eq!(retried.revision, 3);
     assert_eq!(retried.finished_at_ms, None, "retry clears finished_at");
 
-    // A failed run marker is terminal: retrying is a new continue run (18.2).
+    // Internal retry keeps the marker, its ownership, and its existing children.
     let run_id = view.parts[0].part_id;
     engine
         .complete_run(
@@ -1200,7 +1200,7 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
         )
         .await
         .expect("fail run");
-    let error = engine
+    let retried_run = engine
         .update_part(
             session_id,
             run_id,
@@ -1211,11 +1211,11 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
             1_000_002,
         )
         .await
-        .expect_err("run marker is terminal");
-    assert!(matches!(
-        error,
-        agena_storage::store::StoreError::InvalidState(_)
-    ));
+        .expect("retry the same run marker");
+    assert_eq!(retried_run.part_id, run_id);
+    assert_eq!(retried_run.state, PartState::InProgress);
+    assert_eq!(retried_run.content["abort_reason"], serde_json::Value::Null);
+    assert!(retried_run.finished_at_ms.is_none());
 }
 
 #[tokio::test]

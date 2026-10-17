@@ -27,15 +27,6 @@ type MessageRecordLike = {
 
 type ContainsTargetExpose = { containsTarget?: (target: Node | null) => boolean }
 
-type RetryStatusLike = {
-  type: 'retry'
-  next: number
-  attempt: number
-  message: string
-} | null
-
-// The attention event is the shared chat contract; the context only ever
-// forwards it, so it must not re-declare a narrower shape of its own.
 type AttentionLike = AttentionEvent | null
 
 type SessionUsageLike = {
@@ -45,17 +36,6 @@ type SessionUsageLike = {
   costLabel?: string
   tokensValue?: number | null
 }
-
-type SessionErrorLike = {
-  at: number
-  error: {
-    message: string
-    rendered?: string
-    code?: string
-    name?: string
-    classification?: string
-  }
-} | null
 
 export type ChatPageViewContext = {
   pageRef: Ref<HTMLElement | null>
@@ -76,11 +56,9 @@ export type ChatPageViewContext = {
     selectedAttention: AttentionLike
     selectedHistory: { exhausted: boolean; limit: number; loading: boolean; userMessageCount?: number | null }
     transcriptPartPageSize: number
-    selectedSessionError: SessionErrorLike
     messages: MessageEntry[]
     messagesLoading: boolean
     messagesError: string | null
-    clearSessionError: (sessionId: string) => void
   }
   ui: {
     isCompactLayout: boolean
@@ -106,7 +84,6 @@ export type ChatPageViewContext = {
   copiedMessageId: MaybeRef<string>
   revertBusyMessageId: MaybeRef<string>
   sessionEnded: MaybeRef<boolean>
-  retryStatus: MaybeRef<RetryStatusLike>
   currentPhase: MaybeRef<string>
   showRunLoading: MaybeRef<boolean>
 
@@ -195,8 +172,6 @@ export type ChatPageViewContext = {
   closeAttachmentsPanel: () => void
 
   canAbort: MaybeRef<boolean>
-  retryCountdownLabel: MaybeRef<string>
-  retryNextLabel: MaybeRef<string>
   abortRun: () => void | Promise<void>
 
   composerPickerOpen: MaybeRef<null | 'model' | 'thinking' | 'speed'>
@@ -254,7 +229,6 @@ export type ChatPageViewContext = {
   addProjectAttachment: () => void | Promise<void>
 
   isStreamingAssistantMessage: (message: MessageRecordLike | null | undefined) => boolean
-  handleCopySessionError: () => void | Promise<void>
   handleForkFromMessage: (messageId: string) => void
   handleRevertFromMessage: (messageId: string) => void
   handleCopyMessage: (message: MessageRecordLike) => void

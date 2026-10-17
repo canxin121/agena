@@ -2955,3 +2955,24 @@ transcript-rich-fallback = 미리보기 불가: {$reason}. 원본 소스를 표�
 transcript-interactive-app = Agena Web에서 이 앱을 열어 UI와 백엔드를 실행하세요.
 
 overlay-user-input-defer = 나중에 처리
+
+# Durable error Part headline and live retry progress.
+error-part-waiting = 재시도 대기 중
+error-part-retrying = 재시도 중
+error-part-recovered = 복구됨
+error-part-failed = 재시도 실패
+error-part-cancelled = 재시도 취소됨
+error-part-retry-count = 재시도 { $attempt }/{ $max }회
+error-part-retry-number = 재시도 { $attempt }회
+error-part-in-duration = { $duration } 후 재시도
+error-part-scheduled-at = 예정 { $time }
+error-part-awaiting-start = 재시도 시작 대기 중
+error-part-requesting = 응답 대기 중
+error-part-streaming = 응답 수신 중
+error-part-elapsed = { $duration } 경과
+error-part-recovered-after = { $attempt }회 재시도 후 복구
+error-part-exhausted = 재시도 { $max }회 모두 소진
+error-part-stopped = 자동 재시도 중지됨
+error-part-seconds = { $count }초
+error-part-minutes = { $minutes }분 { $seconds }초
+error-part-hours = { $hours }시간 { $minutes }분

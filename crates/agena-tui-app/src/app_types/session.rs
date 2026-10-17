@@ -189,11 +189,6 @@ pub(crate) struct TranscriptState {
     /// The session's canonical part transcript (ordered parts, including
     /// `run` markers), mirroring `SessionExecutionResource.parts`.
     pub(crate) parts: Vec<agena_api::part::PartResource>,
-    /// Last failure observed per run marker. A continuation run clears the
-    /// runtime failure projection when the reply recovers, but the chat keeps
-    /// the last failure so the error Activity remains visible. Keyed by the
-    /// run marker's `part_id`.
-    pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
     pub(crate) refreshing: bool,
     pub(crate) reconcile_loaded_parts: bool,
     pub(crate) removed_part_ids: BTreeSet<i64>,
@@ -281,7 +276,6 @@ pub(crate) struct TranscriptState {
 #[derive(Debug, Clone)]
 pub(crate) struct TranscriptCache {
     pub(crate) parts: Vec<agena_api::part::PartResource>,
-    pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
     pub(crate) transcript_next_cursor: Option<String>,
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_pages_loaded: bool,

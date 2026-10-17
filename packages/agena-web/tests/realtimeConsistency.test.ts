@@ -419,3 +419,73 @@ test('refetched and overlapping older pages keep the live part object when revis
     assert.equal(afterOlder, cached, 'an overlapping older page also retains the displayed object')
     assert.equal(afterOlder.text, 'live body')
   }))
+
+test('error retries, recovery, overlapping pages and reconnect share one ordinary Part', async () =>
+  withChat(async (chat) => {
+    const error = (revision: number, outcome: string) => ({
+      part_id: 2,
+      run_id: 1,
+      kind: 'error',
+      role: 'assistant',
+      state: 'failed',
+      revision,
+      updated_at_ms: revision,
+      content: {
+        problem: { code: 'provider.timeout', user: { fallback: 'Provider timed out' } },
+        retry: { attempt: revision, max_retries: 3, outcome },
+      },
+    })
+    const completed = { ...marker(), state: 'completed', revision: 4, updated_at_ms: 4 }
+    chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', session_id: 7, part: marker() } })
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_added', session_id: 7, part: error(1, 'retrying') },
+    })
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_updated', session_id: 7, part: error(3, 'recovered') },
+    })
+    chat.applyEvent({ type: 'session_changed', properties: { kind: 'part_updated', session_id: 7, part: completed } })
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: { kind: 'part_updated', session_id: 7, part: error(2, 'retrying') },
+    })
+    const latest = chat.getMessagesForSession('7')[0]!.parts[0]!
+    assert.equal(latest.id, '2')
+    assert.equal(latest.agenaKind, 'error')
+    assert.equal(latest.revision, 3)
+    assert.equal(chat.getMessagesForSession('7')[0]!.info.error, undefined)
+    assert.notEqual(latest.synthetic, true)
+
+    let older = false
+    let reconciled = false
+    globalThis.fetch = (async (url) => {
+      const parsed = new URL(String(url), 'http://agena.test')
+      if (parsed.searchParams.has('ids')) {
+        reconciled = true
+        return Response.json(page([completed, error(3, 'recovered')], 4))
+      }
+      if (parsed.pathname.endsWith('/runs')) {
+        older = parsed.searchParams.has('cursor')
+        return Response.json({
+          ...page([completed, error(1, 'retrying')], 4),
+          page: older ? { has_more: false } : { has_more: true, next_cursor: 'older-errors' },
+        })
+      }
+      return Response.json(state(7, 4))
+    }) as typeof fetch
+    await chat.refreshMessages('7')
+    assert.equal(await chat.loadOlderMessages('7'), true)
+    assert.equal(older, true)
+    assert.equal(chat.getMessagesForSession('7')[0]!.parts[0], latest)
+    chat.reconcileLiveState()
+    await until(() => reconciled)
+    await pause(10)
+    const message = chat.getMessagesForSession('7')[0]!
+    assert.equal(message.info.runState, 'completed')
+    assert.equal(message.info.error, undefined)
+    assert.equal(message.parts.length, 1)
+    assert.equal(message.parts[0]?.id, '2')
+    assert.equal(message.parts[0]?.revision, 3)
+    assert.equal((message.parts[0]?.agenaContent as { retry: { outcome: string } }).retry.outcome, 'recovered')
+  }))

@@ -2961,3 +2961,24 @@ transcript-rich-fallback = Vista previa no disponible: {$reason}. Se muestra el 
 transcript-interactive-app = Abre esta aplicación en Agena Web para usar la interfaz y ejecutar sus servicios.
 
 overlay-user-input-defer = Posponer solicitud
+
+# Durable error Part headline and live retry progress.
+error-part-waiting = Esperando reintento
+error-part-retrying = Reintentando
+error-part-recovered = Recuperado
+error-part-failed = Reintento fallido
+error-part-cancelled = Reintento cancelado
+error-part-retry-count = Reintento { $attempt }/{ $max }
+error-part-retry-number = Reintento { $attempt }
+error-part-in-duration = Reintento en { $duration }
+error-part-scheduled-at = a las { $time }
+error-part-awaiting-start = Esperando el inicio del reintento
+error-part-requesting = Esperando respuesta
+error-part-streaming = Recibiendo respuesta
+error-part-elapsed = { $duration } transcurridos
+error-part-recovered-after = Recuperado tras { $attempt } reintentos
+error-part-exhausted = Se agotaron los { $max } reintentos
+error-part-stopped = Reintento automático detenido
+error-part-seconds = { $count } s
+error-part-minutes = { $minutes } min { $seconds } s
+error-part-hours = { $hours } h { $minutes } min

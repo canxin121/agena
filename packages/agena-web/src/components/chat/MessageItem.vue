@@ -9,7 +9,6 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
-import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
 import {
   foldTranscriptReply,
   nextActivityWindowCount,
@@ -94,14 +93,6 @@ const sourcePath = computed(() => {
     if (candidate) return candidate
   }
   return ''
-})
-const hasErrorPart = computed(() => props.displayParts.some((part) => part.kind === 'error'))
-const assistantError = computed(() =>
-  getAssistantErrorInfo({ role: props.message.info.role, error: props.message.info.error }),
-)
-const fallbackError = computed(() => {
-  if (hasErrorPart.value || !assistantError.value || assistantError.value.interrupted) return ''
-  return assistantError.value.message || ''
 })
 const localVisibility = reactive<ActivityVisibility>({ ids: [] })
 const visibility = computed(() => props.activityVisibility ?? localVisibility)
@@ -359,9 +350,8 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
         class="font-semibold"
         :class="{
           'text-primary': role === 'user',
-          'text-emerald-700 dark:text-emerald-300': role === 'assistant' && !fallbackError,
+          'text-emerald-700 dark:text-emerald-300': role === 'assistant',
           'text-amber-700 dark:text-amber-300': role === 'system' || role === 'runtime',
-          'text-rose-700 dark:text-rose-300': Boolean(fallbackError),
         }"
         >{{ role }}</span
       >
@@ -379,9 +369,6 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
       <span v-if="message.info.providerID || message.info.modelID" class="min-w-0 truncate font-mono text-[10px]">
         {{ [message.info.providerID, message.info.adapterID, message.info.modelID].filter(Boolean).join('/') }}
       </span>
-      <span v-if="assistantError?.interrupted" class="text-muted-foreground">{{
-        t('chat.messageItem.interrupted')
-      }}</span>
 
       <span class="flex-1" />
 
@@ -557,12 +544,6 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           @toggle="togglePart(row.part)"
           @select="$emit('nodeSelect', row.part.key)"
         />
-      </div>
-
-      <div v-if="fallbackError" class="px-1">
-        <div class="transcript-content border-rose-400/60 py-1 text-sm text-rose-700 dark:text-rose-300">
-          {{ fallbackError }}
-        </div>
       </div>
     </div>
   </article>

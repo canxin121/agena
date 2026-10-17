@@ -4,12 +4,13 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
-    push_label_value, push_markdown_document, push_markdown_rule, push_section_heading,
-    push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
-    render_markdown_block, should_suppress_markdown_block, strip_terminal_ansi_sequences,
-    style_for_role, transcript_message_parts, transcript_part_content,
-    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
+    markdown_blocks, push_activity_headline, push_activity_headline_with_summary,
+    push_expanded_markdown, push_expanded_tool_text, push_label_value, push_markdown_document,
+    push_markdown_rule, push_section_heading, push_wrapped_line, push_wrapped_rich_line,
+    render_entry_detailed, render_expanded_tool_text_block, render_markdown_block,
+    should_suppress_markdown_block, strip_terminal_ansi_sequences, style_for_role,
+    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
+    trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::{
     render_tool_detail_sections_with_sections, render_tool_execution_with_sections,
@@ -408,7 +409,28 @@ fn canonical_activity_details(
                 format!(
                     "{}: {}",
                     ui_text::t(i18n, "failure-detail-retry"),
-                    retry_directive_label(problem.retry, i18n)
+                    match error.retry.as_ref() {
+                        None => retry_directive_label(problem.retry, i18n),
+                        Some(retry) => format!(
+                            "{} · {}/{} · {}",
+                            retry_directive_label(problem.retry, i18n),
+                            retry.attempt,
+                            retry.max_retries,
+                            ui_text::t(
+                                i18n,
+                                match retry.outcome {
+                                    agena_failure::RetryOutcome::Retrying =>
+                                        "message-activity-response-running",
+                                    agena_failure::RetryOutcome::Recovered =>
+                                        "message-activity-response-completed",
+                                    agena_failure::RetryOutcome::Failed =>
+                                        "message-activity-response-failed",
+                                    agena_failure::RetryOutcome::Cancelled =>
+                                        "message-activity-response-cancelled",
+                                }
+                            )
+                        ),
+                    }
                 ),
             ];
             vec![CanonicalActivityDetail::section(
@@ -1523,6 +1545,7 @@ pub(crate) fn render_part_node(
                 part,
                 &agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
                     problem: error.problem.clone(),
+                    retry: error.retry.clone(),
                 }),
                 None,
                 out,
@@ -1649,31 +1672,6 @@ pub(crate) fn render_part_node(
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => {
-            let problem = match status {
-                TranscriptAssistantReplyLifecycle::Failed { problem } => problem,
-                _ => &None,
-            };
-            let failed_title = ui_text::t(i18n, "message-activity-response-failed");
-            if let Some(problem) = problem.as_ref() {
-                // A failed reply reuses the canonical Error Activity
-                // presentation: same headline, expandable detail sections,
-                // copy text and node structure as every other tool-call
-                // error, so the transcript does not carry a bespoke failure
-                // row.
-                return render_activity_canonical(
-                    message,
-                    part,
-                    &agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
-                        problem: problem.clone(),
-                    }),
-                    Some(failed_title.as_str()),
-                    out,
-                    width,
-                    i18n,
-                    defaults,
-                    expansions,
-                );
-            }
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -1686,9 +1684,6 @@ pub(crate) fn render_part_node(
                     }
                     TranscriptAssistantReplyLifecycle::Completed => {
                         "message-activity-response-completed"
-                    }
-                    TranscriptAssistantReplyLifecycle::Failed { .. } => {
-                        "message-activity-response-failed"
                     }
                     TranscriptAssistantReplyLifecycle::Cancelled => {
                         "message-activity-response-cancelled"
@@ -2730,10 +2725,19 @@ fn render_activity_canonical(
     let default_expanded = defaults.default_expanded(activity_kind_id_for_payload(payload));
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
+    let retry_headline = match payload {
+        agena_domain::ActivityPayload::Error(error) => error.retry.as_ref().map(|retry| {
+            crate::error_part::retry_headline(retry, chrono::Utc::now().timestamp_millis(), i18n)
+        }),
+        _ => None,
+    };
     let localized_title = title_override.map(str::to_owned).unwrap_or_else(|| {
         crate::ui_text::localized_activity_title(i18n, canonical_title.as_str())
     });
-    let title = localized_title.as_str();
+    let title = retry_headline
+        .as_ref()
+        .map(|header| header.title.as_str())
+        .unwrap_or(localized_title.as_str());
     // A notice row carries the wall-clock time it was recorded so the hook
     // timeline reads at a glance instead of by position alone.
     let headline_summary = match payload {
@@ -2746,9 +2750,17 @@ fn render_activity_canonical(
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());
     let details = canonical_activity_details(i18n, payload, summary.as_str());
     let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
-    push_activity_headline(
+    let headline_renderer = if matches!(payload, agena_domain::ActivityPayload::Error(_)) {
+        push_activity_headline_with_summary
+    } else {
+        push_activity_headline
+    };
+    headline_renderer(
         out,
-        part.status,
+        retry_headline
+            .as_ref()
+            .map(|header| header.status)
+            .unwrap_or(part.status),
         expanded,
         toggleable,
         title,
@@ -2756,6 +2768,19 @@ fn render_activity_canonical(
         width,
         i18n,
     );
+    if let Some(header) = &retry_headline {
+        let prefix = if width > 8 { "      " } else { "" };
+        push_wrapped_rich_line(
+            out,
+            prefix,
+            prefix,
+            Line::from(vec![Span::styled(
+                header.progress.clone(),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            )]),
+            width,
+        );
+    }
     let headline_end = out.len();
     let mut children = Vec::new();
     let mut copy_sections = Vec::<String>::new();

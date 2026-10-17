@@ -73,8 +73,11 @@ mod parts_fixtures {
             kind: "error".to_owned(),
             role: role.to_owned(),
             state: "failed".to_owned(),
-            content: serde_json::to_value(ErrorPartResource { problem })
-                .expect("error part serializes"),
+            content: serde_json::to_value(ErrorPartResource {
+                problem,
+                retry: None,
+            })
+            .expect("error part serializes"),
             presentation: None,
             summary: None,
             created_at_ms: part_id * 10,
@@ -6197,14 +6200,13 @@ mod live_transcript_tests {
             ..TranscriptState::default()
         };
 
-        // The failed terminal projection arrives and records the failure.
+        // The server-owned failure is an ordinary transcript Part.
         transcript.merge_parts(transcript.parts.clone());
-        assert_eq!(transcript.reply_failures.len(), 1);
 
-        // /continue recovers: the run completes and drops the error part, but
-        // the remembered failure stays injected into the assistant entry.
+        // Recovery changes the marker and retains the original error identity.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "assistant", "completed"),
+            parts_fixtures::error(1, 2, "assistant", problem.clone()),
             parts_fixtures::text(
                 1,
                 3,
@@ -6214,10 +6216,15 @@ mod live_transcript_tests {
             parts_fixtures::text(1, 4, "assistant", "recovered output"),
         ]);
         assert!(
-            !transcript.parts.iter().any(|part| part.kind == "error"),
-            "the recovering projection must drop the durable error part"
+            transcript
+                .parts
+                .iter()
+                .any(|part| part.kind == "error" && part.part_id == 2),
+            "recovery retains the server's durable error Part"
         );
 
+        let cache = transcript.cache_snapshot();
+        transcript.restore_cache(cache, 7, "restored".to_owned());
         let rendered = transcript
             .rendered(80)
             .lines
@@ -6234,16 +6241,16 @@ mod live_transcript_tests {
                 matches!(
                     node.key,
                     agena_tui_transcript::TranscriptNodeKey::Activity {
-                        content_id: agena_tui_transcript::TranscriptContentId::StoredPart(_),
+                        content_id: agena_tui_transcript::TranscriptContentId::StoredPart(2),
                         ..
                     }
                 )
             }),
-            "the remembered failure must stay rendered as an error activity"
+            "the error must keep its actual Part identity"
         );
     }
     #[test]
-    fn failed_reply_failure_is_recorded_from_the_parts_projection() {
+    fn missing_error_parts_are_not_recreated_from_client_memory() {
         let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
             agena_failure::FailureCode::new("internal.test"),
             agena_failure::FailureCategory::Internal,
@@ -6271,14 +6278,8 @@ mod live_transcript_tests {
             ..TranscriptState::default()
         };
 
-        // The failed projection records the failure without any live patch:
-        // the terminal reloads the full part list and `record_reply_failures`
-        // keys the error part under its run marker.
-        transcript.merge_parts(transcript.parts.clone());
-        assert_eq!(transcript.reply_failures.len(), 1);
-
-        // /continue recovers the reply; the error part is gone from the parts
-        // projection but the remembered failure keeps the summary visible.
+        // Render once, then replace the page with an authoritative snapshot.
+        transcript.rendered(80);
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "assistant", "completed"),
             parts_fixtures::text(
@@ -6291,7 +6292,7 @@ mod live_transcript_tests {
         ]);
         assert!(
             !transcript.parts.iter().any(|part| part.kind == "error"),
-            "the recovering projection must drop the durable error part"
+            "this snapshot intentionally contains no error Part"
         );
 
         let rendered = transcript
@@ -6302,8 +6303,8 @@ mod live_transcript_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            rendered.contains("The provider stream was interrupted."),
-            "failure summary should survive continue when recorded from the projection: {rendered:?}"
+            !rendered.contains("The provider stream was interrupted."),
+            "client memory must not fabricate an error absent from the loaded Parts: {rendered:?}"
         );
     }
 

@@ -33,7 +33,6 @@ import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
-import { hasDisplayableAssistantError } from './assistantError'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 
@@ -94,7 +93,6 @@ const {
   copiedMessageId,
   revertBusyMessageId,
   sessionEnded,
-  retryStatus,
   currentPhase,
   showRunLoading,
 
@@ -174,7 +172,6 @@ const {
   closeAttachmentsPanel,
 
   // Retry notice.
-  retryCountdownLabel,
 
   // Model and run mode picker.
   composerPickerOpen,
@@ -232,7 +229,6 @@ const {
   handleForkFromMessage,
   handleRevertFromMessage,
   handleCopyMessage,
-  handleCopySessionError,
 } = ctx
 
 type TooltipAnchorLike = { triggerEl?: unknown; $el?: unknown } | HTMLElement | null
@@ -317,17 +313,6 @@ const activePickerAnchor = computed(() => {
 })
 
 const activeAttachmentsAnchor = computed(() => resolveAnchorEl(unref(attachmentsTriggerRef) as TooltipAnchorLike))
-
-const timelineSessionError = computed(() => {
-  if (!chat.selectedSessionError) return null
-  const messages = Array.isArray(chat.messages) ? chat.messages : []
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (hasDisplayableAssistantError(messages[i]?.info)) {
-      return null
-    }
-  }
-  return chat.selectedSessionError
-})
 
 // `ref="..."` in templates doesn't count as usage for TS.
 void pageRef
@@ -493,7 +478,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :selected-session-id="chat.selectedSessionId"
                   :messages-loading="chat.messagesLoading"
                   :messages-error="chat.messagesError"
-                  :session-error="timelineSessionError"
                   :render-blocks="renderBlocks"
                   :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
                   :loading-older="loadingOlder"
@@ -507,8 +491,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :is-streaming-assistant-message="isStreamingAssistantMessage"
                   :show-run-loading="showRunLoading"
                   :session-ended="sessionEnded"
-                  :retry-status="retryStatus"
-                  :retry-countdown="retryCountdownLabel"
                   :current-phase="currentPhase"
                   :activity-collapse-signal="activityCollapseSignal"
                   :is-part-expanded="transcriptPartExpanded"
@@ -523,10 +505,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   @fold-expand="loadFoldedActivity"
                   @reveal-parts="ctx.preparePartReveal"
                   @node-select="selectTranscriptNode"
-                  @copySessionError="handleCopySessionError"
-                  @clearSessionError="
-                    chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined
-                  "
                   @set-activity-page-size="ctx.setTranscriptPartPageSize"
                 />
               </div>

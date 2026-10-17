@@ -8,6 +8,7 @@ pub(crate) struct CachedEntryRender {
     width: u16,
     palette: agena_tui_components::theme::ThemePalette,
     remote_image_generation: u64,
+    retry_clock_second: Option<i64>,
     frames: Vec<std::sync::Arc<agena_tui_transcript::content::ContentFrame>>,
     errors: Vec<(agena_domain::ContentId, String)>,
     block: std::sync::Arc<SharedEntryBlock>,
@@ -498,7 +499,6 @@ impl TranscriptState {
             #[cfg(test)]
             messages: Vec::new(),
             parts: Vec::new(),
-            reply_failures: BTreeMap::new(),
             refreshing: false,
             reconcile_loaded_parts: true,
             removed_part_ids: BTreeSet::new(),
@@ -555,7 +555,6 @@ impl TranscriptState {
         #[cfg(test)]
         self.messages.clear();
         self.parts.clear();
-        self.reply_failures.clear();
         self.refreshing = false;
         self.refresh_in_flight_since = None;
         self.state_loading = false;
@@ -602,7 +601,6 @@ impl TranscriptState {
     pub(crate) fn cache_snapshot(&self) -> super::TranscriptCache {
         super::TranscriptCache {
             parts: self.parts.clone(),
-            reply_failures: self.reply_failures.clone(),
             transcript_next_cursor: self.transcript_next_cursor.clone(),
             transcript_has_more: self.transcript_has_more,
             transcript_older_pages_loaded: self.transcript_older_pages_loaded,
@@ -623,7 +621,6 @@ impl TranscriptState {
         self.session_id = Some(session_id);
         self.session_title = title;
         self.parts = cache.parts;
-        self.reply_failures = cache.reply_failures;
         self.transcript_next_cursor = cache.transcript_next_cursor;
         self.transcript_has_more = cache.transcript_has_more;
         self.transcript_older_pages_loaded = cache.transcript_older_pages_loaded;
@@ -754,7 +751,6 @@ impl TranscriptState {
                 .iter()
                 .zip(&parts)
                 .any(|(old, incoming)| old.part_id != incoming.part_id);
-        let failures_before = self.reply_failures.len();
         self.apply_parts_change(|current| *current = parts);
         self.tool_detail_pending
             .retain(|(id, _)| self.parts.iter().any(|part| part.part_id == *id));
@@ -768,7 +764,7 @@ impl TranscriptState {
         // entry and keeps the full invalidation.
         if restructured {
             self.invalidate_render();
-        } else if changed.is_empty() && failures_before == self.reply_failures.len() {
+        } else if changed.is_empty() {
             // Nothing a render could observe changed.
         } else {
             match self.projected_entry_ids_for_parts(&changed) {
@@ -1231,7 +1227,6 @@ impl TranscriptState {
     /// from persisted parts, just like assistant entries.
     fn apply_parts_change(&mut self, change: impl FnOnce(&mut Vec<agena_api::part::PartResource>)) {
         change(&mut self.parts);
-        self.record_reply_failures();
         // Keep explicitly revealed rows visible as the reply grows; an
         // explicitly collapsed entry still keeps its bounded part window.
         self.reveal_loaded_fold_activities();
@@ -1244,7 +1239,6 @@ impl TranscriptState {
     pub(crate) fn remove_run_parts(&mut self, run_id: i64) {
         self.parts
             .retain(|part| part.part_id != run_id && part.run_id != Some(run_id));
-        self.reply_failures.remove(&run_id);
         self.transcript_folds
             .retain(|fold| fold.run_id != run_id && !fold.run_ids.contains(&run_id));
         let remaining = self
@@ -1254,34 +1248,7 @@ impl TranscriptState {
             .collect::<BTreeSet<_>>();
         self.transcript_revealed_part_ids
             .retain(|id| remaining.contains(id));
-        self.record_reply_failures();
         self.invalidate_render();
-    }
-
-    /// Remember the latest structured failure observed per run marker so a
-    /// later continuation that recovers the run keeps the failure visible in
-    /// the chat. The runtime clears its failure projection when the run
-    /// completes, but the chat is a user-facing history: the failure stays.
-    fn record_reply_failures(&mut self) {
-        let mut failures = BTreeMap::new();
-        let marker_ids = self
-            .parts
-            .iter()
-            .filter(|part| part.kind == "run")
-            .map(|part| part.part_id)
-            .collect::<BTreeSet<_>>();
-        for part in &self.parts {
-            if part.kind == "error"
-                && let Some(run_id) = part.run_id
-                && marker_ids.contains(&run_id)
-                && let Ok(error) = serde_json::from_value::<agena_api::part::ErrorPartResource>(
-                    part.content.clone(),
-                )
-            {
-                failures.insert(run_id, error.problem);
-            }
-        }
-        self.reply_failures.extend(failures);
     }
 
     pub(crate) fn set_search_query(&mut self, query: String) {
@@ -1944,12 +1911,29 @@ impl TranscriptState {
     }
 
     fn rendered_inner(&mut self, width: u16) -> &RenderedTranscript {
-        let palette = agena_tui_components::theme::active_palette();
-        let remote_image_generation = agena_tui_media::remote_image_generation();
+        // Capture external render inputs once for the whole frame.
+        self.rendered_inner_at(
+            width,
+            chrono::Utc::now().timestamp_millis(),
+            agena_tui_components::theme::active_palette(),
+            agena_tui_media::remote_image_generation(),
+        )
+    }
+
+    fn rendered_inner_at(
+        &mut self,
+        width: u16,
+        now_ms: i64,
+        palette: agena_tui_components::theme::ThemePalette,
+        remote_image_generation: u64,
+    ) -> &RenderedTranscript {
         if self.rendered.as_ref().is_some_and(|rendered| {
             rendered.width == width
                 && rendered.palette == palette
                 && rendered.remote_image_generation == remote_image_generation
+                && rendered
+                    .retry_clock_second
+                    .is_none_or(|second| second == now_ms.div_euclid(1000))
         }) {
             return self.rendered.as_ref().expect("render cache should exist");
         }
@@ -1972,9 +1956,8 @@ impl TranscriptState {
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
         if self.projected_entries.is_none() {
-            let mut entries =
+            let entries =
                 agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
-            inject_remembered_failures(&mut entries, &self.reply_failures);
             #[cfg(test)]
             let entries = if self.parts.is_empty() {
                 self.messages
@@ -2003,6 +1986,9 @@ impl TranscriptState {
             self.projected_entries = Some(entries);
         }
         let entries = self.projected_entries.as_ref().expect("projected entries");
+        let retry_clock_second = entries.iter().find_map(|entry| {
+            agena_tui_transcript::error_part::entry_retry_clock_second(entry, now_ms)
+        });
         if entries.is_empty() && self.session_id.is_some() {
             lines.push(std::sync::Arc::new(
                 RenderedLine::dim(ui_text::t(&self.i18n, "transcript-empty-session"))
@@ -2012,6 +1998,8 @@ impl TranscriptState {
         }
 
         for entry in entries {
+            let entry_retry_clock_second =
+                agena_tui_transcript::error_part::entry_retry_clock_second(entry, now_ms);
             let frames = entry
                 .parts
                 .iter()
@@ -2045,6 +2033,7 @@ impl TranscriptState {
                 cached.width == width
                     && cached.palette == palette
                     && cached.remote_image_generation == remote_image_generation
+                    && cached.retry_clock_second == entry_retry_clock_second
                     && cached.frames.len() == frames.len()
                     && cached.errors == errors
                     && cached
@@ -2164,6 +2153,7 @@ impl TranscriptState {
                         width,
                         palette,
                         remote_image_generation,
+                        retry_clock_second: entry_retry_clock_second,
                         frames,
                         errors,
                         block: rendered.clone(),
@@ -2230,6 +2220,7 @@ impl TranscriptState {
             width,
             palette,
             remote_image_generation,
+            retry_clock_second,
             lines,
             search_matches,
             nodes,
@@ -4268,71 +4259,6 @@ impl TranscriptState {
     }
 }
 
-fn inject_remembered_failures(
-    entries: &mut [agena_tui_transcript::TranscriptEntry<'static>],
-    reply_failures: &BTreeMap<i64, agena_failure::UserProblem>,
-) {
-    for entry in entries {
-        if entry.role != Some(agena_api::resource::RunRole::Assistant) {
-            continue;
-        }
-        let agena_tui_transcript::TranscriptEntryId::StoredMessage(run_id) = entry.id else {
-            continue;
-        };
-        let Some(problem) = reply_failures.get(&run_id) else {
-            continue;
-        };
-        let has_error = entry.parts.iter().any(|part| {
-            matches!(
-                part.content,
-                agena_tui_transcript::TranscriptPartContent::Activity(
-                    agena_tui_transcript::TranscriptActivityContent::Error(_)
-                )
-            )
-        });
-        if has_error {
-            continue;
-        }
-        let lifecycle = agena_tui_transcript::TranscriptPartContent::Activity(
-            agena_tui_transcript::TranscriptActivityContent::AssistantReplyLifecycle(
-                agena_tui_transcript::TranscriptAssistantReplyLifecycle::Failed {
-                    problem: Some(problem.clone()),
-                },
-            ),
-        );
-        // Render the remembered outcome as the reply lifecycle the transcript
-        // already models. Fabricating an Error content part here duplicated the
-        // run marker id and bypassed the documented failure view.
-        let existing = entry.parts.iter_mut().find(|part| {
-            matches!(
-                part.content,
-                agena_tui_transcript::TranscriptPartContent::Activity(
-                    agena_tui_transcript::TranscriptActivityContent::AssistantReplyLifecycle(_)
-                )
-            )
-        });
-        match existing {
-            Some(part) => {
-                part.status = agena_api::part::PartExecutionStatusResource::Failed;
-                part.content = lifecycle;
-            }
-            None => {
-                let id = entry
-                    .reply_id
-                    .map(agena_tui_transcript::TranscriptContentId::AssistantReplyLifecycle)
-                    .unwrap_or(agena_tui_transcript::TranscriptContentId::StoredPart(
-                        run_id,
-                    ));
-                entry.parts.push(agena_tui_transcript::TranscriptEntryPart {
-                    id,
-                    status: agena_api::part::PartExecutionStatusResource::Failed,
-                    content: lifecycle,
-                })
-            }
-        }
-    }
-}
-
 fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: usize) -> bool {
     let rendered_line = rendered.lines.get(line);
     rendered
@@ -4940,6 +4866,97 @@ mod stall_recovery_tests {
         );
         assert_eq!(state.interaction.text_selection, Some(selection));
         assert!(state.entry_render_cache.len() > 128);
+    }
+
+    #[test]
+    fn retry_clock_repaints_only_its_entry_and_stops_after_the_deadline() {
+        use std::sync::Arc;
+        let mut state = state();
+        let base_ms = chrono::Utc::now().timestamp_millis().div_euclid(1000) * 1000;
+        // Other tests may change the process-wide theme or image generation.
+        // This test changes only the clock, so hold the other inputs fixed.
+        let palette = agena_tui_components::theme::active_palette();
+        let images = agena_tui_media::remote_image_generation();
+        let render_at = |state: &mut TranscriptState, elapsed_ms| {
+            state.rendered_inner_at(80, base_ms + elapsed_ms, palette, images);
+        };
+        let mut history = text_part(2, "static Markdown history");
+        history.run_id = Some(1);
+        history.role = "user".into();
+        let problem: agena_failure::UserProblem = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("provider.timeout"),
+            agena_failure::FailureCategory::Timeout,
+            agena_failure::FailureResponsibility::Dependency,
+            agena_failure::RetryDirective::Backoff,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new("timeout", "The provider request timed out."),
+        )
+        .into();
+        let mut error = text_part(11, "");
+        error.run_id = Some(10);
+        error.kind = "error".into();
+        error.state = "failed".into();
+        error.content = serde_json::json!({ "message": "timeout", "problem": problem, "retry": {
+            "attempt": 2, "max_retries": 10, "outcome": "retrying", "phase": "backoff", "next_at_ms": base_ms + 15_000,
+        }});
+        state.merge_parts(vec![
+            run_part(1, "user"),
+            history,
+            run_part(10, "assistant"),
+            error.clone(),
+        ]);
+        render_at(&mut state, 12_000);
+        let blocks = state
+            .entry_render_cache
+            .iter()
+            .map(|(id, cached)| (*id, cached.block.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let active = *state
+            .entry_render_cache
+            .iter()
+            .find(|(_, cached)| cached.retry_clock_second.is_some())
+            .unwrap()
+            .0;
+        render_at(&mut state, 12_500);
+        for (id, block) in &blocks {
+            assert!(Arc::ptr_eq(block, &state.entry_render_cache[id].block));
+        }
+        render_at(&mut state, 13_000);
+        for (id, block) in &blocks {
+            assert_eq!(
+                Arc::ptr_eq(block, &state.entry_render_cache[id].block),
+                *id != active
+            );
+        }
+        render_at(&mut state, 15_000);
+        assert_eq!(state.rendered.as_ref().unwrap().retry_clock_second, None);
+        let expired = state.entry_render_cache[&active].block.clone();
+        render_at(&mut state, 30_000);
+        assert!(Arc::ptr_eq(
+            &expired,
+            &state.entry_render_cache[&active].block
+        ));
+        error.revision = 1;
+        error.content["retry"]["phase"] = "requesting".into();
+        error.content["retry"]["started_at_ms"] = (base_ms + 30_000).into();
+        state.merge_part(error.clone());
+        render_at(&mut state, 31_000);
+        assert_eq!(
+            state.rendered.as_ref().unwrap().retry_clock_second,
+            Some(base_ms.div_euclid(1000) + 31)
+        );
+        error.revision = 2;
+        error.content["retry"]["outcome"] = "recovered".into();
+        state.merge_part(error);
+        render_at(&mut state, 32_000);
+        assert_eq!(state.rendered.as_ref().unwrap().retry_clock_second, None);
+        let recovered = state.entry_render_cache[&active].block.clone();
+        render_at(&mut state, 33_000);
+        assert!(Arc::ptr_eq(
+            &recovered,
+            &state.entry_render_cache[&active].block
+        ));
     }
 
     #[test]

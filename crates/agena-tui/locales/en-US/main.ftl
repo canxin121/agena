@@ -2590,3 +2590,24 @@ transcript-rich-fallback = Preview unavailable: {$reason}. Original source follo
 transcript-interactive-app = Open this interactive app in Agena Web to use the UI and run its services.
 
 overlay-user-input-defer = Defer request
+
+# Durable error Part headline and live retry progress.
+error-part-waiting = Waiting to retry
+error-part-retrying = Retrying
+error-part-recovered = Recovered
+error-part-failed = Retry failed
+error-part-cancelled = Retry cancelled
+error-part-retry-count = Retry { $attempt }/{ $max }
+error-part-retry-number = Retry { $attempt }
+error-part-in-duration = Retry in { $duration }
+error-part-scheduled-at = at { $time }
+error-part-awaiting-start = Waiting for retry to start
+error-part-requesting = Waiting for response
+error-part-streaming = Receiving response
+error-part-elapsed = { $duration } elapsed
+error-part-recovered-after = Recovered after { $attempt } retries
+error-part-exhausted = All { $max } retries used
+error-part-stopped = Automatic retry stopped
+error-part-seconds = { $count }s
+error-part-minutes = { $minutes }m { $seconds }s
+error-part-hours = { $hours }h { $minutes }m

@@ -331,6 +331,7 @@ impl SessionProcessor {
         invocation: ToolInvocation,
         _title: String,
         _summary: String,
+        failure: Option<agena_failure::Failure>,
         output_text: String,
         attachments: Vec<agena_domain::AttachmentItem>,
         details: agena_domain::ToolOutput,
@@ -382,17 +383,33 @@ impl SessionProcessor {
             .iter()
             .map(|field| field.resource.clone())
             .collect();
-        let mut operation = OperationPart::completed(
-            pending.call_id.unwrap_or_default(),
-            invocation.clone(),
-            output,
-            TimeRange {
-                start_ms: pending
-                    .started_at_ms
-                    .unwrap_or_else(|| Utc::now().timestamp_millis()),
-                end_ms: Some(Utc::now().timestamp_millis()),
-            },
-        );
+        let lifecycle = TimeRange {
+            start_ms: pending
+                .started_at_ms
+                .unwrap_or_else(|| Utc::now().timestamp_millis()),
+            end_ms: Some(Utc::now().timestamp_millis()),
+        };
+        let state = if failure.is_some() {
+            PartState::Failed
+        } else {
+            PartState::Completed
+        };
+        let mut operation = if let Some(failure) = failure {
+            OperationPart::failed(
+                pending.call_id.unwrap_or_default(),
+                invocation.clone(),
+                failure,
+                output,
+                lifecycle,
+            )
+        } else {
+            OperationPart::completed(
+                pending.call_id.unwrap_or_default(),
+                invocation.clone(),
+                output,
+                lifecycle,
+            )
+        };
         operation.resources = resources;
         operation.set_provider_only(true);
         if let Some(raw) = raw {
@@ -430,9 +447,7 @@ impl SessionProcessor {
         part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
             tool_call_from_operation(&operation),
         )))?;
-        if part.state != PartState::Completed {
-            part.state = PartState::Completed;
-        }
+        part.state = state;
         self.persist_part_state(run, parts, part_id).await?;
         Ok(())
     }

@@ -612,7 +612,7 @@ async fn prompt_preparation_error_terminalizes_its_empty_assistant_run() {
         .expect("terminalize over-budget run");
     manager
         .store
-        .append_failure_part(session.id, marker_id, &failure.failure())
+        .record_failure_part(session.id, marker_id, &failure.failure())
         .await
         .expect("persist the final failure after terminalization");
     let reloaded = manager
@@ -2164,6 +2164,7 @@ struct FakeProvider {
 #[derive(Clone, Copy)]
 enum ProviderNativeFixtureMode {
     CompletionOmitsId,
+    FailedCompletion,
     StartedOnly,
 }
 
@@ -2388,7 +2389,11 @@ impl ModelRuntime for ProviderNativeFixtureProvider {
                 "status": "in_progress"
             })),
         })];
-        if matches!(self.mode, ProviderNativeFixtureMode::CompletionOmitsId) {
+        if matches!(
+            self.mode,
+            ProviderNativeFixtureMode::CompletionOmitsId
+                | ProviderNativeFixtureMode::FailedCompletion
+        ) {
             // A redundant progress/start fragment may omit fields or carry
             // structurally empty replacements. It must not erase the hosted
             // call's identity, title, or raw provider context.
@@ -2415,6 +2420,9 @@ impl ModelRuntime for ProviderNativeFixtureProvider {
                 invocation: ToolInvocation::new("web_search", StructuredObject::default()),
                 title: String::new(),
                 summary: "1 result".to_owned(),
+                failure: matches!(self.mode, ProviderNativeFixtureMode::FailedCompletion).then(
+                    || crate::AppError::Provider("Image server unavailable".to_owned()).failure(),
+                ),
                 output_text: "fixture result".to_owned(),
                 blocks: vec![agena_provider::ProviderNativeToolOutputBlock::Text {
                     text: "fixture result".to_owned(),
@@ -7426,6 +7434,7 @@ async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_th
 
 mod adapter_gate;
 mod auto_approval;
+mod failure_parts;
 mod provider_retry;
 
 struct StopCounterFixture {

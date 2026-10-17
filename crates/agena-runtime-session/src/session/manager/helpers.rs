@@ -532,10 +532,11 @@ pub(super) fn validate_user_input_reply(
         let allowed = question
             .options
             .iter()
+            .filter(|option| !option.custom)
             .map(|option| option.label.trim())
             .filter(|label| !label.is_empty())
             .collect::<std::collections::HashSet<_>>();
-        if !question.allow_custom
+        if question.custom_option_index().is_none()
             && let Some(answer) = normalized
                 .iter()
                 .find(|value| !allowed.contains(value.as_str()))
@@ -567,6 +568,36 @@ pub(super) fn validate_user_input_reply(
 mod tests {
     use super::*;
     use crate::tool::ToolPayloadOutput;
+
+    #[test]
+    fn custom_only_option_accepts_written_text_without_the_legacy_flag() {
+        let mut request: UserInputRequest = serde_json::from_value(serde_json::json!({
+            "request_id": "custom", "kind": "ask_user", "source": "host",
+            "created_at": "2026-10-17T00:00:00Z",
+            "questions": [{"question": "Tell us more", "options": [
+                {"label": "Write an answer", "custom": true}
+            ]}]
+        }))
+        .unwrap();
+        let mut reply = UserInputReply {
+            request_id: "custom".into(),
+            kind: UserInputReplyKind::Submit,
+            answers: std::collections::BTreeMap::from([(
+                "0".into(),
+                vec!["中文, answer\n第二行".into()],
+            )]),
+            reason: None,
+        };
+        assert_eq!(
+            validate_user_input_reply(&request, &reply).unwrap()["0"],
+            vec!["中文, answer\n第二行"]
+        );
+        request.questions[0].options[0].custom = false;
+        assert!(validate_user_input_reply(&request, &reply).is_err());
+        request.questions[0].options[0].custom = true;
+        reply.answers.insert("0".into(), vec!["  ".into()]);
+        assert!(validate_user_input_reply(&request, &reply).is_err());
+    }
 
     fn invocation_named(name: &str) -> ToolInvocation {
         ToolInvocation::new(name, agena_domain::StructuredObject::default())

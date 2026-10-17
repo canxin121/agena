@@ -129,6 +129,8 @@ pub struct CommandReferencePartResource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A message part representing a failure.
 pub struct ErrorPartResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<agena_failure::RetryProgress>,
     pub problem: agena_failure::UserProblem,
 }
 

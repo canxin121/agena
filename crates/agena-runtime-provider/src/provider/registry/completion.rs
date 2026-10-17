@@ -106,13 +106,15 @@ fn completion_tool_api_calls(response: &CompletionResponse) -> Vec<RejectedToolA
 }
 
 /// Whether a stream event carries user-visible or actionable content.
-/// `Completed` and `ProviderRetry` are bookkeeping; everything else is
+/// `Completed` and provider retry notifications are bookkeeping; everything else is
 /// content (text, reasoning, or tool calls). An attempt whose only yielded
 /// events are bookkeeping is an empty response.
 fn completion_stream_event_is_content(event: &CompletionStreamEvent) -> bool {
     !matches!(
         event,
-        CompletionStreamEvent::Completed { .. } | CompletionStreamEvent::ProviderRetry { .. }
+        CompletionStreamEvent::Completed { .. }
+            | CompletionStreamEvent::ProviderRetry { .. }
+            | CompletionStreamEvent::ProviderRetryStarted { .. }
     )
 }
 
@@ -1060,6 +1062,7 @@ impl ProviderRegistry {
             let mut protocol_repair_count = 0_usize;
             let mut discarded_usage = None;
             let mut has_nudged_empty_response = false;
+            let mut retry_pending = false;
 
             loop {
                 let attempt = retry_index + 1;
@@ -1091,6 +1094,13 @@ impl ProviderRegistry {
                     );
                     Err(err)?;
                     continue;
+                }
+
+                if std::mem::take(&mut retry_pending) {
+                    yield CompletionStreamEvent::ProviderRetryStarted {
+                        provider_id: model_ref.provider_id.clone(),
+                        model: model_ref.model_id.clone(),
+                    };
                 }
 
                 let mut inner_stream = match provider
@@ -1141,6 +1151,7 @@ impl ProviderRegistry {
                                 delay_ms: delay.as_millis() as u64,
                             };
                             tokio::time::sleep(delay).await;
+                            retry_pending = true;
                             retry_index += 1;
                             continue;
                         }
@@ -1556,6 +1567,7 @@ impl ProviderRegistry {
                                     delay_ms: delay.as_millis() as u64,
                                 };
                                 tokio::time::sleep(delay).await;
+                                retry_pending = true;
                                 retry_index += 1;
                                 should_restart_stream = true;
                                 break;
@@ -1584,11 +1596,12 @@ impl ProviderRegistry {
                                     model: model_ref.model_id.clone(),
                                     message: agena_failure::diagnostic::format_error_chain(&err),
                                     retry_index,
-                                    attempt,
+                                    attempt: replay_retry_index + 1,
                                     max_retries: replay_policy.max_retries_after_output,
                                     delay_ms: delay.as_millis() as u64,
                                 };
                                 tokio::time::sleep(delay).await;
+                                retry_pending = true;
                                 retry_index += 1;
                                 replay_retry_index += 1;
                                 should_restart_stream = true;
@@ -1684,6 +1697,7 @@ impl ProviderRegistry {
                         delay_ms: delay.as_millis() as u64,
                     };
                     tokio::time::sleep(delay).await;
+                    retry_pending = true;
                     retry_index += 1;
                     emitted_history.clear();
                     replay_buffer_exhausted = false;
@@ -3133,6 +3147,24 @@ mod replay_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(text, vec!["Hello ", "world", "!"]);
+        let scheduled = events
+            .iter()
+            .position(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
+            .unwrap();
+        assert!(matches!(
+            events[scheduled + 1],
+            CompletionStreamEvent::ProviderRetryStarted { .. }
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CompletionStreamEvent::ProviderRetryStarted { .. }))
+                .count(),
+            1
+        );
+        assert!(!super::completion_stream_event_is_content(
+            &events[scheduled + 1]
+        ));
         assert!(
             events
                 .iter()
@@ -3482,7 +3514,13 @@ mod replay_tests {
         let content = events
             .iter()
             .filter(|event| !matches!(event, CompletionStreamEvent::Completed { .. }))
-            .filter(|event| !matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
+            .filter(|event| {
+                !matches!(
+                    event,
+                    CompletionStreamEvent::ProviderRetry { .. }
+                        | CompletionStreamEvent::ProviderRetryStarted { .. }
+                )
+            })
             .count();
         assert_eq!(content, 0, "no text or tool events should ever be emitted");
         // Request-level budget: max_retries (10) retries after the first
@@ -3547,6 +3585,45 @@ mod replay_tests {
                 retryable: true,
             })
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_start_is_emitted_only_after_backoff_and_before_the_provider_call() {
+        let provider = Arc::new(AlwaysFailingStartupProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+        let mut events = registry
+            .complete_stream(
+                &ModelRef::new("breaker-test", "test-model"),
+                replay_request(),
+            )
+            .await
+            .unwrap();
+        let delay_ms = match events.next().await.unwrap().unwrap() {
+            CompletionStreamEvent::ProviderRetry {
+                delay_ms,
+                attempt: 1,
+                ..
+            } => delay_ms,
+            event => panic!("expected first backoff, got {event:?}"),
+        };
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        let started = tokio::time::Instant::now();
+        assert!(matches!(
+            events.next().await.unwrap().unwrap(),
+            CompletionStreamEvent::ProviderRetryStarted { .. }
+        ));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(delay_ms));
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            1,
+            "persisting retry start precedes invoking the provider"
+        );
+        assert!(matches!(
+            events.next().await.unwrap().unwrap(),
+            CompletionStreamEvent::ProviderRetry { attempt: 2, .. }
+        ));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test(start_paused = true)]

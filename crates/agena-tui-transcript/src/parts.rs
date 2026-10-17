@@ -129,11 +129,7 @@ pub fn parts_entries_with_folds(
             // Fold adjacent assistant rounds only after exact ownership has
             // been resolved. Runtime/System ingress remains a hard boundary.
             if is_reply {
-                previous.state = if *previous_is_reply {
-                    fold_run_status(previous.state, entry.state)
-                } else {
-                    entry.state
-                };
+                previous.state = entry.state;
                 previous.reply_id = entry.reply_id;
                 *previous_is_reply = true;
             } else if !*previous_is_reply {
@@ -271,19 +267,19 @@ fn finalize_run_entry(
                 Box::new(TextSegmentActivity { text: segment }),
             ));
         }
-        // An assistant run renders a trailing
-        // lifecycle row when it has no content yet (the active envelope) or when
-        // it ended without a durable Error part carrying the outcome (failed,
-        // cancelled, denied). A completed run with body content needs no row.
+        // Empty active/completed envelopes may show run status. Failure
+        // details are always real server Parts, including in paged histories.
         let state = entry.state;
-        let has_error_part = entry.parts.iter().any(|part| {
+        let has_error = entry.parts.iter().any(|part| {
             matches!(
                 part.content,
                 TranscriptPartContent::Activity(TranscriptActivityContent::Error(_))
             )
         });
-        let requires_outcome = assistant_reply_state_requires_outcome(state);
-        if is_reply && (entry.parts.is_empty() || (requires_outcome && !has_error_part)) {
+        if is_reply
+            && (entry.parts.is_empty() || (state == RunStatus::Cancelled && !has_error))
+            && let Some(lifecycle) = assistant_reply_lifecycle(state)
+        {
             let marker_id = match entry.id {
                 TranscriptEntryId::StoredMessage(id) => id,
                 _ => 0,
@@ -299,9 +295,7 @@ fn finalize_run_entry(
                 id: lifecycle_id,
                 status: part_status_from_state(state),
                 content: TranscriptPartContent::Activity(
-                    TranscriptActivityContent::AssistantReplyLifecycle(assistant_reply_lifecycle(
-                        state, None,
-                    )),
+                    TranscriptActivityContent::AssistantReplyLifecycle(lifecycle),
                 ),
             });
         }
@@ -738,59 +732,18 @@ const fn message_status_is_terminal(state: RunStatus) -> bool {
     )
 }
 
-/// Combine two run states for a folded assistant entry: the more terminal /
-/// more severe state wins. Mirrors history's `more_terminal_status` ordering
-/// (Failed > Cancelled > Completed > InProgress > Pending), with the
-/// denied/unavailable set at failed severity so a mid-loop rejection is
-/// surfaced rather than hidden by a later successful turn.
-fn fold_run_status(current: RunStatus, next: RunStatus) -> RunStatus {
-    use RunStatus::*;
-    // A cancellation is an interruption, not a result: when a newer run
-    // continues the same reply (the `/continue` case reuses the reply
-    // identity), the cancelled attempt must not keep the block marked
-    // cancelled — the reply is generating again, or has since completed.
-    if current == Cancelled && next != Cancelled {
-        return next;
-    }
-    let severity = |status: RunStatus| match status {
-        Failed | PolicyDenied | UserDeclined | CapabilityUnavailable | ToolUnavailable => 4,
-        Cancelled => 3,
-        Completed => 2,
-        InProgress => 1,
-        Pending => 0,
-    };
-    if severity(next) > severity(current) {
-        next
-    } else {
-        current
-    }
-}
-
-const fn assistant_reply_state_requires_outcome(state: RunStatus) -> bool {
-    matches!(
-        state,
-        RunStatus::Failed
-            | RunStatus::Cancelled
-            | RunStatus::PolicyDenied
-            | RunStatus::UserDeclined
-            | RunStatus::CapabilityUnavailable
-            | RunStatus::ToolUnavailable
-    )
-}
-
-fn assistant_reply_lifecycle(
-    state: RunStatus,
-    problem: Option<agena_failure::UserProblem>,
-) -> TranscriptAssistantReplyLifecycle {
+fn assistant_reply_lifecycle(state: RunStatus) -> Option<TranscriptAssistantReplyLifecycle> {
     match state {
         RunStatus::Failed
         | RunStatus::PolicyDenied
         | RunStatus::UserDeclined
         | RunStatus::CapabilityUnavailable
-        | RunStatus::ToolUnavailable => TranscriptAssistantReplyLifecycle::Failed { problem },
-        RunStatus::Cancelled => TranscriptAssistantReplyLifecycle::Cancelled,
-        RunStatus::Completed => TranscriptAssistantReplyLifecycle::Completed,
-        RunStatus::Pending | RunStatus::InProgress => TranscriptAssistantReplyLifecycle::Running,
+        | RunStatus::ToolUnavailable => None,
+        RunStatus::Cancelled => Some(TranscriptAssistantReplyLifecycle::Cancelled),
+        RunStatus::Completed => Some(TranscriptAssistantReplyLifecycle::Completed),
+        RunStatus::Pending | RunStatus::InProgress => {
+            Some(TranscriptAssistantReplyLifecycle::Running)
+        }
     }
 }
 
@@ -1137,9 +1090,9 @@ mod tests {
     }
 
     #[test]
-    fn folded_entry_surfaces_a_mid_loop_failure() {
-        // A tool turn fails but a later retry completes. The folded block must
-        // still show the failure rather than hiding it behind the last state.
+    fn folded_entry_uses_the_latest_run_state_after_recovery() {
+        // Historical error Parts retain failures; reply status follows the
+        // latest authoritative marker, including a successful recovery.
         let parts = vec![
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
@@ -1164,7 +1117,7 @@ mod tests {
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].role, Some(RunRole::Assistant));
-        assert_eq!(entries[1].state, RunStatus::Failed);
+        assert_eq!(entries[1].state, RunStatus::Completed);
     }
 
     #[test]
@@ -1438,17 +1391,12 @@ mod tests {
     }
 
     #[test]
-    fn failed_assistant_run_renders_a_lifecycle_outcome_without_an_error_part() {
+    fn failed_assistant_marker_does_not_fabricate_an_error_part() {
         let parts = vec![run(1, "assistant", "failed")];
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].parts.len(), 1);
-        assert!(matches!(
-            entries[0].parts[0].content,
-            TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
-                TranscriptAssistantReplyLifecycle::Failed { .. }
-            ))
-        ));
+        assert_eq!(entries[0].state, RunStatus::Failed);
+        assert!(entries[0].parts.is_empty());
     }
 
     #[test]

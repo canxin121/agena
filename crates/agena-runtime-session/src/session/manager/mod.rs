@@ -1412,9 +1412,6 @@ impl SessionManager {
         // scope so the release cannot be skipped by an early return (`?`) in
         // the bookkeeping below; everything after it is bookkeeping.
         let outcome = Self::execution_outcome(control.as_ref(), &result);
-        let terminal_result = self
-            .finish_execution(session_id, control.as_ref(), outcome)
-            .await;
         // An error between tool/model stages can bypass normal run cleanup.
         // Persist its real cause while the slot is still exclusively owned;
         // a user cancellation must not become a failed process_restart marker.
@@ -1429,12 +1426,67 @@ impl SessionManager {
                         .await?;
                 }
             }
+            if let Some(error) = run_error.filter(|error| !matches!(error, AppError::Cancelled))
+                && !control.cancel.is_cancelled()
+                && (control.restore_document().is_none() || control.user_run_submitted())
+            {
+                let session = self.store.load_session(session_id).await?;
+                let reply_id = control.reply_id().to_string();
+                let marker = session.parts().iter().rev().find(|part| {
+                    part.origin_session_id == session_id
+                        && part.is_run_marker()
+                        && part
+                            .content
+                            .get("reply_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(reply_id.as_str())
+                });
+                let compaction_owns_failure = marker.is_some_and(|marker| {
+                    session.parts().iter().any(|part| {
+                        part.run_id == Some(marker.part_id)
+                            && part.kind == "compaction"
+                            && part.state == agena_storage::store::PartState::Failed
+                            && part
+                                .content
+                                .get("problem")
+                                .is_some_and(serde_json::Value::is_object)
+                    })
+                });
+                if !compaction_owns_failure {
+                    let run_id = if let Some(marker) = marker
+                        .filter(|marker| marker.state == agena_storage::store::PartState::Failed)
+                    {
+                        marker.part_id
+                    } else {
+                        // Preflight, hook, and task failures can precede a model
+                        // run. They still need a durable owner and error Part.
+                        self.store
+                            .start_run(
+                                session_id,
+                                "continue",
+                                crate::session::store::run_marker_content(
+                                    "continue",
+                                    None,
+                                    None,
+                                    Some(control.turn_id()),
+                                    Some(control.reply_id()),
+                                ),
+                            )
+                            .await?
+                    };
+                    self.terminalize_unfinished_model_run(session_id, run_id, error)
+                        .await?;
+                }
+            }
             // Named markers are now terminal on failure/cancellation. The
             // recovery pass cancels any remaining child parts without changing
             // their marker's terminal reason or duplicating failure records.
             self.store.reconcile(session_id, &run_ids).await
         }
         .await;
+        let terminal_result = self
+            .finish_execution(session_id, control.as_ref(), outcome)
+            .await;
         drop(permit);
         if terminal_result.is_ok()
             && let Err(error) = &reconciliation_result

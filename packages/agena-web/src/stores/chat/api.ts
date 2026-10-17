@@ -22,15 +22,7 @@ import {
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type {
-  MessageEntry,
-  MessageError,
-  MessageFold,
-  MessagePart,
-  MessageInfo,
-  Session,
-  SessionState,
-} from '../../types/chat'
+import type { MessageEntry, MessageFold, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
 import { compareChatIds } from './messageIndex'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE } from '@/pages/chat/transcriptPartPaging'
 
@@ -348,8 +340,6 @@ function entriesFromParts(
       })
     }
     if (!entry.parts) entry.parts = []
-    const messageError = messageErrorFromAgenaPart(raw)
-    if (messageError) entry.info.error = messageError
     const normalized = normalizeAgenaPart(partIdStr, sessionId, key, raw as JsonValue)
     if (normalized) entry.parts.push(normalized)
   }
@@ -430,24 +420,6 @@ function problemMessage(value: JsonValue): string {
 function operationFailureMessage(value: JsonValue): string {
   const error = asObject(value)
   return problemMessage(error.failure) || problemMessage(error.problem) || stringField(error, ['message', 'detail'])
-}
-
-export function messageErrorFromAgenaPart(raw: JsonValue): MessageError | null {
-  const part = asRecord(raw)
-  if (str(part.kind) !== 'error') return null
-  const content = asObject(part.content)
-  const problem = asObject(content.problem)
-  const message = problemMessage(problem) || stringField(content, ['message']) || str(part.summary) || 'The run failed.'
-  const code = stringField(problem, ['code'])
-  const category = stringField(problem, ['category']) || stringField(content, ['category'])
-  return {
-    name: 'AgenaError',
-    type: category || 'error',
-    message,
-    ...(code ? { code } : {}),
-    ...(category ? { classification: category } : {}),
-    problem,
-  }
 }
 
 /**
@@ -643,8 +615,9 @@ export function normalizeAgenaPart(
       return { ...base, type: 'compaction', ...(summary ? { text: summary } : {}) }
     }
     case 'error': {
-      const message = messageErrorFromAgenaPart(raw)?.message || 'The run failed.'
-      return { ...base, type: 'text', text: message, synthetic: true }
+      const message =
+        problemMessage(asObject(content).problem) || stringField(asObject(content), ['message']) || str(part.summary)
+      return { ...base, type: 'text', text: message }
     }
     case 'system_notification': {
       const opKind = stringField(content, ['operation_kind']) || 'background'

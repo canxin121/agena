@@ -2590,3 +2590,24 @@ transcript-rich-fallback = 无法预览：{$reason}。下方保留原始源码�
 transcript-interactive-app = 在 Agena Web 中打开此交互应用，即可操作界面和运行后端服务。
 
 overlay-user-input-defer = 稍后处理
+
+# Durable error Part headline and live retry progress.
+error-part-waiting = 等待重试
+error-part-retrying = 重试中
+error-part-recovered = 已恢复
+error-part-failed = 重试失败
+error-part-cancelled = 重试已取消
+error-part-retry-count = 第 { $attempt }/{ $max } 次重试
+error-part-retry-number = 第 { $attempt } 次重试
+error-part-in-duration = { $duration }后重试
+error-part-scheduled-at = 计划 { $time }
+error-part-awaiting-start = 等待重试启动
+error-part-requesting = 等待响应
+error-part-streaming = 正在接收响应
+error-part-elapsed = 已进行 { $duration }
+error-part-recovered-after = 重试 { $attempt } 次后恢复
+error-part-exhausted = 已用完 { $max } 次重试
+error-part-stopped = 自动重试已停止
+error-part-seconds = { $count } 秒
+error-part-minutes = { $minutes } 分 { $seconds } 秒
+error-part-hours = { $hours } 小时 { $minutes } 分

@@ -244,6 +244,7 @@ impl SessionProcessor {
             BTreeMap::new();
         let mut completed_provider_native_tool_call_keys = BTreeSet::<String>::new();
         let mut provider_err: Option<AppError> = None;
+        let mut retry_awaiting_output = false;
         let mut usage = None;
         let mut finish_reason_enum = FinishReason::Stop;
         let mut provider_metadata = None;
@@ -268,6 +269,22 @@ impl SessionProcessor {
             let Some(item) = next else { break };
             if !matches!(&item, Ok(CompletionStreamEvent::ProviderRetry { .. })) {
                 retry.clear();
+            }
+            if retry_awaiting_output
+                && matches!(&item, Ok(event) if !matches!(event,
+                    CompletionStreamEvent::Completed { .. }
+                    | CompletionStreamEvent::ProviderRetry { .. }
+                    | CompletionStreamEvent::ProviderRetryStarted { .. }
+                ))
+            {
+                run.store
+                    .advance_provider_retry(
+                        run.session_id,
+                        assistant_message_id,
+                        agena_failure::RetryPhase::Streaming,
+                    )
+                    .await?;
+                retry_awaiting_output = false;
             }
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
@@ -443,6 +460,7 @@ impl SessionProcessor {
                     invocation,
                     title,
                     summary,
+                    failure,
                     output_text,
                     blocks,
                     details,
@@ -489,6 +507,7 @@ impl SessionProcessor {
                         invocation,
                         title,
                         summary,
+                        failure,
                         output_text,
                         provider_native_output_attachments(blocks),
                         details,
@@ -546,7 +565,23 @@ impl SessionProcessor {
                     message,
                     ..
                 }) => {
+                    retry_awaiting_output = false;
                     retry.update(attempt, max_retries, delay_ms, &message);
+                    if let Some(status) = run.retry_registry.snapshot(run.session_id) {
+                        run.store
+                            .record_provider_retry(run.session_id, assistant_message_id, &status)
+                            .await?;
+                    }
+                }
+                Ok(CompletionStreamEvent::ProviderRetryStarted { .. }) => {
+                    run.store
+                        .advance_provider_retry(
+                            run.session_id,
+                            assistant_message_id,
+                            agena_failure::RetryPhase::Requesting,
+                        )
+                        .await?;
+                    retry_awaiting_output = true;
                 }
                 Err(err) => {
                     provider_err = Some(err.into());
@@ -745,10 +780,24 @@ impl SessionProcessor {
             for part_id in durable_part_ids {
                 self.persist_part_state(&run, &mut parts, part_id).await?;
             }
-            // Keep the failure diagnostic in memory while the session
-            // orchestrator decides whether this failed turn will be retried.
-            // It appends the durable error part only if recovery is exhausted.
+            // Failure history is durable even when the orchestrator recovers.
+            // Repeated attempts update the error owned by this run.
             let failure = (!cancelled).then(|| err.failure());
+            let failure_part = if let Some(failure) = failure.as_ref() {
+                Some(
+                    run.store
+                        .record_failure_part(run.session_id, assistant_message_id, failure)
+                        .await?,
+                )
+            } else {
+                run.store
+                    .finish_provider_retry(
+                        run.session_id,
+                        assistant_message_id,
+                        agena_failure::RetryOutcome::Cancelled,
+                    )
+                    .await?
+            };
             let marker = if cancelled {
                 // `cancel_run` cancels the marker and its in-flight children.
                 run.store
@@ -783,6 +832,7 @@ impl SessionProcessor {
             }
             let ids = std::iter::once(marker.part_id)
                 .chain(parts.iter().map(|part| part.part_id))
+                .chain(failure_part.iter().map(|part| part.part_id))
                 .collect::<Vec<_>>();
             let part_snapshot = run
                 .store
@@ -803,6 +853,15 @@ impl SessionProcessor {
                 finish_reason: FinishReason::Stop,
             });
         }
+
+        let failure_part = run
+            .store
+            .finish_provider_retry(
+                run.session_id,
+                assistant_message_id,
+                agena_failure::RetryOutcome::Recovered,
+            )
+            .await?;
 
         // Successful run: the accumulated parts carry the terminal state driven
         // above. Terminalize the run marker only when every part under it is
@@ -903,6 +962,10 @@ impl SessionProcessor {
 
         let ids = std::iter::once(run_marker.part_id)
             .chain(parts.iter().map(|part| part.part_id))
+            // Failure history is written separately from this provider round's
+            // content. Include its latest row without adding it to the round
+            // accumulator, which can otherwise overwrite newer retry progress.
+            .chain(failure_part.iter().map(|part| part.part_id))
             .collect::<Vec<_>>();
         let part_snapshot = run
             .store

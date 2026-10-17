@@ -44,6 +44,9 @@ pub fn prepare_part_update(
             "part revision is exhausted".to_owned(),
         ));
     }
+    let retrying_run = part.is_run_marker()
+        && part.state == PartState::Failed
+        && delta.state == Some(PartState::InProgress);
     let previous = part.clone();
     let now_ms = now_ms.max(part.updated_at_ms);
     if let Some(to) = delta.state {
@@ -51,6 +54,11 @@ pub fn prepare_part_update(
     }
     if let Some(content) = delta.content {
         part.content = content;
+    }
+    if retrying_run && let Some(content) = part.content.as_object_mut() {
+        // An internal retry retains the run and its children. Its terminal
+        // reason belongs to history on the error Part, not the active marker.
+        content.insert("abort_reason".to_owned(), Value::Null);
     }
     if delta.clear_summary {
         part.summary = None;

@@ -718,6 +718,19 @@ export function errorPresentation(part: TranscriptDisplayPart): ErrorPresentatio
   const content = jsonRecord(part.source.agenaContent)
   const problem = jsonRecord(content.problem)
   const user = jsonRecord(problem.user)
+  const progress = jsonRecord(content.retry)
+  const outcome = firstString(progress, ['outcome'])
+  const outcomeState = { retrying: 'in_progress', recovered: 'completed', failed: 'failed', cancelled: 'cancelled' }[
+    outcome
+  ]
+  const retry = [
+    firstString(problem, ['retry']),
+    ...(outcomeState
+      ? [`${progress.attempt ?? 0}/${progress.max_retries ?? 0}`, partStatusPresentation(outcomeState).label]
+      : []),
+  ]
+    .filter(Boolean)
+    .join(' · ')
   return {
     message:
       firstString(user, ['fallback']) ||
@@ -729,7 +742,7 @@ export function errorPresentation(part: TranscriptDisplayPart): ErrorPresentatio
     responsibility: firstString(problem, ['responsibility']),
     impact: firstString(problem, ['impact']),
     recovery: firstString(problem, ['recovery']),
-    retry: firstString(problem, ['retry']),
+    retry,
     correlationId: firstString(problem, ['correlation_id', 'id']),
     details: problem,
   }

@@ -818,17 +818,37 @@ impl SessionManager {
                         .await?
                 }
             };
+            if let Some(marker) = session
+                .parts()
+                .iter()
+                .find(|part| part.part_id == marker_run_id && part.state == PartState::Failed)
+            {
+                let mut content = marker.content.clone();
+                content["abort_reason"] = serde_json::Value::Null;
+                self.store
+                    .update_part(
+                        session.id,
+                        marker_run_id,
+                        agena_storage::store::PartDelta {
+                            state: Some(PartState::InProgress),
+                            content: Some(content),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            }
             // The marker's current content (accumulated round records, usage)
             // is threaded into the processor so it can extend the round list.
             // On the first model turn the marker was just started and is not
             // yet installed in the in-memory session, so use the exact initial
             // content that was persisted above.
-            let marker_content = session
+            let mut marker_content = session
                 .parts()
                 .iter()
                 .find(|part| part.part_id == marker_run_id)
                 .map(|marker| marker.content.clone())
                 .unwrap_or_else(|| initial_marker_content.clone());
+            marker_content["abort_reason"] = serde_json::Value::Null;
 
             match Box::pin(self.run_model_turn(
                 session,
@@ -963,9 +983,6 @@ impl SessionManager {
                         }
                     }
                     if matches!(err, AppError::PromptBudgetExceeded { .. }) {
-                        self.store
-                            .append_failure_part(session_id, marker_run_id, &err.failure())
-                            .await?;
                         return Err(err);
                     }
                     // A failed model turn is retryable when an agent.stop
@@ -984,9 +1001,6 @@ impl SessionManager {
                                 retries = direct_plan_failure_retries,
                                 "stopping plan autorun after repeated provider failures"
                             );
-                            self.store
-                                .append_failure_part(session_id, marker_run_id, &err.failure())
-                                .await?;
                             return Err(err);
                         }
                         direct_plan_failure_retries += 1;
@@ -1002,7 +1016,7 @@ impl SessionManager {
                             ) => {}
                         }
                         session = self.load_session_with_workspace_root(session_id).await?;
-                        turn_run_id = None;
+                        turn_run_id = Some(marker_run_id);
                         model_requested = true;
                         continue;
                     }
@@ -1019,14 +1033,11 @@ impl SessionManager {
                         .await?
                     {
                         session = continued;
-                        turn_run_id = continuation_marker;
+                        turn_run_id = continuation_marker.or(Some(marker_run_id));
                         direct_plan_continue_after_failure = is_plan_autorun;
                         model_requested = true;
                         continue;
                     }
-                    self.store
-                        .append_failure_part(session_id, marker_run_id, &err.failure())
-                        .await?;
                     return Err(err);
                 }
             }
@@ -1049,6 +1060,13 @@ impl SessionManager {
                 "assistant run marker {marker_run_id} is missing from session {session_id}"
             )));
         };
+        if !matches!(error, AppError::Cancelled)
+            && (marker.state.is_in_flight() || marker.state == PartState::Failed)
+        {
+            self.store
+                .record_failure_part(session_id, marker_run_id, &error.failure())
+                .await?;
+        }
         if marker.state.is_terminal() {
             return Ok(());
         }
@@ -1076,8 +1094,8 @@ impl SessionManager {
     /// continuation on the hook activity and keep the run alive. Returns
     /// `Some((session, None, is_plan_autorun))` when the run should continue after backoff
     /// (the hook activity carries the continuation — the caller must let the
-    /// next model turn open a fresh `continue` marker so the hook message is
-    /// projected into its prompt); `None` when the run should fail with
+    /// next model turn retain its run marker and project the hook message
+    /// into its prompt); `None` when the run should fail with
     /// `error`.
     ///
     /// Shared by the model-turn error path and the model-turn budget
@@ -1118,9 +1136,9 @@ impl SessionManager {
                 }
                 if dispatch.patch.continue_with_message.is_some() {
                     // The continuation lives on the hook activity recorded
-                    // above; the caller's next model turn opens a fresh
-                    // `continue` marker whose prompt projects the hook
-                    // message. Backoff rate-limits the retry loop.
+                    // above. The caller reuses its failed marker for the
+                    // retry; prompt preparation includes the hook activity.
+                    // Backoff rate-limits the retry loop.
                     let delay = *retry_backoff_ms;
                     *retry_backoff_ms = (*retry_backoff_ms * 2).min(5_000);
                     tokio::select! {
@@ -1754,6 +1772,9 @@ impl SessionManager {
                                 Ok::<(), AppError>(())
                             })?;
                     } else {
+                        self.store
+                            .record_failure_part(session_id, marker_run_id, &failure)
+                            .await?;
                         self.store
                             .complete_run(
                                 session_id,

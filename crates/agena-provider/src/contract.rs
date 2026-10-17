@@ -1711,6 +1711,10 @@ pub enum CompletionStreamEvent {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         title: String,
         summary: String,
+        /// Authoritative hosted-operation failure. A terminal item can fail
+        /// while the surrounding model response completes successfully.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<agena_failure::Failure>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output_text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1738,8 +1742,8 @@ pub enum CompletionStreamEvent {
     },
     /// A retryable provider failure observed while streaming this completion.
     /// The provider layer schedules a retry internally; this event is a live
-    /// notification so the runtime can render an immediate retry-progress
-    /// activity without waiting for the final outcome.
+    /// notification so the runtime can persist backoff progress on the ordinary
+    /// error Part without waiting for the final outcome.
     ProviderRetry {
         provider_id: ProviderId,
         model: agena_domain::ModelId,
@@ -1747,11 +1751,17 @@ pub enum CompletionStreamEvent {
         message: String,
         /// Zero-based retry counter at the provider retry loop.
         retry_index: u32,
-        /// One-based attempt number (retry_index + 1) shown to the user.
+        /// One-based upcoming retry number within this retry phase.
         attempt: u32,
-        /// Maximum attempts for this retry phase.
+        /// Maximum retries for this retry phase (excludes the initial request).
         max_retries: u32,
         delay_ms: u64,
+    },
+    /// A scheduled retry has left backoff and is about to call the provider.
+    /// Bookkeeping only: this is not completion content or replay history.
+    ProviderRetryStarted {
+        provider_id: ProviderId,
+        model: agena_domain::ModelId,
     },
 }
 

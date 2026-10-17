@@ -129,14 +129,6 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             TranscriptAssistantReplyLifecycle::Completed => {
                 ui_text::t(i18n, "message-activity-response-completed")
             }
-            TranscriptAssistantReplyLifecycle::Failed { problem } => match problem {
-                Some(problem) => format!(
-                    "{}: {}",
-                    ui_text::t(i18n, "message-activity-response-failed"),
-                    problem.user.fallback
-                ),
-                None => ui_text::t(i18n, "message-activity-response-failed"),
-            },
             TranscriptAssistantReplyLifecycle::Cancelled => {
                 ui_text::t(i18n, "message-activity-response-cancelled")
             }

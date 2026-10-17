@@ -93,12 +93,44 @@ pub(super) fn responses_provider_native_tool_event(
                 invocation,
                 title,
                 summary,
+                failure: hosted_tool_failure(item),
                 output_text,
                 blocks,
                 details,
                 raw,
             },
         },
+    ))
+}
+
+/// Interpret the provider's terminal operation status on the server. Clients
+/// receive the resulting failed tool Part and never inspect provider payloads.
+fn hosted_tool_failure(item: &serde_json::Value) -> Option<agena_failure::Failure> {
+    let status = item.get("status").and_then(serde_json::Value::as_str);
+    let error = item.get("error").filter(|value| !value.is_null());
+    if error.is_none() && !matches!(status, Some("failed" | "incomplete" | "cancelled")) {
+        return None;
+    }
+    let message = error
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| value.as_str())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("The provider could not complete this tool operation.");
+    Some(agena_failure::Failure::new(
+        agena_failure::FailureCode::new("provider.tool_failed"),
+        agena_failure::FailureCategory::DependencyUnavailable,
+        agena_failure::FailureResponsibility::Dependency,
+        agena_failure::RetryDirective::AfterUserAction,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::OperationFailed,
+        agena_failure::UserPresentation::validated_with_context(
+            "failure.provider.tool_failed",
+            message,
+        ),
     ))
 }
 
@@ -817,7 +849,25 @@ mod image_result_tests {
             panic!("expected completed event");
         };
         assert!(blocks.is_empty());
-        assert_eq!(details.to_json_payload(), Some(item));
+        assert_eq!(details.to_json_payload(), Some(item.clone()));
+        let event = responses_provider_native_tool_event(
+            &ProviderId::new("openai"),
+            &ModelId::new("image-model"),
+            &json!({"type": "response.output_item.done", "output_index": 0, "item": item}),
+        )
+        .unwrap()
+        .unwrap();
+        let CompletionStreamEvent::ProviderNativeToolCallCompleted {
+            failure: Some(failure),
+            blocks,
+            ..
+        } = event
+        else {
+            panic!("a failed hosted image operation must carry an authoritative failure");
+        };
+        assert_eq!(failure.code.as_str(), "provider.tool_failed");
+        assert_eq!(failure.user.fallback, "no image");
+        assert!(blocks.is_empty());
     }
 }
 

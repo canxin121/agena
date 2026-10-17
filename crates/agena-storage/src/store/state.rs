@@ -187,14 +187,6 @@ pub fn apply_part_transition(
     if part.state == to {
         return Ok(());
     }
-    let run_marker = part.is_run_marker();
-    // A failed run marker is terminal: retrying a run is a new continue run
-    // (18.2), so `failed -> in_progress` is forbidden for run markers.
-    if part.state == super::PartState::Failed && to == super::PartState::InProgress && run_marker {
-        return Err(StoreError::InvalidState(
-            "a failed run marker is terminal; retry creates a new continue run".to_owned(),
-        ));
-    }
     if !part.state.can_transition(to) {
         return Err(StoreError::InvalidState(format!(
             "invalid part transition {} -> {}",

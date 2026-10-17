@@ -1,11 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { MessageLike, MessagePartLike } from '../src/components/chat/messageList.types'
-import {
-  durablePartKind,
-  projectTranscriptBlocks,
-  userInputOrder,
-} from '../src/pages/chat/transcriptProjection'
+import { durablePartKind, projectTranscriptBlocks, userInputOrder } from '../src/pages/chat/transcriptProjection'
 
 function part(id: string, kind: string, content: Record<string, unknown>, state = 'completed'): MessagePartLike {
   return {
@@ -217,7 +213,7 @@ describe('TUI-parity transcript projection', () => {
     expect(projected?.displayParts.map((item) => item.id)).toEqual(['3', '10'])
   })
 
-  test('projects empty and terminal assistant reply lifecycle rows like the TUI', () => {
+  test('shows active envelopes but does not fabricate terminal error Parts', () => {
     const blocks = projectTranscriptBlocks(
       [
         message('20', 'assistant', [], 'in_progress'),
@@ -231,8 +227,8 @@ describe('TUI-parity transcript projection', () => {
     expect(running.map((item) => [item.kind, item.title, item.status])).toEqual([
       ['lifecycle', 'Response running', 'in_progress'],
     ])
-    expect(failed.map((item) => item.kind)).toEqual(['answer', 'lifecycle'])
-    expect(failed.at(-1)?.title).toBe('Response failed')
+    expect(failed.map((item) => item.kind)).toEqual(['answer'])
+    expect(blocks[2]?.message.info.runState).toBe('failed')
   })
 
   test('uses the latest backend run state when adjacent assistant rounds are folded', () => {
@@ -252,6 +248,24 @@ describe('TUI-parity transcript projection', () => {
     expect(folded?.message.info.finish).toBeUndefined()
     expect(folded?.message.info.error).toBeUndefined()
     expect(folded?.displayParts.some((item) => item.title === 'Response failed')).toBe(false)
+  })
+
+  test('recovery retains error Part identity while the reply status advances', () => {
+    const error = part('41', 'error', { problem: { user: { fallback: 'Temporary failure' } } })
+    const blocks = projectTranscriptBlocks(
+      [
+        message('40', 'assistant', [error], 'failed'),
+        message('42', 'assistant', [part('43', 'text', { text: 'Recovered answer' })], 'completed'),
+      ],
+      { showReasoning: true },
+    )
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.message.info.runState).toBe('completed')
+    expect(blocks[0]?.displayParts.map((part) => [part.id, part.kind])).toEqual([
+      ['41', 'error'],
+      ['43', 'answer'],
+    ])
+    expect(blocks[0]?.displayParts.some((part) => part.kind === 'lifecycle')).toBe(false)
   })
 
   test('does not turn an unknown backend run state into a synthetic failure', () => {

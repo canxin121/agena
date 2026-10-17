@@ -1115,6 +1115,14 @@ mod tests {
     fn failed_activity_is_persistent_visible_content() {
         let now = Utc::now();
         let error_payload = agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+            retry: Some(agena_failure::RetryProgress {
+                attempt: 3,
+                max_retries: 3,
+                next_at_ms: None,
+                phase: None,
+                started_at_ms: None,
+                outcome: agena_failure::RetryOutcome::Recovered,
+            }),
             problem: agena_failure::Failure::new(
                 agena_failure::FailureCode::new("provider.unavailable"),
                 agena_failure::FailureCategory::DependencyUnavailable,
@@ -1161,11 +1169,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Error"), "{text}");
+        assert!(text.contains("3/3"), "{text}");
+        assert!(text.contains("Response completed"), "{text}");
         assert!(
             text.contains("The provider is temporarily unavailable."),
             "{text}"
         );
-        assert!(text.contains("▾ × Error"), "{text}");
+        assert!(text.contains("▾ ● Recovered"), "{text}");
         assert!(rendered.nodes.iter().any(|node| {
             matches!(
                 &node.key,

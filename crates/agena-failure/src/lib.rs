@@ -134,6 +134,40 @@ pub enum FailureImpact {
     FatalStartupFailure,
 }
 
+/// Durable retry progress on an error Part. Recovery keeps the record; only
+/// the outcome changes. This is distinct from a failure's retry directive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryProgress {
+    pub attempt: u32,
+    pub max_retries: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_at_ms: Option<i64>,
+    /// The server owns phase transitions. An elapsed backoff deadline alone
+    /// does not mean that the next provider request has actually started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<RetryPhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    pub outcome: RetryOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryPhase {
+    Backoff,
+    Requesting,
+    Streaming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryOutcome {
+    Retrying,
+    Recovered,
+    Failed,
+    Cancelled,
+}
+
 /// Localisable user-facing description. `fallback` is safe prose for clients
 /// that do not know `key`; it must never contain a source chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -604,6 +638,26 @@ pub mod code {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_progress_reads_legacy_history_and_round_trips_server_phase() {
+        let mut retry: RetryProgress = serde_json::from_value(serde_json::json!({
+            "attempt": 2, "max_retries": 10, "outcome": "retrying", "next_at_ms": 1234
+        }))
+        .unwrap();
+        assert_eq!(retry.phase, None);
+        assert_eq!(retry.started_at_ms, None);
+        retry.phase = Some(RetryPhase::Requesting);
+        retry.started_at_ms = Some(1234);
+        retry.next_at_ms = None;
+        let value = serde_json::to_value(&retry).unwrap();
+        assert!(value.get("next_at_ms").is_none());
+        assert_eq!(value["phase"], "requesting");
+        assert_eq!(
+            serde_json::from_value::<RetryProgress>(value).unwrap(),
+            retry
+        );
+    }
 
     #[test]
     fn safe_failure_round_trips_without_diagnostic_channel() {

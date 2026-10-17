@@ -1,25 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import { RiLoader4Line, RiSparkling2Line } from '@remixicon/vue'
+import { RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
-import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
-import type {
-  MessageLike,
-  RenderBlock,
-  RetryStatusLike,
-  SessionErrorLike,
-  TranscriptDisplayPart,
-} from '@/components/chat/messageList.types'
+import type { MessageLike, RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { AttentionEvent, MessageFold } from '@/types/chat'
-import { formatTimeHMS } from '@/i18n/intl'
 import {
-  errorPresentation,
   partInteractionRequestIds,
   pendingInteractionPresentationFromAttention,
 } from '@/pages/chat/transcriptPartPresentation'
@@ -31,7 +22,6 @@ const props = defineProps<{
   selectedSessionId: string | null
   messagesLoading: boolean
   messagesError: string | null
-  sessionError?: SessionErrorLike
   renderBlocks: RenderBlock[]
   pendingInitialScrollSessionId: string | null
   loadingOlder: boolean
@@ -45,8 +35,6 @@ const props = defineProps<{
   isStreamingAssistantMessage: (message: MessageLike) => boolean
   showRunLoading: boolean
   sessionEnded: boolean
-  retryStatus: RetryStatusLike
-  retryCountdown?: string
   currentPhase: string
   activityCollapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
@@ -63,8 +51,6 @@ const emit = defineEmits<{
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
-  (event: 'copySessionError'): void
-  (event: 'clearSessionError'): void
   (event: 'setActivityPageSize', size: number): void
   (event: 'revealParts'): void
 }>()
@@ -96,36 +82,6 @@ const durableInteractionRequestIds = computed(() => {
 const pendingInteraction = computed(() =>
   pendingInteractionPresentationFromAttention(props.pendingAttention, durableInteractionRequestIds.value),
 )
-
-const retryBody = computed(() =>
-  [String(props.retryStatus?.message || '').trim(), props.retryCountdown || ''].filter(Boolean).join(' · '),
-)
-const showSessionError = computed(() => {
-  if (!props.sessionError) return false
-  const body = sessionErrorBody()
-  return !props.renderBlocks
-    .at(-1)
-    ?.displayParts.some((part) => part.kind === 'error' && errorPresentation(part).message.trim() === body)
-})
-
-function sessionErrorClassificationLabel(): string {
-  const classification = String(props.sessionError?.error?.classification || '').trim()
-  if (classification === 'context_overflow') return String(t('chat.sessionError.classification.contextOverflow'))
-  if (classification === 'provider_auth') return String(t('chat.sessionError.classification.providerAuth'))
-  if (classification === 'network') return String(t('chat.sessionError.classification.network'))
-  if (classification === 'provider_api') return String(t('chat.sessionError.classification.providerApi'))
-  return String(t('chat.sessionError.classification.sessionError'))
-}
-
-function sessionErrorBody(): string {
-  const detail = props.sessionError?.error
-  return String(detail?.rendered || detail?.message || detail?.code || t('chat.sessionError.body.default')).trim()
-}
-
-function sessionErrorAtLabel(): string {
-  const at = Number(props.sessionError?.at || 0)
-  return Number.isFinite(at) && at > 0 ? formatTimeHMS(at) : ''
-}
 
 function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
   emit('partToggle', part, expanded)
@@ -218,39 +174,5 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
       </aside>
       <PartLoadingIndicator v-if="showRunLoading" role="status" class="min-h-8 px-2 py-1" />
     </div>
-
-    <div v-if="retryStatus" role="status" class="mt-3 flex items-start gap-2 px-2 py-2 text-sm text-muted-foreground">
-      <RiLoader4Line class="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-      <div>
-        <div class="font-semibold">{{ t('chat.sessionWork.retry', { attempt: retryStatus.attempt || 0 }) }}</div>
-        <div v-if="retryBody">{{ retryBody }}</div>
-      </div>
-    </div>
-
-    <article v-if="showSessionError" class="mt-3 px-1 py-2">
-      <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-        <span class="font-semibold text-rose-700 dark:text-rose-300">system</span>
-        <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
-      </header>
-      <div class="min-w-0 px-1 text-sm text-rose-800 dark:text-rose-200">
-        <div role="alert" class="transcript-content border-rose-500/60">
-          <div class="font-semibold">{{ sessionErrorClassificationLabel() }}</div>
-          <div class="whitespace-pre-wrap break-words">{{ sessionErrorBody() }}</div>
-        </div>
-        <div class="transcript-content mt-2 flex items-center gap-2 border-rose-500/60" data-transcript-chrome="true">
-          <ToolbarChipButton
-            :tooltip="t('chat.sessionError.actions.copyDetails')"
-            :title="t('chat.sessionError.actions.copyDetails')"
-            :aria-label="t('chat.sessionError.actions.copyDetails')"
-            @click="$emit('copySessionError')"
-          >
-            {{ t('chat.sessionError.actions.copyDetails') }}
-          </ToolbarChipButton>
-          <Button size="sm" variant="ghost" @click="$emit('clearSessionError')">{{
-            t('chat.sessionError.actions.dismiss')
-          }}</Button>
-        </div>
-      </div>
-    </article>
   </template>
 </template>

@@ -13,6 +13,7 @@ impl App {
         );
         match result {
             Ok(execution) => {
+                self.revealed_user_input_request_ids.remove(&request_id);
                 // An auto-approve success resolves the request like a manual
                 // allow/deny: close the open permission popup for this request
                 // before the execution refresh (which would re-derive pending
@@ -69,11 +70,8 @@ impl App {
                     }
                     return;
                 }
-                // The modal closes when a decision is submitted, but the
-                // request is consumed only after backend acknowledgement. On
-                // rejection make the same durable request unseen again and
-                // immediately restore it instead of stranding it behind
-                // Alt+A.
+                // A failed reply keeps the same durable request actionable.
+                // Reveal it again after showing the failure.
                 self.seen_permission_request_ids.remove(&request_id);
                 self.flash_error(error);
                 if self.transcript.session_id == Some(session_id) {

@@ -176,12 +176,34 @@ pub(crate) fn push_activity_headline(
     width: u16,
     i18n: &I18n,
 ) {
+    push_activity_headline_with_summary(
+        out,
+        status,
+        expanded,
+        toggleable,
+        title,
+        if expanded { "" } else { summary },
+        width,
+        i18n,
+    );
+}
+
+/// Error progress and its reason remain visible even when details are open.
+pub(crate) fn push_activity_headline_with_summary(
+    out: &mut Vec<RenderedLine>,
+    status: PartExecutionStatusResource,
+    expanded: bool,
+    toggleable: bool,
+    title: &str,
+    summary: &str,
+    width: u16,
+    i18n: &I18n,
+) {
     let disclosure = if toggleable && expanded { "▾" } else { "▸" };
     let icon = activity_status_icon(status);
     let chrome = format!("  {disclosure} {icon} ");
     let content_width = usize::from(width).saturating_sub(UnicodeWidthStr::width(chrome.as_str()));
-    let (title, summary) =
-        bounded_title_summary_parts(title, if expanded { "" } else { summary }, content_width);
+    let (title, summary) = bounded_title_summary_parts(title, summary, content_width);
 
     let title_style = Style::default().add_modifier(Modifier::BOLD);
     let summary_style = Style::default().fg(agena_tui_components::theme::muted_color());

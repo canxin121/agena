@@ -534,6 +534,7 @@ mod tests {
             ),
             title: "web search".to_owned(),
             summary: "1 result".to_owned(),
+            failure: None,
             output_text: "one result".to_owned(),
             blocks: vec![ProviderNativeToolOutputBlock::SearchResults {
                 query: Some("Agena".to_owned()),

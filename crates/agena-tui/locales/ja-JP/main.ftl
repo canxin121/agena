@@ -2959,3 +2959,24 @@ transcript-rich-fallback = プレビューできません: {$reason}。元のソ
 transcript-interactive-app = Agena Web でこのアプリを開くと、UI とバックエンドを操作できます。
 
 overlay-user-input-defer = 後で対応
+
+# Durable error Part headline and live retry progress.
+error-part-waiting = 再試行を待機中
+error-part-retrying = 再試行中
+error-part-recovered = 復旧済み
+error-part-failed = 再試行に失敗
+error-part-cancelled = 再試行をキャンセル
+error-part-retry-count = 再試行 { $attempt }/{ $max } 回目
+error-part-retry-number = 再試行 { $attempt } 回目
+error-part-in-duration = { $duration }後に再試行
+error-part-scheduled-at = 予定時刻 { $time }
+error-part-awaiting-start = 再試行の開始を待機中
+error-part-requesting = 応答を待機中
+error-part-streaming = 応答を受信中
+error-part-elapsed = { $duration }経過
+error-part-recovered-after = { $attempt } 回の再試行後に復旧
+error-part-exhausted = 再試行 { $max } 回をすべて使用
+error-part-stopped = 自動再試行を停止
+error-part-seconds = { $count } 秒
+error-part-minutes = { $minutes } 分 { $seconds } 秒
+error-part-hours = { $hours } 時間 { $minutes } 分

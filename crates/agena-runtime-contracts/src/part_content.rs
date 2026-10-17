@@ -491,6 +491,8 @@ impl TryFrom<&Value> for CompactionContent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ErrorContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<agena_failure::RetryProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     #[serde(default)]
     pub message: String,
@@ -1078,6 +1080,7 @@ mod tests {
     #[test]
     fn error_round_trips_full_user_problem() {
         let content = ErrorContent {
+            retry: None,
             category: Some("internal".to_owned()),
             message: "boom".to_owned(),
             detail: None,

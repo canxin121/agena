@@ -15,12 +15,12 @@ test('message item renders durable Agena parts as linear transcript nodes', () =
   assert.ok(!source.includes('<summary'))
 })
 
-test('session error copy-details action uses shared toolbar chip button', () => {
-  const file = resolve(import.meta.dir, '../src/components/chat/MessageList.vue')
-  const source = readFileSync(file, 'utf8')
-
-  assert.ok(source.includes("import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'"))
-  assert.ok(source.includes('chat.sessionError.actions.copyDetails'))
-  assert.ok(source.includes('<ToolbarChipButton'))
-  assert.ok(source.includes(':tooltip="t(\'chat.sessionError.actions.copyDetails\')"'))
+test('transcript has no independent session or message error blocks', () => {
+  const list = readFileSync(resolve(import.meta.dir, '../src/components/chat/MessageList.vue'), 'utf8')
+  const item = readFileSync(resolve(import.meta.dir, '../src/components/chat/MessageItem.vue'), 'utf8')
+  assert.ok(!list.includes('showSessionError'))
+  assert.ok(!list.includes('sessionError'))
+  assert.ok(!item.includes('fallbackError'))
+  assert.ok(!item.includes('info.error'))
+  assert.ok(item.includes('<AgenaTranscriptPart'))
 })

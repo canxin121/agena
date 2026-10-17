@@ -203,7 +203,6 @@ export type MessageInfo = {
   role: 'user' | 'assistant' | 'system' | 'tool' | 'runtime' | string
   time?: { created?: number; completed?: number }
   finish?: string
-  error?: MessageError
   modelID?: string
   providerID?: string
   adapterID?: string
@@ -224,15 +223,6 @@ export type MessageInfo = {
   // folding instead of inferring state from the presence of text.
   runState?: string
   runContent?: JsonLike
-  [k: string]: JsonLike
-}
-
-export type MessageError = {
-  name?: string
-  type?: string
-  message?: string
-  code?: string
-  classification?: string
   [k: string]: JsonLike
 }
 
@@ -289,23 +279,6 @@ export type AttentionEvent = {
   kind: 'permission' | 'question'
   at: number
   payload: SseEvent
-}
-
-export type SessionErrorClassification = 'context_overflow' | 'provider_auth' | 'network' | 'provider_api' | 'unknown'
-
-export type SessionError = {
-  message: string
-  rendered?: string
-  code?: string
-  name?: string
-  classification?: SessionErrorClassification
-  raw: JsonLike
-}
-
-export type SessionErrorEvent = {
-  at: number
-  payload: SseEvent
-  error: SessionError
 }
 
 export type SessionRunConfig = {

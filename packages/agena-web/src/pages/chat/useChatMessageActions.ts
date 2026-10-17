@@ -8,7 +8,6 @@ import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { JsonValue } from '@/types/json'
 import type { MessageEntry, Session } from '@/types/chat'
 import { attachmentLabel, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
-import { buildAssistantErrorCopyText } from './assistantError'
 import { getComposerInput, type ComposerExpose, type ComposerSegment } from './composerInput'
 import type { AttachedFile } from './useChatAttachments'
 
@@ -27,7 +26,6 @@ type MessageLike = {
   info?: {
     id?: string
     role?: string
-    error?: JsonValue
   }
   parts?: MessagePartLike[]
 }
@@ -94,13 +92,10 @@ export function useChatMessageActions(opts: {
 
   async function handleCopyMessage(message: MessageLike) {
     const id = typeof message?.info?.id === 'string' ? message.info.id : ''
-    let text = getTextParts(Array.isArray(message?.parts) ? message.parts : [])
+    const text = getTextParts(Array.isArray(message?.parts) ? message.parts : [])
       .map((p) => (typeof p?.text === 'string' ? p.text : ''))
       .filter((t) => t.trim())
       .join('\n\n')
-    if (!text) {
-      text = buildAssistantErrorCopyText(message?.info ?? null)
-    }
     if (!text) return
     try {
       await copyToClipboard(text)

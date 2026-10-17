@@ -338,12 +338,6 @@ pub enum TranscriptActivityContent<'a> {
 pub enum TranscriptAssistantReplyLifecycle {
     Running,
     Completed,
-    /// Terminal failure. Carries the structured public failure projection
-    /// (when the runtime persisted one) so renderers can show a readable
-    /// summary in the collapsed row and a rich, expandable detail view.
-    Failed {
-        problem: Option<agena_failure::UserProblem>,
-    },
     Cancelled,
 }
 
@@ -499,6 +493,8 @@ pub struct RenderedTranscript {
     pub width: u16,
     pub palette: ThemePalette,
     pub remote_image_generation: u64,
+    /// Changes once per second only while a visible entry has live retry timing.
+    pub retry_clock_second: Option<i64>,
     pub lines: Vec<std::sync::Arc<RenderedLine>>,
     pub search_matches: Vec<usize>,
     pub nodes: Vec<RenderedTranscriptNode>,

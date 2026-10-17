@@ -1,14 +1,13 @@
-import { computed, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { AttachedFile, PendingAttachment } from './useChatAttachments'
 import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
-import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
+import { formatCurrencyUSD } from '@/i18n/intl'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import { formatTokensK, sessionContextUsage } from './contextUsage'
 import type { SessionState } from '@/types/chat'
 import type { CancellationOutcome } from '@/stores/chat/api'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
 
@@ -56,8 +55,6 @@ type CanonicalSessionUsage = {
   model_context_window_tokens?: number | null
 }
 
-type RetryStatus = { type: 'retry'; attempt: number; message: string; next: number }
-
 type TokenUsageLike = {
   input?: number
   output?: number
@@ -95,7 +92,6 @@ type MessageLike = {
 
 type ChatLike = {
   selectedSessionId: string | null
-  selectedSessionExecution?: { provider_retry?: { attempt: number; next_at_ms: number; message: string } | null } | null
   selectedSessionState?: SessionState | null
   selectedSessionUsage?: CanonicalSessionUsage | null
   messages: MessageLike[]
@@ -105,16 +101,6 @@ type ChatLike = {
 
 type ActivityLike = {
   snapshot?: Record<string, ActivitySnapshotEntry> | null
-}
-
-function formatClockTime(ms?: number): string {
-  return formatTimeHMS(ms)
-}
-
-function formatCountdown(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0s'
-  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${Math.ceil(ms / 1000)}s`
 }
 
 function numberOrZero(v: number | null | undefined): number {
@@ -199,45 +185,6 @@ export function useChatRunUi(opts: {
     return 'idle'
   })
 
-  const retryStatus = computed<RetryStatus | null>(() => {
-    const retry = chat.selectedSessionExecution?.provider_retry
-    return canonicalRunActive.value && retry
-      ? { type: 'retry', attempt: retry.attempt, message: retry.message, next: retry.next_at_ms }
-      : null
-  })
-
-  const retryNowMs = ref(Date.now())
-  let retryTimer: number | null = null
-
-  function stopRetryTimer() {
-    if (retryTimer !== null) {
-      window.clearInterval(retryTimer)
-      retryTimer = null
-    }
-  }
-
-  function startRetryTimer() {
-    if (retryTimer !== null) return
-    retryNowMs.value = Date.now()
-    retryTimer = window.setInterval(() => {
-      retryNowMs.value = Date.now()
-    }, 1000)
-  }
-
-  const pane = useWorkspacePaneContext()
-  watch(
-    () => [retryStatus.value?.next, !pane || pane.isVisible.value] as const,
-    ([next, visible]) => {
-      if (visible && typeof next === 'number' && Number.isFinite(next)) startRetryTimer()
-      else stopRetryTimer()
-    },
-    { immediate: true },
-  )
-
-  onBeforeUnmount(() => {
-    stopRetryTimer()
-  })
-
   watch(
     () => stateKind.value,
     (ty, prev) => {
@@ -252,15 +199,6 @@ export function useChatRunUi(opts: {
     },
     { immediate: true },
   )
-
-  const retryRemainingMs = computed(() => {
-    const next = retryStatus.value?.next
-    if (!next) return 0
-    return Math.max(0, Math.round(next - retryNowMs.value))
-  })
-
-  const retryCountdownLabel = computed(() => formatCountdown(retryRemainingMs.value))
-  const retryNextLabel = computed(() => formatClockTime(retryStatus.value?.next))
 
   const sessionUsage = computed<SessionUsage | null>(() => {
     const sid = chat.selectedSessionId
@@ -353,8 +291,6 @@ export function useChatRunUi(opts: {
   const showRunLoading = computed(() => {
     if (!chat.selectedSessionId) return false
     if (chat.selectedAttention) return false
-    // Retry already has a dedicated banner near the composer.
-    if (retryStatus.value) return false
     // Don't show a second "working" indicator once we have streaming text.
     if (hasStreamingAssistantText.value) return false
     // If activity is visible, that *is* the working indicator.
@@ -434,9 +370,6 @@ export function useChatRunUi(opts: {
 
   return {
     currentPhase,
-    retryStatus,
-    retryCountdownLabel,
-    retryNextLabel,
     sessionUsage,
     showRunLoading,
     sessionEnded,

@@ -1159,7 +1159,8 @@ where
             }
             CompletionStreamEvent::ProviderNativeToolCallStarted { .. }
             | CompletionStreamEvent::ProviderNativeToolCallCompleted { .. }
-            | CompletionStreamEvent::ProviderRetry { .. } => {}
+            | CompletionStreamEvent::ProviderRetry { .. }
+            | CompletionStreamEvent::ProviderRetryStarted { .. } => {}
             CompletionStreamEvent::Completed {
                 provider_id: pid,
                 model,

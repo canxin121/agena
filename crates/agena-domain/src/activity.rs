@@ -279,6 +279,8 @@ pub enum InteractionActivity {
 #[serde(deny_unknown_fields)]
 /// An activity representing an error with a user-facing problem.
 pub struct ErrorActivity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<agena_failure::RetryProgress>,
     pub problem: agena_failure::UserProblem,
 }
 

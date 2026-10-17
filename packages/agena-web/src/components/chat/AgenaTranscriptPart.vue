@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 import { RiArrowRightSLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
@@ -21,6 +21,7 @@ import {
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import { useChatStore } from '@/stores/chat'
+import { useErrorPartHeadline } from '@/composables/useErrorPartHeadline'
 
 const props = defineProps<{
   part: TranscriptDisplayPart
@@ -46,7 +47,9 @@ const directory = useDirectoryStore()
 const ui = useUiStore()
 const chat = useChatStore()
 const appDirectory = computed(() => chat.getSessionDirectory(props.sessionId) || '')
-const status = computed(() => partStatusPresentation(props.part.status))
+// A durable Part's kind is stable. Ordinary Markdown Parts need no clock or visibility observer.
+const errorHeadline = props.part.kind === 'error' ? useErrorPartHeadline(toRef(props, 'part')) : computed(() => null)
+const status = computed(() => errorHeadline.value?.status ?? partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
 const resources = computed(() =>
@@ -154,12 +157,44 @@ function openAttachment(path: string, url: string) {
         data-part-ordinal="true"
         >#{{ ordinal }}</span
       >
+      <span v-if="errorHeadline" class="min-w-0 flex-1 py-0.5" data-error-part-headline>
+        <span class="flex min-w-0 items-baseline gap-2">
+          <span
+            class="shrink-0 text-[13px] font-semibold"
+            :class="{
+              'text-amber-700 dark:text-amber-300': status.tone === 'warning',
+              'text-primary': status.tone === 'pending',
+              'text-emerald-700 dark:text-emerald-300': status.tone === 'success',
+              'text-rose-700 dark:text-rose-300': status.tone === 'danger',
+              'text-muted-foreground': status.tone === 'muted',
+            }"
+            >{{ errorHeadline.title }}</span
+          >
+          <span class="min-w-0 truncate text-xs text-muted-foreground" :title="errorHeadline.message">{{
+            errorHeadline.message
+          }}</span>
+        </span>
+        <span
+          v-if="errorHeadline.progress"
+          class="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs leading-relaxed"
+          data-error-part-progress
+        >
+          <span class="shrink-0 font-medium tabular-nums">{{ errorHeadline.progress }}</span>
+          <span v-if="errorHeadline.timing" class="text-muted-foreground tabular-nums">{{ errorHeadline.timing }}</span>
+          <span v-if="errorHeadline.scheduledAt" class="text-muted-foreground/70 tabular-nums">{{
+            errorHeadline.scheduledAt
+          }}</span>
+        </span>
+      </span>
       <span
+        v-else
         class="min-w-0 flex-1 truncate text-[13px] font-semibold"
         :class="part.kind === 'error' ? 'text-rose-700 dark:text-rose-300' : ''"
         >{{ part.title }}</span
       >
-      <span v-if="!expanded && part.summary" class="min-w-0 max-w-[60%] truncate text-xs text-muted-foreground"
+      <span
+        v-if="!errorHeadline && !expanded && part.summary"
+        class="min-w-0 max-w-[60%] truncate text-xs text-muted-foreground"
         >· {{ part.summary }}</span
       >
     </button>

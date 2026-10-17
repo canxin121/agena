@@ -3350,7 +3350,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_runs() {
+    async fn retry_transitions_failed_parts_and_runs_without_changing_identity() {
         let (engine, session_id) = setup().await;
         let outcome = engine
             .submit_user_run(
@@ -3400,7 +3400,7 @@ mod tests {
         assert_eq!(retried.revision, 3);
         assert!(retried.finished_at_ms.is_none());
 
-        // A run marker may not retry failed -> in_progress.
+        // Internal retries keep the same marker and clear its terminal reason.
         let marker_id = outcome.run_id;
         engine
             .complete_run(
@@ -3416,7 +3416,7 @@ mod tests {
             )
             .await
             .expect("fail run");
-        let error = engine
+        let retried_run = engine
             .update_part(
                 session_id,
                 marker_id,
@@ -3427,8 +3427,11 @@ mod tests {
                 engine.now_ms(),
             )
             .await
-            .expect_err("run marker cannot retry");
-        assert!(matches!(error, StoreError::InvalidState(_)));
+            .expect("retry the same run marker");
+        assert_eq!(retried_run.part_id, marker_id);
+        assert_eq!(retried_run.state, PartState::InProgress);
+        assert_eq!(retried_run.content["abort_reason"], Value::Null);
+        assert!(retried_run.finished_at_ms.is_none());
     }
 
     #[tokio::test]

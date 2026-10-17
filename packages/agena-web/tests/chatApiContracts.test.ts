@@ -6,7 +6,6 @@ import {
   buildMessageRequestBody,
   buildRunRequestBody,
   interactivePresentationPath,
-  messageErrorFromAgenaPart,
   normalizeAgenaPart,
 } from '../src/stores/chat/api'
 
@@ -71,36 +70,30 @@ test('interactive presentation acknowledgement is scoped to its session', () => 
   )
 })
 
-test('durable Agena error parts expose the user-facing problem envelope', () => {
-  assert.deepEqual(
-    messageErrorFromAgenaPart({
-      part_id: 9,
-      kind: 'error',
-      role: 'assistant',
-      state: 'failed',
-      content: {
-        category: 'provider',
-        message: 'diagnostic text',
-        problem: {
-          code: 'provider.unavailable',
-          category: 'configuration',
-          user: { fallback: 'The configured provider is unavailable.' },
-        },
-      },
-    }),
-    {
-      name: 'AgenaError',
-      type: 'configuration',
-      message: 'The configured provider is unavailable.',
-      code: 'provider.unavailable',
-      classification: 'configuration',
-      problem: {
-        code: 'provider.unavailable',
-        category: 'configuration',
-        user: { fallback: 'The configured provider is unavailable.' },
-      },
-    },
-  )
+test('durable errors retain ordinary Part identity, content and ownership', () => {
+  const problem = {
+    code: 'provider.unavailable',
+    category: 'configuration',
+    user: { fallback: 'The configured provider is unavailable.' },
+  }
+  const content = { category: 'provider', message: 'diagnostic text', problem }
+  const part = normalizeAgenaPart('9', '7', '8', {
+    part_id: 9,
+    run_id: 8,
+    kind: 'error',
+    role: 'assistant',
+    state: 'failed',
+    revision: 3,
+    content,
+  })
+  assert.equal(part?.id, '9')
+  assert.equal(part?.runId, 8)
+  assert.equal(part?.agenaKind, 'error')
+  assert.equal(part?.partState, 'failed')
+  assert.equal(part?.revision, 3)
+  assert.equal(part?.text, problem.user.fallback)
+  assert.deepEqual(part?.agenaContent, content)
+  assert.notEqual(part?.synthetic, true)
 })
 
 test('reasoning parts concatenate Agena streaming fragments without adding lines', () => {
@@ -251,12 +244,26 @@ test('missing or unknown wire state is not invented as completed, pending, or fa
 })
 
 test('sent media preview keeps immutable provider-bound bytes instead of rereading a changed file', () => {
-  const part=normalizeAgenaPart('151','7','10',{
-    part_id:151,kind:'file_ref',role:'user',state:'completed',content:{
-      path:'.agena/uploads/may-change.png',name:'input.png',mime:'image/png',delivery:'model_input',
-      attachments:[{kind:'image',mime:'image/png',source:{source:'provider_data',route:'media-route:opaque',data:'Zml4ZWQ='},filename:'input.png'}],
+  const part = normalizeAgenaPart('151', '7', '10', {
+    part_id: 151,
+    kind: 'file_ref',
+    role: 'user',
+    state: 'completed',
+    content: {
+      path: '.agena/uploads/may-change.png',
+      name: 'input.png',
+      mime: 'image/png',
+      delivery: 'model_input',
+      attachments: [
+        {
+          kind: 'image',
+          mime: 'image/png',
+          source: { source: 'provider_data', route: 'media-route:opaque', data: 'Zml4ZWQ=' },
+          filename: 'input.png',
+        },
+      ],
     },
   })
-  assert.equal(part?.url,'data:image/png;base64,Zml4ZWQ=')
-  assert.equal(part?.serverPath,'.agena/uploads/may-change.png')
+  assert.equal(part?.url, 'data:image/png;base64,Zml4ZWQ=')
+  assert.equal(part?.serverPath, '.agena/uploads/may-change.png')
 })

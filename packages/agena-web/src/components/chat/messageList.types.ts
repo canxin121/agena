@@ -35,7 +35,6 @@ export type MessageLike = {
     role?: string
     time?: { created?: number; completed?: number }
     finish?: string
-    error?: JsonValue
     modelID?: string
     providerID?: string
     adapterID?: string
@@ -81,23 +80,6 @@ export type TranscriptDisplayPart = {
   toggleable: boolean
   defaultExpanded: boolean
 }
-
-export type RetryStatusLike = {
-  next?: number
-  attempt?: number
-  message?: string
-  [k: string]: JsonValue
-} | null
-
-export type SessionErrorLike = {
-  at: number
-  error: {
-    message: string
-    rendered?: string
-    code?: string
-    classification?: string
-  }
-} | null
 
 export type MessageRenderBlock = {
   kind: 'message'

@@ -44,6 +44,8 @@ use crate::AppError;
 use crate::part::{CommandReferencePart, OperationPart};
 use crate::session::Session;
 
+mod failure_parts;
+
 static SESSION_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 pub(crate) struct PartCommandOutcome {
@@ -64,6 +66,7 @@ pub(crate) struct PartCommandOutcome {
 pub(crate) struct StoreAdapter {
     pub(crate) facade: Arc<dyn SessionStore>,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+    failure_gates: Arc<std::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
 }
 
 impl StoreAdapter {
@@ -71,7 +74,11 @@ impl StoreAdapter {
         facade: Arc<dyn SessionStore>,
         now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Self {
-        Self { facade, now_ms }
+        Self {
+            facade,
+            now_ms,
+            failure_gates: Arc::default(),
+        }
     }
 
     /// The claimant token stamped on background-operation claims. Exactly one
@@ -469,46 +476,6 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Append the safe, durable user projection of an execution failure below
-    /// an in-flight run marker. The diagnostic source stays in tracing; this
-    /// part carries only [`agena_failure::UserProblem`], which is suitable for
-    /// transcript rendering and expansion.
-    pub(crate) async fn append_failure_part(
-        &self,
-        session_id: i64,
-        run_id: i64,
-        failure: &agena_failure::Failure,
-    ) -> Result<Part, AppError> {
-        let problem = agena_failure::UserProblem::from(failure);
-        let category = serde_json::to_value(problem.category)
-            .expect("failure category is always JSON serializable")
-            .as_str()
-            .map(ToOwned::to_owned);
-        let message = problem.user.fallback.clone();
-        let mut extra = BTreeMap::new();
-        extra.insert(
-            "problem".to_owned(),
-            serde_json::to_value(&problem).expect("user problem is always JSON serializable"),
-        );
-        let content = TypedContent::Error(part_content::ErrorContent {
-            category,
-            message,
-            detail: None,
-            extra,
-        });
-        let new_part =
-            new_part_from_content("error", PartRole::Assistant, &content, PartState::Failed)?;
-        self.append_parts(session_id, run_id, vec![new_part])
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "append_parts returned no failure part for run {run_id}"
-                ))
-            })
-    }
-
     /// Apply a streaming delta to one part and return the updated part.
     pub(crate) async fn update_part(
         &self,
@@ -577,7 +544,9 @@ impl StoreAdapter {
         self.facade
             .reconcile(session_id, run_ids)
             .await
-            .map_err(store_error)
+            .map_err(store_error)?;
+        self.ensure_failure_parts(session_id).await?;
+        Ok(())
     }
 
     pub(crate) async fn fork(

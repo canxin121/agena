@@ -605,6 +605,7 @@ pub fn remap_stream_event_provider_id(
             invocation,
             title,
             summary,
+            failure,
             output_text,
             blocks,
             details,
@@ -618,6 +619,7 @@ pub fn remap_stream_event_provider_id(
             invocation,
             title,
             summary,
+            failure,
             output_text,
             blocks,
             details,
@@ -638,6 +640,12 @@ pub fn remap_stream_event_provider_id(
             provider_metadata,
             end_turn,
         },
+        CompletionStreamEvent::ProviderRetryStarted { model, .. } => {
+            CompletionStreamEvent::ProviderRetryStarted {
+                provider_id: provider_id.clone(),
+                model,
+            }
+        }
         CompletionStreamEvent::ProviderRetry {
             model,
             message,
@@ -726,6 +734,7 @@ pub fn remap_stream_event_provider_and_model(
             invocation,
             title,
             summary,
+            failure,
             output_text,
             blocks,
             details,
@@ -739,6 +748,7 @@ pub fn remap_stream_event_provider_and_model(
             invocation,
             title,
             summary,
+            failure,
             output_text,
             blocks,
             details,
@@ -758,6 +768,12 @@ pub fn remap_stream_event_provider_and_model(
             provider_metadata,
             end_turn,
         },
+        CompletionStreamEvent::ProviderRetryStarted { .. } => {
+            CompletionStreamEvent::ProviderRetryStarted {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+            }
+        }
         CompletionStreamEvent::ProviderRetry {
             message,
             retry_index,

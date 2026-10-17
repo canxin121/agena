@@ -475,10 +475,10 @@ function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDispla
 
 function runNeedsLifecycle(stateInput: string, displayParts: TranscriptDisplayPart[]): boolean {
   const state = normalizeRunState(stateInput)
-  if (!isKnownRunState(state)) return false
-  if (!displayParts.length) return true
-  if (!isRunFailureState(state) && !isRunCancelled(state)) return false
-  return !displayParts.some((part) => part.kind === 'error')
+  // Failure content comes exclusively from durable server Parts. A partial
+  // page may contain only a marker; its header already carries the status.
+  if (!isKnownRunState(state) || isRunFailureState(state)) return false
+  return displayParts.length === 0 || (isRunCancelled(state) && !displayParts.some((part) => part.kind === 'error'))
 }
 
 function cloneMessage(message: MessageLike): MessageLike {

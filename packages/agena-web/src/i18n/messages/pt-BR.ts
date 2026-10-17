@@ -1374,6 +1374,27 @@ export default {
         "stopped": "Interrompida"
       }
     },
+    errorPart: {
+      waiting: "Aguardando nova tentativa",
+      retrying: "Tentando novamente",
+      recovered: "Recuperado",
+      failed: "Nova tentativa falhou",
+      cancelled: "Nova tentativa cancelada",
+      retryCount: "Tentativa {attempt}/{max}",
+      retryNumber: "Tentativa {attempt}",
+      inDuration: "Nova tentativa em {duration}",
+      scheduledAt: "às {time}",
+      awaitingStart: "Aguardando o início da nova tentativa",
+      requesting: "Aguardando resposta",
+      streaming: "Recebendo resposta",
+      elapsed: "{duration} decorridos",
+      recoveredAfter: "Recuperado após {attempt} tentativas",
+      exhausted: "Todas as {max} tentativas foram usadas",
+      stopped: "Nova tentativa automática interrompida",
+      seconds: "{count} s",
+      minutes: "{minutes} min {seconds} s",
+      hours: "{hours} h {minutes} min",
+    },
     "partTitles": {
       "answer": "Resposta",
       "reasoning": "raciocínio",

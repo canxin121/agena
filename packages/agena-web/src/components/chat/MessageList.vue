@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import { RiSparkling2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
+import AgenaLogo from '@/components/AgenaLogo.vue'
 import Button from '@/components/ui/Button.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
@@ -104,9 +104,13 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
       :action-label="t('chat.messages.empty.actionLabel')"
       :show-action="true"
       @action="openMobileSidebar?.()"
-    />
+    >
+      <template #icon>
+        <AgenaLogo class="mx-auto mb-3 h-12 w-12" aria-hidden="true" />
+      </template>
+    </MobileSidebarEmptyState>
     <template v-else>
-      <RiSparkling2Line class="mx-auto h-8 w-8 opacity-25" />
+      <AgenaLogo class="mx-auto h-12 w-12" aria-hidden="true" />
       <div class="typography-ui-label mt-3 font-semibold">{{ t('chat.messages.empty.title') }}</div>
       <div class="typography-meta mt-1">{{ t('chat.messages.empty.desktopDescription') }}</div>
     </template>

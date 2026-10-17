@@ -27,7 +27,10 @@ bun audit
 ```
 
 `build` includes import-boundary checks, settings translation checks, and Vue
-type checking. The `Agena quality` workflow runs these gates on pull requests
+type checking. Both frontend build modes also verify that all app icons match
+the Shift source at `src/assets/agena.svg`; after editing it, run
+`bun run icons:generate`. See [the icon guide](design/agena-icon.md).
+The `Agena quality` workflow runs these gates on pull requests
 and pushes to `master`, with the Rust suite on Linux and macOS. The existing
 universal-target workflow covers the larger platform matrix separately; it is
 still manually triggered. The quality workflow also runs the plugin host's

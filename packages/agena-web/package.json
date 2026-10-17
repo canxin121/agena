@@ -7,8 +7,10 @@
     "dev": "bun run vite",
     "typecheck": "bun ./node_modules/vue-tsc/bin/vue-tsc.js -b",
     "vue-tsc": "bun ./node_modules/vue-tsc/bin/vue-tsc.js",
-    "build": "bun run check:imports && bun run check:i18n-settings && bun run check:i18n-messages && bun run check:i18n-locales && bun run typecheck && bun run vite build",
-    "build:rust-debug": "bun run check:imports && bun run check:i18n-settings && bun run check:i18n-messages && bun run check:i18n-locales && bun run typecheck && bun run vite build --mode rust-debug",
+    "icons:generate": "bun ./scripts/generate-app-icons.mjs",
+    "check:icons": "bun ./scripts/generate-app-icons.mjs --check",
+    "build": "bun run check:icons && bun run check:imports && bun run check:i18n-settings && bun run check:i18n-messages && bun run check:i18n-locales && bun run typecheck && bun run vite build",
+    "build:rust-debug": "bun run check:icons && bun run check:imports && bun run check:i18n-settings && bun run check:i18n-messages && bun run check:i18n-locales && bun run typecheck && bun run vite build --mode rust-debug",
     "check:imports": "bun ./scripts/check-import-rules.mjs",
     "fmt": "bun ./node_modules/prettier/bin/prettier.cjs -w .",
     "fmt:check": "bun ./node_modules/prettier/bin/prettier.cjs -c .",
@@ -44,6 +46,7 @@
     "vue-sonner": "^2.0.9"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "@tailwindcss/postcss": "^4.0.0",
     "@tailwindcss/typography": "^0.5.15",
     "@types/markdown-it": "^14.1.2",

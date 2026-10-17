@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useHealthStore } from '@/stores/health'
 import { i18n, setAppLocale } from '@/i18n'
 import type { AppLocale } from '@/i18n/locale'
+import AgenaLogo from '@/components/AgenaLogo.vue'
 import Button from '@/components/ui/Button.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -69,11 +70,7 @@ async function submit() {
   >
     <div class="mx-auto my-auto flex w-full max-w-[360px] flex-col justify-center space-y-6">
       <div class="flex flex-col items-center gap-4 text-center">
-        <div
-          class="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-inset ring-foreground/5"
-        >
-          <img src="/favicon.svg" alt="Agena" class="h-10 w-10 opacity-90" />
-        </div>
+        <AgenaLogo class="h-16 w-16" />
         <div class="space-y-1">
           <h1 class="text-2xl font-semibold tracking-tight text-foreground">{{ t('login.title') }}</h1>
           <p class="text-sm text-muted-foreground">{{ t('login.unlockDescription') }}</p>

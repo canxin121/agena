@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Nova</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#62578F"/><stop offset="1" stop-color="#302947"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<path fill="#F4E9FF" fill-rule="evenodd" d="M512 216C549 400 624 475 808 512 624 549 549 624 512 808 475 624 400 549 216 512 400 475 475 400 512 216ZM512 422 422 562H602L512 422Z"/>
+</svg>

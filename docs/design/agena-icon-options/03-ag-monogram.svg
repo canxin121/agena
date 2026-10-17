@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — AG monogram</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#30394A"/><stop offset="1" stop-color="#151B28"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<path fill="#F8F0DF" d="M817 363C780 317 731 292 667 292 548 292 470 386 470 514S548 742 667 742C735 742 787 719 832 682V506H650V602H725V631C710 642 692 648 667 648 608 648 575 594 575 514S612 386 667 386C704 386 734 399 760 428L817 363Z"/><path fill="#FFAB66" fill-rule="evenodd" d="M178 742 335 321C346 291 364 278 394 278S442 291 453 321L610 742H485L459 658H329L303 742H178ZM361 552H427L394 440 361 552Z"/>
+
+</svg>

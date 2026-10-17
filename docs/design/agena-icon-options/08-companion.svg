@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Companion</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F5DE91"/><stop offset="1" stop-color="#E9B95B"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<path d="M276 458 318 279C322 261 344 256 356 270L444 369H580L668 270C680 256 702 261 706 279L748 458V637C748 712 687 773 612 773H412C337 773 276 712 276 637V458Z" fill="#2E302B"/><rect x="366" y="486" width="89" height="107" rx="44.5" fill="#FFF5D8"/><rect x="569" y="486" width="89" height="107" rx="44.5" fill="#FFF5D8"/><path d="M482 661C482 644 496 630 512 630S542 644 542 661C542 678 528 692 512 692S482 678 482 661Z" fill="#F2BD61"/>
+</svg>

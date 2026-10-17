@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Soft A</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#B1E5D5"/><stop offset="1" stop-color="#58C2AB"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<g fill="#173C34"><path fill-rule="evenodd" d="M704 522C704 653.44 597.44 760 466 760S228 653.44 228 522 334.56 284 466 284 704 390.56 704 522ZM576 522C576 461.25 526.75 412 466 412S356 461.25 356 522 405.25 632 466 632 576 582.75 576 522Z"/><rect x="594" y="284" width="142" height="476" rx="71"/></g>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Flow</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#6385ED"/><stop offset="1" stop-color="#3557C4"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<g fill="#F5F2E7"><path id="flow-ribbon" d="M534 238A275 275 0 0 1 778 581Q773 600 754 594L652 567Q633 562 638 543A129 129 0 0 0 522 383Q502 381 504 361L513 257Q515 237 534 238Z"/><use href="#flow-ribbon" transform="rotate(120 512 512)"/><use href="#flow-ribbon" transform="rotate(240 512 512)"/></g>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Orbit</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#34302D"/><stop offset="1" stop-color="#181D20"/></linearGradient><linearGradient id="planet" x1="396" y1="358" x2="625" y2="659" gradientUnits="userSpaceOnUse"><stop stop-color="#FFBD70"/><stop offset="1" stop-color="#F57B43"/></linearGradient></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<ellipse cx="512" cy="512" rx="330" ry="126" transform="rotate(-34 512 512)" stroke="#FFE4BF" stroke-width="62"/><circle cx="512" cy="512" r="167" fill="url(#planet)"/><path d="M785.58 327.46A330 126-34 0 1 238.42 696.54" stroke="#FFE4BF" stroke-width="62" stroke-linecap="round"/>
+</svg>

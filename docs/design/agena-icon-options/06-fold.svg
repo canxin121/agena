@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<title>Agena — Fold</title>
+<defs><linearGradient id="background" x1="150" y1="80" x2="870" y2="1000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FBF4E9"/><stop offset="1" stop-color="#E9DFCF"/></linearGradient><mask id="fold-cut"><rect width="1024" height="1024" fill="white"/><path d="M512 452 609 623 512 582 415 623 512 452Z" fill="black"/></mask></defs>
+<rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+<g mask="url(#fold-cut)"><path d="M512 234 810 760 512 632 214 760 512 234Z" fill="#F87B42"/><path d="M512 234 810 760 512 632V234Z" fill="#CA4E33"/><path d="M512 632 810 760 512 704 214 760 512 632Z" fill="#A73F2E"/></g>
+</svg>

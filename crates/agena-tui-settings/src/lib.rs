@@ -5,9 +5,17 @@
 //! and opening concrete workbenches. This module owns the display-only section
 //! hierarchy plus its selection, query, and keyboard-navigation policy.
 
-use crossterm::event::KeyEvent;
+use std::cell::Cell;
 
-use agena_tui_components::{SectionedListFocus, SectionedListSection, SectionedListState};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use agena_tui_components::{Editor, SectionedListFocus, SectionedListSection, SectionedListState};
+
+mod render;
+pub use render::{SettingsViewSpec, render_settings};
+
+#[cfg(test)]
+mod view_tests;
 
 use agena_tui::i18n::I18n;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve};
@@ -183,6 +191,13 @@ pub type SettingsStudioFocus = SectionedListFocus;
 /// Presentation of the settings studio.
 pub struct SettingsStudioPresentation<A> {
     state: SectionedListState<SettingsStudioSection<A>>,
+    search: Editor,
+    searching: bool,
+    details: bool,
+    detail_scroll: Cell<u16>,
+    detail_max_scroll: Cell<u16>,
+    page_size: Cell<usize>,
+    remembered_items: Vec<usize>,
 }
 
 impl<A> SettingsStudioPresentation<A> {
@@ -192,9 +207,19 @@ impl<A> SettingsStudioPresentation<A> {
         selected_item: usize,
         focus: SettingsStudioFocus,
     ) -> Self {
-        Self {
+        let count = sections.len();
+        let mut presentation = Self {
             state: SectionedListState::new(sections, selected_section, selected_item, focus),
-        }
+            search: Editor::default(),
+            searching: false,
+            details: false,
+            detail_scroll: Cell::new(0),
+            detail_max_scroll: Cell::new(0),
+            page_size: Cell::new(5),
+            remembered_items: vec![0; count],
+        };
+        presentation.remember_selection();
+        presentation
     }
 
     pub fn sections(&self) -> &[SettingsStudioSection<A>] {
@@ -206,7 +231,10 @@ impl<A> SettingsStudioPresentation<A> {
     }
 
     pub fn selected_item(&self) -> Option<&SettingsStudioItem<A>> {
-        self.state.selected_item()
+        self.visible_item_indices(self.selected_section_index())
+            .contains(&self.selected_item_index())
+            .then(|| self.state.selected_item())
+            .flatten()
     }
 
     pub fn selected_section_index(&self) -> usize {
@@ -222,15 +250,167 @@ impl<A> SettingsStudioPresentation<A> {
     }
 
     pub fn set_focus(&mut self, focus: SettingsStudioFocus) {
+        self.searching = false;
         self.state.set_focus(focus);
     }
 
     pub fn set_indices(&mut self, section: usize, item: usize) {
         self.state.set_indices(section, item);
+        self.remember_selection();
     }
 
     pub fn move_selection(&mut self, delta: isize) {
-        self.state.move_selection(delta);
+        match self.focus() {
+            SettingsStudioFocus::Navigation => {
+                let indices = self.visible_section_indices();
+                if let Some(index) = stepped_index(&indices, self.selected_section_index(), delta) {
+                    let item = self.remembered_items.get(index).copied().unwrap_or(0);
+                    self.state.set_indices(index, item);
+                    self.clamp_filtered_selection();
+                }
+            }
+            SettingsStudioFocus::Items => {
+                let section = self.selected_section_index();
+                let indices = self.visible_item_indices(section);
+                if let Some(index) = stepped_index(&indices, self.selected_item_index(), delta) {
+                    self.state.set_indices(section, index);
+                }
+            }
+        }
+        self.remember_selection();
+    }
+
+    pub fn query(&self) -> &str {
+        self.search.text()
+    }
+
+    pub fn is_searching(&self) -> bool {
+        self.searching
+    }
+
+    pub fn details_open(&self) -> bool {
+        self.details
+    }
+
+    pub fn set_query(&mut self, query: &str) {
+        self.search.set_text(query.replace(['\n', '\r', '\t'], " "));
+        self.clamp_filtered_selection();
+    }
+
+    pub fn paste(&mut self, text: &str) {
+        if self.searching {
+            self.search
+                .insert_str(&text.replace(['\n', '\r', '\t'], " "));
+            self.clamp_filtered_selection();
+        }
+    }
+
+    pub fn visible_section_indices(&self) -> Vec<usize> {
+        (0..self.sections().len())
+            .filter(|&index| {
+                self.query().trim().is_empty() || !self.visible_item_indices(index).is_empty()
+            })
+            .collect()
+    }
+
+    pub fn visible_item_indices(&self, section: usize) -> Vec<usize> {
+        let Some(section) = self.sections().get(section) else {
+            return Vec::new();
+        };
+        let query = self.query().to_lowercase();
+        let terms = query.split_whitespace().collect::<Vec<_>>();
+        section
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                if terms.is_empty() {
+                    return Some(index);
+                }
+                let text = format!(
+                    "{} {} {} {} {}",
+                    section.label,
+                    item.label,
+                    item.value,
+                    item.detail,
+                    item.path.as_deref().unwrap_or_default()
+                )
+                .to_lowercase();
+                terms
+                    .iter()
+                    .all(|term| text.contains(term))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    /// Preserve the user's search and per-section position across asynchronous
+    /// snapshot refreshes and edits. The new snapshot owns all displayed values.
+    pub fn restore_view(&mut self, previous: &Self) {
+        for (index, section) in self.state.sections().iter().enumerate() {
+            if let Some(old_index) = previous
+                .sections()
+                .iter()
+                .position(|old| old.id == section.id)
+            {
+                self.remembered_items[index] = previous.remembered_items[old_index];
+            }
+        }
+        self.search = previous.search.clone();
+        self.searching = previous.searching;
+        self.details = previous.details;
+        self.detail_scroll.set(previous.detail_scroll.get());
+        self.clamp_filtered_selection();
+        self.remember_selection();
+    }
+
+    /// Pointer indices address the filtered lists, exactly like keyboard steps.
+    pub fn select_visible(&mut self, panel: usize, position: usize) -> bool {
+        self.searching = false;
+        if panel == 0 {
+            if let Some(&section) = self.visible_section_indices().get(position) {
+                self.state
+                    .set_indices(section, self.remembered_items[section]);
+                self.clamp_filtered_selection();
+                self.set_focus(SettingsStudioFocus::Items);
+            }
+            false
+        } else if let Some(&item) = self
+            .visible_item_indices(self.selected_section_index())
+            .get(position)
+        {
+            self.set_indices(self.selected_section_index(), item);
+            self.set_focus(SettingsStudioFocus::Items);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn remember_selection(&mut self) {
+        let section = self.selected_section_index();
+        let item = self.selected_item_index();
+        if let Some(remembered) = self.remembered_items.get_mut(section) {
+            *remembered = item;
+        }
+    }
+
+    fn clamp_filtered_selection(&mut self) {
+        let sections = self.visible_section_indices();
+        let section = self.selected_section_index();
+        let section = if sections.contains(&section) {
+            section
+        } else {
+            sections.first().copied().unwrap_or(0)
+        };
+        let items = self.visible_item_indices(section);
+        let item = self.selected_item_index();
+        let item = if items.contains(&item) {
+            item
+        } else {
+            items.first().copied().unwrap_or(0)
+        };
+        self.state.set_indices(section, item);
     }
 
     /// Selects the first presentation row whose visible strings contain the
@@ -276,6 +456,20 @@ impl<A> SettingsStudioPresentation<A> {
     }
 }
 
+fn stepped_index(indices: &[usize], selected: usize, delta: isize) -> Option<usize> {
+    let position = indices
+        .iter()
+        .position(|&index| index == selected)
+        .unwrap_or(0);
+    indices
+        .get(
+            position
+                .saturating_add_signed(delta)
+                .min(indices.len().saturating_sub(1)),
+        )
+        .copied()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Effect produced by the settings studio.
 pub enum SettingsStudioEffect {
@@ -289,7 +483,78 @@ pub fn handle_key<A>(
     presentation: &mut SettingsStudioPresentation<A>,
     key: KeyEvent,
 ) -> SettingsStudioEffect {
-    match resolve(KeyContext::SettingsStudio, key) {
+    let action = resolve(KeyContext::SettingsStudio, key);
+    if presentation.details {
+        if matches!(action, Some(KeyAction::Close | KeyAction::SettingsDetails)) {
+            presentation.details = false;
+        } else if matches!(
+            action,
+            Some(
+                KeyAction::MoveUp
+                    | KeyAction::MoveDown
+                    | KeyAction::PageUp
+                    | KeyAction::PageDown
+                    | KeyAction::Home
+                    | KeyAction::End
+            )
+        ) {
+            let mut scroll =
+                agena_tui_components::ScrollState::new(presentation.detail_scroll.get());
+            scroll.handle_navigation_key(
+                key,
+                presentation.detail_max_scroll.get(),
+                presentation.page_size.get().min(u16::MAX as usize) as u16,
+            );
+            presentation.detail_scroll.set(scroll.scroll);
+        }
+        return SettingsStudioEffect::KeepOpen;
+    }
+    let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+    if presentation.searching {
+        match key.code {
+            KeyCode::Esc if plain => {
+                presentation.set_query("");
+                presentation.searching = false;
+            }
+            KeyCode::Enter | KeyCode::Down | KeyCode::Up if plain => {
+                presentation.set_focus(SettingsStudioFocus::Items);
+            }
+            KeyCode::Tab | KeyCode::BackTab if plain => {
+                presentation.set_focus(SettingsStudioFocus::Navigation)
+            }
+            _ => {
+                presentation.search.handle_line_input_key(key);
+                presentation.clamp_filtered_selection();
+            }
+        }
+        return SettingsStudioEffect::KeepOpen;
+    }
+    match action {
+        Some(KeyAction::SettingsSearch) => {
+            presentation.searching = true;
+            SettingsStudioEffect::KeepOpen
+        }
+        Some(KeyAction::SettingsDetails) => {
+            if presentation.selected_item().is_some() {
+                presentation.details = true;
+                presentation.detail_scroll.set(0);
+            }
+            SettingsStudioEffect::KeepOpen
+        }
+        Some(KeyAction::Close) if !presentation.query().is_empty() => {
+            presentation.set_query("");
+            SettingsStudioEffect::KeepOpen
+        }
+        Some(KeyAction::PageUp | KeyAction::PageDown | KeyAction::Home | KeyAction::End) => {
+            let step = match action {
+                Some(KeyAction::PageUp) => -(presentation.page_size.get() as isize),
+                Some(KeyAction::PageDown) => presentation.page_size.get() as isize,
+                Some(KeyAction::Home) => isize::MIN,
+                _ => isize::MAX,
+            };
+            presentation.move_selection(step);
+            SettingsStudioEffect::KeepOpen
+        }
         Some(KeyAction::Close) => SettingsStudioEffect::Close,
         Some(KeyAction::MoveLeft) => {
             presentation.set_focus(SettingsStudioFocus::Navigation);
@@ -315,7 +580,12 @@ pub fn handle_key<A>(
             SettingsStudioEffect::KeepOpen
         }
         Some(KeyAction::Refresh) => SettingsStudioEffect::Refresh,
-        Some(KeyAction::Activate) => SettingsStudioEffect::Activate,
+        Some(KeyAction::Activate)
+            if presentation.focus() == SettingsStudioFocus::Navigation
+                || presentation.selected_item().is_some() =>
+        {
+            SettingsStudioEffect::Activate
+        }
         _ => SettingsStudioEffect::KeepOpen,
     }
 }

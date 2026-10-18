@@ -2982,3 +2982,34 @@ error-part-stopped = Reintento automático detenido
 error-part-seconds = { $count } s
 error-part-minutes = { $minutes } min { $seconds } s
 error-part-hours = { $hours } h { $minutes } min
+
+# Settings page navigation and search
+settings-search-placeholder = Buscar ajustes…
+settings-search-empty = No hay ajustes coincidentes
+settings-search-empty-hint = Prueba otro nombre o ruta de configuración. Esc borra la búsqueda.
+settings-key-results = Resultados
+settings-key-clear = Borrar
+settings-key-sections = Secciones
+settings-key-items = Ajustes
+settings-key-open = Abrir
+settings-key-search = Buscar
+settings-key-details = Detalles
+settings-key-refresh = Actualizar
+settings-key-back = Volver
+settings-details-footer = ↑/↓ desplazar · PgUp/PgDn página · Esc volver
+
+## Compact session browsing
+session-action-pin = fijar
+session-action-unpin = desfijar
+session-action-page = página
+session-action-scroll = desplazar
+session-page-previous = anterior
+session-page-next = siguiente
+session-hub-guide = Enter abrir/expandir · p fijar · f favorito · Ctrl+R recargar
+session-directory-guide = Enter expandir/contraer directorio
+session-search-guide = / o Ctrl+F para buscar título o ID
+session-search-input-hints = ←→ cursor · Tab lista · Alt+P fijar · Alt+F favorito · Esc lista
+session-search-results-hints = ↑↓ elegir · ←→ / PgUp/Dn página · / buscar · Enter abrir · Esc volver
+session-page-status = Página { $page }/{ $pages }{ $more } · { $count } cargadas
+session-bucket-page = página { $page }
+session-search-compact-hints = ↑↓ · ←→ página · Enter abrir · Esc

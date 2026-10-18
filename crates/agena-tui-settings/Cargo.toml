@@ -10,6 +10,8 @@ description = "Settings presentation state and app adapter effect protocol"
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 crossterm = { workspace = true }
+ratatui = { workspace = true }
+unicode-width = { workspace = true }
 
 [lints]
 workspace = true

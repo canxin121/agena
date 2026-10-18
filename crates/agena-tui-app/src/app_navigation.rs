@@ -126,6 +126,12 @@ impl App {
             session_id: session.id,
             title: session.title.clone(),
             favorite: session.favorite,
+            pinned: session.pinned,
+            summary: format!(
+                "{} · {}",
+                ui_text::session_state_label(&self.i18n, &session.state),
+                chrono::DateTime::<chrono::Local>::from(session.updated_at).format("%m-%d %H:%M")
+            ),
             label: session.title,
             detail: detail_parts.join(" | "),
         }

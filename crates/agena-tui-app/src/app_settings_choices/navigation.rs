@@ -110,7 +110,7 @@ impl App {
         let scope_session_id = (self.sessions.view_mode() == SessionViewMode::Subtree)
             .then(|| self.current_or_selected_session_id())
             .flatten();
-        let dialog =
+        let mut dialog =
             self.build_session_search_overlay(input, self.sessions.view_mode(), scope_session_id);
         match dialog.meta.mode {
             SessionViewMode::Subtree => {
@@ -118,13 +118,13 @@ impl App {
                     self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
                     return;
                 };
-                self.request_session_search_subtree(
+                dialog.meta.request_id = self.request_session_search_subtree(
                     session_id,
                     dialog.input.text().trim().to_string(),
                 );
             }
             SessionViewMode::All | SessionViewMode::Roots => {
-                self.request_session_search_page(
+                dialog.meta.request_id = self.request_session_search_page(
                     dialog.meta.mode,
                     dialog.input.text().trim().to_string(),
                     0,

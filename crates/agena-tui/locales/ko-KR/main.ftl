@@ -2976,3 +2976,34 @@ error-part-stopped = 자동 재시도 중지됨
 error-part-seconds = { $count }초
 error-part-minutes = { $minutes }분 { $seconds }초
 error-part-hours = { $hours }시간 { $minutes }분
+
+# Settings page navigation and search
+settings-search-placeholder = 설정 검색…
+settings-search-empty = 일치하는 설정 없음
+settings-search-empty-hint = 다른 이름이나 설정 경로를 입력하세요. Esc 키로 검색을 지웁니다.
+settings-key-results = 결과
+settings-key-clear = 지우기
+settings-key-sections = 카테고리
+settings-key-items = 설정 항목
+settings-key-open = 열기
+settings-key-search = 검색
+settings-key-details = 상세
+settings-key-refresh = 새로 고침
+settings-key-back = 뒤로
+settings-details-footer = ↑/↓ 스크롤 · PgUp/PgDn 페이지 · Esc 뒤로
+
+## Compact session browsing
+session-action-pin = 고정
+session-action-unpin = 고정 해제
+session-action-page = 페이지
+session-action-scroll = 스크롤
+session-page-previous = 이전
+session-page-next = 다음
+session-hub-guide = Enter 열기/펼치기 · p 고정 · f 즐겨찾기 · Ctrl+R 새로고침
+session-directory-guide = Enter 디렉터리 펼치기/접기
+session-search-guide = / 또는 Ctrl+F로 제목, ID 검색
+session-search-input-hints = ←→ 커서 · Tab 목록 · Alt+P 고정 · Alt+F 즐겨찾기 · Esc 목록
+session-search-results-hints = ↑↓ 선택 · ←→ / PgUp/Dn 페이지 · / 검색 · Enter 열기 · Esc 뒤로
+session-page-status = { $page }/{ $pages }{ $more } 페이지 · { $count }개 로드됨
+session-bucket-page = { $page } 페이지
+session-search-compact-hints = ↑↓ · ←→ 페이지 · Enter 열기 · Esc 뒤로

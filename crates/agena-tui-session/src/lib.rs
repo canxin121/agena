@@ -7,6 +7,7 @@
 //! [`session_view`]), the session page/summary/message shapes, live events,
 //! and the [`SessionController`] that tracks the active session from events.
 
+mod session_chrome;
 pub mod session_helpers;
 pub mod session_hub;
 pub mod session_list;
@@ -136,3 +137,6 @@ mod tests {
         assert!(!controller.active);
     }
 }
+
+#[cfg(test)]
+mod browsing_tests;

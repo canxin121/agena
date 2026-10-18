@@ -216,6 +216,8 @@ pub enum KeyAction {
     PreviousTab,
     Clear,
     Refresh,
+    SettingsSearch,
+    SettingsDetails,
     PlanToggleAutorun,
     ProviderRefreshModels,
     ProviderAddModel,
@@ -933,6 +935,32 @@ mod tests {
             ),
             Some(KeyAction::Refresh)
         );
+        for (code, modifiers, action) in [
+            (
+                KeyCode::Char('/'),
+                KeyModifiers::NONE,
+                KeyAction::SettingsSearch,
+            ),
+            (
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+                KeyAction::SettingsSearch,
+            ),
+            (
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                KeyAction::SettingsDetails,
+            ),
+            (KeyCode::PageUp, KeyModifiers::NONE, KeyAction::PageUp),
+            (KeyCode::PageDown, KeyModifiers::NONE, KeyAction::PageDown),
+            (KeyCode::Home, KeyModifiers::NONE, KeyAction::Home),
+            (KeyCode::End, KeyModifiers::NONE, KeyAction::End),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::SettingsStudio, key(code, modifiers)),
+                Some(action)
+            );
+        }
     }
 
     #[test]
@@ -1019,11 +1047,42 @@ mod tests {
     }
 
     #[test]
+    fn session_browser_marks_have_focus_independent_alternatives() {
+        for (character, action) in [
+            ('p', KeyAction::HubTogglePinned),
+            ('f', KeyAction::ToggleFavorite),
+        ] {
+            for context in [KeyContext::SessionSearch, KeyContext::Hub] {
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::ALT)),
+                    Some(action)
+                );
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
+                    Some(action)
+                );
+            }
+        }
+        for byte in b' '..=b'~' {
+            let character = char::from(byte);
+            if matches!(character, 'p' | 'f' | '/') {
+                continue;
+            }
+            assert_eq!(
+                resolve(
+                    KeyContext::SessionSearch,
+                    key(KeyCode::Char(character), KeyModifiers::NONE)
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn searchable_pages_leave_printable_characters_for_the_editor() {
         for context in [
             KeyContext::Choice,
             KeyContext::FileAttach,
-            KeyContext::SessionSearch,
             KeyContext::Picker,
             KeyContext::SessionModel,
             KeyContext::Timeline,
@@ -1348,7 +1407,11 @@ mod tests {
             for character in '!'..='~' {
                 assert_eq!(
                     resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
-                    None,
+                    if context == KeyContext::SettingsStudio && character == '/' {
+                        Some(KeyAction::SettingsSearch)
+                    } else {
+                        None
+                    },
                     "{context:?} still binds printable character {character:?}"
                 );
             }
@@ -1409,7 +1472,6 @@ mod tests {
         let contexts = [
             KeyContext::Help,
             KeyContext::Usage,
-            KeyContext::SettingsStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,

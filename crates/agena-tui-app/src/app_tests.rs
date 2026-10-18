@@ -10,6 +10,7 @@ use super::{
     transcript_node_highlight_range, transcript_selection_scroll_position,
 };
 
+mod session_browsing;
 mod session_hub;
 mod transcript_paging;
 mod ui;

@@ -137,6 +137,7 @@ impl App {
         state.request_id = self.next_hub_request_id;
         state.search_changed_at = Some(std::time::Instant::now());
         state.pages.clear();
+        state.pending_page = None;
         state.loading = false;
     }
 
@@ -200,6 +201,7 @@ impl App {
                 if let Route::Hub(state) = &mut self.current_route {
                     state.loading = false;
                     state.error = Some(error.to_string());
+                    state.pending_page = None;
                 }
                 return;
             }
@@ -307,6 +309,9 @@ impl App {
                 .collect();
             state.presentation.set_catalog(directories, sections);
             state.presentation.set_pagination(catalog.pages);
+            if let Some((target, last)) = state.pending_page.take() {
+                state.presentation.select_page_target(target, last);
+            }
             state.request_task = None;
         }
     }
@@ -330,7 +335,7 @@ impl App {
         });
     }
 
-    fn request_session_pin(&mut self, session_id: i64, pinned: bool) {
+    pub(crate) fn request_session_pin(&mut self, session_id: i64, pinned: bool) {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -359,6 +364,7 @@ impl App {
             Some(HubRow::Page { target, page, .. }) => {
                 if !state.loading {
                     state.pages.insert(target, page);
+                    state.pending_page = Some((target, false));
                     self.spawn_hub_overview_request(state);
                 }
             }
@@ -411,13 +417,13 @@ impl App {
         }
         match resolve_tui_key(KeyContext::Hub, key) {
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
-                if let Some(id) = state.presentation.selected_workspace() {
-                    state
-                        .presentation
-                        .toggle_directory(id, Some(action == KeyAction::MoveRight));
-                    if action == KeyAction::MoveRight && !state.loading {
-                        self.spawn_hub_overview_request(state);
-                    }
+                let forward = action == KeyAction::MoveRight;
+                if !state.loading
+                    && let Some((target, page)) = state.presentation.page_request(forward)
+                {
+                    state.pages.insert(target, page);
+                    state.pending_page = Some((target, !forward));
+                    self.spawn_hub_overview_request(state);
                 }
             }
             Some(KeyAction::HubTogglePinned) => {
@@ -469,14 +475,21 @@ impl App {
                     self.request_session_favorite(item.session_id, !item.favorite);
                 }
             }
-            Some(KeyAction::MoveUp) => state.presentation.move_selection(-1),
-            Some(KeyAction::MoveDown) => state.presentation.move_selection(1),
+            Some(KeyAction::SearchForward) => state.search_active = true,
+            Some(KeyAction::MoveUp) => {
+                state.search_active = false;
+                state.presentation.move_selection(-1);
+            }
+            Some(KeyAction::MoveDown) => {
+                state.search_active = false;
+                state.presentation.move_selection(1);
+            }
             Some(KeyAction::PageUp) => state
                 .presentation
-                .move_selection_page(-1, (self.layout.overlay_area.height as usize / 4).max(1)),
+                .move_selection_page(-1, state.presentation.viewport_page_size()),
             Some(KeyAction::PageDown) => state
                 .presentation
-                .move_selection_page(1, (self.layout.overlay_area.height as usize / 4).max(1)),
+                .move_selection_page(1, state.presentation.viewport_page_size()),
             Some(KeyAction::Home) => state.presentation.move_selection_home(),
             Some(KeyAction::End) => state.presentation.move_selection_end(),
             Some(KeyAction::NextTab) => state.presentation.move_selection_section(1),
@@ -581,6 +594,11 @@ impl App {
             title: session.title.clone(),
             favorite: session.favorite,
             label: session.title.clone(),
+            summary: format!(
+                "{} · {}",
+                ui_text::session_state_label(&self.i18n, &session.state),
+                chrono::DateTime::<chrono::Local>::from(session.updated_at).format("%m-%d %H:%M")
+            ),
             detail: detail_parts.join(" | "),
             is_new_session: false,
         }
@@ -596,6 +614,7 @@ impl App {
             title: String::new(),
             favorite: false,
             label: self.i18n.text("hub-item-new"),
+            summary: String::new(),
             detail: self.i18n.text("hub-item-new-detail"),
             is_new_session: true,
         }

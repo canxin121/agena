@@ -2980,3 +2980,34 @@ error-part-stopped = 自動再試行を停止
 error-part-seconds = { $count } 秒
 error-part-minutes = { $minutes } 分 { $seconds } 秒
 error-part-hours = { $hours } 時間 { $minutes } 分
+
+# Settings page navigation and search
+settings-search-placeholder = 設定を検索…
+settings-search-empty = 一致する設定がありません
+settings-search-empty-hint = 別の名前や設定パスをお試しください。Esc で検索をクリアします。
+settings-key-results = 結果
+settings-key-clear = クリア
+settings-key-sections = カテゴリ
+settings-key-items = 設定項目
+settings-key-open = 開く
+settings-key-search = 検索
+settings-key-details = 詳細
+settings-key-refresh = 更新
+settings-key-back = 戻る
+settings-details-footer = ↑/↓ スクロール · PgUp/PgDn ページ · Esc 戻る
+
+## Compact session browsing
+session-action-pin = 固定
+session-action-unpin = 固定解除
+session-action-page = ページ
+session-action-scroll = スクロール
+session-page-previous = 前へ
+session-page-next = 次へ
+session-hub-guide = Enter 開く／展開 · p 固定 · f お気に入り · Ctrl+R 更新
+session-directory-guide = Enter ディレクトリを展開／折りたたむ
+session-search-guide = / または Ctrl+F でタイトル・IDを検索
+session-search-input-hints = ←→ カーソル · Tab 一覧 · Alt+P 固定 · Alt+F お気に入り · Esc 一覧
+session-search-results-hints = ↑↓ 選択 · ←→ / PgUp/Dn ページ · / 検索 · Enter 開く · Esc 戻る
+session-page-status = { $page }/{ $pages }{ $more } ページ · { $count } 件読み込み済み
+session-bucket-page = { $page } ページ
+session-search-compact-hints = ↑↓ · ←→ ページ · Enter 開く · Esc 戻る

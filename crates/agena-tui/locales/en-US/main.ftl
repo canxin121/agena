@@ -2611,3 +2611,34 @@ error-part-stopped = Automatic retry stopped
 error-part-seconds = { $count }s
 error-part-minutes = { $minutes }m { $seconds }s
 error-part-hours = { $hours }h { $minutes }m
+
+# Settings page navigation and search
+settings-search-placeholder = Search settings…
+settings-search-empty = No matching settings
+settings-search-empty-hint = Try a different name or configuration path. Press Esc to clear the search.
+settings-key-results = Results
+settings-key-clear = Clear
+settings-key-sections = Sections
+settings-key-items = Settings
+settings-key-open = Open
+settings-key-search = Search
+settings-key-details = Details
+settings-key-refresh = Refresh
+settings-key-back = Back
+settings-details-footer = ↑/↓ scroll · PgUp/PgDn page · Esc back
+
+## Compact session browsing
+session-action-pin = pin
+session-action-unpin = unpin
+session-action-page = page
+session-action-scroll = scroll
+session-page-previous = previous
+session-page-next = next
+session-hub-guide = Enter open / expand · p pin · f favorite · Ctrl+R refresh
+session-directory-guide = Enter expand / collapse directory
+session-search-guide = / or Ctrl+F to search title or ID
+session-search-input-hints = ←→ cursor · Tab results · Alt+P pin · Alt+F favorite · Esc results
+session-search-results-hints = ↑↓ move · ←→ / PgUp/Dn page · / search · Enter open · Esc back
+session-page-status = Page { $page }/{ $pages }{ $more } · { $count } loaded
+session-bucket-page = page { $page }
+session-search-compact-hints = ↑↓ · ←→ page · Enter open · Esc back

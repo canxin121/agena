@@ -346,7 +346,6 @@ impl App {
 
         Ok(SettingsStudioOverlay {
             title: ui_text::t(&self.i18n, "overlay-settings-title"),
-            footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
             state: SettingsStudioPresentation::new(
                 std::mem::take(&mut sections),
                 selected_section,
@@ -360,11 +359,13 @@ impl App {
         &self,
         dialog: &SettingsStudioOverlay,
     ) -> UiResult<SettingsStudioOverlay> {
-        self.build_settings_studio_overlay(
+        let mut rebuilt = self.build_settings_studio_overlay(
             dialog.state.selected_section().map(|section| section.id),
             dialog.state.selected_item().map(|item| item.label.as_str()),
             dialog.state.focus(),
-        )
+        )?;
+        rebuilt.state.restore_view(&dialog.state);
+        Ok(rebuilt)
     }
 
     pub(crate) fn refresh_settings_studio_overlay(&mut self, dialog: &mut SettingsStudioOverlay) {
@@ -391,7 +392,6 @@ impl App {
         }];
         Ok(SettingsStudioOverlay {
             title: ui_text::t(&self.i18n, "overlay-client-versions-title"),
-            footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
             state: SettingsStudioPresentation::new(sections, 0, 0, SettingsStudioFocus::Items),
         })
     }
@@ -406,6 +406,7 @@ impl App {
             dialog.state.selected_item_index(),
         );
         rebuilt.state.set_focus(dialog.state.focus());
+        rebuilt.state.restore_view(&dialog.state);
         Ok(rebuilt)
     }
 

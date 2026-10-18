@@ -3031,3 +3031,34 @@ error-part-stopped = 自動重試已停止
 error-part-seconds = { $count } 秒
 error-part-minutes = { $minutes } 分 { $seconds } 秒
 error-part-hours = { $hours } 小時 { $minutes } 分
+
+# Settings page navigation and search
+settings-search-placeholder = 搜尋設定…
+settings-search-empty = 沒有符合的設定
+settings-search-empty-hint = 試試其他名稱或設定路徑，按 Esc 清除搜尋。
+settings-key-results = 查看結果
+settings-key-clear = 清除搜尋
+settings-key-sections = 分類
+settings-key-items = 設定項
+settings-key-open = 開啟
+settings-key-search = 搜尋
+settings-key-details = 詳情
+settings-key-refresh = 重新整理
+settings-key-back = 返回
+settings-details-footer = ↑/↓ 捲動 · PgUp/PgDn 翻頁 · Esc 返回
+
+## Compact session browsing
+session-action-pin = 置頂
+session-action-unpin = 取消置頂
+session-action-page = 翻頁
+session-action-scroll = 捲動
+session-page-previous = 上一頁
+session-page-next = 下一頁
+session-hub-guide = Enter 開啟／展開 · p 置頂 · f 收藏 · Ctrl+R 重新整理
+session-directory-guide = Enter 展開／收合目錄
+session-search-guide = / 或 Ctrl+F 搜尋標題、工作階段 ID
+session-search-input-hints = ←→ 游標 · Tab 清單 · Alt+P 置頂 · Alt+F 收藏 · Esc 返回清單
+session-search-results-hints = ↑↓ 選擇 · ←→ / PgUp/Dn 翻頁 · / 搜尋 · Enter 開啟 · Esc 返回
+session-page-status = 第 { $page }/{ $pages }{ $more } 頁 · 已載入 { $count } 個工作階段
+session-bucket-page = 第 { $page } 頁
+session-search-compact-hints = ↑↓ · ←→ 翻頁 · Enter 開啟 · Esc 返回

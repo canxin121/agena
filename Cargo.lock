@@ -1446,6 +1446,8 @@ dependencies = [
  "agena-tui",
  "agena-tui-components",
  "crossterm",
+ "ratatui",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

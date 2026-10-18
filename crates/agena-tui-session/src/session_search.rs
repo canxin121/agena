@@ -5,14 +5,11 @@
 //! response/error handling at that application boundary.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
-use agena_tui_components::{
-    Editor, SearchPicker, SearchPickerDialogSpec, SearchPickerItem, SearchPickerNoCustom,
-    render_search_picker_dialog,
-};
-use ratatui::{Frame, layout::Rect};
-
-use agena_tui::{i18n::I18n, sanitize_picker_text};
+use agena_tui_components::{Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom};
+mod render;
+pub use render::render_overlay;
 
 use crate::session_view::SessionViewMode;
 
@@ -22,14 +19,16 @@ pub struct SessionSearchItem {
     pub session_id: i64,
     pub title: String,
     pub favorite: bool,
+    pub pinned: bool,
+    pub summary: String,
     pub label: String,
     pub detail: String,
 }
 
 impl SessionSearchItem {
     pub fn matches_query(&self, query: &str) -> bool {
-        let query = query.to_ascii_lowercase();
-        self.title.to_ascii_lowercase().contains(query.as_str())
+        let query = query.to_lowercase();
+        self.title.to_lowercase().contains(query.as_str())
             || self.session_id.to_string().contains(query.as_str())
     }
 }
@@ -40,11 +39,12 @@ impl SearchPickerItem for SessionSearchItem {
     }
 
     fn search_picker_label(&self) -> Cow<'_, str> {
-        if self.favorite {
-            Cow::Owned(format!("★ {}", self.label))
-        } else {
-            Cow::Borrowed(&self.label)
-        }
+        Cow::Owned(format!(
+            "{}{}{}",
+            if self.pinned { "◆ " } else { "" },
+            if self.favorite { "★ " } else { "" },
+            self.label
+        ))
     }
 
     fn search_picker_detail(&self) -> Option<Cow<'_, str>> {
@@ -77,6 +77,11 @@ pub struct SessionSearchPresentation {
     pub page_index: usize,
     pub next_cursor: Option<String>,
     pub has_more: bool,
+    /// Unique App request id, including re-opened dialogs and repeated queries.
+    pub request_id: u64,
+    /// Only advance after an append if the user has not moved elsewhere.
+    pub advance_after_load: Option<(i64, usize)>,
+    marks: BTreeMap<i64, (Option<bool>, Option<bool>)>,
 }
 
 impl SessionSearchPresentation {
@@ -88,6 +93,9 @@ impl SessionSearchPresentation {
             page_index: 0,
             next_cursor: None,
             has_more: false,
+            request_id: 0,
+            advance_after_load: None,
+            marks: BTreeMap::new(),
         }
     }
 
@@ -96,6 +104,7 @@ impl SessionSearchPresentation {
         self.page_index = 0;
         self.next_cursor = None;
         self.has_more = false;
+        self.advance_after_load = None;
         SessionSearchEffect::LoadPage {
             page_index: 0,
             cursor: None,
@@ -121,6 +130,43 @@ impl SessionSearchPresentation {
         self.has_more = has_more;
     }
 
+    pub fn remember_marks(
+        &mut self,
+        session_id: i64,
+        pinned: Option<bool>,
+        favorite: Option<bool>,
+    ) {
+        let entry = self.marks.entry(session_id).or_default();
+        if pinned.is_some() {
+            entry.0 = pinned;
+        }
+        if favorite.is_some() {
+            entry.1 = favorite;
+        }
+        for item in &mut self.all_items {
+            if item.session_id == session_id {
+                if let Some(value) = pinned {
+                    item.pinned = value;
+                }
+                if let Some(value) = favorite {
+                    item.favorite = value;
+                }
+            }
+        }
+    }
+
+    /// A list request may have started before a successful mark mutation.
+    pub fn apply_marks(&self, item: &mut SessionSearchItem) {
+        if let Some((pinned, favorite)) = self.marks.get(&item.session_id) {
+            if let Some(value) = pinned {
+                item.pinned = *value;
+            }
+            if let Some(value) = favorite {
+                item.favorite = *value;
+            }
+        }
+    }
+
     /// Restore the prior page after a failed append request.
     pub fn reject_page(&mut self, page_index: usize) {
         if page_index > 0 && self.page_index == page_index {
@@ -131,22 +177,6 @@ impl SessionSearchPresentation {
 
 pub type SessionSearchOverlay =
     SearchPicker<SessionSearchItem, SearchPickerNoCustom, SessionSearchPresentation, Editor>;
-
-/// Renders session search from its TUI-owned pagination and picker state. The
-/// App executes the emitted Runtime query/navigation effects only.
-pub fn render_overlay(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    dialog: &SessionSearchOverlay,
-    i18n: &I18n,
-) {
-    let spec = SearchPickerDialogSpec::new(
-        i18n.text("overlay-picker-loading").into(),
-        i18n.text("overlay-attach-matches").into(),
-    )
-    .with_text(i18n);
-    render_search_picker_dialog(frame, area, dialog, &spec, sanitize_picker_text);
-}
 
 #[cfg(test)]
 mod tests {

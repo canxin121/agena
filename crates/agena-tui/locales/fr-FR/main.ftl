@@ -2979,3 +2979,34 @@ error-part-stopped = Reprise automatique arrêtée
 error-part-seconds = { $count } s
 error-part-minutes = { $minutes } min { $seconds } s
 error-part-hours = { $hours } h { $minutes } min
+
+# Settings page navigation and search
+settings-search-placeholder = Rechercher un réglage…
+settings-search-empty = Aucun réglage correspondant
+settings-search-empty-hint = Essayez un autre nom ou chemin de configuration. Échap efface la recherche.
+settings-key-results = Résultats
+settings-key-clear = Effacer
+settings-key-sections = Rubriques
+settings-key-items = Réglages
+settings-key-open = Ouvrir
+settings-key-search = Chercher
+settings-key-details = Détails
+settings-key-refresh = Actualiser
+settings-key-back = Retour
+settings-details-footer = ↑/↓ défiler · PgUp/PgDn page · Esc retour
+
+## Compact session browsing
+session-action-pin = épingler
+session-action-unpin = désépingler
+session-action-page = page
+session-action-scroll = défiler
+session-page-previous = précédente
+session-page-next = suivante
+session-hub-guide = Enter ouvrir/déplier · p épingler · f favori · Ctrl+R actualiser
+session-directory-guide = Enter déplier/replier le dossier
+session-search-guide = / ou Ctrl+F : rechercher un titre ou ID
+session-search-input-hints = ←→ curseur · Tab liste · Alt+P épingler · Alt+F favori · Esc liste
+session-search-results-hints = ↑↓ choisir · ←→ / PgUp/Dn page · / chercher · Enter ouvrir · Esc retour
+session-page-status = Page { $page }/{ $pages }{ $more } · { $count } chargées
+session-bucket-page = page { $page }
+session-search-compact-hints = ↑↓ · ←→ page · Enter ouvrir · Esc

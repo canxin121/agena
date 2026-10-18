@@ -683,11 +683,12 @@ where
         }
     }
 
-    fn set_visible_page_size(&self, page_size: usize) {
+    /// Let a feature-specific renderer use its actual number of visible rows.
+    pub fn set_visible_page_size(&self, page_size: usize) {
         self.visible_page_size.set(page_size.max(1));
     }
 
-    fn visible_page_bounds(&self) -> (usize, usize) {
+    pub fn visible_page_bounds(&self) -> (usize, usize) {
         let start = self.current_page().saturating_mul(self.page_size());
         (start, (start + self.page_size()).min(self.row_count()))
     }
@@ -707,14 +708,13 @@ where
 
     pub fn move_selection_home(&mut self) {
         self.focus = SearchPickerFocus::Results;
-        self.selected = 0;
-        self.preview_scroll = 0;
+        self.move_selection(-(self.selected as isize));
     }
 
     pub fn move_selection_end(&mut self) {
         self.focus = SearchPickerFocus::Results;
-        self.selected = self.row_count().saturating_sub(1);
-        self.preview_scroll = 0;
+        let target = self.row_count().saturating_sub(1);
+        self.move_selection(target as isize - self.selected as isize);
     }
 
     pub fn fill_input_from_selected(&mut self) -> bool {

@@ -78,7 +78,7 @@ async fn hub_catalog_groups_all_directories_and_has_independent_pins() {
         })
         .unwrap();
     state.presentation.select_row(directory);
-    app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let Route::Hub(state) = &app.current_route else {
         panic!()
     };

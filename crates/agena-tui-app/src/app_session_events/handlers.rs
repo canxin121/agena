@@ -186,6 +186,7 @@ impl App {
 
     pub(crate) fn handle_session_search_page_loaded(
         &mut self,
+        request_id: u64,
         mode: SessionViewMode,
         query: String,
         page_index: usize,
@@ -194,7 +195,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.meta.mode != mode
+        if dialog.meta.request_id != request_id
+            || dialog.meta.mode != mode
             || dialog.meta.page_index != page_index
             || dialog.input.text().trim() != query
         {
@@ -212,15 +214,38 @@ impl App {
                         .then_with(|| right.updated_at.cmp(&left.updated_at))
                         .then_with(|| right.id.cmp(&left.id))
                 });
+                dialog.clear_error();
                 let items = page
                     .items
                     .into_iter()
-                    .map(|session| self.session_search_item(session))
+                    .map(|session| {
+                        let mut item = self.session_search_item(session);
+                        dialog.meta.apply_marks(&mut item);
+                        item
+                    })
                     .collect::<Vec<_>>();
                 if page_index == 0 {
                     dialog.replace_items(items);
                 } else {
-                    dialog.append_items(items);
+                    let existing = dialog
+                        .items
+                        .iter()
+                        .map(|item| item.session_id)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    dialog.append_items(
+                        items
+                            .into_iter()
+                            .filter(|item| !existing.contains(&item.session_id))
+                            .collect(),
+                    );
+                }
+                if let Some((anchor, target)) = dialog.meta.advance_after_load.take()
+                    && dialog
+                        .selected_item()
+                        .is_some_and(|item| item.session_id == anchor)
+                    && dialog.focus == agena_tui_components::SearchPickerFocus::Results
+                {
+                    dialog.move_selection(target as isize - dialog.selected as isize);
                 }
                 dialog
                     .meta
@@ -229,6 +254,8 @@ impl App {
             }
             Err(error) => {
                 dialog.meta.reject_page(page_index);
+                dialog.meta.advance_after_load = None;
+                dialog.set_error(error.to_string(), page_index > 0);
                 self.flash_error(error);
             }
         }
@@ -237,6 +264,7 @@ impl App {
 
     pub(crate) fn handle_session_search_subtree_loaded(
         &mut self,
+        request_id: u64,
         session_id: i64,
         query: String,
         result: UiResult<Vec<SessionResource>>,
@@ -244,7 +272,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.meta.mode != SessionViewMode::Subtree
+        if dialog.meta.request_id != request_id
+            || dialog.meta.mode != SessionViewMode::Subtree
             || dialog.meta.scope_session_id != Some(session_id)
             || dialog.input.text().trim() != query
         {
@@ -264,11 +293,18 @@ impl App {
                 });
                 dialog.meta.all_items = sessions
                     .into_iter()
-                    .map(|session| self.session_search_item(session))
+                    .map(|session| {
+                        let mut item = self.session_search_item(session);
+                        dialog.meta.apply_marks(&mut item);
+                        item
+                    })
                     .collect();
                 self.refresh_session_search_overlay_local(&mut dialog);
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                dialog.set_error(error.to_string(), false);
+                self.flash_error(error);
+            }
         }
         self.restore_session_search_dialog(host, dialog);
     }

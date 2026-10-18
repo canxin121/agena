@@ -744,12 +744,14 @@ pub(super) enum AppMessage {
         result: UiResult<Vec<ProviderSummaryResource>>,
     },
     SessionSearchPageLoaded {
+        request_id: u64,
         mode: SessionViewMode,
         query: String,
         page_index: usize,
         result: UiResult<PaginatedResponse<SessionResource>>,
     },
     SessionSearchSubtreeLoaded {
+        request_id: u64,
         session_id: i64,
         query: String,
         result: UiResult<Vec<SessionResource>>,
@@ -1029,6 +1031,7 @@ pub(super) enum Route {
 pub(super) struct HubState {
     pub(super) dirty: bool,
     pub(super) pages: BTreeMap<agena_tui_session::session_hub::HubPageTarget, usize>,
+    pub(super) pending_page: Option<(agena_tui_session::session_hub::HubPageTarget, bool)>,
     pub(super) search_changed_at: Option<Instant>,
     pub(super) request_task: Option<tokio::task::AbortHandle>,
     pub(super) presentation: SessionHubPresentation,
@@ -1051,6 +1054,7 @@ impl HubState {
             dirty: false,
             presentation: SessionHubPresentation::empty(),
             pages: BTreeMap::new(),
+            pending_page: None,
             search_changed_at: None,
             request_task: None,
             loading: true,

@@ -4,16 +4,15 @@
 //! expansion, filtering, selection and independent directory/quick-access
 //! viewports; requests and durable session operations remain in the App.
 
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use agena_tui::i18n::I18n;
 use agena_tui_components::theme::{accent_color, danger_color, muted_style, selection_style};
-use agena_tui_components::{ShortcutHint, build_accented_two_line_list_item, build_shortcut_line};
+use agena_tui_components::{ShortcutHint, build_shortcut_line};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph},
@@ -32,7 +31,9 @@ pub struct SessionHubItem {
     /// First line of the row; the renderer never invents text, so the App
     /// pre-localizes it.
     pub label: String,
-    /// Second, muted line of the row (state, message count, recency, ...).
+    /// Compact status and recency shown beside the title.
+    pub summary: String,
+    /// Full metadata of the selected session.
     pub detail: String,
     /// True for the synthetic "new session" action row the App places at the
     /// very top of the hub. Entering on it creates a fresh session instead of
@@ -162,10 +163,7 @@ impl HubRow {
     }
 
     fn height(&self) -> u16 {
-        match self {
-            Self::Item(_) | Self::Directory { .. } => 2,
-            _ => 1,
-        }
+        1
     }
 }
 
@@ -201,6 +199,8 @@ pub struct SessionHubPresentation {
     pagination: BTreeMap<HubPageTarget, HubPagination>,
     directory_offset: Cell<usize>,
     quick_offset: Cell<usize>,
+    directory_height: Cell<usize>,
+    quick_height: Cell<usize>,
 }
 
 impl SessionHubPresentation {
@@ -216,6 +216,8 @@ impl SessionHubPresentation {
             pagination: BTreeMap::new(),
             directory_offset: Cell::new(0),
             quick_offset: Cell::new(0),
+            directory_height: Cell::new(10),
+            quick_height: Cell::new(10),
         }
     }
 
@@ -281,6 +283,73 @@ impl SessionHubPresentation {
 
     pub fn selected_row(&self) -> Option<&HubRow> {
         self.rows.get(self.selection)
+    }
+
+    /// The backend page containing a row. Directory headings page workspaces;
+    /// their children page sessions, and quick-access rows page their own bucket.
+    fn row_page_target(&self, index: usize) -> HubPageTarget {
+        match self.rows.get(index) {
+            Some(HubRow::Page { target, .. }) => return *target,
+            Some(HubRow::Directory { .. }) => return HubPageTarget::Workspaces,
+            _ => {}
+        }
+        for row in self.rows[..index.min(self.rows.len())].iter().rev() {
+            match row {
+                HubRow::Header(kind) => return HubPageTarget::Section(*kind),
+                HubRow::Directory { workspace_id, .. } => {
+                    return HubPageTarget::Directory(*workspace_id);
+                }
+                _ => {}
+            }
+        }
+        HubPageTarget::Workspaces
+    }
+
+    pub fn selected_page_target(&self) -> HubPageTarget {
+        self.row_page_target(self.selection)
+    }
+
+    pub fn page_request(&self, forward: bool) -> Option<(HubPageTarget, usize)> {
+        let target = self.selected_page_target();
+        let page = self.pagination.get(&target)?;
+        if forward {
+            page.has_more
+                .then_some((target, page.page.saturating_add(1)))
+        } else {
+            page.page.checked_sub(1).map(|page| (target, page))
+        }
+    }
+
+    /// After a remote page arrives, focus its first/last session instead of
+    /// falling back to the new-session action or another duplicate bucket.
+    pub fn select_page_target(&mut self, target: HubPageTarget, last: bool) {
+        let indices = self
+            .item_indices()
+            .into_iter()
+            .filter(|&index| {
+                self.row_page_target(index) == target
+                    && match &self.rows[index] {
+                        HubRow::Item(item) => !item.is_new_session,
+                        HubRow::Directory { .. } => true,
+                        _ => false,
+                    }
+            })
+            .collect::<Vec<_>>();
+        if let Some(index) = if last {
+            indices.last()
+        } else {
+            indices.first()
+        } {
+            self.selection = *index;
+        }
+    }
+
+    pub fn viewport_page_size(&self) -> usize {
+        if self.same_region(self.selection, 0) {
+            self.directory_height.get().max(1)
+        } else {
+            self.quick_height.get().max(1)
+        }
     }
 
     pub fn selected_workspace(&self) -> Option<i64> {
@@ -558,6 +627,7 @@ impl SessionHubPresentation {
     fn rebuild_rows(&mut self) {
         let previous = self.selected_row().and_then(HubRow::identity);
         let previous_selection = self.selection;
+        let previous_target = self.selected_page_target();
         let filtered = self
             .sections
             .iter()
@@ -679,10 +749,20 @@ impl SessionHubPresentation {
                 self.rows
                     .iter()
                     .enumerate()
-                    .filter_map(|(index, row)| (row.identity() == Some(previous)).then_some(index))
+                    .filter_map(|(index, row)| {
+                        (row.identity() == Some(previous)
+                            && self.row_page_target(index) == previous_target)
+                            .then_some(index)
+                    })
                     .min_by_key(|index| {
                         (*index as isize - previous_selection as isize).unsigned_abs()
                     })
+            })
+            .or_else(|| {
+                self.item_indices()
+                    .into_iter()
+                    .filter(|&index| self.row_page_target(index) == previous_target)
+                    .min_by_key(|&index| index.abs_diff(previous_selection))
             })
             .unwrap_or(0);
         self.clamp_selection();
@@ -771,122 +851,118 @@ pub fn render_session_hub(
     query: &str,
     i18n: &I18n,
 ) {
+    use agena_tui_components::pointer::{self, PointerAction};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    pointer::begin_surface();
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", i18n.text("hub-title")));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let action_area = rows[0];
-    let search_area = rows[1];
-    let mut content_area = rows[2];
-    let footer_area = rows[3];
-
-    let action = if search_active {
-        build_shortcut_line([ShortcutHint::new(
-            "Esc",
-            i18n.text("hub-action-clear-search"),
-        )])
-    } else {
-        build_shortcut_line([
-            ShortcutHint::new("Ctrl+N", i18n.text("hub-action-create")),
-            ShortcutHint::new("/", i18n.text("hub-action-search")),
-            ShortcutHint::new("←/→", i18n.text("hub-action-directory")),
-            ShortcutHint::new("Ctrl+R", i18n.text("hub-action-refresh")),
-        ])
-    };
-    frame.render_widget(Paragraph::new(action), action_area);
-
-    let search_title = if search_active {
-        let prompt = if query.trim().is_empty() {
-            i18n.text("hub-search-active-empty")
+    let [actions, search, content, details, footer] = hub_layout(area, error.is_some());
+    let selected = presentation
+        .selected_item()
+        .filter(|item| !item.is_new_session);
+    let pin = format!(
+        "p {}",
+        i18n.text(if selected.is_some_and(|item| item.pinned) {
+            "session-action-unpin"
         } else {
-            i18n.text_args("hub-search-active", &agena_tui::fl_args!("query" => query))
-        };
-        Line::from(Span::styled(prompt, accent_color()))
-    } else {
+            "session-action-pin"
+        })
+    );
+    let favorite = format!(
+        "f {}",
+        i18n.text(if selected.is_some_and(|item| item.favorite) {
+            "hub-action-unfavorite"
+        } else {
+            "hub-action-favorite"
+        })
+    );
+    let create = format!("^N {}", i18n.text("hub-action-create"));
+    let find = format!("/ {}", i18n.text("hub-action-search"));
+    let ctrl = |c| PointerAction::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    let alt = |c| PointerAction::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
+    pointer::render_buttons(
+        frame,
+        actions,
+        &[
+            (&create, ctrl('n')),
+            (&find, ctrl('f')),
+            (&pin, alt('p')),
+            (&favorite, alt('f')),
+        ],
+    );
+
+    let mut search_line = if !query.is_empty() || search_active {
         Line::from(Span::styled(
-            i18n.text("hub-search-placeholder"),
-            muted_style(),
+            i18n.text_args(
+                "hub-search-active",
+                &agena_tui::fl_args!("query" => agena_tui::sanitize_picker_text(query)),
+            ),
+            accent_color(),
         ))
+    } else {
+        Line::from(Span::styled(i18n.text("session-hub-guide"), muted_style()))
     };
-    let mut search_title = search_title;
     if loading {
-        search_title.spans.push(Span::styled(
+        search_line.spans.push(Span::styled(
             format!("  … {}", i18n.text("overlay-picker-loading")),
             muted_style(),
         ));
     }
-    frame.render_widget(Paragraph::new(search_title), search_area);
-
+    frame.render_widget(Paragraph::new(search_line), search);
     if let Some(error) = error {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(1)])
-            .split(content_area);
-        let sanitized = agena_tui::sanitize_picker_text(error);
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                sanitized,
-                Style::default().fg(danger_color()),
-            ))),
-            rows[0],
+            Paragraph::new(agena_tui::sanitize_picker_text(error))
+                .style(Style::default().fg(danger_color())),
+            Rect::new(content.x, content.y.saturating_sub(1), content.width, 1),
         );
-        content_area = rows[1];
     }
-
     if presentation.rows().is_empty() {
-        let message = if loading {
-            i18n.text("overlay-picker-loading")
-        } else {
-            i18n.text("hub-empty")
-        };
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(message, muted_style()))),
-            content_area,
+            Paragraph::new(i18n.text(if loading {
+                "overlay-picker-loading"
+            } else {
+                "hub-empty"
+            }))
+            .style(muted_style()),
+            content,
         );
     } else {
-        render_rows(frame, content_area, presentation, i18n);
+        render_rows(frame, content, presentation, i18n);
     }
-
-    let mut footer_hints = vec![
-        ShortcutHint::new("↑/↓", i18n.text("hub-hint-move")),
+    let (title, detail) = match presentation.selected_row() {
+        Some(HubRow::Item(item)) => (item.label.clone(), item.detail.clone()),
+        Some(HubRow::Directory { path, count, .. }) => (
+            path.clone(),
+            format!("{} · {count}", i18n.text("session-directory-guide")),
+        ),
+        _ => (String::new(), String::new()),
+    };
+    crate::session_chrome::render_details(frame, details, &title, &detail);
+    let hints = build_shortcut_line([
+        ShortcutHint::new("↑↓", i18n.text("hub-hint-move")),
+        ShortcutHint::new("←→", i18n.text("session-action-page")),
+        ShortcutHint::new("PgUp/Dn", i18n.text("session-action-scroll")),
         ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
-        ShortcutHint::new("Enter", i18n.text("hub-hint-open")),
-    ];
-    if let Some(selected) = presentation
-        .selected_item()
-        .filter(|item| !item.is_new_session)
-    {
-        footer_hints.push(ShortcutHint::new(
-            "f",
-            i18n.text(if selected.favorite {
-                "hub-action-unfavorite"
-            } else {
-                "hub-action-favorite"
-            }),
-        ));
-    }
-    if presentation
-        .selected_item()
-        .is_some_and(|item| !item.is_new_session)
-    {
-        footer_hints.push(ShortcutHint::new("p", i18n.text("hub-action-pin")));
-    }
-    footer_hints.push(ShortcutHint::new("Esc", i18n.text("hub-hint-back")));
-    frame.render_widget(
-        Paragraph::new(build_shortcut_line(footer_hints)),
-        footer_area,
-    );
+        ShortcutHint::new("Esc", i18n.text("hub-hint-back")),
+    ]);
+    frame.render_widget(Paragraph::new(hints), footer);
+}
+
+fn hub_layout(area: Rect, has_error: bool) -> [Rect; 5] {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let details_height = if inner.height >= 12 { 2 } else { 0 };
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(inner.height >= 8)),
+        Constraint::Length(u16::from(has_error)),
+        Constraint::Min(1),
+        Constraint::Length(details_height),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    [rows[0], rows[1], rows[3], rows[4], rows[5]]
 }
 
 /// Shared geometry for rendering and hit testing. Each area retains its own
@@ -901,7 +977,9 @@ fn hub_row_regions(
         .position(|row| matches!(row, HubRow::Header(_)))
         .unwrap_or(presentation.rows.len());
     let mut regions = Vec::new();
-    if area.height < 8 {
+    if area.height < 8 || split == 0 || split == presentation.rows.len() {
+        presentation.directory_height.set(usize::from(area.height));
+        presentation.quick_height.set(usize::from(area.height));
         visible_region(
             area,
             presentation,
@@ -911,11 +989,46 @@ fn hub_row_regions(
         );
         return (regions, None);
     }
-    let quick_height = (area.height / 3).max(4).min(area.height.saturating_sub(4));
-    let directory_height = area.height.saturating_sub(quick_height + 1);
-    let directories = Rect::new(area.x, area.y, area.width, directory_height);
-    let divider = Rect::new(area.x, area.y + directory_height, area.width, 1);
-    let quick = Rect::new(area.x, divider.y + 1, area.width, quick_height);
+    let (directories, divider, quick) = if area.width >= 108 {
+        let left_width = area.width / 2;
+        let right_x = area.x + left_width + 1;
+        let right_width = area.width.saturating_sub(left_width + 1);
+        (
+            Rect::new(area.x, area.y, left_width, area.height),
+            Rect::new(right_x, area.y, right_width, 1),
+            Rect::new(
+                right_x,
+                area.y + 1,
+                right_width,
+                area.height.saturating_sub(1),
+            ),
+        )
+    } else {
+        // Give unused rows back to the other region; a collapsed directory
+        // should not leave two thirds of a small terminal empty.
+        let available = area.height.saturating_sub(1);
+        let quick_rows = presentation.rows.len().saturating_sub(split) as u16;
+        let directory_rows = u16::try_from(split).unwrap_or(u16::MAX);
+        let quick_height = quick_rows
+            .min((available / 2).max(3))
+            .max(available.saturating_sub(directory_rows))
+            .min(available.saturating_sub(2));
+        let directory_height = available.saturating_sub(quick_height);
+        (
+            Rect::new(area.x, area.y, area.width, directory_height),
+            Rect::new(area.x, area.y + directory_height, area.width, 1),
+            Rect::new(
+                area.x,
+                area.y + directory_height + 1,
+                area.width,
+                quick_height,
+            ),
+        )
+    };
+    presentation
+        .directory_height
+        .set(usize::from(directories.height));
+    presentation.quick_height.set(usize::from(quick.height));
     visible_region(
         directories,
         presentation,
@@ -981,19 +1094,7 @@ pub fn hub_hit_test(
     row: u16,
     i18n: &I18n,
 ) -> Option<HubHit> {
-    let inner = Block::default().borders(Borders::ALL).inner(area);
-    let layout = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    let mut content = layout[2];
-    if has_error {
-        content.y += 1;
-        content.height = content.height.saturating_sub(1);
-    }
+    let content = hub_layout(area, has_error)[2];
     let (regions, divider) = hub_row_regions(content, presentation);
     if let Some(divider) = divider
         && divider.contains((column, row).into())
@@ -1007,6 +1108,9 @@ pub fn hub_hit_test(
             // Width comes from the same terminal-aware text primitive used
             // by the renderer, including double-width directory languages.
             let width = Line::from(quick_bucket_label(section, i18n)).width();
+            if x + width > usize::from(divider.right()) {
+                break;
+            }
             if usize::from(column) >= x && usize::from(column) < x + width {
                 return presentation
                     .rows
@@ -1045,6 +1149,14 @@ fn render_rows(
 ) {
     let (regions, divider) = hub_row_regions(area, presentation);
     if let Some(divider) = divider {
+        if divider.x > area.x {
+            for y in area.y..area.bottom() {
+                frame.render_widget(
+                    Paragraph::new("│").style(muted_style()),
+                    Rect::new(divider.x - 1, y, 1, 1),
+                );
+            }
+        }
         let buckets = presentation
             .sections
             .iter()
@@ -1074,26 +1186,46 @@ fn render_rows(
         };
         let item = match row {
             HubRow::Header(kind) => ListItem::new(Line::from(Span::styled(
-                format!(" {} ", i18n.text(kind.localization_key())),
+                {
+                    let page = presentation.pagination.get(&HubPageTarget::Section(*kind));
+                    let count = page.and_then(|p| p.total).unwrap_or_else(|| {
+                        presentation
+                            .sections
+                            .iter()
+                            .find(|section| section.kind == *kind)
+                            .map_or(0, |section| section.items.len())
+                    });
+                    let suffix = page
+                        .map(|p| {
+                            format!(
+                                " · {}{}",
+                                agena_tui::sanitize_picker_text(&i18n.text_args(
+                                    "session-bucket-page",
+                                    &agena_tui::fl_args!("page" => (p.page + 1) as i64)
+                                )),
+                                if p.has_more { "+" } else { "" }
+                            )
+                        })
+                        .unwrap_or_default();
+                    format!(
+                        " {}  {}{}",
+                        i18n.text(kind.localization_key()),
+                        count,
+                        suffix
+                    )
+                },
                 Style::default()
                     .fg(accent_color())
                     .add_modifier(Modifier::BOLD),
             ))),
-            HubRow::Item(item) => build_accented_two_line_list_item(
-                Cow::Owned(format!(
-                    "{}{}{}{}",
-                    indent,
-                    if item.pinned { "◆ " } else { "" },
-                    if item.favorite { "★ " } else { "" },
-                    agena_tui::sanitize_picker_text(&item.label)
-                )),
-                None,
-                Some(Cow::Owned(format!(
-                    "{}{}",
-                    indent,
-                    agena_tui::sanitize_picker_text(&item.detail)
-                ))),
-            ),
+            HubRow::Item(item) => ListItem::new(crate::session_chrome::session_line(
+                area.width.saturating_sub(2),
+                &item.label,
+                &item.summary,
+                item.pinned,
+                item.favorite,
+                !indent.is_empty(),
+            )),
             HubRow::Directory {
                 path,
                 expanded,
@@ -1105,29 +1237,32 @@ fn render_rows(
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or(&path);
-                build_accented_two_line_list_item(
-                    Cow::Owned(format!(
-                        "{} {} ({})",
-                        if *expanded { "▾" } else { "▸" },
-                        name,
-                        count
-                    )),
-                    None,
-                    Some(Cow::Owned(path)),
-                )
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{} {}", if *expanded { "▾" } else { "▸" }, name),
+                        Style::default()
+                            .fg(accent_color())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("  {count}"), muted_style()),
+                ]))
             }
-            HubRow::Page { page, forward, .. } => ListItem::new(i18n.text_args(
-                if *forward {
-                    "hub-page-next"
-                } else {
-                    "hub-page-previous"
-                },
-                &agena_tui::fl_args!("page" => (*page + 1) as i64),
-            )),
-            HubRow::More { remaining, .. } => ListItem::new(i18n.text_args(
-                "hub-directory-more",
-                &agena_tui::fl_args!("count" => *remaining as i64),
-            )),
+            HubRow::Page { page, forward, .. } => {
+                ListItem::new(agena_tui::sanitize_picker_text(&i18n.text_args(
+                    if *forward {
+                        "hub-page-next"
+                    } else {
+                        "hub-page-previous"
+                    },
+                    &agena_tui::fl_args!("page" => (*page + 1) as i64),
+                )))
+            }
+            HubRow::More { remaining, .. } => {
+                ListItem::new(agena_tui::sanitize_picker_text(&i18n.text_args(
+                    "hub-directory-more",
+                    &agena_tui::fl_args!("count" => *remaining as i64),
+                )))
+            }
         };
         let list = List::new([item])
             .highlight_style(selection_style())
@@ -1155,6 +1290,7 @@ mod tests {
             title: format!("session {id}"),
             favorite: false,
             label: format!("session {id}"),
+            summary: "Ready · 10-18 12:00".to_string(),
             detail: "detail".to_string(),
             is_new_session: false,
         }
@@ -1168,6 +1304,7 @@ mod tests {
             title: String::new(),
             favorite: false,
             label: "new session".to_string(),
+            summary: String::new(),
             detail: String::new(),
             is_new_session: true,
         }
@@ -1326,7 +1463,7 @@ mod tests {
                 assert!(text.contains("session 900"));
             }
             if width == 120 {
-                let content = Rect::new(1, 3, width - 2, height - 5);
+                let content = super::hub_layout(area, false)[2];
                 let (before, divider) = super::hub_row_regions(content, &state);
                 let divider = divider.unwrap();
                 let pin_hit = super::hub_hit_test(
@@ -1476,7 +1613,7 @@ mod tests {
                     super::render_session_hub(frame, area, &state, false, None, false, "", &i18n)
                 })
                 .unwrap();
-            let regions = super::hub_row_regions(Rect::new(1, 3, 98, 25), &state).0;
+            let regions = super::hub_row_regions(super::hub_layout(area, false)[2], &state).0;
             let (_, rect) = regions
                 .iter()
                 .find(|(row, _)| *row == index)

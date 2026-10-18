@@ -109,7 +109,9 @@ impl App {
         query: String,
         page_index: usize,
         cursor: Option<String>,
-    ) {
+    ) -> u64 {
+        self.next_usage_request_id = self.next_usage_request_id.saturating_add(1);
+        let request_id = self.next_usage_request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -125,6 +127,7 @@ impl App {
             .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionSearchPageLoaded {
+                    request_id,
                     mode,
                     query,
                     page_index,
@@ -132,9 +135,12 @@ impl App {
                 })
                 .await;
         });
+        request_id
     }
 
-    pub(crate) fn request_session_search_subtree(&mut self, session_id: i64, query: String) {
+    pub(crate) fn request_session_search_subtree(&mut self, session_id: i64, query: String) -> u64 {
+        self.next_usage_request_id = self.next_usage_request_id.saturating_add(1);
+        let request_id = self.next_usage_request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -144,12 +150,14 @@ impl App {
                 .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionSearchSubtreeLoaded {
+                    request_id,
                     session_id,
                     query,
                     result,
                 })
                 .await;
         });
+        request_id
     }
 
     pub(crate) fn request_lineage(&mut self, session_id: i64) {

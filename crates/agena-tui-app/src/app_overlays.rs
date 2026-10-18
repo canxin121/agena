@@ -22,30 +22,107 @@ impl App {
         key: KeyEvent,
         dialog: &mut SessionSearchOverlay,
     ) -> bool {
-        match resolve_tui_key(KeyContext::SessionSearch, key) {
+        use agena_tui_components::{SearchPickerFocus, SearchPickerPhase};
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let results = dialog.focus == SearchPickerFocus::Results;
+        let action = resolve_tui_key(KeyContext::SessionSearch, key);
+        let ready = !matches!(
+            dialog.phase,
+            SearchPickerPhase::Searching { .. }
+                | SearchPickerPhase::Error {
+                    keep_results: false
+                }
+        );
+        match action {
             Some(KeyAction::Open) => {
-                let Some(session) = dialog.selected_item().cloned() else {
-                    return false;
+                if ready && let Some(session) = dialog.selected_item().cloned() {
+                    self.open_session(session.session_id, session.title);
+                    self.focus = Focus::Composer;
+                    return true;
+                }
+            }
+            Some(KeyAction::HubTogglePinned | KeyAction::ToggleFavorite)
+                if results || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if ready && let Some(session) = dialog.selected_item() {
+                    if action == Some(KeyAction::HubTogglePinned) {
+                        self.request_session_pin(session.session_id, !session.pinned);
+                    } else {
+                        self.request_session_favorite(session.session_id, !session.favorite);
+                    }
+                }
+            }
+            Some(KeyAction::SearchForward)
+                if results || key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                dialog.focus = SearchPickerFocus::Input;
+                dialog.meta.advance_after_load = None;
+            }
+            Some(KeyAction::NextTab) => {
+                dialog.focus = if results {
+                    SearchPickerFocus::Input
+                } else {
+                    SearchPickerFocus::Results
                 };
-                self.open_session(session.session_id, session.title);
-                self.focus = Focus::Composer;
-                true
+                dialog.meta.advance_after_load = None;
+            }
+            Some(KeyAction::PageUp | KeyAction::PageDown) => {
+                dialog.focus = SearchPickerFocus::Results;
+                self.page_session_search(dialog, action == Some(KeyAction::PageDown));
+            }
+            Some(KeyAction::Home | KeyAction::End) if results => {
+                dialog.meta.advance_after_load = None;
+                if action == Some(KeyAction::Home) {
+                    dialog.move_selection_home();
+                } else {
+                    dialog.move_selection_end();
+                }
+            }
+            Some(KeyAction::Refresh) => {
+                if !dialog.is_loading() {
+                    if dialog.meta.has_more && dialog.error_message.is_some() {
+                        let target = dialog.selected.saturating_add(dialog.page_size());
+                        self.request_more_session_search_results(dialog, target);
+                    } else {
+                        self.reset_session_search_query(
+                            dialog,
+                            dialog.input.text().trim().to_string(),
+                        );
+                    }
+                }
+            }
+            _ if results
+                && key.modifiers.is_empty()
+                && matches!(key.code, KeyCode::Left | KeyCode::Right) =>
+            {
+                self.page_session_search(dialog, key.code == KeyCode::Right);
+            }
+            _ if !results && key.code == KeyCode::Esc && key.modifiers.is_empty() => {
+                dialog.focus = SearchPickerFocus::Results;
+                dialog.meta.advance_after_load = None;
             }
             _ => {
+                if results
+                    && key.code == KeyCode::Down
+                    && dialog.is_loading()
+                    && dialog.selected.saturating_add(1) >= dialog.items.len()
+                {
+                    return false;
+                }
                 let selected_before = dialog.selected;
+                dialog.meta.advance_after_load = None;
                 match dialog.handle_input_key(key) {
-                    SearchPickerInputResult::Close => true,
+                    SearchPickerInputResult::Close => return true,
                     SearchPickerInputResult::Navigated => {
-                        let stayed_at_boundary = dialog.selected == selected_before;
-                        if stayed_at_boundary
-                            && matches!(
-                                key.code,
-                                crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Right
-                            )
+                        if results
+                            && dialog.selected == selected_before
+                            && key.code == KeyCode::Down
                         {
-                            self.request_more_session_search_results(dialog);
+                            self.request_more_session_search_results(
+                                dialog,
+                                selected_before.saturating_add(1),
+                            );
                         }
-                        false
                     }
                     SearchPickerInputResult::Edited { changed } => {
                         if changed {
@@ -54,18 +131,35 @@ impl App {
                                 dialog.input.text().trim().to_string(),
                             );
                         }
-                        false
                     }
                 }
             }
         }
+        false
     }
 
-    fn request_more_session_search_results(&mut self, dialog: &mut SessionSearchOverlay) {
-        if dialog.is_loading() || !dialog.meta.has_more {
+    fn page_session_search(&mut self, dialog: &mut SessionSearchOverlay, forward: bool) {
+        if forward && dialog.is_loading() && dialog.current_page() + 1 == dialog.page_count() {
             return;
         }
-        if dialog.meta.mode == SessionViewMode::Subtree {
+        dialog.meta.advance_after_load = None;
+        if forward && dialog.current_page() + 1 == dialog.page_count() {
+            let target = dialog.selected.saturating_add(dialog.page_size());
+            self.request_more_session_search_results(dialog, target);
+        } else {
+            dialog.move_selection_page(if forward { 1 } else { -1 });
+        }
+    }
+
+    fn request_more_session_search_results(
+        &mut self,
+        dialog: &mut SessionSearchOverlay,
+        target: usize,
+    ) {
+        if dialog.is_loading()
+            || !dialog.meta.has_more
+            || dialog.meta.mode == SessionViewMode::Subtree
+        {
             return;
         }
         let Some(SessionSearchEffect::LoadPage { page_index, cursor }) =
@@ -73,14 +167,33 @@ impl App {
         else {
             return;
         };
+        dialog.meta.advance_after_load =
+            dialog.selected_item().map(|item| (item.session_id, target));
+        dialog.clear_error();
         dialog.begin_append();
         dialog.footer = self.session_search_footer(dialog);
-        self.request_session_search_page(
+        dialog.meta.request_id = self.request_session_search_page(
             dialog.meta.mode,
             dialog.input.text().trim().to_string(),
             page_index,
             cursor,
         );
+    }
+
+    pub(crate) fn update_session_search_marks(
+        &mut self,
+        session_id: i64,
+        pinned: Option<bool>,
+        favorite: Option<bool>,
+    ) {
+        let Some((host, mut dialog)) = self.take_session_search_dialog() else {
+            return;
+        };
+        dialog.meta.remember_marks(session_id, pinned, favorite);
+        for item in &mut dialog.items {
+            dialog.meta.apply_marks(item);
+        }
+        self.restore_session_search_dialog(host, dialog);
     }
 
     pub(crate) fn reset_session_search_query(
@@ -90,16 +203,19 @@ impl App {
     ) {
         let _ = dialog.meta.reset_for_query();
         dialog.selected = 0;
+        dialog.replace_items(Vec::new());
+        dialog.clear_error();
         dialog.set_loading(true);
         dialog.footer = self.session_search_footer(dialog);
         match dialog.meta.mode {
             SessionViewMode::Subtree => {
                 if let Some(session_id) = dialog.meta.scope_session_id {
-                    self.request_session_search_subtree(session_id, query);
+                    dialog.meta.request_id = self.request_session_search_subtree(session_id, query);
                 }
             }
             SessionViewMode::All | SessionViewMode::Roots => {
-                self.request_session_search_page(dialog.meta.mode, query, 0, None);
+                dialog.meta.request_id =
+                    self.request_session_search_page(dialog.meta.mode, query, 0, None);
             }
         }
     }

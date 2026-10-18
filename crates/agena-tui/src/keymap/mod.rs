@@ -1047,11 +1047,42 @@ mod tests {
     }
 
     #[test]
+    fn session_browser_marks_have_focus_independent_alternatives() {
+        for (character, action) in [
+            ('p', KeyAction::HubTogglePinned),
+            ('f', KeyAction::ToggleFavorite),
+        ] {
+            for context in [KeyContext::SessionSearch, KeyContext::Hub] {
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::ALT)),
+                    Some(action)
+                );
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
+                    Some(action)
+                );
+            }
+        }
+        for byte in b' '..=b'~' {
+            let character = char::from(byte);
+            if matches!(character, 'p' | 'f' | '/') {
+                continue;
+            }
+            assert_eq!(
+                resolve(
+                    KeyContext::SessionSearch,
+                    key(KeyCode::Char(character), KeyModifiers::NONE)
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn searchable_pages_leave_printable_characters_for_the_editor() {
         for context in [
             KeyContext::Choice,
             KeyContext::FileAttach,
-            KeyContext::SessionSearch,
             KeyContext::Picker,
             KeyContext::SessionModel,
             KeyContext::Timeline,

@@ -138,7 +138,7 @@ impl App {
                 }
             }
             Route::SessionSearch(dialog) => {
-                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
+                self.help_for(HelpPreset::SessionSearch, dialog.title.clone())
             }
             Route::CommandPalette(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
@@ -190,7 +190,7 @@ impl App {
             ),
             Overlay::Confirm(dialog) => self.help_for(HelpPreset::Confirm, dialog.title.clone()),
             Overlay::SessionSearch(dialog) => {
-                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
+                self.help_for(HelpPreset::SessionSearch, dialog.title.clone())
             }
             Overlay::Timeline(dialog) => self.help_for(HelpPreset::Timeline, dialog.title.clone()),
             Overlay::ProviderStudio(dialog) => self.help_for_provider(dialog),
@@ -806,6 +806,7 @@ mod tests {
             HelpPreset::SingleLineEditor,
             HelpPreset::MultiLineEditor,
             HelpPreset::SearchPicker,
+            HelpPreset::SessionSearch,
             HelpPreset::ChoiceList,
             HelpPreset::Timeline,
             HelpPreset::Permission,
@@ -1019,6 +1020,7 @@ mod tests {
             HelpPreset::PromptHistory,
             HelpPreset::Suggestion,
             HelpPreset::SearchPicker,
+            HelpPreset::SessionSearch,
             HelpPreset::ChoiceList,
             HelpPreset::Timeline,
             HelpPreset::PluginActions,
@@ -1056,6 +1058,7 @@ mod tests {
             HelpPreset::SingleLineEditor,
             HelpPreset::MultiLineEditor,
             HelpPreset::SearchPicker,
+            HelpPreset::SessionSearch,
             HelpPreset::ChoiceList,
             HelpPreset::Timeline,
             HelpPreset::Permission,

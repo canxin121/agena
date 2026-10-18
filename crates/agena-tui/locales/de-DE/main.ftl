@@ -3141,3 +3141,19 @@ settings-key-details = Details
 settings-key-refresh = Aktualisieren
 settings-key-back = Zurück
 settings-details-footer = ↑/↓ scrollen · PgUp/PgDn blättern · Esc zurück
+
+## Compact session browsing
+session-action-pin = anheften
+session-action-unpin = lösen
+session-action-page = Seite
+session-action-scroll = scrollen
+session-page-previous = zurück
+session-page-next = weiter
+session-hub-guide = Enter öffnen/ausklappen · p anheften · f Favorit · Ctrl+R laden
+session-directory-guide = Enter Verzeichnis auf-/zuklappen
+session-search-guide = / oder Ctrl+F: Titel oder ID suchen
+session-search-input-hints = ←→ Cursor · Tab Liste · Alt+P anheften · Alt+F Favorit · Esc Liste
+session-search-results-hints = ↑↓ Auswahl · ←→ / PgUp/Dn Seite · / Suche · Enter öffnen · Esc zurück
+session-page-status = Seite { $page }/{ $pages }{ $more } · { $count } geladen
+session-bucket-page = Seite { $page }
+session-search-compact-hints = ↑↓ · ←→ Seite · Enter öffnen · Esc

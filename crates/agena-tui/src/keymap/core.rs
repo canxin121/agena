@@ -145,6 +145,24 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::SessionSearch => match key.code {
             K::Enter if unmodified(key) => Some(A::Open),
+            K::Char('/') if unmodified(key) => Some(A::SearchForward),
+            K::Char('f') if only_ctrl(key) => Some(A::SearchForward),
+            K::Char('f')
+                if unmodified(key) || key.modifiers == crossterm::event::KeyModifiers::ALT =>
+            {
+                Some(A::ToggleFavorite)
+            }
+            K::Char('p')
+                if unmodified(key) || key.modifiers == crossterm::event::KeyModifiers::ALT =>
+            {
+                Some(A::HubTogglePinned)
+            }
+            K::PageUp if unmodified(key) => Some(A::PageUp),
+            K::PageDown if unmodified(key) => Some(A::PageDown),
+            K::Home if unmodified(key) => Some(A::Home),
+            K::End if unmodified(key) => Some(A::End),
+            K::Tab | K::BackTab if unmodified_or_shift(key) => Some(A::NextTab),
+            K::Char('r') if only_ctrl(key) => Some(A::Refresh),
             _ => None,
         },
         KeyContext::Hub => match key.code {
@@ -163,8 +181,17 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('n') if only_ctrl(key) => Some(A::HubCreateSession),
             K::Char('c') if unmodified(key) => Some(A::HubCreateSession),
             K::Char('l') if unmodified(key) => Some(A::HubOpenSessionList),
-            K::Char('f') if unmodified(key) => Some(A::ToggleFavorite),
-            K::Char('p') if unmodified(key) => Some(A::HubTogglePinned),
+            K::Char('f') if only_ctrl(key) => Some(A::SearchForward),
+            K::Char('f')
+                if unmodified(key) || key.modifiers == crossterm::event::KeyModifiers::ALT =>
+            {
+                Some(A::ToggleFavorite)
+            }
+            K::Char('p')
+                if unmodified(key) || key.modifiers == crossterm::event::KeyModifiers::ALT =>
+            {
+                Some(A::HubTogglePinned)
+            }
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
             _ => None,
         },

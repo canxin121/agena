@@ -28,6 +28,7 @@ pub enum ContextHelpPreset {
     SingleLineEditor,
     MultiLineEditor,
     SearchPicker,
+    SessionSearch,
     ChoiceList,
     Timeline,
     Permission,
@@ -289,6 +290,32 @@ pub fn preset_specs(
             )],
             tips,
         )),
+        SessionSearch => Some((
+            "context-help-summary-list",
+            vec![
+                (
+                    navigation,
+                    vec![
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("← / → · PgUp / PgDn", "context-help-key-page"),
+                        ("Home / End", "session-action-scroll"),
+                        ("/ · Ctrl+F", "hub-action-search"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
+                        ("Enter", "context-help-key-open"),
+                        ("Esc", "context-help-key-back"),
+                    ],
+                ),
+                (
+                    actions,
+                    vec![
+                        ("p / Alt+P", "hub-action-pin"),
+                        ("f / Alt+F", "context-help-key-toggle-favorite"),
+                        ("Ctrl+R", "context-help-key-refresh"),
+                    ],
+                ),
+            ],
+            tips,
+        )),
         SearchPicker => Some((
             "context-help-summary-search-picker",
             vec![(
@@ -535,7 +562,9 @@ pub fn preset_specs(
                     actions,
                     vec![
                         ("Ctrl+N / c", "context-help-key-create-session"),
-                        ("← / →", "hub-action-directory"),
+                        ("← / →", "session-action-page"),
+                        ("PgUp / PgDn", "session-action-scroll"),
+                        ("Enter", "session-directory-guide"),
                         ("p", "hub-action-pin"),
                         ("l", "context-help-key-session-list"),
                         ("f", "context-help-key-toggle-favorite"),

@@ -2626,3 +2626,19 @@ settings-key-details = 详情
 settings-key-refresh = 刷新
 settings-key-back = 返回
 settings-details-footer = ↑/↓ 滚动 · PgUp/PgDn 翻页 · Esc 返回
+
+## Compact session browsing
+session-action-pin = 置顶
+session-action-unpin = 取消置顶
+session-action-page = 翻页
+session-action-scroll = 滚动
+session-page-previous = 上一页
+session-page-next = 下一页
+session-hub-guide = Enter 打开／展开 · p 置顶 · f 收藏 · Ctrl+R 刷新
+session-directory-guide = Enter 展开／收起目录
+session-search-guide = / 或 Ctrl+F 搜索标题、会话 ID
+session-search-input-hints = ←→ 光标 · Tab 列表 · Alt+P 置顶 · Alt+F 收藏 · Esc 返回列表
+session-search-results-hints = ↑↓ 选择 · ←→ / PgUp/Dn 翻页 · / 搜索 · Enter 打开 · Esc 返回
+session-page-status = 第 { $page }/{ $pages }{ $more } 页 · 已载入 { $count } 个会话
+session-bucket-page = 第 { $page } 页
+session-search-compact-hints = ↑↓ · ←→ 翻页 · Enter 打开 · Esc 返回

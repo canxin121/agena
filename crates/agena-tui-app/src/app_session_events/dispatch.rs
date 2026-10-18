@@ -147,6 +147,7 @@ impl App {
             }
             AppMessage::SessionPinnedUpdated { session_id, result } => match result {
                 Ok(session) => {
+                    self.update_session_search_marks(session_id, Some(session.pinned), None);
                     if self.transcript.session_id == Some(session_id)
                         && let Some(execution) = self.transcript.execution.as_mut()
                     {
@@ -180,16 +181,20 @@ impl App {
                 self.handle_session_execution_updated(session_id, *execution, false);
             }
             AppMessage::SessionSearchPageLoaded {
+                request_id,
                 mode,
                 query,
                 page_index,
                 result,
-            } => self.handle_session_search_page_loaded(mode, query, page_index, result),
+            } => {
+                self.handle_session_search_page_loaded(request_id, mode, query, page_index, result)
+            }
             AppMessage::SessionSearchSubtreeLoaded {
+                request_id,
                 session_id,
                 query,
                 result,
-            } => self.handle_session_search_subtree_loaded(session_id, query, result),
+            } => self.handle_session_search_subtree_loaded(request_id, session_id, query, result),
             AppMessage::LineageLoaded { session_id, result } => {
                 self.handle_lineage_loaded(session_id, result)
             }
@@ -940,6 +945,7 @@ impl App {
     ) {
         match result {
             Ok(session) => {
+                self.update_session_search_marks(session_id, None, Some(session.favorite));
                 self.sessions
                     .replace_item(agena_tui_session::session_list::SessionListItem {
                         session_id: session.id,

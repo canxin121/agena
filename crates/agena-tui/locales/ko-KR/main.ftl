@@ -2991,3 +2991,19 @@ settings-key-details = 상세
 settings-key-refresh = 새로 고침
 settings-key-back = 뒤로
 settings-details-footer = ↑/↓ 스크롤 · PgUp/PgDn 페이지 · Esc 뒤로
+
+## Compact session browsing
+session-action-pin = 고정
+session-action-unpin = 고정 해제
+session-action-page = 페이지
+session-action-scroll = 스크롤
+session-page-previous = 이전
+session-page-next = 다음
+session-hub-guide = Enter 열기/펼치기 · p 고정 · f 즐겨찾기 · Ctrl+R 새로고침
+session-directory-guide = Enter 디렉터리 펼치기/접기
+session-search-guide = / 또는 Ctrl+F로 제목, ID 검색
+session-search-input-hints = ←→ 커서 · Tab 목록 · Alt+P 고정 · Alt+F 즐겨찾기 · Esc 목록
+session-search-results-hints = ↑↓ 선택 · ←→ / PgUp/Dn 페이지 · / 검색 · Enter 열기 · Esc 뒤로
+session-page-status = { $page }/{ $pages }{ $more } 페이지 · { $count }개 로드됨
+session-bucket-page = { $page } 페이지
+session-search-compact-hints = ↑↓ · ←→ 페이지 · Enter 열기 · Esc 뒤로

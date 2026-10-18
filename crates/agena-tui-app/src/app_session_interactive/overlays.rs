@@ -665,6 +665,7 @@ impl App {
         );
         dialog.set_loading(true);
         dialog.footer = self.session_search_footer(&dialog);
+        dialog.focus = agena_tui_components::SearchPickerFocus::Results;
         dialog
     }
 

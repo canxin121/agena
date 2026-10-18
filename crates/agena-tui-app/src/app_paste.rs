@@ -45,8 +45,20 @@ impl App {
             }
             return;
         }
-        let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
-            None;
+        if (matches!(self.overlay, Some(Overlay::SessionSearch(_)))
+            || (self.overlay.is_none() && matches!(self.current_route, Route::SessionSearch(_))))
+            && let Some((host, mut dialog)) = self.take_session_search_dialog()
+        {
+            let before = dialog.input.text().trim().to_string();
+            dialog.input.insert_str(&text);
+            dialog.focus = agena_tui_components::SearchPickerFocus::Input;
+            let query = dialog.input.text().trim().to_string();
+            if before != query {
+                self.reset_session_search_query(&mut dialog, query);
+            }
+            self.restore_session_search_dialog(host, dialog);
+            return;
+        }
         let mut pending_path_browser_refresh = None;
         if self.overlay.is_none() {
             // Pasting onto an expanded pending interaction part inserts the
@@ -76,19 +88,7 @@ impl App {
                         handled_route = true;
                     }
                 }
-                Route::SessionSearch(dialog) => {
-                    let before = dialog.input.text().trim().to_string();
-                    dialog.input.insert_str(text.as_str());
-                    let after = dialog.input.text().trim().to_string();
-                    if before != after {
-                        let _ = dialog.meta.reset_for_query();
-                        dialog.selected = 0;
-                        dialog.set_loading(true);
-                        pending_session_search_request =
-                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
-                    }
-                    handled_route = true;
-                }
+                Route::SessionSearch(_) => {}
                 Route::CommandPalette(dialog) => {
                     let _ = agena_tui::command_palette::reduce(
                         &mut dialog.presentation,
@@ -142,18 +142,6 @@ impl App {
                 }
             }
             if handled_route {
-                if let Some((mode, scope_session_id, query)) = pending_session_search_request {
-                    match mode {
-                        SessionViewMode::Subtree => {
-                            if let Some(session_id) = scope_session_id {
-                                self.request_session_search_subtree(session_id, query);
-                            }
-                        }
-                        SessionViewMode::All | SessionViewMode::Roots => {
-                            self.request_session_search_page(mode, query, 0, None);
-                        }
-                    }
-                }
                 return;
             }
         }
@@ -182,18 +170,7 @@ impl App {
                         .0,
                     );
                 }
-                Overlay::SessionSearch(dialog) => {
-                    let before = dialog.input.text().trim().to_string();
-                    dialog.input.insert_str(text.as_str());
-                    let after = dialog.input.text().trim().to_string();
-                    if before != after {
-                        let _ = dialog.meta.reset_for_query();
-                        dialog.selected = 0;
-                        dialog.set_loading(true);
-                        pending_session_search_request =
-                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
-                    }
-                }
+                Overlay::SessionSearch(_) => {}
                 Overlay::ProviderStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.insert_str(text.as_str());
@@ -213,18 +190,6 @@ impl App {
             }
             if let Some(directory) = pending_path_browser_refresh {
                 self.request_path_browser_directory_refresh(directory);
-            }
-            if let Some((mode, scope_session_id, query)) = pending_session_search_request {
-                match mode {
-                    SessionViewMode::Subtree => {
-                        if let Some(session_id) = scope_session_id {
-                            self.request_session_search_subtree(session_id, query);
-                        }
-                    }
-                    SessionViewMode::All | SessionViewMode::Roots => {
-                        self.request_session_search_page(mode, query, 0, None);
-                    }
-                }
             }
             return;
         }
@@ -267,4 +232,3 @@ mod tests {
 }
 use crate::{App, Overlay, Route};
 use agena_tui::main_focus::Focus;
-use agena_tui_session::session_view::SessionViewMode;

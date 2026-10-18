@@ -16,25 +16,24 @@
 //! demand by the `session.environment` tool because they can change
 //! mid-session.
 
-use crate::session::model::Session;
 use crate::tool::ToolExecutor;
 use crate::tool::tool_registry::compact_tool_call_name;
 
 use super::SessionManager;
-use super::merge_system_prompts;
+use crate::merge_system_prompts;
 
 /// Keep workflow advice usable even when only part of a plugin is enabled.
 fn render_planning_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec![
         "# Planning",
-        "Plan new features, architectural choices, uncertain requirements and coordinated changes. Skip formal plans for small clear fixes and research. Explore before review.",
+        "Plan substantial changes; explore before review. Small fixes and research need no formal plan.",
     ];
     if has("plan.set") {
         if has("plan.review") || has("plan.phase") {
-            paragraphs.push("`plan.set` records without waiting. With default `request_approval: true`, creating or replacing a plan puts it in the planning phase and blocks mutations.");
+            paragraphs.push("`plan.set` returns immediately; by default creating or replacing a plan puts it in the planning phase, blocking mutations.");
             if has("plan.review") {
-                paragraphs.push("Call `plan.review` for approval before implementation.");
+                paragraphs.push("Get approval with `plan.review` before implementation.");
             } else {
                 paragraphs.push("Use `plan.phase` with `phase: active` to request the required approval before implementation.");
             }
@@ -45,16 +44,16 @@ fn render_planning_section(tool_names: &[String]) -> String {
         paragraphs.push("Use `plan.review` to request approval of the current saved plan when it needs approval. It can suspend the turn until the user responds.");
     }
     if has("plan.set") || has("plan.phase") {
-        paragraphs.push("Use `request_approval: false` only with prior user authorization AND trusted configuration allowing it; never change configuration to bypass review.");
+        paragraphs.push("`request_approval: false` needs prior user authorization AND trusted configuration; never bypass review.");
     }
     if has("plan.review") || has("plan.phase") {
-        paragraphs.push("Pending reviews bind to a revision. If the plan changes during review, inspect it and obtain required approval for that revision.");
+        paragraphs.push("Pending reviews bind to a revision; changes during review need approval of the new revision.");
     }
     if has("plan.edit") {
-        paragraphs.push("`plan.edit` updates step/check progress and notes without changing the phase or requesting approval. Ordinary progress updates to an active plan do not require another review.");
+        paragraphs.push("`plan.edit` records progress without changing phase. Ordinary progress updates to an active plan do not require another review.");
     }
     if has("plan.phase") {
-        paragraphs.push("`plan.phase` changes phases. For completion, finish required steps/checks first. Approved-plan transitions need no new review; others follow live help.");
+        paragraphs.push("`plan.phase`: For completion, finish required steps/checks first. Approved transitions need no new review; see live help.");
     }
     paragraphs.join("\n\n")
 }
@@ -70,9 +69,9 @@ fn render_planning_section(tool_names: &[String]) -> String {
 fn render_asking_section(has_plan_review: bool) -> String {
     let mut section = r#"# Asking the user
 
-Use `interaction.ask` for decisions without a reasonable default or authorization for a specific dangerous action: discarding changes, rewriting Git history, or squashing before an authorized push. Read live help; give at least two distinct choices and bundle questions. Ask before substantial rework. Your turn suspends until answers arrive; then resume. Repair rejected input. Reuse approval for the same action and scope; never reconfirm already authorized work or use this tool for plan approval.
+Use `interaction.ask` for decisions with no reasonable default or a specific dangerous action lacking authorization. Give at least two distinct choices; bundle questions. The turn suspends until answers arrive. Repair rejected input. Reuse approval for the same action and scope and already authorized work. Plan approval uses its own tool.
 
-Use the tool for every question; do not end your turn with a plain-text question. Wait for its result before the dependent action. A timeout, cancellation, or empty answer is not approval: continue only independent, already-authorized work and report any remaining blocker."#
+Use the tool for every question; wait before dependent work. A timeout, cancellation, or empty answer is not approval; continue independent authorized work and report blockers."#
         .to_string();
     if has_plan_review {
         section.push_str(" Use `plan.review` for plan approval.");
@@ -85,9 +84,9 @@ Use the tool for every question; do not end your turn with a plain-text question
 fn render_delegating_section() -> String {
     r#"# Delegating work
 
-Use `tasks.run` for bounded independent work or a suitable command/subagent. Give scope, checks and relevant `commands`; limit concurrency and verify results. Handle simple lookups yourself; do not redo delegated work or delegate understanding.
+Use `tasks.run` for bounded independent work. Give scope, checks and `commands`; limit concurrency, verify results, and do not redo delegated work. Handle simple lookups yourself.
 
-Default execution waits for the task's result. Use `run_in_background: true` when other useful work can proceed; completion follows the background notification rules below."#
+Default execution waits for the task. Use `run_in_background: true` for concurrent work; follow notification rules below."#
         .to_string()
 }
 
@@ -96,19 +95,19 @@ fn render_background_section(tool_names: &[String]) -> String {
     let has = |name: &str| tool_names.iter().any(|tool| tool == name);
     let mut paragraphs = vec!["# Background execution".to_owned()];
     if has("shell.exec") {
-        paragraphs.push("`shell.exec` waits for non-interactive output and exit. Timeout/cancellation terminates its process tree. Tool names select launch mode; tty/run_in_background flags do not.".to_owned());
+        paragraphs.push("`shell.exec` waits for exit; timeout/cancel kills its tree. Tool names select launch mode, not tty/background flags.".to_owned());
     }
     if has("shell.spawn") {
-        paragraphs.push("`shell.spawn` confirms non-interactive startup and returns process_id. Completion, failure, timeout or stop sends one system_notification. Supplied timeout_ms is enforced; omission permits running until exit/stop.".to_owned());
+        paragraphs.push("`shell.spawn` returns process_id after startup; exit/timeout/stop sends one system_notification. timeout_ms limits lifetime; omission permits running until exit/stop.".to_owned());
     }
     if has("shell.watch") {
-        paragraphs.push("`shell.watch` launches or replaces a process_id's watch. Omit/null policy removes the watch, preserving timeout/completion. ready_pattern notifies once without stopping. include_pattern wakes once, or coalesced notifications=on_change (default 30s). Success/failure patterns or quiet_period_ms stop the tree. Patterns filter notifications, not capture; never poll to wait.".to_owned());
+        paragraphs.push("`shell.watch` launches/replaces a watch; null policy removes it. ready_pattern notifies once; include_pattern wakes once or coalesces on_change (30s default). Success/failure patterns or quiet_period_ms stop the tree. Filters affect notifications, not capture.".to_owned());
     }
     if has("tasks.run") {
-        paragraphs.push("`tasks.run` with `run_in_background: true` returns a handle and later delivers a system_notification on completion, failure, timeout or cancellation.".to_owned());
+        paragraphs.push("Background `tasks.run` returns a handle; completion/failure/timeout/cancel sends system_notification.".to_owned());
     }
     if has("monitor.start") {
-        paragraphs.push("`monitor.start` subscribes to WebSocket text events; each event has a sequence and arrives in bounded system_notification batches. A subscription can end on source exit, disconnect, timeout, cancellation or session end. Do not restart it just to check for events.".to_owned());
+        paragraphs.push("`monitor.start`: WebSocket text in bounded system_notification batches; each event has a sequence. Ends on source exit/disconnect/timeout/cancel/session end. Do not restart to check events.".to_owned());
         if has("shell.watch") {
             paragraphs.push("For local command-output listeners use `shell.watch`.".to_owned());
         }
@@ -117,16 +116,16 @@ fn render_background_section(tool_names: &[String]) -> String {
         }
     }
     if has("cron.create") {
-        paragraphs.push("`cron.create` schedules wakes as `system_notification` messages at safe turn boundaries and retains the originating assistant run. Use the IANA timezone from `<environment_context>`; returned timestamps are explicit RFC 3339 instants. Jobs are session-only and expire after seven days.".to_owned());
+        paragraphs.push("`cron.create` wakes at safe turn boundaries, retaining the originating assistant run. Use the environment's IANA timezone; timestamps are RFC 3339. Session-only jobs expire after seven days.".to_owned());
     }
-    paragraphs.push("Continue useful work. If only a notification remains, end the current turn with the work still pending; resume from the notification. Waiting is not task completion: verify the outcome before claiming success. Never poll or sleep to await promised notifications. Use bounded reads for a concrete diagnosis or missing result details.".to_owned());
+    paragraphs.push("When only a notification remains, end the current turn with the work still pending; resume from the notification. Waiting is not task completion; verify outcomes. Never poll or sleep for promised wakes. Read only for a concrete diagnosis or result details.".to_owned());
     if has("shell.open") {
-        paragraphs.push("`shell.open` returns a persistent interactive terminal/PTY process_id. yield_time_ms sets initial wait; timeout_ms sets lifetime. Exit sends no wake or completion notification. Silence/yield is not process exit.".to_owned());
+        paragraphs.push("`shell.open`: persistent interactive terminal/PTY process_id; yield_time_ms sets wait, timeout_ms lifetime. Exit sends no wake. Silence/yield is not process exit.".to_owned());
         if has("shell.read") {
-            paragraphs.push("Use `shell.read` for bounded output; interactive I/O is allowed because PTYs promise no wake. Omit since_seq for unread output; explicit cursors replay without changing the automatic cursor. include_screen returns screen state.".to_owned());
+            paragraphs.push("`shell.read`: interactive I/O is allowed; PTYs promise no wake. Omit since_seq for unread output; explicit cursors replay. include_screen returns the screen.".to_owned());
         }
         if has("shell.write") {
-            paragraphs.push(r#"Use `shell.write` for nonempty exact terminal input: `\r` is Enter, `\u0003` is Ctrl-C. It can collect a bounded response in the same call. Declare subsequent effects and never resend a whole input after a partial write."#.to_owned());
+            paragraphs.push(r#"`shell.write`: exact input, `\r` is Enter, `\u0003` is Ctrl-C; can collect a response. Declare effects; never resend whole input after a partial write."#.to_owned());
         } else {
             paragraphs.push("No terminal input tool is available; do not launch an interactive program that needs later keystrokes.".to_owned());
         }
@@ -136,14 +135,17 @@ fn render_background_section(tool_names: &[String]) -> String {
             .map(|name| format!("`{name}`"))
             .collect::<Vec<_>>();
         if !controls.is_empty() {
-            paragraphs.push(format!("Available terminal lifecycle controls: {}. Read live help for dimensions, out-of-band interruption and process-tree cleanup.", controls.join(", ")));
+            paragraphs.push(format!(
+                "Terminal controls (see live help): {}.",
+                controls.join(", ")
+            ));
         }
     }
     if (has("shell.spawn") || has("shell.watch")) && has("shell.logs") {
-        paragraphs.push("Use `shell.logs` for bounded explicit replay of background-job diagnostics. Omit cursors to consume unread output; resume with last_seq and next_event_offset as event_offset. Do not read repeatedly merely to wait for completion.".to_owned());
+        paragraphs.push("`shell.logs`: bounded background diagnostics; omit cursors for unread output. Never read repeatedly to await completion.".to_owned());
     }
     if has("shell.exec") || has("shell.spawn") || has("shell.watch") || has("shell.open") {
-        paragraphs.push("max_output_bytes (1024–16384) bounds previews independently of capture. Resume partial events with last_seq/next_event_offset as since_seq/event_offset; omit both for unread output. output_resource references Part content. Cursor gaps and capture errors differ from preview truncation.".to_owned());
+        paragraphs.push("max_output_bytes (1024–16384) limits previews, not capture. Resume with last_seq/next_event_offset as since_seq/event_offset. output_resource references captured content. Cursor gaps, capture errors and preview truncation differ.".to_owned());
     }
     paragraphs.join("\n\n")
 }
@@ -257,37 +259,6 @@ impl SessionManager {
     ) -> String {
         let tool_names = scoped_executor
             .available_execution_tools()
-            .into_iter()
-            .map(|tool| compact_tool_call_name(&tool.canonical_name()))
-            .collect::<Vec<_>>();
-        let mut base = self.assemble_system_prompt_for_tool_names(tool_names, user_system);
-        if let Some(instruction) = scoped_executor.conversation_instruction() {
-            base.push_str("\n\n");
-            base.push_str(&instruction);
-        }
-        let guidance = scoped_executor.project_instruction_section(&[]);
-        if guidance.is_empty() {
-            base
-        } else {
-            format!("{base}\n\n{guidance}")
-        }
-    }
-
-    /// Async catalog path used by model turns and other Tokio request flows.
-    /// Definition hooks are awaited directly through the current plugin host.
-    pub(crate) async fn assemble_session_system_prompt_async(
-        &self,
-        session: &Session,
-        user_system: Option<&str>,
-    ) -> String {
-        let state = self.execution_state();
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context_async(&session.runtime.execution)
-            .await;
-        let tool_names = scoped_executor
-            .available_execution_tools_async()
-            .await
             .into_iter()
             .map(|tool| compact_tool_call_name(&tool.canonical_name()))
             .collect::<Vec<_>>();

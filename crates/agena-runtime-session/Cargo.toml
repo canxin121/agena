@@ -10,11 +10,11 @@ description = "Agena session model, history and execution"
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 arc-swap = { workspace = true }
+base64 = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-permission = { workspace = true }
-agena-plugin-sdk = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-session-core = { workspace = true }
@@ -27,20 +27,15 @@ agena-storage = { workspace = true }
 agena-storage-sqlite = { workspace = true }
 agena-tool = { workspace = true }
 async-trait = { workspace = true }
-blake3 = { workspace = true }
 chrono = { workspace = true }
-derive_more = { workspace = true, features = ["display", "from", "into"] }
 hex = { workspace = true }
 futures-util = { workspace = true }
-indexmap = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true }
-schemars = { workspace = true }
 sha2 = { workspace = true }
-smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
@@ -49,7 +44,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 agena-runtime-session-core = { workspace = true, features = ["test-support"] }
-base64 = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

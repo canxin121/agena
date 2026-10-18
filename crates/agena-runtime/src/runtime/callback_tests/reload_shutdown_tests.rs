@@ -18,7 +18,7 @@ pub(super) async fn build_candidate(
         &runtime.inner.load_request,
         runtime.workspace_root(),
         super::super::SnapshotDatabases {
-            chat: runtime.inner.database.clone(),
+            chat: runtime.inner.session_kernel.clone(),
             scheduler: runtime.inner.scheduler_database.clone(),
         },
         original.session_manager(),

@@ -69,16 +69,23 @@ fn run_pager(
 pub fn page_text(text: &str) -> Result<(), ExternalPagerError> {
     let file = NamedTempFile::new()?;
     std::fs::write(file.path(), text)?;
+    page_file(file.path())
+}
 
+/// Page a completely prepared document without copying it back into memory.
+pub fn page_file(path: &std::path::Path) -> Result<(), ExternalPagerError> {
     if let Some((program, args)) = configured_pager()? {
-        run_pager(program.as_str(), args.as_slice(), file.path())?;
-        return Ok(());
+        return if run_pager(program.as_str(), args.as_slice(), path)? {
+            Ok(())
+        } else {
+            Err(ExternalPagerError::NoPagerAvailable)
+        };
     }
 
-    if run_pager("less", &[String::from("-R")], file.path())? {
+    if run_pager("less", &[String::from("-R")], path)? {
         return Ok(());
     }
-    if run_pager("more", &[], file.path())? {
+    if run_pager("more", &[], path)? {
         return Ok(());
     }
 

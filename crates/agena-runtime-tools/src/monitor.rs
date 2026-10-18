@@ -29,7 +29,7 @@ use std::sync::{Arc, Condvar, Mutex, atomic::Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use futures_util::StreamExt as _;
+use futures_util::{FutureExt as _, StreamExt as _};
 use regex::Regex;
 use thiserror::Error;
 use tokio::process::Command;
@@ -71,7 +71,7 @@ pub enum MonitorError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Parameters for starting a monitored process.
 pub struct StartParams {
-    pub output: Option<agena_storage::content::ContentWriter>,
+    pub output: Option<crate::tool::ToolOutputStreams>,
     /// Trusted argv overrides the display command without another outer shell.
     pub argv: Option<Vec<String>>,
     /// Trusted workspace/session identity. None is host-only and invisible to AI tools.
@@ -327,7 +327,7 @@ impl MonitorState {
                 .launch
                 .output
                 .as_ref()
-                .map(|writer| writer.resource().reference()),
+                .map(crate::tool::ToolOutputStreams::reference),
             tty: false,
             websocket: self.launch.ws.is_some(),
             command: self.command.clone(),
@@ -521,13 +521,7 @@ impl MonitorService for MonitorRegistry {
         }
         let state = Arc::new(MonitorState {
             owner: params.owner.clone(),
-            launch: StartParams {
-                output: params
-                    .output
-                    .as_ref()
-                    .map(agena_storage::content::ContentWriter::delegate_lifecycle),
-                ..params.clone()
-            },
+            launch: params.clone(),
             monitor_id: process_id,
             command: source,
             description: params.description.clone(),
@@ -605,6 +599,11 @@ impl MonitorService for MonitorRegistry {
                     monitors.remove(&id);
                 }
             }
+            if let Some(output) = &params.output {
+                output
+                    .register_external_launch()
+                    .map_err(|error| MonitorError::Invalid(error.to_string()))?;
+            }
             monitors.insert(state.monitor_id.clone(), Arc::clone(&state));
         }
         let summary = state.snapshot();
@@ -613,16 +612,20 @@ impl MonitorService for MonitorRegistry {
         }
 
         let runner_state = Arc::clone(&state);
+        let supervisor_state = Arc::clone(&state);
         let worker = if let Some(ws) = params.ws.clone() {
             let runner_ws = ws;
             let runner_quiet_period_ms = params.quiet_period_ms;
             handle.spawn(async move {
-                run_ws_monitor(
-                    runner_state,
-                    runner_ws,
-                    runner_quiet_period_ms,
-                    timeout_ms,
-                    abort_rx,
+                supervise_runner(
+                    supervisor_state,
+                    run_ws_monitor(
+                        runner_state,
+                        runner_ws,
+                        runner_quiet_period_ms,
+                        timeout_ms,
+                        abort_rx,
+                    ),
                 )
                 .await;
             })
@@ -633,16 +636,19 @@ impl MonitorService for MonitorRegistry {
             let runner_capture_stderr = params.capture_stderr;
             let runner_persistent = params.persistent;
             handle.spawn(async move {
-                run_monitor(
-                    runner_state,
-                    params.argv,
-                    runner_command,
-                    runner_workdir,
-                    runner_env,
-                    runner_capture_stderr,
-                    runner_persistent,
-                    timeout_ms,
-                    abort_rx,
+                supervise_runner(
+                    supervisor_state,
+                    run_monitor(
+                        runner_state,
+                        params.argv,
+                        runner_command,
+                        runner_workdir,
+                        runner_env,
+                        runner_capture_stderr,
+                        runner_persistent,
+                        timeout_ms,
+                        abort_rx,
+                    ),
                 )
                 .await;
             })
@@ -804,7 +810,7 @@ impl MonitorService for MonitorRegistry {
                 .launch
                 .output
                 .as_ref()
-                .map(|writer| writer.resource().reference()),
+                .map(crate::tool::ToolOutputStreams::reference),
             status: inner.status,
             ready: state.watch.lock().unwrap().ready,
             events: slice.events,
@@ -1036,7 +1042,7 @@ fn collect_events_locked(
             .launch
             .output
             .as_ref()
-            .map(|writer| writer.resource().reference()),
+            .map(crate::tool::ToolOutputStreams::reference),
         status,
         ready: state.watch.lock().unwrap().ready,
         events,
@@ -1261,7 +1267,7 @@ async fn run_monitor(
         final_status = ProcessStatus::Failed;
         completion_reason = "process_tree_cleanup_failed".to_string();
     }
-    join_stream_tasks(stdout_task, stderr_task).await;
+    join_stream_tasks(&state, stdout_task, stderr_task).await;
     notification_task.abort();
     watch::flush_pending(&state);
     // Fast commands may exit before their final output is framed. Reconcile
@@ -1282,12 +1288,6 @@ async fn run_monitor(
             _ => {}
         }
     }
-    if let Some(writer) = &state.launch.output
-        && let Err(error) = writer.finalize(agena_domain::ContentState::Complete).await
-    {
-        tracing::error!(%error, "background content seal failed");
-    }
-
     {
         let mut inner = state.inner.lock().unwrap();
         inner.status = final_status;
@@ -1296,6 +1296,9 @@ async fn run_monitor(
         inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
         inner.worker = None;
+    }
+    if let Some(output) = &state.launch.output {
+        output.finish_activity(&state.snapshot()).await;
     }
     state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
@@ -1372,6 +1375,13 @@ async fn run_ws_monitor(
                     push_event(&state, ProcessStream::Stdout, text.to_string());
                 }
                 Some(Ok(WsMessage::Binary(data))) => {
+                    if let Some(output) = &state.launch.output {
+                        output.record_loss(
+                            agena_domain::ContentKind::Log,
+                            data.len(),
+                            "binary WebSocket frame cannot be represented by the text feed",
+                        );
+                    }
                     // Text frames are the event contract; binary frames are
                     // surfaced as an opaque marker so nothing is silently lost.
                     push_event(
@@ -1445,6 +1455,12 @@ fn mark_ws_finished(state: &MonitorState, status: ProcessStatus, completion_reas
             inner.worker = None;
         }
     }
+    if let Some(output) = state.launch.output.clone() {
+        let summary = state.snapshot();
+        tokio::spawn(async move {
+            output.finish_activity(&summary).await;
+        });
+    }
     state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
         listener.on_finished(&state.snapshot());
@@ -1478,6 +1494,7 @@ async fn terminate_monitored_child(
 }
 
 async fn join_stream_tasks(
+    state: &MonitorState,
     mut stdout_task: Option<tokio::task::JoinHandle<()>>,
     mut stderr_task: Option<tokio::task::JoinHandle<()>>,
 ) {
@@ -1506,6 +1523,13 @@ async fn join_stream_tasks(
         Ok((stdout_result, stderr_result)) => {
             for (stream, result) in [("stdout", stdout_result), ("stderr", stderr_result)] {
                 if let Err(error) = result {
+                    if let Some(output) = &state.launch.output {
+                        output.record_loss(
+                            agena_domain::ContentKind::Log,
+                            0,
+                            &format!("background {stream} reader task failed: {error}"),
+                        );
+                    }
                     tracing::error!(
                         target: "agena_runtime::monitor",
                         stream,
@@ -1519,6 +1543,13 @@ async fn join_stream_tasks(
             }
         }
         Err(timeout_error) => {
+            if let Some(output) = &state.launch.output {
+                output.record_loss(
+                    agena_domain::ContentKind::Log,
+                    0,
+                    "background output pipes did not close before capture deadline",
+                );
+            }
             if let Some(abort) = stdout_abort {
                 abort.abort();
             }
@@ -1572,6 +1603,23 @@ enum PatternOutcome {
     Failure,
 }
 
+async fn supervise_runner(
+    state: Arc<MonitorState>,
+    runner: impl std::future::Future<Output = ()> + Send,
+) {
+    if std::panic::AssertUnwindSafe(runner)
+        .catch_unwind()
+        .await
+        .is_err()
+        && state.snapshot().status == ProcessStatus::Running
+    {
+        mark_failed(
+            &state,
+            "background worker panicked; external process ownership was interrupted".into(),
+        );
+    }
+}
+
 fn mark_failed(state: &MonitorState, reason: String) {
     push_event(state, ProcessStream::Stderr, reason);
     let mut inner = state.inner.lock().unwrap();
@@ -1581,11 +1629,10 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.abort = None;
     inner.worker = None;
     drop(inner);
-    if let Some(writer) = state.launch.output.clone() {
+    if let Some(output) = state.launch.output.clone() {
+        let summary = state.snapshot();
         tokio::spawn(async move {
-            let _ = writer
-                .finalize(agena_domain::ContentState::Interrupted)
-                .await;
+            output.finish_activity(&summary).await;
         });
     }
     state.changed.notify_all();
@@ -1649,11 +1696,12 @@ where
                             ProcessStream::Stderr => agena_domain::CommandOutputStream::Stderr,
                         };
                         let byte_count = text.len();
-                        if let Err(error) = writer.capture(agena_domain::ContentInput::Log {
-                            stream: channel,
-                            text: text.clone(),
-                        }) {
-                            writer.record_loss(byte_count, &error);
+                        if let Err(error) = writer.try_log(channel, &text) {
+                            writer.record_loss(
+                                agena_domain::ContentKind::Log,
+                                byte_count,
+                                &error.to_string(),
+                            );
                         }
                     }
                     let event = push_output_event_filtered(&state, stream, text, true, false);
@@ -1665,6 +1713,13 @@ where
                 }
             }
             Err(error) => {
+                if let Some(output) = &state.launch.output {
+                    output.record_loss(
+                        agena_domain::ContentKind::Log,
+                        0,
+                        &format!("background output pipe read failed: {error}"),
+                    );
+                }
                 push_event(
                     &state,
                     ProcessStream::Stderr,
@@ -1707,6 +1762,21 @@ fn push_output_event_filtered(
     chunk: bool,
     notify: bool,
 ) -> ProcessEvent {
+    if state.launch.ws.is_some()
+        && let Some(output) = &state.launch.output
+    {
+        let channel = match stream {
+            ProcessStream::Stdout => agena_domain::CommandOutputStream::Stdout,
+            ProcessStream::Stderr => agena_domain::CommandOutputStream::Stderr,
+        };
+        if let Err(error) = output.try_log(channel, &line) {
+            output.record_loss(
+                agena_domain::ContentKind::Log,
+                line.len(),
+                &error.to_string(),
+            );
+        }
+    }
     let mut inner = state.inner.lock().unwrap();
     // Assign and append under one lock: concurrent stdout/stderr must not
     // insert an older sequence after a newer cursor has already been read.

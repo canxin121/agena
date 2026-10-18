@@ -251,9 +251,7 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_sessions(self, command: SessionsCommand) -> Result<(), AppError> {
-        let output = self.render_server_sessions_command(command).await?;
-        println!("{output}");
-        Ok(())
+        self.run_server_sessions_command(command).await
     }
 
     pub(super) async fn run_resume(self, args: ResumeArgs) -> Result<(), AppError> {

@@ -44,7 +44,7 @@ type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, Ru
 /// scheduler (`None` degrades the scheduler to its in-memory store).
 #[derive(Clone, Default)]
 pub(crate) struct SnapshotDatabases {
-    pub(crate) chat: Option<Arc<DatabaseConnection>>,
+    pub(crate) chat: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
     pub(crate) scheduler: Option<Arc<DatabaseConnection>>,
 }
 
@@ -120,9 +120,12 @@ impl RuntimeSnapshot {
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
         let SnapshotDatabases {
-            chat: database,
+            chat: session_kernel,
             scheduler: scheduler_database,
         } = databases;
+        let database = session_kernel
+            .as_ref()
+            .map(|kernel| kernel.database.clone());
         let worker_loader = loader.clone();
         let request = load_request.clone();
         let mut resolution = crate::blocking::FILE_OPERATIONS
@@ -237,25 +240,25 @@ impl RuntimeSnapshot {
         .map_err(AppError::Config)?;
         let session_build_config =
             agena_runtime::session_build_config_from_resolved(&resolution.config);
-        let (session_manager, pending_session_reconfiguration) = if let Some(db) = database.as_ref()
-        {
-            let (manager, pending) =
-                build_or_prepare_session_manager(agena_runtime::SessionCompositionInputs {
-                    existing: existing_session_manager,
-                    database: db,
-                    providers: Arc::clone(&providers),
-                    plugins: Arc::clone(&plugins),
-                    lsp_registry: lsp_registry.clone(),
-                    workspace_root,
-                    config: &session_build_config,
-                    mcp_manager: mcp_manager.clone(),
-                    monitor_registry: monitor_registry.clone(),
-                    scheduler_database: scheduler_database.clone(),
-                });
-            (Some(manager), pending)
-        } else {
-            (None, None)
-        };
+        let (session_manager, pending_session_reconfiguration) =
+            if let Some(db) = session_kernel.as_ref() {
+                let (manager, pending) =
+                    build_or_prepare_session_manager(agena_runtime::SessionCompositionInputs {
+                        existing: existing_session_manager,
+                        database: db,
+                        providers: Arc::clone(&providers),
+                        plugins: Arc::clone(&plugins),
+                        lsp_registry: lsp_registry.clone(),
+                        workspace_root,
+                        config: &session_build_config,
+                        mcp_manager: mcp_manager.clone(),
+                        monitor_registry: monitor_registry.clone(),
+                        scheduler_database: scheduler_database.clone(),
+                    });
+                (Some(manager), pending)
+            } else {
+                (None, None)
+            };
         // there is no persisted event store to resume: interrupted-run
         // reconciliation is deferred to `SessionManager::get_session` on open
         // (17.4), so there is nothing to do here.

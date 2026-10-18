@@ -8,21 +8,6 @@ static WORKSPACE_TRANSFERS: agena_async::BlockingPool = agena_async::BlockingPoo
 static WORKSPACE_IDENTITIES: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
 impl ApplicationService {
-    /// Metadata-only catalog check; avoids session counts/tree projections.
-    pub async fn workspace_revision_rows(&self) -> ApplicationResult<Vec<(i64, i64, String)>> {
-        Ok(self
-            .workspace_repository
-            .list(StorageWorkspaceListQuery {
-                limit: i64::MAX as u64,
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .into_iter()
-            .map(|row| (row.id, row.updated_at_ms, row.path))
-            .collect())
-    }
-
     pub async fn list_workspaces(
         &self,
         query: WorkspaceListQuery,
@@ -57,12 +42,16 @@ impl ApplicationService {
             HashMap::new()
         };
         let stats = if query.include_session_count {
-            self.session_store
-                .workspace_session_stats(&workspace_ids)
+            self.session_kernel
+                .reader
+                .workspace_statistics(&workspace_ids)
                 .await
-                .map_err(|error| ApplicationError::internal_error(&error))?
+                .map_err(crate::kernel_error)?
+                .iter()
+                .map(|(id, stats)| (*id, *stats))
+                .collect::<std::collections::BTreeMap<_, _>>()
         } else {
-            HashMap::new()
+            std::collections::BTreeMap::new()
         };
         let items = slice
             .iter()

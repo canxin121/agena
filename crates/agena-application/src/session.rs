@@ -43,32 +43,6 @@ pub async fn session_user_input_reply_request(
     .await
 }
 
-/// The canonical API envelope, preserving ownership, lifecycle and source
-/// references across lists, snapshots and live delivery.
-pub fn part_resource_from_fact(part: &agena_storage::store::Part) -> agena_api::part::PartResource {
-    agena_api::part::PartResource {
-        part_id: part.part_id,
-        sections: Vec::new(),
-        kind: agena_runtime_contracts::part_content::canonical_kind(&part.kind, &part.content),
-        role: part.role.as_str().into(),
-        state: part.state.as_str().into(),
-        content: part.content.clone(),
-        presentation: None,
-        summary: part.summary.clone(),
-        visibility: part.visibility.as_str().into(),
-        parent_part_id: part.parent_part_id,
-        run_id: part.run_id,
-        origin_session_id: part.origin_session_id,
-        revision: part.revision,
-        started_at_ms: part.started_at_ms,
-        finished_at_ms: part.finished_at_ms,
-        created_at_ms: part.created_at_ms,
-        updated_at_ms: part.updated_at_ms,
-        user_message_ordinal: None,
-        provider_state: part.provider_state.clone(),
-    }
-}
-
 pub async fn resolve_session_run_options(
     state: &Application,
     session_id: i64,

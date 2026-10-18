@@ -13,19 +13,28 @@ impl App {
     }
 
     pub(crate) fn copy_last_assistant_message(&mut self) {
-        let Some(text) = agena_tui_transcript::last_assistant_reply_text(&self.transcript.parts)
-        else {
+        let Some(session_id) = self.transcript.session_id else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
             return;
         };
-        if text.trim().is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message-text"));
-            return;
-        }
-
-        self.request_clipboard_copy(
-            text,
-            ui_text::t(&self.i18n, "flash-copied-assistant-message"),
+        self.dispatch_backend_operation(
+            move |application| async move { application.last_assistant_message_text(session_id).await },
+            move |app, result| {
+                if app.transcript.session_id != Some(session_id) {
+                    return;
+                }
+                match result {
+                    Ok(Some(text)) => app.request_clipboard_copy(
+                        text,
+                        ui_text::t(&app.i18n, "flash-copied-assistant-message"),
+                    ),
+                    Ok(None) => app.flash_warning(ui_text::t(&app.i18n, "flash-no-assistant-message-text")),
+                    Err(error) => app.flash_error(app.i18n.text_args(
+                        "flash-clipboard-copy-failed",
+                        &agena_tui::fl_args!("error" => error.to_string()),
+                    )),
+                }
+            },
         );
     }
 
@@ -42,159 +51,114 @@ impl App {
         );
     }
 
-    pub(crate) fn export_transcript_to_editor(
-        &mut self,
-        terminal: &mut TerminalRuntime,
-        requested_path: Option<&Path>,
-    ) -> Result<()> {
-        let text = self.transcript_export_markdown();
-        if text.trim().is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-loaded-transcript"));
-            return Ok(());
-        }
-
+    pub(crate) fn request_transcript_export(&mut self, requested_path: Option<&Path>) {
         let path = match self.resolve_transcript_export_path(requested_path) {
             Ok(path) => path,
             Err(error) => {
                 self.flash_error(self.i18n.text_args(
                     "flash-transcript-export-failed",
-                    &agena_tui::fl_args!("error" => error),
+                    &agena_tui::fl_args!("error" => error.to_string()),
+                ));
+                return;
+            }
+        };
+        self.prepare_full_transcript(Some(path));
+    }
+
+    pub(crate) fn request_transcript_pager(&mut self) {
+        self.prepare_full_transcript(None);
+    }
+
+    fn prepare_full_transcript(&mut self, destination: Option<PathBuf>) {
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-loaded-transcript"));
+            return;
+        };
+        let request = crate::app_backend::transcript_export::TranscriptExportRequest {
+            session_id,
+            session_title: self.current_or_selected_session_title().unwrap_or_default(),
+            execution: self.transcript.execution.clone(),
+            i18n: self.i18n.clone(),
+            markdown: destination.is_some(),
+            destination: destination.clone(),
+            pager_context: self
+                .current_lineage_context_parts()
+                .into_iter()
+                .chain([self.current_session_view_summary()])
+                .chain(self.run_options.summary(&self.i18n))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        };
+        self.dispatch_backend_operation(
+            move |application| async move { application.prepare_transcript_export(request).await },
+            move |app, result| {
+                if app.transcript.session_id != Some(session_id) {
+                    return;
+                }
+                match result {
+                    Ok(Some(file)) => {
+                        app.pending_ui_action = Some(crate::UiAction::PreparedTranscript {
+                            session_id,
+                            file,
+                            destination,
+                        });
+                    }
+                    Ok(None) => {
+                        app.flash_warning(ui_text::t(&app.i18n, "flash-no-loaded-transcript"))
+                    }
+                    Err(error) => app.flash_error(app.i18n.text_args(
+                        if destination.is_some() {
+                            "flash-transcript-export-failed"
+                        } else {
+                            "flash-transcript-pager-failed"
+                        },
+                        &agena_tui::fl_args!("error" => error.to_string()),
+                    )),
+                }
+            },
+        );
+    }
+
+    pub(crate) fn open_prepared_transcript(
+        &mut self,
+        terminal: &mut TerminalRuntime,
+        session_id: i64,
+        file: tempfile::NamedTempFile,
+        destination: Option<PathBuf>,
+    ) -> Result<()> {
+        if self.transcript.session_id != Some(session_id) {
+            return Ok(());
+        }
+        if let Some(path) = destination {
+            if let Err(error) = file.persist(&path) {
+                self.flash_error(self.i18n.text_args(
+                    "flash-transcript-export-failed",
+                    &agena_tui::fl_args!("error" => error.to_string()),
                 ));
                 return Ok(());
             }
-        };
-
-        if let Some(parent) = path.parent()
-            && let Err(error) = std::fs::create_dir_all(parent)
-        {
-            self.flash_error(self.i18n.text_args(
-                "flash-transcript-export-failed",
-                &agena_tui::fl_args!("error" => error.to_string()),
-            ));
-            return Ok(());
-        }
-
-        if let Err(error) = std::fs::write(&path, text) {
-            self.flash_error(self.i18n.text_args(
-                "flash-transcript-export-failed",
-                &agena_tui::fl_args!("error" => error.to_string()),
-            ));
-            return Ok(());
-        }
-
-        let result =
-            terminal.with_suspended(SuspendReason::OpenPath, || open_path(path.as_path()))?;
-
-        match result {
-            Ok(()) => self.flash_success(self.i18n.text_args(
-                "flash-transcript-exported",
-                &agena_tui::fl_args!("path" => path.display().to_string()),
-            )),
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-transcript-export-failed",
-                &agena_tui::fl_args!("error" => error.to_string()),
-            )),
-        }
-        Ok(())
-    }
-
-    pub(crate) fn page_transcript(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
-        let text = self.transcript_pager_text();
-        if text.trim().is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-loaded-transcript"));
-            return Ok(());
-        }
-
-        let result =
-            terminal.with_suspended(SuspendReason::ExternalPager, || page_text(text.as_str()))?;
-
-        if let Err(error) = result {
-            self.flash_error(self.i18n.text_args(
-                "flash-transcript-pager-failed",
-                &agena_tui::fl_args!("error" => error.to_string()),
-            ));
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn transcript_export_text(&self) -> String {
-        let entries = agena_tui_transcript::parts_entries(&self.transcript.parts);
-        if entries.is_empty() {
-            return String::new();
-        }
-
-        entries
-            .iter()
-            .map(|entry| {
-                render_entry_export(
-                    entry,
-                    &self.i18n,
-                    &TranscriptDetailDefaults {
-                        activity_default_expanded: true,
-                        kind_defaults: std::collections::BTreeMap::new(),
-                    },
-                )
-                .into_iter()
-                .map(|line| line.text)
-                .collect::<Vec<_>>()
-                .join("\n")
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
-
-    pub(crate) fn transcript_pager_text(&self) -> String {
-        let body = self.transcript_export_text();
-        if body.trim().is_empty() {
-            return String::new();
-        }
-
-        let mut lines = Vec::new();
-        lines.push(
-            self.current_or_selected_session_title()
-                .unwrap_or_else(|| ui_text::t(&self.i18n, "pane-transcript")),
-        );
-        if let Some(session_id) = self.transcript.session_id {
-            lines.push(format!("#{}", session_id));
-        }
-
-        let mut meta = Vec::new();
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            if let Some(parent_id) = execution.session.parent_id {
-                meta.push(self.i18n.text_args(
-                    "session-summary-parent",
-                    &agena_tui::fl_args!("id" => parent_id),
-                ));
+            let result = terminal.with_suspended(SuspendReason::OpenPath, || open_path(&path))?;
+            match result {
+                Ok(()) => self.flash_success(self.i18n.text_args(
+                    "flash-transcript-exported",
+                    &agena_tui::fl_args!("path" => path.display().to_string()),
+                )),
+                Err(error) => self.flash_error(self.i18n.text_args(
+                    "flash-transcript-export-failed",
+                    &agena_tui::fl_args!("error" => error.to_string()),
+                )),
             }
-            if execution.session.child_session_count > 0 {
-                meta.push(self.i18n.text_args(
-                    "session-summary-children",
-                    &agena_tui::fl_args!("count" => execution.session.child_session_count as i64),
+        } else {
+            let result =
+                terminal.with_suspended(SuspendReason::ExternalPager, || page_file(file.path()))?;
+            if let Err(error) = result {
+                self.flash_error(self.i18n.text_args(
+                    "flash-transcript-pager-failed",
+                    &agena_tui::fl_args!("error" => error.to_string()),
                 ));
             }
         }
-        meta.extend(self.current_lineage_context_parts());
-        meta.push(self.current_session_view_summary());
-        if let Some(summary) = self.run_options.summary(&self.i18n) {
-            meta.push(summary);
-        }
-        if !meta.is_empty() {
-            lines.push(meta.join(" | "));
-        }
-        lines.push(String::new());
-        lines.push(body);
-        lines.join("\n")
-    }
-
-    pub(crate) fn transcript_export_markdown(&self) -> String {
-        render_parts_export_markdown(
-            &self.i18n,
-            self.transcript.session_id,
-            self.transcript.session_title.as_str(),
-            self.transcript.execution.as_ref(),
-            &self.transcript.parts,
-        )
+        Ok(())
     }
 
     pub(crate) fn resolve_transcript_export_path(
@@ -328,7 +292,7 @@ impl App {
 use crate::Result;
 use crate::{
     App, Local, NoticeScope, NoticeSeverity, NotificationSurface, Path, PathBuf, TerminalRuntime,
-    TranscriptDetailDefaults, UiResult, min, open_path, page_text, render_entry_export,
-    render_parts_export_markdown, ui_text,
+    UiResult, min, open_path, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;
+use agena_tui_platform::external_pager::page_file;

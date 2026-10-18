@@ -1,6 +1,7 @@
 use super::*;
 use agena_api::resource::{BtwAnswer, BtwRequest};
 use agena_domain::ConversationMode;
+use agena_storage::kernel::{MetadataChange, RequestId, SummaryQuery};
 
 async fn parent_fixture(server: &TestServer, client: &AgenaClient) -> i64 {
     let parent = client
@@ -8,11 +9,12 @@ async fn parent_fixture(server: &TestServer, client: &AgenaClient) -> i64 {
         .await
         .unwrap();
     let application = application_for_test(&server.runtime);
-    let store = application.session_store_facade().unwrap();
-    store.submit_user_run(parent.id, vec![agena_storage::store::NewPart {
-        state: agena_storage::store::PartState::Completed,
-        ..agena_storage::store::NewPart::pending("text", agena_storage::store::PartRole::User, serde_json::json!({"text":"Implement the main task, which remains in the parent."}))
-    }], None).await.unwrap();
+    kernel_fixture::completed_input(
+        &application,
+        parent.id,
+        "Implement the main task, which remains in the parent.",
+    )
+    .await;
     application
         .update_session_selection(parent.id, options())
         .await
@@ -65,18 +67,20 @@ async fn answer(stream: &mut agena_client::BtwSubscription) -> BtwAnswer {
 }
 
 async fn cleaned(server: &TestServer) {
-    let store = application_for_test(&server.runtime)
-        .session_store_facade()
-        .unwrap();
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if store
-                .list_session_summaries(agena_storage::store::SessionListQuery {
+            if kernel
+                .reader
+                .query_summaries(SummaryQuery {
                     temporary_only: true,
+                    limit: 128,
                     ..Default::default()
                 })
                 .await
                 .unwrap()
+                .sessions
                 .is_empty()
             {
                 return;
@@ -144,8 +148,14 @@ async fn btw_reads_context_and_tools_without_changing_a_running_parent() {
         .await
         .unwrap();
     let _ = requests.recv().await.unwrap();
-    let store = application.session_store_facade().unwrap();
-    let before = store.load(parent).await.unwrap();
+    let kernel = application.session_kernel().unwrap();
+    let before = kernel_fixture::entries(&application, parent).await;
+    let before_version = kernel
+        .reader
+        .metadata(parent.try_into().unwrap())
+        .await
+        .unwrap()
+        .metadata_version;
     let mut stream = client
         .ask_btw(
             parent,
@@ -169,9 +179,17 @@ async fn btw_reads_context_and_tools_without_changing_a_running_parent() {
         "read-only tool executed"
     );
     cleaned(&server).await;
-    let after = store.load(parent).await.unwrap();
-    assert_eq!(before.parts, after.parts);
-    assert_eq!(before.meta.version, after.meta.version);
+    let after = kernel_fixture::entries(&application, parent).await;
+    assert_eq!(before, after);
+    assert_eq!(
+        before_version,
+        kernel
+            .reader
+            .metadata(parent.try_into().unwrap())
+            .await
+            .unwrap()
+            .metadata_version
+    );
     let after_state = client
         .get_session_state(parent)
         .await
@@ -249,10 +267,9 @@ async fn closing_btw_cancels_only_the_temporary_execution_and_hides_it_from_list
     let server = start_test_server(&url).await;
     let client = AgenaClient::new(&server.url).unwrap();
     let parent = parent_fixture(&server, &client).await;
-    let store = application_for_test(&server.runtime)
-        .session_store_facade()
-        .unwrap();
-    let before = store.load(parent).await.unwrap();
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
+    let before = kernel_fixture::entries(&application, parent).await;
     let live_state = AppState::from_application(application_for_test(&server.runtime));
     let mut live = crate::live::subscribe(&live_state, agena_api::Scope::Global).unwrap();
     let stream = client
@@ -269,57 +286,51 @@ async fn closing_btw_cancels_only_the_temporary_execution_and_hides_it_from_list
         .await
         .unwrap()
         .unwrap();
-    let visible = store
-        .list_session_summaries(Default::default())
+    let visible = kernel
+        .reader
+        .query_summaries(SummaryQuery {
+            limit: 128,
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].id, parent);
-    assert_eq!(visible[0].child_session_count, 0);
+    assert_eq!(visible.sessions.len(), 1);
+    assert_eq!(visible.sessions[0].id.get(), parent);
+    assert_eq!(visible.sessions[0].child_session_count, 0);
     assert_eq!(
-        store
-            .workspace_session_stats(&[server.workspace_id])
+        kernel
+            .reader
+            .workspace_statistics(&[server.workspace_id])
             .await
             .unwrap()[&server.workspace_id]
             .total,
         1
     );
-    assert_eq!(
-        store
-            .session_counts_by_workspace(&[server.workspace_id])
-            .await
-            .unwrap()[&server.workspace_id],
-        1
-    );
-    let child = store
-        .list_session_summaries(agena_storage::store::SessionListQuery {
+    let child = kernel
+        .reader
+        .query_summaries(SummaryQuery {
             temporary_only: true,
+            limit: 1,
             ..Default::default()
         })
         .await
-        .unwrap()[0]
-        .id;
+        .unwrap()
+        .sessions[0]
+        .id
+        .get();
     let mut midstream_live = crate::live::subscribe(&live_state, agena_api::Scope::Global).unwrap();
     // Connecting after creation must classify parts from metadata, rather
     // than depending on having observed the temporary fork's creation.
-    store
-        .submit_user_run(
-            child,
-            vec![agena_storage::store::NewPart::pending(
-                "text",
-                agena_storage::store::PartRole::User,
-                serde_json::json!({"text":"hidden"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
+    // The live temporary execution itself supplies hidden changes; no second
+    // request is queued while the fixture provider is deliberately held.
     drop(stream);
     cleaned(&server).await;
-    store
+    kernel
+        .sessions
         .update_metadata(
-            parent,
-            agena_storage::store::SessionMetadataPatch {
+            RequestId::new(),
+            parent.try_into().unwrap(),
+            MetadataChange {
                 title: Some("parent barrier".into()),
                 ..Default::default()
             },
@@ -340,7 +351,7 @@ async fn closing_btw_cancels_only_the_temporary_execution_and_hides_it_from_list
             }
         }).await.expect("parent updates still delivered");
     }
-    assert_eq!(store.load(parent).await.unwrap().parts, before.parts);
+    assert_eq!(kernel_fixture::entries(&application, parent).await, before);
     let _ = release.send(());
     provider.await.unwrap();
 }

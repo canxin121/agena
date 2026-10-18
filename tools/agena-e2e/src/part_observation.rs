@@ -1,34 +1,47 @@
-//! Explicit factual history reads and temporary content projections for probes.
-use agena_storage::store::{Part, PartCursor, SessionStore};
+//! Explicit bounded public projections for real-provider probes.
+use agena_api::{live::ToolDetailSection, part::PartResource, queries::ReadPartsParams};
+use agena_application::Application;
 use std::collections::BTreeMap;
 
-pub async fn parts(store: &dyn SessionStore, session_id: i64) -> anyhow::Result<Vec<Part>> {
-    let mut before = None;
-    let mut parts = Vec::new();
+pub async fn parts(
+    application: &Application,
+    session_id: i64,
+) -> anyhow::Result<Vec<PartResource>> {
+    let mut cursor = None;
+    let mut pages = Vec::new();
+    let mut count = 0usize;
     loop {
-        let page = store.load_page(session_id, before, 256).await?;
-        let next = page.parts.last().map(|p| PartCursor {
-            created_at_ms: p.created_at_ms,
-            part_id: p.part_id,
-        });
-        let more = page.has_more;
-        parts.extend(page.parts);
-        if !more {
+        let page = application
+            .read_parts(ReadPartsParams {
+                session_id,
+                cursor: cursor.clone(),
+                limit: Some(256),
+                sections: ToolDetailSection::ALL.to_vec(),
+                ..Default::default()
+            })
+            .await?;
+        anyhow::ensure!(
+            count.saturating_add(page.parts.len()) <= 65_536,
+            "probe transcript exceeds its export limit"
+        );
+        count += page.parts.len();
+        pages.push(page.parts);
+        if !page.page.has_more {
             break;
         }
         anyhow::ensure!(
-            next.is_some() && next != before,
+            page.page.next_cursor.is_some() && page.page.next_cursor != cursor,
             "history cursor did not advance"
         );
-        before = next;
+        cursor = page.page.next_cursor;
     }
-    parts.sort_unstable_by_key(|p| (p.created_at_ms, p.part_id));
-    Ok(parts)
+    Ok(pages.into_iter().rev().flatten().collect())
 }
 
 pub async fn text(
-    store: &dyn SessionStore,
-    parts: &[Part],
+    application: &Application,
+    session_id: i64,
+    parts: &[PartResource],
 ) -> anyhow::Result<BTreeMap<i64, String>> {
     let mut result = BTreeMap::new();
     for part in parts {
@@ -46,12 +59,35 @@ pub async fn text(
             for reference in resources {
                 let reference: agena_domain::ContentRef =
                     serde_json::from_value(reference.clone())?;
-                let body = store
-                    .contents()
-                    .read_text(reference.resource_id, 1024 * 1024)
-                    .await?;
-                anyhow::ensure!(!body.gap && !body.truncated, "probe output was incomplete");
-                text.push_str(&body.text);
+                let mut after = None;
+                loop {
+                    let page = application
+                        .read_content(session_id, reference.resource_id, after, 64 * 1024)
+                        .await?;
+                    anyhow::ensure!(
+                        !page.gap
+                            && page.resource.dropped_packets == 0
+                            && page.resource.dropped_bytes == 0,
+                        "probe output was incomplete"
+                    );
+                    for chunk in page.chunks {
+                        if let Some(body) = chunk.payload.text_content() {
+                            text.push_str(body);
+                        }
+                    }
+                    anyhow::ensure!(
+                        text.len() <= 16 * 1024 * 1024,
+                        "probe output exceeds its export limit"
+                    );
+                    if !page.has_more {
+                        break;
+                    }
+                    anyhow::ensure!(
+                        Some(page.next_cursor) != after,
+                        "content cursor did not advance"
+                    );
+                    after = Some(page.next_cursor);
+                }
             }
         }
         if part.kind == "tool_call" {

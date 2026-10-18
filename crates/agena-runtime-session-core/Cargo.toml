@@ -12,13 +12,9 @@ test-support = []
 [dependencies]
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }
-agena-provider = { workspace = true }
 agena-runtime-contracts = { workspace = true }
-agena-storage = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
 
 [lints]
 workspace = true

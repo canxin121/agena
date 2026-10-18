@@ -69,6 +69,9 @@ fn frame(kind: ContentKind, payloads: Vec<ContentPayload>) -> ContentView {
         sequence: payloads.len() as u64,
     };
     let resource = ContentResource {
+        dropped_packets: 0,
+        committed_dropped_bytes: 0,
+        committed_dropped_packets: 0,
         resource_id: id,
         owner_session_id: 1,
         part_id: 2,
@@ -79,7 +82,7 @@ fn frame(kind: ContentKind, payloads: Vec<ContentPayload>) -> ContentView {
             sequence: 0,
             ..cursor
         },
-        total_bytes: 0,
+        total_bytes: None,
         dropped_bytes: 0,
         retained_ranges: vec![],
         capture_error: None,

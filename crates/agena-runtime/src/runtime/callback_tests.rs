@@ -36,6 +36,7 @@ struct Observed {
     reload_request: Mutex<Option<agena_plugin_sdk::host_api::HostConfigReloadRequestResponse>>,
     prompt_entered: tokio::sync::Notify,
     prompt_release: tokio_util::sync::CancellationToken,
+    execution_fixture: AtomicBool,
     session_ends: Mutex<Vec<agena_plugin_sdk::SessionEndInput>>,
     session_end_entered: tokio::sync::Notify,
     session_end_release: tokio_util::sync::CancellationToken,
@@ -106,6 +107,9 @@ impl Plugin for CallbackPlugin {
         &self,
         _: agena_plugin_sdk::UserPromptSubmitInput,
     ) -> agena_plugin_sdk::Result<Option<agena_plugin_sdk::UserPromptSubmitPatch>> {
+        if self.0.execution_fixture.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         self.0.prompt_entered.notify_one();
         self.0.prompt_release.cancelled().await;
         Ok(None)
@@ -125,6 +129,9 @@ impl Plugin for CallbackPlugin {
         &self,
         _: agena_plugin_sdk::ShellEnvInput,
     ) -> agena_plugin_sdk::Result<Option<agena_plugin_sdk::ShellEnvPatch>> {
+        if self.0.execution_fixture.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         self.waiting_hook_reload().await?;
         Ok(None)
     }
@@ -133,6 +140,9 @@ impl Plugin for CallbackPlugin {
         &self,
         _: agena_plugin_sdk::ChatParamsInput,
     ) -> agena_plugin_sdk::Result<Option<agena_plugin_sdk::ChatParamsPatch>> {
+        if self.0.execution_fixture.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         self.waiting_hook_reload().await?;
         Ok(None)
     }
@@ -190,6 +200,147 @@ impl Plugin for CallbackPlugin {
             sink.stream_id(),
             serde_json::to_string(&accepted).unwrap(),
         ))
+    }
+}
+
+struct CallbackExecutionProvider {
+    model: agena_domain::ModelId,
+    called: tokio::sync::Notify,
+    calls: AtomicUsize,
+    tool_input: Option<Value>,
+}
+
+#[async_trait::async_trait]
+impl crate::provider::ModelRuntime for CallbackExecutionProvider {
+    fn id(&self) -> &str {
+        "callback-fixture"
+    }
+
+    fn default_model(&self) -> &agena_domain::ModelId {
+        &self.model
+    }
+
+    fn prompt_cache_shape(
+        &self,
+        _: &agena_domain::ModelId,
+    ) -> Option<agena_provider::PromptCacheShape> {
+        Some(agena_provider::PromptCacheShape::from_fields(
+            "callback-fixture",
+            [("endpoint", "controlled")],
+        ))
+    }
+
+    async fn list_models(
+        &self,
+    ) -> Result<Vec<agena_domain::Model>, agena_runtime_provider::ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _: agena_provider::CompletionRequest,
+    ) -> Result<agena_provider::CompletionResponse, agena_runtime_provider::ProviderError> {
+        Err(agena_runtime_provider::ProviderError::Config(
+            "callback fixture supports streaming only".into(),
+        ))
+    }
+
+    async fn complete_stream(
+        &self,
+        _: agena_provider::CompletionRequest,
+    ) -> Result<crate::provider::core::CompletionEventStream, agena_runtime_provider::ProviderError>
+    {
+        use agena_provider::{CompletionFinishReason, CompletionStreamEvent};
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        self.called.notify_one();
+        let Some(input) = &self.tool_input else {
+            return Ok(Box::pin(futures_util::stream::pending()));
+        };
+        let provider = agena_domain::ProviderId::new(self.id());
+        let mut events = Vec::new();
+        if call == 0 {
+            events.push(Ok(CompletionStreamEvent::ToolCallDelta {
+                provider_id: provider.clone(),
+                model: self.model.clone(),
+                stream_key: "callback:0".into(),
+                id: Some("nested-callback-tool".into()),
+                name: Some("tools_call".into()),
+                arguments_delta: json!({"tool": format!("{KEY}.reload"), "input": input})
+                    .to_string(),
+            }));
+        } else {
+            events.push(Ok(CompletionStreamEvent::TextDelta {
+                provider_id: provider.clone(),
+                model: self.model.clone(),
+                delta: "nested callback completed".into(),
+            }));
+        }
+        events.push(Ok(CompletionStreamEvent::Completed {
+            provider_id: provider,
+            model: self.model.clone(),
+            finish_reason: Some(if call == 0 {
+                CompletionFinishReason::ToolCalls
+            } else {
+                CompletionFinishReason::Stop
+            }),
+            usage: None,
+            provider_metadata: None,
+            end_turn: Some(call > 0),
+        }));
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+fn install_execution_provider(
+    fixture: &Fixture,
+    runtime: &AgenaRuntime,
+    tool_input: Option<Value>,
+) -> Arc<CallbackExecutionProvider> {
+    fixture
+        .observed
+        .execution_fixture
+        .store(true, Ordering::SeqCst);
+    let provider = Arc::new(CallbackExecutionProvider {
+        model: agena_domain::ModelId::new("controlled"),
+        called: tokio::sync::Notify::new(),
+        calls: AtomicUsize::new(0),
+        tool_input,
+    });
+    let mut registry = crate::provider::ProviderRegistry::new();
+    registry.register_arc(provider.clone());
+    let host = runtime.current_snapshot().plugin_manager();
+    let executor = crate::tool::ToolExecutor::new(
+        runtime.workspace_root().to_owned(),
+        crate::authorization::ExecutionPrincipal::new(
+            crate::permission::PermissionPolicy::allow_all(),
+            crate::permission::ToolPermissionPolicy::allow_all(),
+        ),
+        host.clone(),
+        None,
+        None,
+    );
+    runtime.session_manager().unwrap().reconfigure(
+        Arc::new(registry),
+        crate::ContextGovernor::new(agena_domain::ContextPolicy::default()),
+        crate::session::SessionProcessor::new(host),
+        executor,
+        crate::RuntimeSessionManagerConfig::default(),
+    );
+    provider
+}
+
+fn fixture_run_options() -> crate::SessionRunOptions {
+    crate::SessionRunOptions {
+        model_supports_parallel_tool_calls: None,
+        model: agena_domain::ModelRef::new("callback-fixture", "controlled"),
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature: None,
+        max_output_tokens: None,
     }
 }
 
@@ -288,13 +439,10 @@ impl Fixture {
             },
             workspace_root: Some(path),
             bootstrap_preflight: None,
-            database_connection: None,
             database_url: Some("sqlite::memory:".into()),
             database_path: None,
-            scheduler_database_connection: None,
             scheduler_database_url: Some("sqlite::memory:".into()),
             scheduler_database_path: None,
-            initialize_schema: true,
             tracing_reload_handle: None,
         }
     }
@@ -696,17 +844,27 @@ async fn nested_bundled_settings_reload_waits_for_the_outer_http_call() {
         })
         .await
         .unwrap();
-    let caller = runtime.clone();
-    let invocation = tokio::spawn(async move {
-        invoke_in_session(
-            &caller,
-            KEY,
-            "reload",
-            json!({"nested": true, "wait": true, "repeat": true}),
+    install_execution_provider(
+        &fixture,
+        &runtime,
+        Some(json!({"nested": true, "wait": true, "repeat": true})),
+    );
+    // A nested host call needs a live native tool capability. Drive the
+    // outer HTTP plugin through a controlled provider turn instead of
+    // granting authority to an arbitrary session/call-id pair.
+    let manager = runtime.session_manager().unwrap();
+    let submitted = crate::SessionExecutionCommandService::submit_user_run(
+        manager.as_ref(),
+        crate::SessionUserRunRequest::new(
             session.id,
-        )
-        .await
-    });
+            fixture_run_options(),
+            agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "exercise the nested settings callback".into(),
+            }]),
+        ),
+    )
+    .await
+    .unwrap();
     tokio::time::timeout(WAIT, fixture.observed.reload_entered.notified())
         .await
         .unwrap();
@@ -723,9 +881,28 @@ async fn nested_bundled_settings_reload_waits_for_the_outer_http_call() {
         "nested settings return must not end the outer call's barrier"
     );
     fixture.observed.reload_release.notify_one();
-    let result = invocation.await.unwrap();
-    assert!(result.is_ok(), "nested reload caller completes: {result:?}");
     wait_reload(&runtime, &accepted.task_id).await;
+    let execution = submitted.receipt.unwrap().execution_id;
+    tokio::time::timeout(WAIT, async {
+        while manager.is_run_active(session.id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .execution(
+                agena_domain::session_kernel::SessionId::try_from(session.id).unwrap(),
+                execution,
+            )
+            .await
+            .unwrap()
+            .phase,
+        agena_domain::session_kernel::ExecutionPhase::Succeeded,
+    );
     assert_eq!(fixture.read_config().await, json!("zh-CN"));
     runtime.current_snapshot().plugin_manager().shutdown().await;
 }

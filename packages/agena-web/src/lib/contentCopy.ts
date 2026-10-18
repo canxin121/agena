@@ -1,6 +1,6 @@
 import { i18n } from '@/i18n'
 import type { IBuffer } from '@xterm/xterm'
-import { type ContentCursor, type ContentPage } from './content'
+import { contentChunkStart, type ContentCursor, type ContentPage } from './content'
 
 const MAX_COPY_BYTES = 16 * 1024 * 1024
 
@@ -29,18 +29,30 @@ export async function readContentForCopy(
     for (const chunk of page.chunks) {
       if (chunk.cursor.epoch !== target.epoch)
         throw new Error(i18n.global.t('errors.content.generationChangedDuringCopy'))
-      if (chunk.cursor.sequence > target.sequence) break
+      const payload = chunk.payload.type === 'document_event' ? chunk.payload.input : chunk.payload
+      const textSource = page.resource.kind === 'text' && chunk.payload.type === 'text'
+      if (chunk.cursor.sequence > target.sequence && !textSource) break
       if (chunk.cursor.sequence <= cursor.sequence) continue
-      if (chunk.cursor.sequence !== cursor.sequence + 1) await mark()
-      if ('text' in chunk.payload) {
-        bytes += encoder.encode(chunk.payload.text).byteLength
+      const start = contentChunkStart(chunk, page.resource.kind)
+      if (start < 0) throw new Error(gapMarker)
+      if (start > cursor.sequence) await mark()
+      if ('text' in payload) {
+        let text = payload.text
+        if (textSource) {
+          const encoded = encoder.encode(text)
+          const first = Math.max(0, cursor.sequence - start)
+          const last = Math.min(encoded.byteLength, target.sequence - start)
+          if (last <= first) break
+          text = new TextDecoder('utf-8', { fatal: true }).decode(encoded.subarray(first, last))
+        } else if (start < cursor.sequence) throw new Error(gapMarker)
+        bytes += encoder.encode(text).byteLength
         if (bytes > MAX_COPY_BYTES) throw new Error(limitMessage)
-        await consume(chunk.payload.text)
+        await consume(text)
       }
-      cursor = chunk.cursor
+      cursor = { ...chunk.cursor, sequence: Math.min(chunk.cursor.sequence, target.sequence) }
     }
     if (!page.has_more || cursor.sequence >= target.sequence || page.next_cursor.sequence >= target.sequence) {
-      if (cursor.sequence < target.sequence || (page.resource.dropped_bytes > 0 && !marked)) await mark()
+      if (cursor.sequence < target.sequence || ((page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0) && !marked)) await mark()
       return
     }
     if (cursor.sequence === before) throw new Error(gapMarker)

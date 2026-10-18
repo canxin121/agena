@@ -1216,7 +1216,7 @@ async fn reconnect_removes_missed_memberships_without_resurrecting_them_from_old
     assert!(!app.transcript.parts.iter().any(|part| part.part_id == 12));
 }
 
-/// Two assistant rounds (part ids 3 and 8) merge into one entry, and the
+/// Two assistant rounds (part ids 3 and 12) merge into one entry, and the
 /// bounded run window hides an older page prefix of the second run. The
 /// entry must render exactly ONE collapsed-run row, owned by the server fold.
 #[tokio::test]
@@ -1232,10 +1232,10 @@ async fn a_folded_multi_run_reply_renders_one_marker_row_and_keeps_every_part_re
             "detail",
         )
     }));
-    parts.push(parts_fixtures::run(8, "assistant", "completed"));
+    parts.push(parts_fixtures::run(12, "assistant", "completed"));
     parts.extend((14..20).map(|part_id| {
         parts_fixtures::hook(
-            8,
+            12,
             part_id,
             "assistant",
             &format!("Part {part_id}"),
@@ -1244,8 +1244,8 @@ async fn a_folded_multi_run_reply_renders_one_marker_row_and_keeps_every_part_re
     }));
     app.transcript.parts = parts;
     app.transcript.transcript_folds = vec![TranscriptFold {
-        run_id: 8,
-        run_ids: vec![8],
+        run_id: 12,
+        run_ids: vec![12],
         anchor_part_id: 14,
         hidden_count: 5,
         next_cursor: Some("before-14".into()),
@@ -1253,7 +1253,7 @@ async fn a_folded_multi_run_reply_renders_one_marker_row_and_keeps_every_part_re
     let key = TranscriptNodeKey::Activity {
         entry_id: TranscriptEntryId::StoredMessage(3),
         content_id: TranscriptContentId::TranscriptFold {
-            run_id: 8,
+            run_id: 12,
             anchor_part_id: 14,
         },
     };
@@ -1345,10 +1345,10 @@ async fn one_merged_marker_row_reveals_every_run_of_a_multi_run_reply() {
     // Consecutive run markers alone stay one contiguous activity run, so a
     // non-activity part is what separates the two rounds into two runs.
     parts.push(parts_fixtures::paste(3, 10, "user", "pasted note"));
-    parts.push(parts_fixtures::run(8, "assistant", "completed"));
+    parts.push(parts_fixtures::run(11, "assistant", "completed"));
     parts.extend((14..20).map(|part_id| {
         parts_fixtures::hook(
-            8,
+            11,
             part_id,
             "assistant",
             &format!("Part {part_id}"),

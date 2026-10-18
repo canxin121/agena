@@ -28,6 +28,7 @@ pub struct ContentView {
     gap: bool,
     windowed: bool,
     recovering: bool,
+    retired_epochs: Vec<ContentCursor>,
     text: String,
     terminal_frame: Option<(ContentCursor, u16, u16, bool)>,
     document: Option<agena_domain::ContentDocument>,
@@ -43,6 +44,7 @@ impl Default for ContentView {
             gap: false,
             windowed: false,
             recovering: false,
+            retired_epochs: Vec::new(),
             text: String::new(),
             terminal_frame: None,
             document: None,
@@ -55,10 +57,19 @@ impl ContentView {
     /// Return false on an unexplained gap so the reader resumes from the
     /// last accepted cursor. Duplicate frames never append output twice.
     pub fn apply(&mut self, page: ContentPage) -> bool {
+        if self
+            .retired_epochs
+            .iter()
+            .any(|cursor| cursor.epoch == page.next_cursor.epoch)
+        {
+            return true;
+        }
+        let previous_epoch = self.frame.as_ref().map(|frame| frame.resource.cursor.epoch);
         let reset = self.recovering
             || self
-                .cursor
-                .is_some_and(|cursor| cursor.epoch != page.next_cursor.epoch);
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.resource.cursor.epoch != page.next_cursor.epoch);
         if page.resource.cursor.epoch != page.next_cursor.epoch
             || page.resource.committed_cursor.epoch != page.next_cursor.epoch
             || page.next_cursor.sequence > page.resource.cursor.sequence
@@ -93,11 +104,51 @@ impl ContentView {
             if expected.is_some_and(|sequence| chunk.cursor.sequence <= sequence) {
                 continue;
             }
-            if expected.is_some_and(|sequence| chunk.cursor.sequence != sequence + 1) && !page.gap {
+            let start = if page.resource.kind == agena_domain::ContentKind::Text {
+                let ContentPayload::Text { text } = &chunk.payload else {
+                    return false;
+                };
+                let Some(start) = chunk.cursor.sequence.checked_sub(text.len() as u64) else {
+                    return false;
+                };
+                if let Some(sequence) = expected.filter(|sequence| *sequence > start)
+                    && !text.is_char_boundary((sequence - start) as usize)
+                {
+                    return false;
+                }
+                start
+            } else {
+                chunk.cursor.sequence.saturating_sub(1)
+            };
+            if expected.is_some_and(|sequence| start > sequence) && !page.gap {
                 return false;
             }
             expected = Some(chunk.cursor.sequence);
             match &chunk.payload {
+                ContentPayload::DocumentEvent { input, checkpoint } => {
+                    if let Some(checkpoint) = checkpoint {
+                        document = Some((**checkpoint).clone());
+                    } else if let agena_domain::ContentInput::Structured { event } = &**input {
+                        let Some(next) = document
+                            .as_ref()
+                            .filter(|_| {
+                                document_cursor.is_some_and(|cursor| {
+                                    cursor.epoch == chunk.cursor.epoch
+                                        && cursor.sequence + 1 == chunk.cursor.sequence
+                                })
+                            })
+                            .and_then(|document| document.updated(event).ok())
+                        else {
+                            self.cursor = None;
+                            self.recovering = true;
+                            return false;
+                        };
+                        document = Some(next);
+                    } else if document.is_none() {
+                        document = Some(agena_domain::ContentDocument::default());
+                    }
+                    document_cursor = Some(chunk.cursor);
+                }
                 ContentPayload::StructuredSnapshot { document: snapshot } => {
                     if snapshot.validate().is_err() {
                         return false;
@@ -154,26 +205,44 @@ impl ContentView {
             }
         }
         if reset {
+            let mut retired = std::mem::take(&mut self.retired_epochs);
+            if let Some(epoch) = previous_epoch.filter(|epoch| *epoch != page.next_cursor.epoch) {
+                retired.push(ContentCursor { epoch, sequence: 0 });
+                if retired.len() > 16 {
+                    retired.remove(0);
+                }
+            }
             *self = Self::default();
+            self.retired_epochs = retired;
         }
         if self.cursor.is_none()
-            && page
-                .chunks
-                .first()
-                .is_some_and(|chunk| chunk.cursor.sequence > 1)
+            && page.chunks.first().is_some_and(|chunk| {
+                if let ContentPayload::Text { text } = &chunk.payload
+                    && page.resource.kind == agena_domain::ContentKind::Text
+                {
+                    chunk.cursor.sequence > text.len() as u64
+                } else {
+                    chunk.cursor.sequence > 1
+                }
+            })
             && page.resource.kind != agena_domain::ContentKind::Structured
         {
             self.windowed = true;
         }
+        let mut applied_sequence = self.cursor.map(|cursor| cursor.sequence);
         for chunk in &page.chunks {
-            if self
-                .cursor
-                .is_some_and(|cursor| chunk.cursor.sequence <= cursor.sequence)
-            {
+            if applied_sequence.is_some_and(|sequence| chunk.cursor.sequence <= sequence) {
                 continue;
             }
             match &chunk.payload {
                 ContentPayload::Text { text } => {
+                    let text = if page.resource.kind == agena_domain::ContentKind::Text {
+                        let start = chunk.cursor.sequence - text.len() as u64;
+                        let skip = applied_sequence.unwrap_or(start).saturating_sub(start) as usize;
+                        &text[skip..]
+                    } else {
+                        text.as_str()
+                    };
                     self.text.push_str(text);
                     if page.resource.kind != agena_domain::ContentKind::Text {
                         self.parser.process(text.replace('\n', "\r\n").as_bytes());
@@ -193,6 +262,22 @@ impl ContentView {
                         self.parser.process(b"\x1b[0m");
                     }
                 }
+                ContentPayload::DocumentEvent { input, .. } => match &**input {
+                    agena_domain::ContentInput::Text { text } => {
+                        self.text.push_str(text);
+                        self.parser.process(text.replace('\n', "\r\n").as_bytes());
+                    }
+                    agena_domain::ContentInput::Log { text, stream } => {
+                        if *stream == agena_domain::CommandOutputStream::Stderr {
+                            self.parser.process(b"\x1b[31m");
+                        }
+                        self.parser.process(text.replace('\n', "\r\n").as_bytes());
+                        if *stream == agena_domain::CommandOutputStream::Stderr {
+                            self.parser.process(b"\x1b[0m");
+                        }
+                    }
+                    _ => {}
+                },
                 ContentPayload::Structured { .. } | ContentPayload::StructuredSnapshot { .. } => {}
                 ContentPayload::Terminal { screen } => {
                     self.parser
@@ -209,8 +294,10 @@ impl ContentView {
                         .process(screen.formatted_patch(rows_changed).as_bytes());
                 }
             }
+            applied_sequence = Some(chunk.cursor.sequence);
         }
-        self.gap |= page.gap || page.resource.dropped_bytes > 0;
+        self.gap |=
+            page.gap || page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0;
         self.terminal_frame = terminal_frame;
         self.document = document;
         self.document_cursor = document_cursor;
@@ -229,12 +316,36 @@ impl ContentView {
             self.cursor = Some(page.next_cursor);
         }
         let previous = self.frame.as_ref();
-        if previous
-            .is_some_and(|frame| frame.resource.cursor.sequence > page.resource.cursor.sequence)
+        let mut resource = if let Some(previous) =
+            previous.filter(|frame| frame.resource.cursor.sequence > page.resource.cursor.sequence)
         {
-            return true;
+            previous.resource.clone()
+        } else {
+            page.resource.clone()
+        };
+        if let Some(previous) = previous {
+            resource.committed_cursor.sequence = resource
+                .committed_cursor
+                .sequence
+                .max(previous.resource.committed_cursor.sequence)
+                .max(page.resource.committed_cursor.sequence);
+            resource.dropped_bytes = resource
+                .dropped_bytes
+                .max(previous.resource.dropped_bytes)
+                .max(page.resource.dropped_bytes);
+            resource.dropped_packets = resource
+                .dropped_packets
+                .max(previous.resource.dropped_packets)
+                .max(page.resource.dropped_packets);
+            resource.committed_dropped_bytes = resource
+                .committed_dropped_bytes
+                .max(previous.resource.committed_dropped_bytes)
+                .max(page.resource.committed_dropped_bytes);
+            resource.committed_dropped_packets = resource
+                .committed_dropped_packets
+                .max(previous.resource.committed_dropped_packets)
+                .max(page.resource.committed_dropped_packets);
         }
-        let mut resource = page.resource;
         if let Some(previous) = previous
             && previous.resource.state != ContentState::Active
             && resource.state == ContentState::Active

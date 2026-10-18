@@ -91,13 +91,10 @@ impl AgenaRuntime {
         let workspace_root = config.resolve_workspace_root()?;
         let RuntimeCompositionConfig {
             load_request,
-            database_connection,
             database_url,
             database_path,
-            scheduler_database_connection,
             scheduler_database_url,
             scheduler_database_path,
-            initialize_schema,
             tracing_reload_handle,
             bootstrap_preflight,
             workspace_root: _,
@@ -131,11 +128,8 @@ impl AgenaRuntime {
         let chat_database_path = database_path.clone();
         let database =
             agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
-                database_connection,
                 database_url,
                 database_path,
-                initialize_schema,
-                tracing,
             })
             .await
             .map_err(runtime_database_error)?;
@@ -159,7 +153,6 @@ impl AgenaRuntime {
                 None
             } else {
                 agena_runtime::connect_scheduler_database(
-                    scheduler_database_connection,
                     scheduler_database_url,
                     scheduler_database_path,
                     tracing,
@@ -289,21 +282,8 @@ impl AgenaRuntime {
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
-        // Startup recovery of abandoned runs is a precondition, not a
-        // background nicety: this process owns the data directory, so a run
-        // marker still in flight can only belong to a process that is gone,
-        // and every reader — overview, session list, session open — must
-        // observe settled state. Await it before the runtime is published
-        // (17.4).
-        if let Some(manager) = initial_snapshot.session_manager()
-            && let Err(error) = manager.reconcile_interrupted_executions().await
-        {
-            tracing::warn!(
-                target: "agena_session",
-                %error,
-                "startup session-run reconciliation failed"
-            );
-        }
+        // Opening the session kernel reconciles abandoned native attempts
+        // before the initial snapshot and its readers are published.
         if automatic_maintenance {
             runtime.spawn_background_tasks();
         }
@@ -332,13 +312,6 @@ impl AgenaRuntime {
                     "startup background task reconciliation failed"
                 );
             }
-            if let Err(error) = manager.reconcile_background_processes(64).await {
-                tracing::warn!(
-                    target: "agena_background",
-                    %error,
-                    "startup background process reconciliation failed"
-                );
-            }
             if let Err(error) = manager.recover_background_deliveries(64).await {
                 tracing::warn!(
                     target: "agena_background",
@@ -349,45 +322,74 @@ impl AgenaRuntime {
         });
     }
 
-    /// Project delegated-task status into the unified background-activity
-    /// registry. Subtask state is kept in the `sessions` row; the facade's
-    /// [`SessionChange::SessionMetaUpdated`](agena_storage::SessionChange)
-    /// notifications (emitted after commit, never persisted) drive this.
+    /// Follow native configuration and transcript changes with bounded replay.
     fn spawn_subtask_activity_bridge(&self) {
-        if self
+        let mut slot = self
             .subtask_bridge
             .lock()
-            .expect("subtask bridge lock")
-            .is_some()
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_some() {
             return;
         }
-        let Some(manager) = self.current_snapshot().session_manager() else {
+        let Some(manager) = self.session_manager() else {
             return;
         };
         let registry = self.activities.registry.clone();
-        let store = manager.session_store();
-        let completion_observer = self.background_completion.observer();
-        let subscription = store.subscribe_all(Arc::new(move |change| {
-            if let agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } = &change {
-                crate::activity::upsert_task_activity_from_meta(&registry, meta);
-            } else if match &change {
-                agena_storage::store::SessionChange::PartAdded { part, .. }
-                | agena_storage::store::SessionChange::PartUpdated { part, .. } => {
-                    // Task log rows omit thinking and run-marker bodies.
-                    // Their progress does not change an observable log value.
-                    !matches!(part.kind.as_str(), "think" | "run")
+        let control = self.task_control_handle();
+        *slot = Some(tokio::spawn(async move {
+            let kernel = manager.session_kernel();
+            loop {
+                let mut watch = match kernel.reader.watch_all(None) {
+                    Ok(watch) => watch,
+                    Err(_) => break,
+                };
+                let mut before = None;
+                loop {
+                    let page = match kernel
+                        .reader
+                        .query_summaries(agena_storage::kernel::SummaryQuery {
+                            tasks_only: true,
+                            before,
+                            limit: 128,
+                            ..Default::default()
+                        })
+                        .await
+                    {
+                        Ok(page) => page,
+                        Err(error) => {
+                            tracing::warn!(%error,"task activity refresh failed");
+                            break;
+                        }
+                    };
+                    for meta in &page.sessions {
+                        if let Ok(config) = kernel.reader.configuration(meta.id).await {
+                            crate::activity::upsert_task_activity_from_meta(
+                                &registry, meta, &config,
+                            );
+                        }
+                    }
+                    if !page.has_more {
+                        break;
+                    }
+                    before = page.next;
                 }
-                agena_storage::store::SessionChange::PartRemoved { .. } => true,
-                _ => false,
-            } {
-                registry.touch_task_logs(change.session_id());
+                loop {
+                    let changed = tokio::select! {_ =control.cancelled()=>return,changed=watch.recv()=>changed};
+                    let change = match changed {
+                        Ok(change) => change,
+                        Err(agena_storage::kernel::WatchError::Reset { .. }) => break,
+                        Err(_) => return,
+                    };
+                    if let (Ok(meta), Ok(config)) = (
+                        kernel.reader.summary(change.session).await,
+                        kernel.reader.configuration(change.session).await,
+                    ) {
+                        crate::activity::upsert_task_activity_from_meta(&registry, &meta, &config);
+                    }
+                    registry.touch_task_logs(change.session.get());
+                }
             }
-            completion_observer(change);
         }));
-        // Retain the handle for the runtime's lifetime; dropping it would
-        // unsubscribe (15.5).
-        *self.subtask_bridge.lock().expect("subtask bridge lock") = Some(subscription);
     }
 
     /// Publish just the changed cron descriptor. Install before admission so
@@ -462,42 +464,63 @@ mod provider_client_version_refresh_tests {
 mod durable_activity_projection_tests {
     use std::collections::BTreeMap;
 
-    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
-    use agena_storage::store::{
-        BackgroundOperation, BackgroundOperationKind, BackgroundOperationPhase,
-    };
-
     use super::{durable_operation_activity, scheduled_job_activity};
-
+    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
+    use agena_storage::kernel::{
+        BackgroundActivityKind as Kind, BackgroundActivityStart, BackgroundActivityView, EntryId,
+        SessionId, ToolId,
+    };
     #[test]
     fn monitor_projection_keeps_durable_session_and_source_part_identity() {
+        let id = agena_domain::ActivityId::new();
         let activity = durable_operation_activity(
             &BTreeMap::new(),
-            BackgroundOperation {
-                operation_id: "bg_58_42".to_owned(),
-                session_id: 58,
-                launch_run_id: Some(40),
-                launch_tool_part_id: Some(42),
-                kind: BackgroundOperationKind::Monitor,
-                external_id: Some("proc_58_42".to_owned()),
-                phase: BackgroundOperationPhase::Running,
+            BackgroundActivityView {
+                id,
+                origin_session_id: SessionId::try_from(58).unwrap(),
+                launch_tool: ToolId::try_from(42).unwrap(),
+                launch_entry: EntryId::try_from(77).unwrap(),
+                start: BackgroundActivityStart {
+                    kind: Kind::Monitor,
+                    label: "watch".into(),
+                },
                 outcome: None,
-                failure: None,
-                last_event_seq: 3,
-                owner_id: None,
-                lease_until_ms: None,
-                revision: 2,
                 created_at_ms: 100,
-                updated_at_ms: 120,
                 finished_at_ms: None,
             },
         );
+        assert_eq!(activity.id, "proc_58_42");
         assert_eq!(activity.kind, BackgroundActivityKind::Monitor);
         assert_eq!(activity.status, BackgroundActivityStatus::Running);
         assert_eq!(activity.session_id, Some(58));
-        assert_eq!(activity.source_part_id, Some(42));
-        assert_eq!(activity.operation_id.as_deref(), Some("bg_58_42"));
-        assert_eq!(activity.last_seq, 3);
+        assert_eq!(activity.source_part_id, Some(77));
+        assert_eq!(activity.operation_id, Some(id.to_string()));
+    }
+
+    #[test]
+    fn durable_terminal_outcome_overrides_a_stale_live_activity() {
+        let mut operation = BackgroundActivityView {
+            id: agena_domain::ActivityId::new(),
+            origin_session_id: SessionId::try_from(58).unwrap(),
+            launch_tool: ToolId::try_from(42).unwrap(),
+            launch_entry: EntryId::try_from(77).unwrap(),
+            start: BackgroundActivityStart {
+                kind: Kind::Process,
+                label: "process".into(),
+            },
+            outcome: None,
+            created_at_ms: 100,
+            finished_at_ms: None,
+        };
+        let live = durable_operation_activity(&BTreeMap::new(), operation.clone());
+        let live = BTreeMap::from([(live.id.clone(), live)]);
+        operation.outcome = Some(agena_storage::kernel::BackgroundActivityOutcome::Stopped);
+        operation.finished_at_ms = Some(200);
+        let terminal = durable_operation_activity(&live, operation);
+        assert_eq!(terminal.status, BackgroundActivityStatus::Stopped);
+        assert_eq!(terminal.finished_at_ms, Some(200));
+        assert!(!terminal.cancellable);
+        assert!(terminal.dismissible);
     }
 
     #[test]
@@ -593,61 +616,48 @@ mod durable_activity_projection_tests {
 
 fn durable_operation_activity(
     live: &BTreeMap<String, agena_domain::BackgroundActivity>,
-    operation: agena_storage::store::BackgroundOperation,
+    operation: agena_storage::kernel::BackgroundActivityView,
 ) -> agena_domain::BackgroundActivity {
     use agena_domain::{BackgroundActivity, BackgroundActivityKind, BackgroundActivityStatus};
-    use agena_storage::store::{BackgroundOperationKind, BackgroundOperationPhase};
-
-    let external_id = operation
-        .external_id
-        .clone()
-        .unwrap_or_else(|| operation.operation_id.clone());
-    let activity_id = match operation.kind {
-        BackgroundOperationKind::Task => format!("task_{external_id}"),
-        _ => external_id.clone(),
+    use agena_storage::kernel::{
+        BackgroundActivityKind as Kind, BackgroundActivityOutcome as Outcome,
     };
-    let kind = match operation.kind {
-        BackgroundOperationKind::Shell => BackgroundActivityKind::Shell,
-        BackgroundOperationKind::Task => BackgroundActivityKind::Task,
-        BackgroundOperationKind::Monitor => BackgroundActivityKind::Monitor,
-        BackgroundOperationKind::ScheduledDelivery => BackgroundActivityKind::Cron,
+    let external_id = agena_runtime_tools::managed_process_id(
+        operation.origin_session_id.get(),
+        operation.launch_tool.get(),
+    );
+    let kind = match operation.start.kind {
+        Kind::Process | Kind::Terminal => BackgroundActivityKind::Shell,
+        Kind::Monitor => BackgroundActivityKind::Monitor,
+        Kind::Task => BackgroundActivityKind::Task,
     };
-    let status = match operation.phase {
-        BackgroundOperationPhase::LaunchRequested | BackgroundOperationPhase::Launching => {
-            BackgroundActivityStatus::Pending
-        }
-        BackgroundOperationPhase::Running => BackgroundActivityStatus::Running,
-        BackgroundOperationPhase::Completed => BackgroundActivityStatus::Succeeded,
-        BackgroundOperationPhase::Failed | BackgroundOperationPhase::TimedOut => {
-            BackgroundActivityStatus::Failed
-        }
-        BackgroundOperationPhase::Cancelled | BackgroundOperationPhase::Interrupted => {
-            BackgroundActivityStatus::Cancelled
-        }
+    let id = if kind == BackgroundActivityKind::Task {
+        format!("activity_{}", operation.id)
+    } else {
+        external_id
     };
-    let mut activity = live.get(&activity_id).cloned().unwrap_or_else(|| {
-        let title = match kind {
-            BackgroundActivityKind::Shell => format!("Background shell · {external_id}"),
-            BackgroundActivityKind::Monitor => format!("Monitor · {external_id}"),
-            BackgroundActivityKind::Task => format!("Delegated task · {external_id}"),
-            BackgroundActivityKind::Cron => format!("Scheduled delivery · {external_id}"),
-            BackgroundActivityKind::Runtime | BackgroundActivityKind::Browser => {
-                external_id.clone()
-            }
-        };
-        BackgroundActivity {
-            id: activity_id.clone(),
+    let status = match operation.outcome {
+        None => BackgroundActivityStatus::Running,
+        Some(Outcome::Succeeded { .. }) => BackgroundActivityStatus::Succeeded,
+        Some(Outcome::Failed { .. }) => BackgroundActivityStatus::Failed,
+        Some(Outcome::Stopped) => BackgroundActivityStatus::Stopped,
+        Some(Outcome::Interrupted { .. }) => BackgroundActivityStatus::Cancelled,
+    };
+    let mut view = live
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| BackgroundActivity {
+            id: id.clone(),
             kind,
             status,
-            title,
-            description: external_id.clone(),
+            title: operation.start.label.clone(),
+            description: operation.start.label.clone(),
             command: None,
             workdir: None,
-            session_id: (kind != BackgroundActivityKind::Task).then_some(operation.session_id),
-            parent_session_id: (kind == BackgroundActivityKind::Task)
-                .then_some(operation.session_id),
-            operation_id: Some(operation.operation_id.clone()),
-            source_part_id: operation.launch_tool_part_id,
+            session_id: Some(operation.origin_session_id.get()),
+            parent_session_id: None,
+            operation_id: Some(operation.id.to_string()),
+            source_part_id: Some(operation.launch_entry.get()),
             created_at_ms: operation.created_at_ms,
             started_at_ms: operation.created_at_ms,
             finished_at_ms: operation.finished_at_ms,
@@ -655,52 +665,21 @@ fn durable_operation_activity(
             exit_code: None,
             message: None,
             failure: None,
-            last_seq: operation.last_event_seq,
+            last_seq: 0,
             has_more: false,
             dropped_lines: 0,
             cancellable: status.is_active(),
             dismissible: status.is_terminal(),
-        }
-    });
-    activity.kind = kind;
-    activity.status = status;
-    activity.operation_id = Some(operation.operation_id);
-    activity.source_part_id = operation.launch_tool_part_id;
-    activity.created_at_ms = operation.created_at_ms;
-    activity.started_at_ms = operation.created_at_ms;
-    activity.finished_at_ms = operation.finished_at_ms;
-    activity.last_seq = activity.last_seq.max(operation.last_event_seq);
-    activity.cancellable = status.is_active();
-    activity.dismissible = status.is_terminal();
-    match kind {
-        // Durable ownership fixes the process registry's intentionally
-        // session-neutral shell record.
-        BackgroundActivityKind::Shell | BackgroundActivityKind::Monitor => {
-            activity.session_id = Some(operation.session_id);
-        }
-        // Task registry rows point at the child session; the operation owner
-        // is the parent that launched it.
-        BackgroundActivityKind::Task => {
-            activity.parent_session_id = Some(operation.session_id);
-        }
-        _ => {}
-    }
-    if activity.failure.is_none()
-        && let Some(failure) = operation.failure
-    {
-        match serde_json::from_value(failure) {
-            Ok(failure) => activity.failure = Some(failure),
-            Err(error) => tracing::warn!(
-                operation_id = activity.operation_id.as_deref().unwrap_or("unknown"),
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "decode a persisted background-operation failure",
-                    &error,
-                ),
-                "background activity failure projection is incomplete"
-            ),
-        }
-    }
-    activity
+        });
+    view.kind = kind;
+    view.status = status;
+    view.operation_id = Some(operation.id.to_string());
+    view.source_part_id = Some(operation.launch_entry.get());
+    view.session_id = Some(operation.origin_session_id.get());
+    view.finished_at_ms = operation.finished_at_ms;
+    view.cancellable = status.is_active();
+    view.dismissible = status.is_terminal();
+    view
 }
 
 fn scheduled_job_activity(
@@ -822,49 +801,65 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .collect::<BTreeMap<_, _>>();
 
         if let Some(manager) = self.current_snapshot().session_manager() {
-            let session_store = manager.session_store();
-            // A dropped terminal observer must not leave an in-memory Running
-            // row visible after the durable aggregate has already settled.
-            // Resolve every registry-backed durable kind first, including
-            // terminal operations, then add active aggregates that have no
-            // process-local detail (for example after restart).
-            let include_durable = filter.kinds.is_empty()
-                || filter.kinds.iter().any(|kind| {
-                    matches!(
-                        kind,
-                        agena_domain::BackgroundActivityKind::Shell
-                            | agena_domain::BackgroundActivityKind::Monitor
-                            | agena_domain::BackgroundActivityKind::Task
-                    )
-                });
-            if include_durable {
-                for live_activity in projected.values().cloned().collect::<Vec<_>>() {
-                    if let Some(operation) =
-                        durable_operation_for_live_activity(session_store.as_ref(), &live_activity)
-                            .await?
-                    {
-                        let activity = durable_operation_activity(&projected, operation);
-                        projected.insert(activity.id.clone(), activity);
+            let kernel = manager.session_kernel();
+            let owner = filter
+                .session_id
+                .map(agena_storage::kernel::SessionId::try_from)
+                .transpose()
+                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
+            // Reconcile live records by identity even for an active-only
+            // query, so a durable terminal outcome removes a stale live run.
+            for id in projected.keys().cloned().collect::<Vec<_>>() {
+                let Some((session, tool)) = managed_process_scope(&id) else {
+                    continue;
+                };
+                match kernel.reader.tool(session, tool).await {
+                    Ok(tool) => {
+                        if let Some(activity) = tool.activities.last() {
+                            let operation =
+                                kernel.reader.activity(session, *activity).await.map_err(
+                                    |error| {
+                                        agena_runtime::ActivityControlError::internal_error(&error)
+                                    },
+                                )?;
+                            let activity =
+                                durable_operation_activity(&projected, (*operation).clone());
+                            projected.insert(activity.id.clone(), activity);
+                        }
+                    }
+                    Err(agena_storage::kernel::KernelError::NotFound(_)) => {
+                        projected.remove(&id);
+                    }
+                    Err(error) => {
+                        return Err(agena_runtime::ActivityControlError::internal_error(&error));
                     }
                 }
-                let operations = if let Some(session_id) = filter.session_id {
-                    session_store
-                        .active_background_operations_for_session(session_id, None, 4_096)
-                        .await
-                } else {
-                    session_store
-                        .active_background_operations(None, 4_096)
-                        .await
+            }
+            let mut after = None;
+            let mut observed = 0usize;
+            loop {
+                let operations = kernel
+                    .reader
+                    .background_activities(owner, after, filter.active_only, 256)
+                    .await
+                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
+                if observed + operations.len() > 4096 {
+                    return Err(agena_runtime::ActivityControlError::internal(
+                        "activity query exceeds 4096 records; narrow the session filter",
+                    ));
                 }
-                .map_err(|error| {
-                    agena_runtime::ActivityControlError::internal(format!(
-                        "load durable background operations: {error}"
-                    ))
-                })?;
-                for operation in operations {
-                    let activity = durable_operation_activity(&projected, operation);
+                observed += operations.len();
+                for operation in operations.iter() {
+                    if operation.start.kind == agena_storage::kernel::BackgroundActivityKind::Task {
+                        continue;
+                    }
+                    let activity = durable_operation_activity(&projected, operation.clone());
                     projected.insert(activity.id.clone(), activity);
                 }
+                if operations.len() < 256 {
+                    break;
+                }
+                after = operations.last().map(|operation| operation.id);
             }
 
             if (filter.kinds.is_empty()
@@ -933,41 +928,24 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 let source = cron_source_part_id(&job);
                 return Ok(scheduled_job_activity(job, source));
             }
-            let store = manager.session_store();
-            if let Some(activity) = &live {
-                if let Some(operation) =
-                    durable_operation_for_live_activity(store.as_ref(), activity).await?
-                {
-                    return Ok(durable_operation_activity(
-                        &BTreeMap::from([(activity.id.clone(), activity.clone())]),
-                        operation,
-                    ));
-                }
-            } else {
-                use agena_storage::store::BackgroundOperationKind;
-                let (external_id, kinds): (&str, &[BackgroundOperationKind]) =
-                    if let Some(task) = activity_id.strip_prefix("task_") {
-                        (task, &[BackgroundOperationKind::Task])
-                    } else {
-                        (
-                            activity_id,
-                            &[
-                                BackgroundOperationKind::Shell,
-                                BackgroundOperationKind::Monitor,
-                                BackgroundOperationKind::ScheduledDelivery,
-                            ],
-                        )
-                    };
-                for kind in kinds {
-                    if let Some(operation) = store
-                        .background_operation_by_external_id(*kind, external_id)
+            if let Some((session, tool)) = managed_process_scope(activity_id) {
+                let kernel = manager.session_kernel();
+                let tool = kernel
+                    .reader
+                    .tool(session, tool)
+                    .await
+                    .map_err(|e| agena_runtime::ActivityControlError::internal_error(&e))?;
+                if let Some(id) = tool.activities.last() {
+                    let operation = kernel
+                        .reader
+                        .activity(session, *id)
                         .await
-                        .map_err(|error| {
-                            agena_runtime::ActivityControlError::internal_error(&error)
-                        })?
-                    {
-                        return Ok(durable_operation_activity(&BTreeMap::new(), operation));
-                    }
+                        .map_err(|e| agena_runtime::ActivityControlError::internal_error(&e))?;
+                    let current = live
+                        .as_ref()
+                        .map(|activity| BTreeMap::from([(activity.id.clone(), activity.clone())]))
+                        .unwrap_or_default();
+                    return Ok(durable_operation_activity(&current, (*operation).clone()));
                 }
             }
         }
@@ -1220,48 +1198,17 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
     }
 }
 
-async fn durable_operation_for_live_activity(
-    store: &dyn agena_storage::store::SessionStore,
-    activity: &agena_domain::BackgroundActivity,
-) -> Result<Option<agena_storage::store::BackgroundOperation>, agena_runtime::ActivityControlError>
-{
-    use agena_domain::BackgroundActivityKind;
-    use agena_storage::store::BackgroundOperationKind;
-
-    let query = |kind, external_id: &str| {
-        let external_id = external_id.to_owned();
-        async move {
-            store
-                .background_operation_by_external_id(kind, &external_id)
-                .await
-                .map_err(|error| {
-                    agena_runtime::ActivityControlError::internal(format!(
-                        "resolve durable background activity {}: {error}",
-                        activity.id
-                    ))
-                })
-        }
-    };
-    match activity.kind {
-        BackgroundActivityKind::Shell => {
-            if let Some(operation) = query(BackgroundOperationKind::Shell, &activity.id).await? {
-                return Ok(Some(operation));
-            }
-            query(BackgroundOperationKind::Monitor, &activity.id).await
-        }
-        BackgroundActivityKind::Monitor => {
-            query(BackgroundOperationKind::Monitor, &activity.id).await
-        }
-        BackgroundActivityKind::Task => {
-            let Some(task_id) = activity.id.strip_prefix("task_") else {
-                return Ok(None);
-            };
-            query(BackgroundOperationKind::Task, task_id).await
-        }
-        BackgroundActivityKind::Cron
-        | BackgroundActivityKind::Runtime
-        | BackgroundActivityKind::Browser => Ok(None),
-    }
+fn managed_process_scope(
+    id: &str,
+) -> Option<(
+    agena_storage::kernel::SessionId,
+    agena_storage::kernel::ToolId,
+)> {
+    let mut pieces = id.strip_prefix("proc_")?.split('_');
+    let session =
+        agena_storage::kernel::SessionId::try_from(pieces.next()?.parse::<i64>().ok()?).ok()?;
+    let tool = agena_storage::kernel::ToolId::try_from(pieces.next()?.parse::<i64>().ok()?).ok()?;
+    pieces.next().is_none().then_some((session, tool))
 }
 
 impl agena_runtime::ModelCatalogRuntimeService for AgenaRuntime {
@@ -2439,13 +2386,10 @@ pub(crate) struct AgenaRuntimeShared {
     pub(crate) inner: Arc<AgenaRuntimeInner>,
     pub(crate) activities: Arc<crate::activity::ActivityRuntimeState>,
     pub(crate) live_signals: Arc<crate::live_signal::LiveSignalHub>,
-    /// Holds the subtask→activity facade subscription for the runtime's
-    /// lifetime. The handle must not be dropped or it unsubscribes (15.5).
-    subtask_bridge: Arc<std::sync::Mutex<Option<agena_storage::store::GlobalSubscription>>>,
-    /// Correlates launched-in-background operations with their transcript
-    /// parts. The observer subscription it creates is held by
-    /// `subtask_bridge`; the completion signals reach it through the monitor
-    /// `on_finished` callback and the facade `SessionMetaUpdated` events.
+    /// Bounded kernel-feed task retained for the runtime lifetime.
+    subtask_bridge: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Reliable process event/completion bridge. Task supervisors publish
+    /// their own outcomes directly through the same kernel delivery port.
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
 }
@@ -2494,9 +2438,9 @@ impl AgenaRuntime {
                 )),
             }
         });
-        let session_store = session_manager
+        let session_kernel = session_manager
             .as_ref()
-            .map(|manager| manager.session_store());
+            .map(|manager| manager.session_kernel());
         let session_queries = session_manager
             .as_ref()
             .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionQueryService>);
@@ -2551,7 +2495,7 @@ impl AgenaRuntime {
                     Some(Arc::new(Adapter(Arc::clone(&self.live_signals)))
                         as Arc<dyn agena_runtime::RuntimeLiveSignalService>)
                 },
-                session_store,
+                session_kernel,
                 session_queries,
                 execution_control,
                 execution_commands,
@@ -2590,6 +2534,15 @@ impl AgenaRuntime {
         if !self.inner.control_state.shutdown() {
             return;
         }
+        self.background_completion.set_manager(None);
+        if let Some(task) = self
+            .subtask_bridge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
         if let Some(service) = self.activities.monitor.as_ref() {
             service.shutdown();
         }
@@ -2599,9 +2552,34 @@ impl AgenaRuntime {
             }
             match tokio::runtime::Handle::try_current() {
                 Ok(_handle) => {
-                    let broadcast = session_manager
-                        .broadcast_active_session_end(agena_plugin_host::SessionEndReason::Other);
-                    agena_runtime::spawn_detached(broadcast);
+                    let kernel = self.inner.session_kernel.clone();
+                    agena_runtime::spawn_detached(async move {
+                        session_manager
+                            .broadcast_active_session_end(
+                                agena_plugin_host::SessionEndReason::Other,
+                            )
+                            .await;
+                        loop {
+                            match session_manager.shutdown().await {
+                                Ok(()) => break,
+                                Err(AppError::PersistenceBusy) => {
+                                    tracing::warn!(
+                                        "waiting for session supervision to persist its final outcomes"
+                                    );
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error,"session supervision shutdown failed; retaining its kernel");
+                                    return;
+                                }
+                            }
+                        }
+                        if let Some(kernel) = kernel
+                            && let Err(error) = kernel.ports.clone().shutdown().await
+                        {
+                            tracing::warn!(%error,"session kernel shutdown failed");
+                        }
+                    });
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -2641,7 +2619,7 @@ impl AgenaRuntime {
                 &self.inner.load_request,
                 self.inner.workspace_root.as_path(),
                 super::SnapshotDatabases {
-                    chat: self.inner.database.clone(),
+                    chat: self.inner.session_kernel.clone(),
                     scheduler: self.inner.scheduler_database.clone(),
                 },
                 previous.session_manager(),
@@ -2951,34 +2929,6 @@ impl AgenaRuntime {
                                 let delivery_manager = Arc::clone(&manager);
                                 // Await the bounded round so maintenance never overlaps itself.
                                 {
-                                    if let Err(error) = delivery_manager
-                                        .renew_background_operation_leases(128)
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            target: "agena_background",
-                                            %error,
-                                            "background operation lease renewal failed"
-                                        );
-                                    }
-                                    if let Err(error) =
-                                        delivery_manager.reconcile_background_tasks(64).await
-                                    {
-                                        tracing::warn!(
-                                            target: "agena_background",
-                                            %error,
-                                            "periodic background task reconciliation failed"
-                                        );
-                                    }
-                                    if let Err(error) =
-                                        delivery_manager.reconcile_background_processes(64).await
-                                    {
-                                        tracing::warn!(
-                                            target: "agena_background",
-                                            %error,
-                                            "periodic background process reconciliation failed"
-                                        );
-                                    }
                                     if let Err(error) =
                                         delivery_manager.recover_background_deliveries(64).await
                                     {

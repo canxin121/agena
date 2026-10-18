@@ -398,7 +398,7 @@ async fn a_new_server_identity_invalidates_the_same_durable_resource() {
 
 #[tokio::test]
 async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships() {
-    use agena_storage::store::{NewPart, PartDelta, PartRole, PartState};
+    use agena_storage::kernel::{RequestId, ToolPhase, ToolResult};
     let server = start_test_server("http://127.0.0.1:9").await;
     let client = AgenaClient::new(&server.url).unwrap();
     let http = reqwest::Client::new();
@@ -406,36 +406,21 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         .create_session(server.workspace_id, "tool versions", None)
         .await
         .unwrap();
-    let store = application_for_test(&server.runtime)
-        .session_store_facade()
-        .unwrap();
-    let tool = agena_runtime_contracts::part_content::ToolCallContent {
-        name: "shell.exec".into(),
-        input: serde_json::json!({"command":"echo hello"}),
-        state: agena_domain::ToolResultState::Running,
-        ..Default::default()
-    };
-    let content = tool.as_value();
-    let run = store
-        .submit_user_run(
-            session.id,
-            vec![NewPart {
-                state: PartState::InProgress,
-                ..NewPart::pending("tool_call", PartRole::Assistant, content.clone())
-            }],
-            None,
-        )
-        .await
-        .unwrap();
-    let part = run
-        .parts
-        .iter()
-        .find(|part| part.kind == "tool_call")
-        .unwrap();
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
+    let (_attempt, _round, tool, entry) = kernel_fixture::tool(
+        &application,
+        session.id,
+        "shell.exec",
+        serde_json::json!({"command":"echo hello"}),
+    )
+    .await;
     let endpoint = |section: &str| {
         format!(
             "{}/api/v1/sessions/{}/parts/{}/tool-sections/{section}",
-            server.url, session.id, part.part_id
+            server.url,
+            session.id,
+            entry.get()
         )
     };
     let input = http
@@ -454,19 +439,7 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         .error_for_status()
         .unwrap();
     let output_etag = output.headers()["etag"].to_str().unwrap().to_owned();
-    let mut next = content;
-    next["output"] = serde_json::json!({"payload":{"text":"hello again"},"truncated":false});
-    store
-        .update_part(
-            session.id,
-            part.part_id,
-            PartDelta {
-                content: Some(next),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    tool.complete(RequestId::new(),ToolResult{phase:ToolPhase::Succeeded,value:serde_json::json!({"raw_output":{"payload":{"text":"hello again"},"truncated":false}})}).await.unwrap();
     let unchanged = http
         .get(endpoint("input"))
         .header("if-none-match", &input_etag)
@@ -486,7 +459,11 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         .unwrap();
     assert_eq!(changed.status(), reqwest::StatusCode::OK);
     assert_ne!(changed.headers()["etag"].to_str().unwrap(), output_etag);
-    store.delete(session.id).await.unwrap();
+    kernel
+        .sessions
+        .delete(RequestId::new(), session.id.try_into().unwrap())
+        .await
+        .unwrap();
     let deleted = http
         .get(endpoint("input"))
         .header("if-none-match", input_etag)

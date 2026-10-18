@@ -57,7 +57,11 @@ pub fn folds_from_run_window(page: &agena_api::live::SessionPartsResource) -> Ve
             if hidden_count == 0 {
                 return None;
             }
-            let anchor = page.parts.iter().find(|p| p.run_id == Some(run.run_id))?;
+            let anchor = page
+                .parts
+                .iter()
+                .find(|p| p.run_id == Some(run.run_id) && p.part_id != run.run_id)
+                .or_else(|| page.parts.iter().find(|p| p.run_id == Some(run.run_id)))?;
             Some(TranscriptFold {
                 run_id: run.run_id,
                 run_ids: vec![run.run_id],
@@ -92,11 +96,11 @@ pub fn parts_entries_with_folds(
 ) -> Vec<TranscriptEntry<'static>> {
     let marker_ids = parts
         .iter()
-        .filter(|part| part.kind == "run")
+        .filter(|part| part.is_message_boundary())
         .map(|part| part.part_id)
         .collect::<std::collections::BTreeSet<_>>();
     let mut content_by_run = std::collections::BTreeMap::<i64, Vec<&PartResource>>::new();
-    for part in parts.iter().filter(|part| part.kind != "run") {
+    for part in parts {
         if let Some(run_id) = part.run_id
             && marker_ids.contains(&run_id)
         {
@@ -108,10 +112,12 @@ pub fn parts_entries_with_folds(
     // owner. This is the same projection contract used by Web.
     let mut projected = Vec::new();
     for part in parts {
-        if part.kind == "run" {
+        if part.is_message_boundary() {
             let mut entry = run_marker_entry(part);
             if let Some(content) = content_by_run.remove(&part.part_id) {
-                entry.parts.extend(content.into_iter().map(entry_part));
+                entry
+                    .parts
+                    .extend(content.into_iter().flat_map(entry_parts));
             }
             // Maintenance runs have their own content lifecycle, separate
             // from the assistant reply that they are displayed beneath.
@@ -191,27 +197,8 @@ pub fn parts_entries_with_folds(
 pub fn parts_have_non_terminal_runs(parts: &[PartResource]) -> bool {
     parts
         .iter()
-        .filter(|part| part.kind == "run")
+        .filter(|part| part.is_message_boundary())
         .any(|marker| !message_status_is_terminal(message_status_from_string(&marker.state)))
-}
-
-/// The last assistant reply's text from the parts projection: the text parts
-/// of the final assistant `run` marker (design §4.1.1 marker == turn), joined
-/// with newlines. Returns `None` when no assistant run carries text.
-pub fn last_assistant_reply_text(parts: &[PartResource]) -> Option<String> {
-    let marker = parts.iter().rev().find(|part| {
-        part.kind == "run"
-            && part.role == "assistant"
-            && part.content.get("run_kind").and_then(Value::as_str) != Some("compaction")
-    })?;
-    // Resolve by owner, including output appended after a maintenance run.
-    let text = parts
-        .iter()
-        .filter(|part| part.run_id == Some(marker.part_id) && part.kind == "text")
-        .filter_map(|part| string_field(&part.content, "text"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.trim().is_empty()).then_some(text)
 }
 
 fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
@@ -326,6 +313,108 @@ fn attachment_kind_from_value(content: &serde_json::Value) -> Option<PartAttachm
     }
 }
 
+fn composer_resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
+    let kind = match resource.kind {
+        agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
+        agena_domain::ResourceKind::Audio => PartAttachmentKind::Audio,
+        agena_domain::ResourceKind::Video => PartAttachmentKind::Video,
+        agena_domain::ResourceKind::Pdf => PartAttachmentKind::Pdf,
+        agena_domain::ResourceKind::File
+        | agena_domain::ResourceKind::Directory
+        | agena_domain::ResourceKind::Url
+        | agena_domain::ResourceKind::Artifact => PartAttachmentKind::File,
+    };
+    let (source, sha256) = match &resource.reference {
+        agena_domain::ResourceReference::Artifact { sha256, uri } => (
+            PartAttachmentSource::FileId {
+                file_id: uri.clone(),
+            },
+            Some(sha256.clone()),
+        ),
+        agena_domain::ResourceReference::WorkspacePath { path } => {
+            (PartAttachmentSource::LocalPath { path: path.clone() }, None)
+        }
+        agena_domain::ResourceReference::Url { url } => {
+            (PartAttachmentSource::Url { url: url.clone() }, None)
+        }
+        agena_domain::ResourceReference::ProviderFile { file_id, .. } => (
+            PartAttachmentSource::FileId {
+                file_id: file_id.clone(),
+            },
+            None,
+        ),
+    };
+    PartAttachment {
+        kind,
+        mime: resource.media_type.clone().unwrap_or_default(),
+        source,
+        filename: Some(resource.name.clone()),
+        title: None,
+        size_bytes: resource.size_bytes,
+        sha256,
+        width: resource.width,
+        height: resource.height,
+        duration_ms: resource.duration_ms,
+        page_count: resource.page_count,
+    }
+}
+
+fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
+    let mut projected = vec![entry_part(part)];
+    if part.role != "user" {
+        return projected;
+    }
+    let Some(document) = part
+        .content
+        .get("document")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<agena_domain::ComposerDocument>(value).ok())
+    else {
+        return projected;
+    };
+    for node in document.0 {
+        let agena_domain::ComposerNode::Activity { activity } = node else {
+            continue;
+        };
+        let content = match activity.payload {
+            agena_domain::ActivityPayload::Resource(resource) => {
+                TranscriptActivityContent::Attachment(AttachmentPartResource {
+                    attachments: vec![composer_resource_attachment(&resource)],
+                })
+            }
+            agena_domain::ActivityPayload::CommandReference(command) => {
+                TranscriptActivityContent::CommandReference(CommandReferencePartResource {
+                    commands: vec![PartCommandReference {
+                        name: command.name,
+                        description: command.description,
+                        content_hash: command.content_hash,
+                        source: command.source,
+                        aliases: command.aliases,
+                    }],
+                })
+            }
+            agena_domain::ActivityPayload::TextArtifact(artifact) => {
+                projected.push(TranscriptEntryPart {
+                    id: TranscriptContentId::Activity(activity.id),
+                    status: PartExecutionStatusResource::Completed,
+                    content: TranscriptPartContent::Text(TextPartResource {
+                        text: artifact.text,
+                        synthetic: true,
+                    }),
+                });
+                continue;
+            }
+            _ => continue,
+        };
+        projected.push(TranscriptEntryPart {
+            id: TranscriptContentId::Activity(activity.id),
+            status: PartExecutionStatusResource::Completed,
+            content: TranscriptPartContent::Activity(content),
+        });
+    }
+    projected
+}
+
 fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
     TranscriptEntryPart {
         id: TranscriptContentId::StoredPart(part.part_id),
@@ -341,6 +430,51 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
     // disappears.
     match part.kind.as_str() {
         "text" => {
+            if part.role == "user"
+                && let Some(document) = part.content.get("document").cloned().and_then(|value| {
+                    serde_json::from_value::<agena_domain::ComposerDocument>(value).ok()
+                })
+            {
+                return TranscriptPartContent::UserDocument(crate::TranscriptUserDocument {
+                    nodes: document
+                        .0
+                        .into_iter()
+                        .map(|node| match node {
+                            agena_domain::ComposerNode::Text { text } => {
+                                crate::TranscriptUserDocumentNode::Text { id: None, text }
+                            }
+                            agena_domain::ComposerNode::Activity { activity } => {
+                                let (placeholder, style) = match activity.payload {
+                                    agena_domain::ActivityPayload::Resource(resource) => (
+                                        format!("[{}]", resource.name),
+                                        crate::TranscriptUserActivityStyle::Resource,
+                                    ),
+                                    agena_domain::ActivityPayload::CommandReference(command) => (
+                                        format!("[{}]", command.name),
+                                        crate::TranscriptUserActivityStyle::Command,
+                                    ),
+                                    agena_domain::ActivityPayload::TextArtifact(artifact) => (
+                                        format!(
+                                            "[{}]",
+                                            artifact.label.unwrap_or_else(|| "text".into())
+                                        ),
+                                        crate::TranscriptUserActivityStyle::TextArtifact,
+                                    ),
+                                    _ => (
+                                        "[activity]".into(),
+                                        crate::TranscriptUserActivityStyle::Other,
+                                    ),
+                                };
+                                crate::TranscriptUserDocumentNode::Activity {
+                                    id: activity.id,
+                                    placeholder,
+                                    style,
+                                }
+                            }
+                        })
+                        .collect(),
+                });
+            }
             let Some(content) = decode_part_content::<TextContent>(part) else {
                 return fallback_text_part(part);
             };
@@ -752,12 +886,74 @@ mod tests {
     use super::*;
     use agena_api::part::PartResource;
 
+    #[test]
+    fn native_boundaries_render_their_content_once_and_keep_composer_activity_identity() {
+        use agena_domain::{
+            ActivityId, ActivityPayload, ComposerActivity, ComposerDocument, ComposerNode,
+            TextArtifactActivity,
+        };
+        let activity = ActivityId::new();
+        let document = ComposerDocument(vec![
+            ComposerNode::Text {
+                text: "  exact\n".into(),
+            },
+            ComposerNode::activity(ComposerActivity {
+                id: activity,
+                payload: ActivityPayload::TextArtifact(TextArtifactActivity {
+                    text: "artifact body".into(),
+                    language: None,
+                    label: Some("snippet".into()),
+                }),
+                provenance: Default::default(),
+            }),
+        ]);
+        let parts = vec![
+            PartResource {
+                part_id: 1,
+                run_id: Some(1),
+                message_boundary: true,
+                kind: "text".into(),
+                role: "user".into(),
+                state: "completed".into(),
+                content: serde_json::json!({"text":document.text(),"document":document}),
+                ..Default::default()
+            },
+            PartResource {
+                part_id: 2,
+                run_id: Some(2),
+                message_boundary: true,
+                kind: "text".into(),
+                role: "assistant".into(),
+                state: "completed".into(),
+                content: serde_json::json!({"text":"answer"}),
+                ..Default::default()
+            },
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].parts.len(), 2);
+        let TranscriptPartContent::UserDocument(document) = &entries[0].parts[0].content else {
+            panic!("native user document")
+        };
+        assert_eq!(document.plain_text(), "  exact\n[snippet]");
+        assert!(
+            matches!(document.nodes[1],crate::TranscriptUserDocumentNode::Activity{id,..} if id==activity)
+        );
+        assert_eq!(
+            entries[0].parts[1].id,
+            TranscriptContentId::Activity(activity)
+        );
+        assert_eq!(entries[1].parts.len(), 1);
+        assert_eq!(entries[1].parts[0].id, TranscriptContentId::StoredPart(2));
+    }
+
     fn run(part_id: i64, role: &str, state: &str) -> PartResource {
         PartResource {
             revision: 0,
             updated_at_ms: 0,
             part_id,
             kind: "run".to_owned(),
+            message_boundary: true,
             role: role.to_owned(),
             state: state.to_owned(),
             content: serde_json::json!({ "run_kind": "user_send" }),
@@ -791,6 +987,7 @@ mod tests {
             updated_at_ms: 0,
             part_id,
             kind: kind.to_owned(),
+            message_boundary: kind == "run",
             role: role.to_owned(),
             state: "completed".to_owned(),
             content,
@@ -898,7 +1095,6 @@ mod tests {
             };
             assert_eq!(content.detail.as_deref(), Some("Compaction detail"));
             assert_eq!(content.summary_text(), Some("Checkpoint summary"));
-            assert_eq!(last_assistant_reply_text(&parts).as_deref(), Some("Hello"));
             assert_eq!(parts_entries(&[marker, compact])[0].parts.len(), 1);
         }
         let mut marker = run(3, "assistant", "failed");
@@ -961,10 +1157,6 @@ mod tests {
                 TranscriptContentId::StoredPart(6),
                 TranscriptContentId::StoredPart(7)
             ]
-        );
-        assert_eq!(
-            last_assistant_reply_text(&parts).as_deref(),
-            Some("Final answer")
         );
         let key = TranscriptNodeKey::Activity {
             entry_id: entry.id,
@@ -1520,52 +1712,5 @@ mod tests {
         assert!(!parts_have_non_terminal_runs(&done));
         let active = vec![run(1, "assistant", "in_progress")];
         assert!(parts_have_non_terminal_runs(&active));
-    }
-
-    #[test]
-    fn last_assistant_reply_text_takes_the_final_assistant_run() {
-        // Each content part backlinks its enclosing run marker, matching the
-        // durable projection's `run_id` contract.
-        let content = |run_id: i64, part_id: i64, role: &str, text: &str| PartResource {
-            revision: 0,
-            updated_at_ms: 0,
-            part_id,
-            kind: "text".to_owned(),
-            role: role.to_owned(),
-            state: "completed".to_owned(),
-            content: serde_json::json!({ "text": text }),
-            presentation: None,
-            summary: None,
-            created_at_ms: part_id * 10,
-            parent_part_id: None,
-            run_id: Some(run_id),
-            ..Default::default()
-        };
-        let parts = vec![
-            run(1, "user", "completed"),
-            content(1, 2, "user", "hello"),
-            run(3, "assistant", "completed"),
-            content(3, 4, "assistant", "first"),
-            run(5, "user", "completed"),
-            content(5, 6, "user", "again"),
-            run(7, "assistant", "in_progress"),
-            content(7, 8, "assistant", "second"),
-            content(7, 9, "assistant", "tail"),
-        ];
-        assert_eq!(
-            last_assistant_reply_text(&parts).as_deref(),
-            Some("second\ntail")
-        );
-    }
-
-    #[test]
-    fn last_assistant_reply_text_is_none_without_an_assistant_text() {
-        let parts = vec![
-            run(1, "user", "completed"),
-            content_part(2, "text", "user", serde_json::json!({ "text": "hello" })),
-        ];
-        assert_eq!(last_assistant_reply_text(&parts), None);
-        let bare = vec![run(3, "assistant", "completed")];
-        assert_eq!(last_assistant_reply_text(&bare), None);
     }
 }

@@ -49,7 +49,7 @@ test('extractSessionActivityUpdate: session_changed run part in_progress maps to
     properties: {
       kind: 'part_added',
       session_id: 2,
-      part: { part_id: 1, kind: 'run', state: 'in_progress' },
+      part: { part_id: 1, message_boundary: true, kind: 'run', state: 'in_progress' },
     },
   }
   assert.deepEqual(extractSessionActivityUpdate(evt), { sessionID: '2', phase: 'busy' })
@@ -61,7 +61,7 @@ test('extractSessionActivityUpdate: session_changed run part terminal maps to id
     properties: {
       kind: 'part_updated',
       session_id: 5,
-      part: { part_id: 1, kind: 'run', state: 'terminal' },
+      part: { part_id: 1, message_boundary: true, kind: 'run', state: 'terminal' },
     },
   }
   assert.deepEqual(extractSessionActivityUpdate(evt), { sessionID: '5', phase: 'idle' })

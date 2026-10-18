@@ -27,7 +27,6 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 oauth2 = { workspace = true }
 os_info = { workspace = true }
-parking_lot = { workspace = true }
 portable-atomic = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }

@@ -54,6 +54,7 @@ export type AgenaSession = {
 /** One public Part envelope for windows, details and live changes. */
 export type AgenaPart = {
   part_id: number
+  message_boundary?: boolean
   kind: string
   role: string
   state: string
@@ -178,7 +179,8 @@ export type TranscriptMessageListResponse = MessageListResponse & {
 function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
   return page.runs.flatMap((run) => {
     const hiddenCount = Math.max(0, run.part_count - run.page.returned)
-    const anchor = page.parts.find((part) => part.run_id === run.run_id)
+    const anchor = page.parts.find((part) => part.run_id === run.run_id && part.part_id !== run.run_id)
+      || page.parts.find((part) => part.run_id === run.run_id)
     if (!hiddenCount || !anchor) return []
     return [
       {
@@ -262,7 +264,7 @@ function entriesFromParts(
   const runMarkers = new Set<string>()
   for (const raw of parts) {
     const part = asRecord(raw)
-    if (str(part.kind) !== 'run' || typeof part.part_id !== 'number') continue
+    if (part.message_boundary !== true || typeof part.part_id !== 'number') continue
     runMarkers.add(String(part.part_id))
   }
   const contextualRuns = new Set(contextRunIds.filter((runId) => Number.isFinite(runId)).map(String))
@@ -279,7 +281,6 @@ function entriesFromParts(
 
   for (const raw of parts) {
     const part = asRecord(raw)
-    const kind = str(part.kind)
     const partId = typeof part.part_id === 'number' ? part.part_id : undefined
     if (typeof partId !== 'number') continue
     const partIdStr = String(partId)
@@ -288,7 +289,7 @@ function entriesFromParts(
     const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
     const runIdRaw = typeof part.run_id === 'number' ? part.run_id : undefined
 
-    if (kind === 'run') {
+    if (part.message_boundary === true) {
       const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
       const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
       const runState = str(part.state)
@@ -320,10 +321,9 @@ function entriesFromParts(
         info.userMessageOrdinal = Math.floor(ordinalRaw)
       }
       ensure(partIdStr, info)
-      continue
     }
 
-    // Every content part must point at a materialized run marker. A missing
+    // Every content part must point at a materialized message boundary. A missing
     // or unknown owner is malformed current data, not a message that can be
     // reconstructed by the client.
     if (runIdRaw == null) continue
@@ -490,7 +490,7 @@ export function normalizeAgenaPart(
 
   switch (kind) {
     case 'text': {
-      const text = stringField(content, ['text'])
+      const text = typeof asObject(content).text === 'string' ? asObject(content).text as string : ''
       return { ...base, type: 'text', text }
     }
     case 'think': {

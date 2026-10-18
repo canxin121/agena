@@ -33,7 +33,7 @@ mod memory_store;
 pub use memory_store::MemoryStore;
 
 pub mod backend;
-pub mod content;
+pub mod kernel;
 pub mod store;
 
 /// Unified database storage configuration.

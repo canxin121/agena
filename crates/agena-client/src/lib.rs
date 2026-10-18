@@ -1,24 +1,26 @@
 //! # agena-client
 //!
-//! Official Rust SDK for the v2 agena API. Talks REST for one-shot
-//! commands/queries and WebSocket for live part-patch subscriptions over a single
-//! multiplexed connection.
+//! Official Rust SDK for the v2 agena API. Uses REST for commands and queries,
+//! bounded session/content streams for live reads, and raw JSONL streaming for
+//! portable archives. WebSocket subscriptions are also available.
 //!
 //! ## Quick start
 //!
-//! ```ignore
-//! use agena_client::AgenaClient;
-//! use agena_api::{Scope, subscribe::SubscribeRequest};
+//! ```no_run
+//! use agena_client::{AgenaClient, ClientError, SubscriptionEvent};
 //!
-//! let client = AgenaClient::new("http://localhost:7878").await?;
-//! let session = client.create_session("workspace-1", 1, "demo", None).await?;
-//! let mut sub = client
-//!     .subscribe(SubscribeRequest {
-//!         scope: Scope::Session { session_id: session.id },
-//!     })
-//!     .await?;
-//! while let Some(update) = sub.recv().await {
-//!     println!("got update: {:?}", update);
+//! async fn observe_session(server: &str, session_id: i64) -> Result<(), ClientError> {
+//!     let client = AgenaClient::connect_server(server, None, None).await?;
+//!     let mut connection = client.connect_session(session_id).await?;
+//!     while let Some(update) = connection.subscription.recv().await {
+//!         match update? {
+//!             SubscriptionEvent::Lagged(_) => {
+//!                 connection = client.connect_session(session_id).await?;
+//!             }
+//!             update => println!("got update: {update:?}"),
+//!         }
+//!     }
+//!     Ok(())
 //! }
 //! ```
 

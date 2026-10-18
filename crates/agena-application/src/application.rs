@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
-use agena_notification::model::{Notification, NotificationScope};
+use agena_notification::model::NotificationScope;
 use agena_provider::ProviderCatalog;
 
 use crate::ApplicationError;
@@ -50,7 +50,6 @@ pub struct Application {
 #[derive(Default)]
 struct NotificationAggregator {
     started: AtomicBool,
-    session_subscription: std::sync::Mutex<Option<agena_storage::store::GlobalSubscription>>,
     tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -132,7 +131,7 @@ impl Application {
             activities,
             tools,
             live_signals,
-            session_store,
+            session_kernel,
             session_queries,
             execution_control,
             execution_commands,
@@ -158,8 +157,8 @@ impl Application {
                 repositories.memory,
                 repositories.workspace,
                 repositories.permission_rules,
-                session_store.ok_or_else(|| {
-                    ApplicationError::internal("runtime session store facade is unavailable")
+                session_kernel.ok_or_else(|| {
+                    ApplicationError::internal("runtime session kernel is unavailable")
                 })?,
             ),
             notifications: Arc::new(
@@ -579,11 +578,8 @@ impl Application {
 
     /// Wire live surfaces into the unified notification store.
     ///
-    /// Spawns background projection tasks that convert user-visible changes
-    /// into unified notifications: notice parts arrive as `SessionChange` on
-    /// the sealed session store facade's notification bus (14.3, never an
-    /// event log), and background-activity changes arrive as ephemeral runtime
-    /// live signals. Outside a Tokio runtime the call is a no-op, so CLI
+    /// Projects committed kernel notices and runtime activity changes into
+    /// unified notifications without loading transcript history. Outside a Tokio runtime the call is a no-op, so CLI
     /// helpers that compose an `Application` for one-shot queries stay safe.
     pub fn spawn_notification_aggregator(&self) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -596,20 +592,62 @@ impl Application {
         {
             return;
         }
-        let store = Arc::clone(&self.notifications);
-        if let Ok(facade) = self.session_store_facade() {
-            let store = Arc::clone(&store);
-            let subscription = facade.subscribe_all(Arc::new(move |change| {
-                if let Some(notification) = notification_from_session_change(&change) {
-                    store.ingest_shared(notification);
-                }
-            }));
-            *self
-                .notification_aggregator
-                .session_subscription
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscription);
+        if let Ok(kernel) = self.session_kernel() {
+            let reader = kernel.reader.clone();
+            if let Ok(mut watch) = reader.watch_all(None) {
+                let store = Arc::clone(&self.notifications);
+                let task = handle.spawn(async move {
+                    loop {
+                        let change = match watch.recv().await {
+                            Ok(change) => change,
+                            Err(agena_storage::kernel::WatchError::Closed) => break,
+                            Err(agena_storage::kernel::WatchError::Reset { .. }) => {
+                                match reader.watch_all(None) {
+                                    Ok(next) => watch = next,
+                                    Err(_) => break,
+                                }
+                                continue;
+                            }
+                        };
+                        for id in &change.affected_entries {
+                            let Ok(entry) = reader.entry(change.session, *id).await else {
+                                continue;
+                            };
+                            let agena_storage::kernel::EntryPayload::Notice { text } =
+                                &entry.payload
+                            else {
+                                continue;
+                            };
+                            let notice =
+                                serde_json::from_str::<agena_runtime_contracts::NoticePart>(text)
+                                    .unwrap_or_else(|_| agena_runtime_contracts::NoticePart {
+                                        kind: "session_notice".into(),
+                                        summary: text.clone(),
+                                        detail: None,
+                                        title: None,
+                                    });
+                            let mut notification = agena_runtime_notifications::from_notice_part(
+                                &notice,
+                                NotificationScope::Session(change.session.get()),
+                                entry.created_at_ms,
+                            );
+                            notification.id =
+                                format!("kernel-notice-{}-{}", change.session.get(), id.get());
+                            notification.dedup_key = Some(notification.id.clone());
+                            if let Err(error) = store.ingest_with(move || notification).await {
+                                tracing::error!(%error, "session notice notification failed");
+                            }
+                        }
+                    }
+                });
+                self.notification_aggregator
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(task);
+            }
         }
+        let store = Arc::clone(&self.notifications);
         let Some(live_signals) = self.live_signals.clone() else {
             return;
         };
@@ -831,15 +869,11 @@ impl Application {
         })
     }
 
-    /// The sealed session store facade used by presentation transports.
-    /// Session data reads and live `SessionChange` notifications both stay
-    /// behind this one boundary (14.1-14.3).
-    pub fn session_store_facade(
+    /// Read and business command capabilities; no mutable transcript aggregate.
+    pub fn session_kernel(
         &self,
-    ) -> Result<Arc<dyn agena_storage::store::SessionStore>, ApplicationError> {
-        self.service.session_store_facade().ok_or_else(|| {
-            ApplicationError::service_unavailable("session store facade not initialised")
-        })
+    ) -> Result<&agena_storage::kernel::SessionKernel, ApplicationError> {
+        Ok(self.service.session_kernel())
     }
 
     /// Ephemeral non-part signals (activities/plugins/tool registry). These
@@ -1239,47 +1273,6 @@ fn model_catalog_search_text(model: &CatalogModelResource) -> String {
     .to_lowercase()
 }
 
-/// Project one live `SessionChange` into a unified notification, or `None`
-/// when the change carries no user-visible notice (transcript content,
-/// streaming deltas, and non-notice activities are intentionally not
-/// notification-worthy). Only notice parts on the facade's notification bus
-/// project to banner notifications (14.3).
-fn notification_from_session_change(
-    change: &agena_storage::store::SessionChange,
-) -> Option<Notification> {
-    let agena_storage::store::SessionChange::PartAdded { session_id, part } = change else {
-        return None;
-    };
-    // Storage rows carry the canonical typed JSON keyed by the part's `kind`
-    // column (the removed 2-arm encoding is gone), so decode through the contracts
-    // dispatcher rather than deserializing removed payload shapes.
-    let content = match agena_runtime_contracts::part_content::decode(&part.kind, &part.content) {
-        Ok(content) => content,
-        Err(error) => {
-            tracing::warn!(
-                session_id,
-                part_id = part.part_id,
-                part_kind = %part.kind,
-                diagnostic = %format!(
-                    "decode a persisted session part for notification projection: {error}"
-                ),
-                "session notification projection skipped a malformed part"
-            );
-            return None;
-        }
-    };
-    let agena_runtime_contracts::part_content::TypedContent::Notice(notice) = content else {
-        return None;
-    };
-    let notice_part =
-        agena_runtime_contracts::part_content::notice_part_from_notice_content(&notice);
-    Some(agena_runtime_notifications::from_notice_part(
-        &notice_part,
-        NotificationScope::Session(*session_id),
-        part.created_at_ms,
-    ))
-}
-
 pub fn model_catalog_source_kind_from_domain(
     value: agena_provider::ModelCatalogSnapshotSourceKind,
 ) -> agena_api::resource::ModelCatalogSourceKind {
@@ -1354,102 +1347,5 @@ fn plugin_surface_catalog_resource_from_domain(
                 })
                 .collect(),
         },
-    }
-}
-
-#[cfg(test)]
-mod notification_aggregator_tests {
-    use super::*;
-    use agena_notification::model::{NotificationKind, NotificationSurface};
-    use agena_storage::store::{Part, PartRole, PartState, SessionChange};
-
-    fn notice_part_change(kind: &str, summary: &str) -> SessionChange {
-        let content = agena_runtime_contracts::part_content::NoticeContent {
-            kind: kind.to_owned(),
-            summary: summary.to_owned(),
-            detail: Some("Reduce scope".to_owned()),
-            title: None,
-            extra: Default::default(),
-        }
-        .as_value();
-        SessionChange::PartAdded {
-            session_id: 7,
-            part: Part {
-                part_id: 1,
-                kind: "notice".to_owned(),
-                role: PartRole::Assistant,
-                state: PartState::Completed,
-                content,
-                summary: None,
-                visibility: agena_storage::store::PartVisibility::Both,
-                parent_part_id: None,
-                run_id: Some(1),
-                origin_session_id: 7,
-                revision: 1,
-                started_at_ms: 1000,
-                finished_at_ms: Some(1000),
-                created_at_ms: 1000,
-                updated_at_ms: 1000,
-                provider_state: None,
-            },
-        }
-    }
-
-    #[test]
-    fn notice_part_change_projects_to_session_banner() {
-        let notification = notification_from_session_change(&notice_part_change(
-            "max_turns_exhausted",
-            "Turn budget exhausted",
-        ))
-        .expect("projected");
-        assert_eq!(
-            notification.kind,
-            NotificationKind::Notice {
-                code: "max_turns_exhausted".into()
-            }
-        );
-        assert_eq!(notification.scope, NotificationScope::Session(7));
-        assert_eq!(notification.surface, NotificationSurface::Banner);
-        assert_eq!(notification.summary, "Turn budget exhausted");
-        assert_eq!(notification.created_at_ms, 1000);
-    }
-
-    #[test]
-    fn non_notice_part_changes_project_to_none() {
-        let change = SessionChange::PartAdded {
-            session_id: 7,
-            part: Part {
-                part_id: 2,
-                kind: "text".to_owned(),
-                role: PartRole::User,
-                state: PartState::Completed,
-                content: agena_runtime_contracts::part_content::TextContent {
-                    resources: Vec::new(),
-                    text: "hello".to_owned(),
-                    synthetic: false,
-                    extra: Default::default(),
-                }
-                .as_value(),
-                summary: None,
-                visibility: agena_storage::store::PartVisibility::Both,
-                parent_part_id: Some(1),
-                run_id: Some(1),
-                origin_session_id: 7,
-                revision: 1,
-                started_at_ms: 1000,
-                finished_at_ms: Some(1000),
-                created_at_ms: 1000,
-                updated_at_ms: 1000,
-                provider_state: None,
-            },
-        };
-        assert!(notification_from_session_change(&change).is_none());
-        assert!(
-            notification_from_session_change(&SessionChange::PartRemoved {
-                session_id: 7,
-                part_id: 2,
-            })
-            .is_none()
-        );
     }
 }

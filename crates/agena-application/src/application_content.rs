@@ -1,107 +1,340 @@
-//! Resource access shared by every transport and every kind of client.
-
-use agena_domain::{ContentCursor, ContentId, ContentPage, ContentResource};
-use agena_storage::content::ContentHub;
-use agena_storage::store::{Part, SessionChange, Subscription};
-use tokio::sync::watch;
+//! Bounded content reads over membership-authorized kernel capabilities.
 
 use crate::{Application, ApplicationError};
+use agena_domain::{
+    ContentChunk, ContentCursor, ContentEpoch, ContentId, ContentKind, ContentPage, ContentPayload,
+    ContentRange, ContentResource, ContentState, ContentTextPage, ContentTextPosition,
+    ContentTextSlice,
+};
+use agena_storage::kernel::{
+    CaptureState, ContentStreamView, EventCursor, EventPayload, KernelError, KernelReader,
+    TextCursor,
+};
+
+enum ContentReadError {
+    Kernel(KernelError),
+    Application(ApplicationError),
+}
+
+impl From<KernelError> for ContentReadError {
+    fn from(error: KernelError) -> Self {
+        Self::Kernel(error)
+    }
+}
+
+impl From<ApplicationError> for ContentReadError {
+    fn from(error: ApplicationError) -> Self {
+        Self::Application(error)
+    }
+}
+
+impl From<ContentReadError> for ApplicationError {
+    fn from(error: ContentReadError) -> Self {
+        match error {
+            ContentReadError::Kernel(error) => crate::kernel_error(error),
+            ContentReadError::Application(error) => error,
+        }
+    }
+}
 
 pub struct ContentWatch {
     pub resource: ContentResource,
-    pub changes: Option<watch::Receiver<ContentResource>>,
-    pub access: watch::Receiver<bool>,
-    hub: ContentHub,
-    _membership: Subscription,
+    session: agena_storage::kernel::SessionId,
+    reader: KernelReader,
+    changes: agena_storage::kernel::ContentWatch,
 }
 
-/// One snapshot/subscribe barrier and cursor loop for SSE, WS and IPC.
-/// A slow transport retains one cursor and rereads bounded resource pages.
+/// A slow transport retains one source cursor and rereads bounded pages.
 pub struct ContentDelivery {
     watch: ContentWatch,
     cursor: Option<ContentCursor>,
     max_bytes: usize,
     waiting: bool,
     closed: bool,
+    admission_retries: u64,
 }
 
 impl ContentDelivery {
+    /// Read-admission contention retried without advancing the source cursor.
+    pub fn admission_retries(&self) -> u64 {
+        self.admission_retries
+    }
+
     pub async fn next(&mut self) -> Result<Option<ContentPage>, ApplicationError> {
         if self.closed {
             return Ok(None);
         }
         if self.waiting {
-            if let Some(changes) = self.watch.changes.as_mut() {
-                tokio::select! {
-                    result = changes.changed() => {
-                        if result.is_err() { self.watch.changes = None; }
-                    },
-                    _ = self.watch.access.changed() => {
-                        if !*self.watch.access.borrow() { self.closed = true; return Ok(None); }
-                    },
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-            } else {
-                self.closed = true;
-                return Ok(None);
+            match self.watch.changes.changed().await {
+                Ok(_) => {}
+                // changed() consumes the notification before charging its
+                // returned head. Retry the read, never wait for a second change.
+                Err(KernelError::Busy) => self.admission_retries += 1,
+                Err(error) => return Err(crate::kernel_error(error)),
             }
+            self.waiting = false;
         }
-        let page = self.watch.read(self.cursor, self.max_bytes).await?;
-        if !*self.watch.access.borrow() {
-            self.closed = true;
-            return Ok(None);
-        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut backoff = std::time::Duration::from_millis(1);
+        let page = loop {
+            match self.watch.read_inner(self.cursor, self.max_bytes).await {
+                Ok(page) => break page,
+                Err(ContentReadError::Kernel(KernelError::Busy))
+                    if tokio::time::Instant::now() < deadline =>
+                {
+                    self.admission_retries += 1;
+                    // The failed read has dropped every read view/SQL permit.
+                    // Keep one cursor while bounded native admission recovers.
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(std::time::Duration::from_millis(100));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
         self.cursor = Some(page.next_cursor);
-        self.waiting = !page.has_more && page.resource.state == agena_domain::ContentState::Active;
-        self.closed = !page.has_more && page.resource.state != agena_domain::ContentState::Active;
+        self.waiting = !page.has_more && page.resource.state == ContentState::Active;
+        self.closed = !page.has_more && page.resource.state != ContentState::Active;
         Ok(Some(page))
     }
 }
 
 impl ContentWatch {
-    pub fn delivery(self, mut after: Option<ContentCursor>, max_bytes: usize) -> ContentDelivery {
-        if after.is_none()
-            && matches!(
-                self.resource.kind,
-                agena_domain::ContentKind::Text
-                    | agena_domain::ContentKind::Structured
-                    | agena_domain::ContentKind::Document
-            )
-        {
-            after = Some(ContentCursor {
-                sequence: 0,
-                ..self.resource.cursor
-            });
-        }
+    pub fn delivery(self, after: Option<ContentCursor>, max_bytes: usize) -> ContentDelivery {
         ContentDelivery {
             watch: self,
             cursor: after,
-            max_bytes: max_bytes.clamp(1, 1024 * 1024),
+            max_bytes: max_bytes.clamp(4, 1024 * 1024),
             waiting: false,
             closed: false,
+            admission_retries: 0,
         }
     }
+
     pub async fn read(
         &self,
         after: Option<ContentCursor>,
         max_bytes: usize,
     ) -> Result<ContentPage, ApplicationError> {
-        if !*self.access.borrow() {
-            return Err(ApplicationError::not_found(
-                "The content resource is unavailable.",
-            ));
+        self.read_inner(after, max_bytes).await.map_err(Into::into)
+    }
+
+    async fn read_inner(
+        &self,
+        after: Option<ContentCursor>,
+        max_bytes: usize,
+    ) -> Result<ContentPage, ContentReadError> {
+        let head = self.changes.head()?;
+        let max_bytes = max_bytes.clamp(4, 1024 * 1024);
+        // Recovery creates a new epoch. An authoritative page lets live
+        // reducers replace the old tail; fixed-generation copies detect it.
+        let after = after.filter(|cursor| ContentEpoch::from(cursor.epoch) == head.epoch);
+        if head.kind == ContentKind::Text {
+            let cursor = after.map(|c| TextCursor {
+                content: head.id,
+                epoch: ContentEpoch::from(c.epoch),
+                offset: c.sequence,
+            });
+            let mut gap = false;
+            let mut result = self
+                .reader
+                .text_range(self.session, head.id, cursor, max_bytes)
+                .await;
+            for _ in 0..2 {
+                match &result {
+                    Err(agena_storage::kernel::KernelError::ContentGap {
+                        retained_start, ..
+                    }) => {
+                        gap = true;
+                        let epoch = self.changes.head()?.epoch;
+                        result = self
+                            .reader
+                            .text_range(
+                                self.session,
+                                head.id,
+                                Some(TextCursor {
+                                    content: head.id,
+                                    epoch,
+                                    offset: *retained_start,
+                                }),
+                                max_bytes,
+                            )
+                            .await;
+                    }
+                    Err(agena_storage::kernel::KernelError::ContentReset)
+                        if cursor.is_some_and(|cursor| {
+                            self.changes
+                                .head()
+                                .is_ok_and(|head| head.epoch != cursor.epoch)
+                        }) =>
+                    {
+                        result = self
+                            .reader
+                            .text_range(self.session, head.id, None, max_bytes)
+                            .await;
+                    }
+                    _ => break,
+                }
+            }
+            let page = result?;
+            // Prefix retention may cut a UTF-8 scalar. Its remaining bytes
+            // belong to the declared gap, never to a replacement character.
+            let skipped = if gap {
+                page.bytes
+                    .iter()
+                    .take_while(|byte| (**byte & 0xc0) == 0x80)
+                    .count()
+            } else {
+                0
+            };
+            let body = &page.bytes[skipped..];
+            // UTF-8 pages can split a scalar. Return only its complete prefix;
+            // the next read starts at the same incomplete scalar, never drops it.
+            let length = match std::str::from_utf8(body) {
+                Ok(_) => body.len(),
+                Err(error) if error.error_len().is_none() => error.valid_up_to(),
+                Err(error) => return Err(ApplicationError::internal_error(&error).into()),
+            };
+            let text = String::from_utf8(body[..length].to_vec())
+                .map_err(|error| ApplicationError::internal_error(&error))?;
+            let next = ContentCursor {
+                epoch: page.stream.epoch.into(),
+                sequence: page.start.saturating_add((skipped + length) as u64),
+            };
+            let chunks = if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![ContentChunk {
+                    cursor: next,
+                    captured_at_ms: 0,
+                    payload: ContentPayload::Text { text },
+                }]
+            };
+            return Ok(ContentPage {
+                resource: resource(self.session.get(), &page.stream),
+                chunks,
+                next_cursor: next,
+                has_more: page.has_more || length < body.len(),
+                gap,
+            });
         }
-        let page = self
-            .hub
-            .read(self.resource.resource_id, after, max_bytes)
-            .await
-            .map_err(content_error)?;
-        if !*self.access.borrow() {
-            return Err(ApplicationError::not_found(
-                "The content resource is unavailable.",
-            ));
+        let cursor = after.map(|c| EventCursor {
+            content: head.id,
+            epoch: ContentEpoch::from(c.epoch),
+            sequence: c.sequence,
+        });
+        let mut gap = false;
+        let mut result = self
+            .reader
+            .event_page(self.session, head.id, cursor, 64)
+            .await;
+        for _ in 0..2 {
+            match &result {
+                Err(agena_storage::kernel::KernelError::ContentGap { retained_start, .. }) => {
+                    gap = true;
+                    let epoch = self.changes.head()?.epoch;
+                    result = self
+                        .reader
+                        .event_page(
+                            self.session,
+                            head.id,
+                            Some(EventCursor {
+                                content: head.id,
+                                epoch,
+                                sequence: *retained_start,
+                            }),
+                            64,
+                        )
+                        .await;
+                }
+                Err(agena_storage::kernel::KernelError::ContentReset)
+                    if cursor.is_some_and(|cursor| {
+                        self.changes
+                            .head()
+                            .is_ok_and(|head| head.epoch != cursor.epoch)
+                    }) =>
+                {
+                    result = self
+                        .reader
+                        .event_page(self.session, head.id, None, 64)
+                        .await;
+                }
+                _ => break,
+            }
         }
-        Ok(page)
+        let page = result?;
+        let mut chunks = Vec::new();
+        let mut bytes = 0usize;
+        let mut next = after
+            .filter(|cursor| ContentEpoch::from(cursor.epoch) == page.stream.epoch)
+            .map(|cursor| ContentCursor {
+                sequence: cursor.sequence.max(page.stream.retained_start),
+                ..cursor
+            })
+            .unwrap_or(ContentCursor {
+                epoch: page.stream.epoch.into(),
+                sequence: page.stream.retained_start,
+            });
+        for record in &page.records {
+            let payload = match &record.payload {
+                EventPayload::Mixed { input, checkpoint } => ContentPayload::DocumentEvent {
+                    input: input.clone(),
+                    checkpoint: checkpoint.clone(),
+                },
+                EventPayload::Log { channel, text } => ContentPayload::Log {
+                    stream: channel.clone(),
+                    text: text.clone(),
+                },
+                EventPayload::DocumentCheckpoint { document } => {
+                    ContentPayload::StructuredSnapshot {
+                        document: (**document).clone(),
+                    }
+                }
+                EventPayload::DocumentPatch { base, mutation } => ContentPayload::Structured {
+                    base_cursor: ContentCursor {
+                        epoch: page.stream.epoch.into(),
+                        sequence: *base,
+                    },
+                    event: (**mutation).clone(),
+                },
+                EventPayload::TerminalCheckpoint { screen } => ContentPayload::Terminal {
+                    screen: (**screen).clone(),
+                },
+                EventPayload::TerminalPatch {
+                    base,
+                    screen,
+                    rows_changed,
+                } => ContentPayload::TerminalPatch {
+                    base_cursor: ContentCursor {
+                        epoch: page.stream.epoch.into(),
+                        sequence: *base,
+                    },
+                    screen: (**screen).clone(),
+                    rows_changed: rows_changed.clone(),
+                },
+            };
+            let size = payload.byte_len();
+            // An atomic checkpoint can exceed an ordinary page budget.
+            if !chunks.is_empty() && bytes.saturating_add(size) > max_bytes {
+                break;
+            }
+            bytes = bytes.saturating_add(size);
+            next = ContentCursor {
+                epoch: page.stream.epoch.into(),
+                sequence: record.sequence,
+            };
+            chunks.push(ContentChunk {
+                cursor: next,
+                captured_at_ms: record.timestamp_ms,
+                payload,
+            });
+        }
+        Ok(ContentPage {
+            resource: resource(self.session.get(), &page.stream),
+            has_more: page.has_more || chunks.len() < page.records.len(),
+            chunks,
+            next_cursor: next,
+            gap,
+        })
     }
 }
 
@@ -109,21 +342,121 @@ impl Application {
     pub async fn read_content_text(
         &self,
         params: agena_api::content::ReadContentTextParams,
-    ) -> Result<agena_domain::ContentTextPage, ApplicationError> {
+    ) -> Result<ContentTextPage, ApplicationError> {
         let watch = self
             .watch_content(params.session_id, params.resource_id)
             .await?;
-        let page = watch
-            .hub
-            .read_text_page(params.resource_id, params.position, params.max_bytes)
-            .await
-            .map_err(content_error)?;
-        if !*watch.access.borrow() {
-            return Err(ApplicationError::not_found(
-                "The content resource is unavailable.",
-            ));
+        let after = params.position.map(|p| ContentCursor {
+            sequence: p.after.sequence.saturating_add(
+                if watch.resource.kind == ContentKind::Text {
+                    p.offset as u64
+                } else {
+                    0
+                },
+            ),
+            ..p.after
+        });
+        let page = watch.read(after, params.max_bytes).await?;
+        let mut slices = Vec::new();
+        let first = page.chunks.first().map(|chunk| ContentCursor {
+            epoch: chunk.cursor.epoch,
+            sequence: chunk.cursor.sequence.saturating_sub(1),
+        });
+        let mut next = ContentTextPosition {
+            after: if watch.resource.kind == ContentKind::Text {
+                after
+                    .filter(|cursor| cursor.epoch == page.resource.cursor.epoch)
+                    .unwrap_or(ContentCursor {
+                        epoch: page.resource.cursor.epoch,
+                        sequence: 0,
+                    })
+            } else {
+                first.unwrap_or(page.next_cursor)
+            },
+            offset: 0,
+        };
+        let mut bytes = 0usize;
+        let budget = params.max_bytes.clamp(4, 1024 * 1024);
+        for (index, chunk) in page.chunks.iter().enumerate() {
+            let (stream, text) = match &chunk.payload {
+                ContentPayload::Text { text } => (None, Some(text.as_str())),
+                ContentPayload::Log { stream, text } => (Some(stream.clone()), Some(text.as_str())),
+                ContentPayload::DocumentEvent { input, .. } => match &**input {
+                    agena_domain::ContentInput::Text { text } => (None, Some(text.as_str())),
+                    agena_domain::ContentInput::Log { stream, text } => {
+                        (Some(stream.clone()), Some(text.as_str()))
+                    }
+                    _ => (None, None),
+                },
+                _ => (None, None),
+            };
+            if let Some(text) = text {
+                let start = if watch.resource.kind != ContentKind::Text && index == 0 {
+                    params
+                        .position
+                        .filter(|p| {
+                            p.after.epoch == chunk.cursor.epoch
+                                && p.after.sequence.saturating_add(1) == chunk.cursor.sequence
+                        })
+                        .map_or(0, |p| p.offset)
+                        .min(text.len())
+                } else {
+                    0
+                };
+                if !text.is_char_boundary(start) {
+                    return Err(ApplicationError::bad_request(
+                        "The text offset is not a UTF-8 boundary.",
+                    ));
+                }
+                let mut end = text
+                    .len()
+                    .min(start.saturating_add(budget.saturating_sub(bytes)));
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if end == start && start < text.len() {
+                    return Ok(ContentTextPage {
+                        resource: page.resource,
+                        slices,
+                        next_position: next,
+                        has_more: true,
+                        gap: page.gap,
+                    });
+                }
+                slices.push(ContentTextSlice {
+                    cursor: chunk.cursor,
+                    captured_at_ms: chunk.captured_at_ms,
+                    offset: start,
+                    stream,
+                    text: text[start..end].to_owned(),
+                });
+                bytes += end - start;
+                if end < text.len() {
+                    next.offset = end;
+                    return Ok(ContentTextPage {
+                        resource: page.resource,
+                        slices,
+                        next_position: next,
+                        has_more: true,
+                        gap: page.gap,
+                    });
+                }
+            }
+            next = ContentTextPosition {
+                after: chunk.cursor,
+                offset: 0,
+            };
         }
-        Ok(page)
+        if page.chunks.is_empty() {
+            next.after = page.next_cursor;
+        }
+        Ok(ContentTextPage {
+            resource: page.resource,
+            slices,
+            next_position: next,
+            has_more: page.has_more,
+            gap: page.gap,
+        })
     }
 
     pub async fn read_content(
@@ -144,72 +477,273 @@ impl Application {
         session_id: i64,
         id: ContentId,
     ) -> Result<ContentWatch, ApplicationError> {
-        let store = self.session_store_facade()?;
-        let hub = store.contents().clone();
-        let resource = hub.describe(id).await.map_err(content_error)?;
-        // Both change subscriptions precede authorization/bootstrap reads.
-        // Rare membership changes revoke access without a query per chunk.
-        let changes = hub.subscribe(id);
-        let (access_tx, access) = watch::channel(true);
-        let part_id = resource.part_id;
-        let referenced_resource = resource.clone();
-        let membership = store.subscribe(
-            session_id,
-            std::sync::Arc::new(move |change| {
-                let revoked = match change {
-                    SessionChange::SessionDeleted { .. } => true,
-                    SessionChange::PartRemoved {
-                        part_id: removed, ..
-                    } => removed == part_id,
-                    SessionChange::PartUpdated { part, .. } if part.part_id == part_id => {
-                        !part_references(&part, &referenced_resource)
-                    }
-                    _ => false,
-                };
-                if revoked {
-                    access_tx.send_replace(false);
-                }
-            }),
-        );
-        let view = store
-            .load_part_ids(session_id, &[part_id])
+        let session = crate::kernel_session_id(session_id)?;
+        let reader = self.session_kernel()?.reader.clone();
+        // Membership is checked by the backend on bootstrap and every range;
+        // a rewind/deletion revokes retained watch capabilities immediately.
+        let changes = reader
+            .watch_content(session, id)
             .await
-            .map_err(content_error)?;
-        if !view
-            .parts
-            .iter()
-            .any(|part| part_references(part, &resource))
-            || !*access.borrow()
-        {
-            return Err(ApplicationError::not_found(
-                "The content resource is unavailable.",
-            ));
-        }
+            .map_err(crate::kernel_error)?;
+        let head = changes.head().map_err(crate::kernel_error)?;
+        let resource = resource(session_id, &head);
         Ok(ContentWatch {
             resource,
+            session,
+            reader,
             changes,
-            access,
-            hub,
-            _membership: membership,
         })
     }
 }
 
-fn part_references(part: &Part, resource: &ContentResource) -> bool {
-    part.visibility.visible_to_user() && part.references_content(resource)
+fn resource(session_id: i64, head: &ContentStreamView) -> ContentResource {
+    ContentResource {
+        resource_id: head.id,
+        owner_session_id: session_id,
+        part_id: head.entry.get(),
+        kind: head.kind,
+        state: match head.state {
+            CaptureState::Open => ContentState::Active,
+            CaptureState::Complete => ContentState::Complete,
+            CaptureState::Interrupted => ContentState::Interrupted,
+        },
+        cursor: ContentCursor {
+            epoch: head.epoch.into(),
+            sequence: head.accepted,
+        },
+        committed_cursor: ContentCursor {
+            epoch: head.epoch.into(),
+            sequence: head.committed,
+        },
+        total_bytes: (head.kind == ContentKind::Text).then_some(head.accepted),
+        dropped_bytes: head.capture_loss.bytes,
+        dropped_packets: head.capture_loss.packets,
+        committed_dropped_bytes: head.capture_loss.committed_bytes,
+        committed_dropped_packets: head.capture_loss.committed_packets,
+        retained_ranges: if head.accepted > head.retained_start {
+            vec![ContentRange {
+                first: head.retained_start.saturating_add(1),
+                last: head.accepted,
+            }]
+        } else {
+            Vec::new()
+        },
+        capture_error: head.capture_error.clone(),
+    }
 }
 
-fn content_error(error: agena_storage::store::StoreError) -> ApplicationError {
-    match error {
-        agena_storage::store::StoreError::Constraint(_) => {
-            ApplicationError::bad_request_error(&error)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_storage::kernel::*;
+
+    #[tokio::test]
+    async fn utf8_byte_pages_resume_exactly_and_stale_epoch_restarts_authoritatively() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "unicode".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let output = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        let expected = "a🙂中文  \n";
+        output.append(expected).await.unwrap();
+        let changes = kernel
+            .reader
+            .watch_content(session, output.id())
+            .await
+            .unwrap();
+        let watch = super::ContentWatch {
+            resource: resource(session.get(), &changes.head().unwrap()),
+            session,
+            reader: kernel.reader.clone(),
+            changes,
+        };
+        let mut after = None;
+        let mut text = String::new();
+        loop {
+            let page = watch.read(after, 4).await.unwrap();
+            for chunk in &page.chunks {
+                let ContentPayload::Text { text: part } = &chunk.payload else {
+                    panic!("text source")
+                };
+                text.push_str(part);
+            }
+            assert!(after.is_none_or(|cursor:ContentCursor|page.next_cursor.sequence>cursor.sequence));
+            after = Some(page.next_cursor);
+            if !page.has_more {
+                break;
+            }
         }
-        agena_storage::store::StoreError::NotFound(_) => {
-            ApplicationError::not_found("The content resource is unavailable.")
+        assert_eq!(text, expected);
+        assert_eq!(after.unwrap().sequence, expected.len() as u64);
+        let stale = ContentCursor {
+            epoch: uuid::Uuid::new_v4(),
+            sequence: 999,
+        };
+        let reset = watch.read(Some(stale), 4).await.unwrap();
+        assert_ne!(reset.resource.cursor.epoch, stale.epoch);
+        assert_eq!(
+            reset.chunks[0].payload,
+            ContentPayload::Text { text: "a".into() }
+        );
+        assert_eq!(reset.next_cursor.sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn content_delivery_retries_busy_after_consuming_a_change_without_losing_its_cursor() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(
+                RequestId::new(),
+                workspace.id,
+                "read admission recovery".into(),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let output = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        let changes = kernel
+            .reader
+            .watch_content(session, output.id())
+            .await
+            .unwrap();
+        let watch = super::ContentWatch {
+            resource: resource(session.get(), &changes.head().unwrap()),
+            session,
+            reader: kernel.reader.clone(),
+            changes,
+        };
+        let mut delivery = watch.delivery(None, 64 * 1024);
+        let bootstrap = delivery.next().await.unwrap().unwrap();
+        assert_eq!(bootstrap.next_cursor.sequence, 0);
+        assert!(delivery.waiting);
+
+        // Exhaust this source's actual retained-view admission, not a mocked
+        // failure. changed() will consume the notification before returning Busy.
+        let mut held = Vec::new();
+        loop {
+            match delivery.watch.changes.head() {
+                Ok(head) => held.push(head),
+                Err(KernelError::Busy) => break,
+                Err(error) => panic!("unexpected head error: {error}"),
+            }
+            assert!(held.len() <= 256);
         }
-        agena_storage::store::StoreError::Conflict(_) => {
-            ApplicationError::conflict("The content cursor is no longer valid.")
-        }
-        other => ApplicationError::internal_error(&other),
+        let expected = "retained cursor survives admission contention 🙂";
+        output.append(expected).await.unwrap();
+        output.finish(RequestId::new()).await.unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let rejected = runtime.diagnostics.read_budget().rejected;
+        let reader = tokio::spawn(async move {
+            let page = delivery.next().await.unwrap().unwrap();
+            assert!(delivery.next().await.unwrap().is_none());
+            (page, delivery.admission_retries())
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while runtime.diagnostics.read_budget().rejected == rejected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("delivery must observe native Busy before releasing held views");
+        drop(held);
+        let (page, retries) = tokio::time::timeout(std::time::Duration::from_secs(5), reader)
+            .await
+            .expect("same delivery must resume without another source change")
+            .unwrap();
+        assert!(retries > 0);
+        assert_eq!(page.next_cursor.sequence, expected.len() as u64);
+        assert_eq!(page.chunks.len(), 1);
+        assert_eq!(
+            page.chunks[0].payload,
+            ContentPayload::Text {
+                text: expected.into()
+            }
+        );
+        assert!(!page.has_more);
+        assert!(!page.gap);
+        assert_eq!(page.resource.state, ContentState::Complete);
+        kernel.clone().shutdown().await.unwrap();
     }
 }

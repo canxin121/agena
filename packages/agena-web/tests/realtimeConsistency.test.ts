@@ -33,7 +33,7 @@ async function until(check: () => boolean) {
 }
 const marker = (id = 1) => ({
   part_id: id,
-  kind: 'run',
+  message_boundary: true, kind: 'run',
   role: 'assistant',
   state: 'in_progress',
   content: {},

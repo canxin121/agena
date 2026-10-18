@@ -16,6 +16,7 @@ pub(crate) struct RuntimeProcessState<Loader, Request, Snapshot, Error> {
     pub(crate) load_request: Request,
     pub(crate) workspace_root: PathBuf,
     pub(crate) database: Option<Arc<DatabaseConnection>>,
+    pub(crate) session_kernel: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
     /// Dedicated scheduler database connection retained for snapshot reloads.
     pub(crate) scheduler_database: Option<Arc<DatabaseConnection>>,
     pub(crate) control_state: RuntimeControlState<Snapshot, Error>,
@@ -29,7 +30,7 @@ where
         loader: Loader,
         load_request: Request,
         workspace_root: PathBuf,
-        database: Option<Arc<DatabaseConnection>>,
+        session_kernel: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
         scheduler_database: Option<Arc<DatabaseConnection>>,
         control_state: RuntimeControlState<Snapshot, Error>,
     ) -> Self {
@@ -37,7 +38,10 @@ where
             loader,
             load_request,
             workspace_root,
-            database,
+            database: session_kernel
+                .as_ref()
+                .map(|kernel| kernel.database.clone()),
+            session_kernel,
             scheduler_database,
             control_state,
         }

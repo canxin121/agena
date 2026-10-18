@@ -115,7 +115,6 @@ pub struct RuntimeBootstrapRequest {
     /// ephemeral deployments) default to the in-memory scheduler store.
     pub scheduler_database_url: Option<String>,
     pub scheduler_database_path: Option<PathBuf>,
-    pub initialize_schema: bool,
     pub tracing_reload_handle: Option<crate::TracingFilterReloadHandle>,
 }
 
@@ -136,7 +135,6 @@ impl RuntimeBootstrapRequest {
             database_path,
             scheduler_database_url,
             scheduler_database_path,
-            initialize_schema,
             tracing_reload_handle,
             ..
         } = self;
@@ -144,13 +142,10 @@ impl RuntimeBootstrapRequest {
             load_request,
             workspace_root,
             bootstrap_preflight: Some(bootstrap_preflight),
-            database_connection: None,
             database_url,
             database_path,
-            scheduler_database_connection: None,
             scheduler_database_url,
             scheduler_database_path,
-            initialize_schema,
             tracing_reload_handle,
         })
     }

@@ -46,7 +46,7 @@ pub struct TerminalOwner {
 
 #[derive(Debug, Clone)]
 pub struct TerminalStartParams {
-    pub output: Option<agena_storage::content::ContentWriter>,
+    pub output: Option<crate::tool::ToolOutputStreams>,
     pub process_id: Option<String>,
     pub owner: TerminalOwner,
     pub command: Vec<String>,
@@ -190,6 +190,7 @@ impl TerminalRegistry {
                 if existing.owner != params.owner
                     || existing.command != params.display_command
                     || existing.workdir != params.workdir
+                    || !existing.output_matches(&params.output)
                 {
                     return Err(invalid(
                         "terminal launch identity belongs to another operation",
@@ -228,6 +229,11 @@ impl TerminalRegistry {
                 } else {
                     break;
                 }
+            }
+            if let Some(output) = &params.output {
+                output
+                    .register_external_launch()
+                    .map_err(|error| invalid(error.to_string()))?;
             }
             state = Arc::new(State::new(id.clone(), &params, tx, self.listener.clone()));
             sessions.insert(id, Arc::clone(&state));

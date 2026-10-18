@@ -41,16 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scheduler_database_path: std::env::var("AGENA_SCHEDULER_DATABASE_PATH")
             .ok()
             .map(std::path::PathBuf::from),
-        initialize_schema: true,
         tracing_reload_handle: None,
     };
     let runtime = agena_runtime::bootstrap_application_services(request).await?;
     let services = runtime.application_services();
     let providers = services.provider_catalog.clone();
-    let queries = services
-        .session_queries
-        .clone()
-        .expect("session queries present");
     let commands = services
         .execution_commands
         .clone()
@@ -59,10 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .execution_control
         .clone()
         .expect("execution control present");
-    let session_store = services
-        .session_store
-        .clone()
-        .expect("session store present");
+    let application =
+        agena_application::Application::from_composed_runtime_services(services.clone())?;
+    let kernel = application.session_kernel()?;
 
     let model_target = std::env::var("AGENA_PROBE_MODEL").map_err(|_| {
         std::io::Error::new(
@@ -123,31 +117,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut observed_execution = false;
     let mut last_snapshot = None;
     loop {
-        let page = queries.read_part_window(session_id, None, 256).await?;
+        let page = application
+            .read_parts(agena_api::queries::ReadPartsParams {
+                session_id,
+                limit: Some(256),
+                ..Default::default()
+            })
+            .await?;
         let runs = page
             .parts
             .iter()
-            .filter(|part| part.kind == "run")
+            .filter(|part| part.is_message_boundary())
             .collect::<Vec<_>>();
-        let assistant_seen = runs
-            .iter()
-            .any(|run| run.role == agena_storage::store::PartRole::Assistant);
-        let all_runs_terminal = !runs.is_empty() && runs.iter().all(|run| run.state.is_terminal());
+        let assistant_seen = runs.iter().any(|run| run.role == "assistant");
+        let all_runs_terminal = !runs.is_empty()
+            && runs
+                .iter()
+                .all(|run| matches!(run.state.as_str(), "completed" | "failed" | "cancelled"));
         let active_execution = execution_control.active_execution(session_id).await;
         observed_execution |= active_execution.is_some() || assistant_seen;
-        let active_background = session_store
-            .active_background_operations(None, 1_024)
+        let active_background = kernel
+            .reader
+            .active_activities(session_id.try_into()?, None, 1024)
             .await?
-            .into_iter()
-            .filter(|operation| operation.session_id == session_id)
-            .count();
-        let pending_deliveries = session_store
-            .pending_background_deliveries(1_024)
+            .activities
+            .len();
+        let pending_deliveries = kernel
+            .reader
+            .pending_deliveries(session_id.try_into()?, None, 1024)
             .await?
-            .into_iter()
-            .filter(|delivery| delivery.session_id == session_id)
-            .count();
-        let session_state = session_store.session_state(session_id).await?;
+            .len();
+        let session_state = kernel.reader.summary(session_id.try_into()?).await?;
         let snapshot = format!(
             "active={} runs={} all_terminal={} background={} deliveries={} session={:?}",
             active_execution.is_some(),
@@ -166,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             && all_runs_terminal
             && active_background == 0
             && pending_deliveries == 0
-            && session_state.state == agena_storage::store::SessionState::Ready
+            && session_state.state == agena_domain::SessionStateKind::Ready
         {
             break;
         }
@@ -184,16 +184,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut before = None;
     let mut parts = Vec::new();
     loop {
-        let page = queries.read_part_window(session_id, before, 256).await?;
-        before = page
-            .parts
-            .last()
-            .map(|part| agena_storage::store::PartCursor {
-                created_at_ms: part.created_at_ms,
-                part_id: part.part_id,
-            });
+        let page = application
+            .read_parts(agena_api::queries::ReadPartsParams {
+                session_id,
+                cursor: before,
+                limit: Some(256),
+                sections: agena_api::live::ToolDetailSection::ALL.to_vec(),
+                ..Default::default()
+            })
+            .await?;
+        before = page.page.next_cursor.clone();
         parts.extend(page.parts);
-        if !page.has_more {
+        if !page.page.has_more {
             break;
         }
     }
@@ -213,18 +215,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for reference in resources {
                 let reference: agena_domain::ContentRef =
                     serde_json::from_value(reference.clone())?;
-                let descriptor = session_store
-                    .contents()
-                    .describe(reference.resource_id)
-                    .await?;
+                let descriptor = application
+                    .watch_content(session_id, reference.resource_id)
+                    .await?
+                    .resource;
                 let mut cursor = agena_domain::ContentCursor {
                     sequence: 0,
                     ..descriptor.cursor
                 };
                 loop {
-                    let page = session_store
-                        .contents()
-                        .read(reference.resource_id, Some(cursor), 64 * 1024)
+                    let page = application
+                        .read_content(session_id, reference.resource_id, Some(cursor), 64 * 1024)
                         .await?;
                     if page.gap {
                         println!("   [content retention gap]");

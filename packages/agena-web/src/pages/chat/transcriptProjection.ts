@@ -553,6 +553,33 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
   return null
 }
 
+function expandComposerActivities(part:MessagePartLike):MessagePartLike[] {
+  const document = durablePartContent(part).document
+  if (!Array.isArray(document)) return [part]
+  const activities:MessagePartLike[]=[]
+  for (const node of document) {
+    const activity=record(record(node).activity)
+    const payload=record(activity.payload)
+    const id=text(activity.id)
+    if (!id) continue
+    const base={...part,id,agenaRole:'user'}
+    if(payload.activity_type==='resource') {
+      const reference=record(payload.reference)
+      const path=firstText(reference,['path'])
+      const url=firstText(reference,['url','uri'])
+      const source:JsonRecord=path?{source:'local_path',path}:url?{source:'url',url}:{source:'file_id',file_id:reference.file_id??''}
+      const attachment:JsonRecord={...payload,mime:payload.media_type??'',filename:payload.name??'',source,sha256:reference.sha256??null}
+      activities.push({...base,type:'file',agenaKind:'file_ref',filename:text(payload.name),mime:text(payload.media_type),serverPath:path,url:url||path,
+        agenaContent:{...payload,name:payload.name??'',path,url,mime:payload.media_type??'',attachments:[attachment]}})
+    } else if(payload.activity_type==='command_reference') {
+      activities.push({...base,type:'tool',agenaKind:'skill_ref',agenaContent:{...payload,command:payload.name}})
+    } else if(payload.activity_type==='text_artifact') {
+      activities.push({...base,type:'text',agenaKind:'paste_ref',text:rawText(payload.text),agenaContent:payload})
+    }
+  }
+  return [...activities,part]
+}
+
 export function projectTranscriptBlocks(
   messages: MessageLike[],
   options: TranscriptProjectionOptions = { showReasoning: true },
@@ -560,7 +587,7 @@ export function projectTranscriptBlocks(
 ): RenderBlock[] {
   return foldAssistantMessages(messages || []).map(({ message, runIds }, messageIndex): MessageRenderBlock => {
     const role = text(message.info.role) || 'assistant'
-    const ordered = message.parts
+    const ordered = role === 'user' ? message.parts.flatMap(expandComposerActivities) : message.parts
     const answerId = finalAnswerPartId(role, ordered)
     const displayParts = ordered
       .map((part) => project(part, role, answerId, options.labels))

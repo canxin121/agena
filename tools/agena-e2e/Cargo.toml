@@ -21,6 +21,8 @@ name = "dsv4f_tool_api_suite"
 path = "src/bin/dsv4f_tool_api_suite.rs"
 
 [dependencies]
+agena-api = { workspace = true }
+agena-application = { workspace = true }
 agena-runtime = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-storage = { workspace = true }

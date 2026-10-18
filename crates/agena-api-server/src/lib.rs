@@ -43,6 +43,7 @@ pub mod jsonrpc;
 mod live;
 #[cfg(feature = "http")]
 pub mod rest;
+#[cfg(feature = "http")]
 mod revisions;
 #[cfg(feature = "sse")]
 pub mod sse;
@@ -467,7 +468,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/sessions/import",
-                post(rest::import_session).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+                post(rest::import_session).layer(DefaultBodyLimit::disable()),
             )
             .route(
                 "/api/v1/sessions/tree/{root_id}",
@@ -575,8 +576,10 @@ mod background_task_tests;
 
 #[cfg(all(test, feature = "http"))]
 mod router_contract_tests {
+    mod archive_streaming;
     mod conversations;
     mod file_changes;
+    mod kernel_fixture;
     mod realtime_consistency;
     mod revisions;
     mod settings_sources;
@@ -635,7 +638,6 @@ mod router_contract_tests {
             config_path: Some(workspace.path().join("global.json")),
             database_url: Some("sqlite::memory:".to_owned()),
             scheduler_database_path: Some(scheduler_path.clone()),
-            initialize_schema: true,
             ..RuntimeBootstrapRequest::default()
         })
         .await
@@ -712,16 +714,13 @@ mod router_contract_tests {
             workspace_root: Some(std::env::temp_dir()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
         .await
         .expect("build test runtime");
         let application = application_for_test(&runtime);
-        let session_store = application
-            .session_store_facade()
-            .expect("test application exposes session store");
+        let session_kernel = application.session_kernel().unwrap().clone();
         let app = router(AppState::from_application(application));
         let runtime_app = app.clone();
         let command_app = runtime_app.clone();
@@ -889,55 +888,49 @@ mod router_contract_tests {
             serde_json::from_slice(&body).expect("decode shared workspace response");
         assert_eq!(workspace.path, workspace_path);
 
-        let ready_session = session_store
-            .create_session(agena_storage::store::NewSession {
-                workspace_id: workspace.id,
-                parent_id: None,
-                relation_kind: agena_domain::SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "recent session".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
+        let ready_session = session_kernel
+            .sessions
+            .create(
+                agena_storage::kernel::RequestId::new(),
+                workspace.id,
+                "recent session".into(),
+            )
             .await
-            .expect("create recent session");
-        session_store
+            .unwrap()
+            .value;
+        session_kernel
+            .sessions
             .update_metadata(
+                agena_storage::kernel::RequestId::new(),
                 ready_session.id,
-                agena_storage::store::SessionMetadataPatch {
-                    title: None,
+                agena_storage::kernel::MetadataChange {
                     favorite: Some(true),
-                    pinned: None,
+                    ..Default::default()
                 },
             )
             .await
-            .expect("favorite recent session");
-        let running_session = session_store
-            .create_session(agena_storage::store::NewSession {
-                workspace_id: workspace.id,
-                parent_id: None,
-                relation_kind: agena_domain::SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "running session".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
-            .await
-            .expect("create running session");
-        session_store
-            .submit_user_run(
-                running_session.id,
-                vec![agena_storage::store::NewPart::pending(
-                    "text",
-                    agena_storage::store::PartRole::User,
-                    serde_json::json!({"text": "keep running"}),
-                )],
-                None,
+            .unwrap();
+        let running_session = session_kernel
+            .sessions
+            .create(
+                agena_storage::kernel::RequestId::new(),
+                workspace.id,
+                "running session".into(),
             )
             .await
-            .expect("start running session");
+            .unwrap()
+            .value;
+        session_kernel
+            .sessions
+            .send(
+                agena_storage::kernel::RequestId::new(),
+                running_session.id,
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: "keep running".into(),
+                }]),
+            )
+            .await
+            .unwrap();
 
         let response = overview_app
             .oneshot(
@@ -962,7 +955,7 @@ mod router_contract_tests {
                 .iter()
                 .map(|session| session.id)
                 .collect::<Vec<_>>(),
-            vec![ready_session.id]
+            vec![ready_session.id.get()]
         );
         assert!(overview.attention.is_empty());
         assert_eq!(
@@ -971,7 +964,7 @@ mod router_contract_tests {
                 .iter()
                 .map(|session| session.id)
                 .collect::<Vec<_>>(),
-            vec![running_session.id]
+            vec![running_session.id.get()]
         );
         assert_eq!(
             overview
@@ -979,7 +972,7 @@ mod router_contract_tests {
                 .iter()
                 .map(|session| session.id)
                 .collect::<Vec<_>>(),
-            vec![ready_session.id]
+            vec![ready_session.id.get()]
         );
 
         // Cursor pagination is nested through two flattened query DTOs. Keep
@@ -1007,7 +1000,7 @@ mod router_contract_tests {
 
         let response = cost_app
             .oneshot(
-                Request::get(format!("/api/v1/sessions/{}/cost", ready_session.id))
+                Request::get(format!("/api/v1/sessions/{}/cost", ready_session.id.get()))
                     .body(axum::body::Body::empty())
                     .expect("build session cost request"),
             )
@@ -1051,7 +1044,6 @@ mod router_contract_tests {
             workspace_root: Some(workspace.path().to_path_buf()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
@@ -1092,7 +1084,6 @@ mod router_contract_tests {
             workspace_root: Some(workspace.path().to_path_buf()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
@@ -1344,7 +1335,7 @@ mod router_contract_tests {
 
         // Presentation, answer, cancellation and permission commands all use
         // the same refreshable lifecycle conflict when their request is gone.
-        let request_id = "host-input:999999:1:0";
+        let request_id = "999999";
         for (path, reply) in [
             (format!("interactive/{request_id}/present"), None),
             (
@@ -1361,9 +1352,7 @@ mod router_contract_tests {
             ),
             (
                 "permission-replies".to_owned(),
-                Some(
-                    serde_json::json!({ "request_id": "permission-unknown", "kind": "allow_once" }),
-                ),
+                Some(serde_json::json!({ "request_id": request_id, "kind": "allow_once" })),
             ),
         ] {
             let body = reply
@@ -1442,16 +1431,13 @@ mod router_contract_tests {
             workspace_root: Some(std::env::temp_dir()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
         .await
         .expect("build test runtime");
         let services = runtime.application_services();
-        let session_store = services
-            .session_store
-            .expect("access websocket session store facade");
+        let session_kernel = services.session_kernel.clone().unwrap();
         let workspace_repository = services
             .repositories
             .expect("access websocket repositories")
@@ -1655,19 +1641,16 @@ mod router_contract_tests {
             .ensure_id(workspace_path.to_string_lossy().as_ref())
             .await
             .expect("create workspace for live patch");
-        let live_session = session_store
-            .create_session(agena_storage::store::NewSession {
-                workspace_id: live_workspace_id,
-                parent_id: None,
-                relation_kind: agena_domain::SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "websocket live patch".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
+        let live_session = session_kernel
+            .sessions
+            .create(
+                agena_storage::kernel::RequestId::new(),
+                live_workspace_id,
+                "websocket live patch".into(),
+            )
             .await
-            .expect("create session patch fixture");
+            .unwrap()
+            .value;
         let notification = socket
             .next()
             .await
@@ -1687,7 +1670,7 @@ mod router_contract_tests {
                     session_id,
                     ref title,
                     ..
-                } if session_id == live_session.id && title == "websocket live patch")
+                } if session_id == live_session.id.get() && title == "websocket live patch")
         ));
 
         socket
@@ -1727,7 +1710,6 @@ mod router_contract_tests {
             workspace_root: Some(std::env::temp_dir()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
@@ -1861,7 +1843,6 @@ mod router_contract_tests {
             workspace_root: Some(std::env::temp_dir()),
             config_path: Some(isolated_global_config_path()),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
@@ -2205,6 +2186,11 @@ mod router_contract_tests {
         let project_config_dir = workspace.path().join(".agena");
         std::fs::create_dir_all(&project_config_dir).expect("create project config directory");
         let config = serde_json::json!({
+            "runtime": {
+                "providers": {
+                    "client_versions": { "auto_update": false }
+                }
+            },
             "permission": {
                 "path": {
                     "workspace": {
@@ -2248,7 +2234,6 @@ mod router_contract_tests {
             workspace_root: Some(workspace.path().to_path_buf()),
             config_path: Some(workspace.path().join("isolated-global-agena.json")),
             database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
             tracing_reload_handle: None,
             ..RuntimeBootstrapRequest::default()
         })
@@ -2401,9 +2386,9 @@ mod router_contract_tests {
             .expect("create SSE lag session");
         let session_id = session.id;
 
-        // The test-only query controls keep the real HTTP handler subscribed
-        // while its one-slot live queue is deliberately flooded before the
-        // initial snapshot is read. Production builds expose neither field.
+        // Hold the real handler after subscription until the flood is committed.
+        // Its blocked one-slot projection queue must overflow the kernel's
+        // 256-notice feed. Production builds expose none of these controls.
         let subscription_probe = format!(
             "session-sse-lag-{session_id}-{}",
             std::time::SystemTime::now()
@@ -2411,8 +2396,10 @@ mod router_contract_tests {
                 .expect("system clock")
                 .as_nanos()
         );
+        let snapshot_gate =
+            crate::rest::hold_test_session_stream_snapshot(subscription_probe.clone());
         let stream_url = format!(
-            "{}/api/v1/sessions/{session_id}/changes/stream?since_version=0&test_queue_capacity=1&test_snapshot_delay_ms=3000&test_subscription_probe={subscription_probe}",
+            "{}/api/v1/sessions/{session_id}/changes/stream?since_version=0&test_queue_capacity=1&test_subscription_probe={subscription_probe}",
             server.url
         );
         let http = reqwest::Client::new();
@@ -2435,7 +2422,27 @@ mod router_contract_tests {
         }
 
         let update_url = format!("{}/api/v1/sessions/{session_id}", server.url);
-        let updates = (0..24).map(|index| {
+        let seed_update = http
+            .put(&update_url)
+            .json(&serde_json::json!({"title": "queued-before-overflow"}))
+            .send()
+            .await
+            .expect("send the pre-snapshot patch");
+        assert!(seed_update.status().is_success());
+        seed_update
+            .bytes()
+            .await
+            .expect("consume the seed response");
+        let queue_probe = format!("{subscription_probe}:queued");
+        let queue_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !crate::rest::take_test_session_stream_subscription(&queue_probe) {
+            assert!(
+                tokio::time::Instant::now() < queue_deadline,
+                "the pre-snapshot patch did not enter the blocked live queue"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        let updates = (0..320).map(|index| {
             let http = http.clone();
             let update_url = update_url.clone();
             async move {
@@ -2456,7 +2463,11 @@ mod router_contract_tests {
                     .expect("consume queued update response");
             }
         });
-        futures_util::future::join_all(updates).await;
+        // Limit response-summary reads while overflowing the real upstream feed.
+        futures_util::stream::iter(updates)
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
         let final_title = "snapshot-converged-title";
         let final_update = http
             .put(update_url)
@@ -2469,6 +2480,7 @@ mod router_contract_tests {
             .bytes()
             .await
             .expect("consume final update response");
+        snapshot_gate.notify_one();
 
         let response = tokio::time::timeout(std::time::Duration::from_secs(6), response_task)
             .await
@@ -2631,181 +2643,95 @@ mod router_contract_tests {
     }
 
     #[tokio::test]
-    async fn session_history_commands_branch_at_message_ids_through_real_http() {
+    async fn session_history_commands_branch_at_real_entry_ids_through_http() {
         let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
-        let server = start_test_server(provider_url.as_str()).await;
-        let client = AgenaClient::new(server.url.as_str()).unwrap();
+        let server = start_test_server(&provider_url).await;
+        let client = AgenaClient::new(&server.url).unwrap();
         let source = client
             .create_session(server.workspace_id, "history source", None)
             .await
             .unwrap();
-        let state = AppState::from_application(application_for_test(&server.runtime));
-        let store = state.session_store().unwrap();
-        let input = |text: &str| agena_storage::store::NewPart {
-            state: agena_storage::store::PartState::Completed,
-            ..agena_storage::store::NewPart::pending(
-                "text",
-                agena_storage::store::PartRole::User,
-                serde_json::json!({"text": text}),
-            )
-        };
-        let first = store
-            .submit_user_run(source.id, vec![input("first input")], None)
-            .await
-            .unwrap();
-        let second = store
-            .submit_user_run(source.id, vec![input("second input")], None)
-            .await
-            .unwrap();
-        let original = store.load(source.id).await.unwrap();
-
+        let application = application_for_test(&server.runtime);
+        let first = kernel_fixture::completed_input(&application, source.id, "first input").await;
+        let second = kernel_fixture::completed_input(&application, source.id, "second input").await;
+        let original = kernel_fixture::entries(&application, source.id).await;
         client
             .command(Command::RewindSession(RewindSessionParams {
                 session_id: source.id,
-                at_message_id: second.run_id,
+                at_message_id: second.message_id.get(),
                 expected_version: Some(0),
             }))
             .await
-            .expect_err("the HTTP client must preserve rewind's optimistic version check");
-        assert_eq!(store.list_session_tree(source.id).await.unwrap().len(), 1);
-
+            .expect_err("optimistic version check is preserved");
         let CommandResult::Execution(fork) = client
             .command(Command::ForkSession(ForkSessionParams {
                 conversation_mode: None,
                 session_id: source.id,
-                at_message_id: Some(first.run_id),
-                title: Some("message fork".to_owned()),
+                at_message_id: Some(first.message_id.get()),
+                title: Some("message fork".into()),
             }))
             .await
             .unwrap()
         else {
-            panic!("fork must return an execution resource")
+            panic!("fork execution")
         };
         assert_ne!(fork.session.id, source.id);
         assert_eq!(fork.session.parent_id, Some(source.id));
+        let inherited = kernel_fixture::entries(&application, fork.session.id).await;
         assert_eq!(
-            store.load(fork.session.id).await.unwrap().parts,
-            first.parts
+            inherited.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![first.message_id]
         );
-
-        let CommandResult::Execution(full) = client
-            .command(Command::ForkSession(ForkSessionParams {
-                conversation_mode: None,
+        let CommandResult::Execution(rewind) = client
+            .command(Command::RewindSession(RewindSessionParams {
                 session_id: source.id,
-                at_message_id: None,
-                title: None,
+                at_message_id: second.message_id.get(),
+                expected_version: None,
             }))
             .await
             .unwrap()
         else {
-            panic!("full fork must return an execution resource")
+            panic!("rewind execution")
         };
         assert_eq!(
-            store.load(full.session.id).await.unwrap().parts,
-            original.parts
+            kernel_fixture::entries(&application, rewind.session.id)
+                .await
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![first.message_id]
         );
-
-        let CommandResult::Execution(rewind) = client
-            .command(Command::RewindSession(RewindSessionParams {
-                session_id: source.id,
-                at_message_id: second.run_id,
-                expected_version: None,
-            }))
-            .await
-            .expect("rewind uses the real numeric user message id on HTTP")
-        else {
-            panic!("rewind must return an execution resource")
-        };
-        assert_eq!(rewind.session.parent_id, Some(source.id));
-        assert_eq!(
-            store.load(rewind.session.id).await.unwrap().parts,
-            first.parts
-        );
-
         let CommandResult::Execution(empty) = client
             .command(Command::RewindSession(RewindSessionParams {
                 session_id: fork.session.id,
-                at_message_id: first.run_id,
+                at_message_id: first.message_id.get(),
                 expected_version: None,
             }))
             .await
-            .expect("an inherited user message remains a valid rewind target")
+            .unwrap()
         else {
-            panic!("inherited rewind must return an execution resource")
+            panic!("inherited rewind")
         };
-        assert!(store.load(empty.session.id).await.unwrap().parts.is_empty());
-        store
-            .submit_user_run(empty.session.id, vec![input("new branch input")], None)
-            .await
-            .unwrap();
-        assert_eq!(
-            store.load(source.id).await.unwrap(),
-            original,
-            "branch operations and subsequent input preserve the source"
+        assert!(
+            kernel_fixture::entries(&application, empty.session.id)
+                .await
+                .is_empty()
         );
-
+        kernel_fixture::completed_input(&application, empty.session.id, "new branch input").await;
+        assert_eq!(
+            kernel_fixture::entries(&application, source.id).await,
+            original
+        );
         let response = reqwest::Client::new()
             .post(format!(
                 "{}/api/v1/sessions/{}/rewind",
                 server.url, source.id
             ))
-            .json(&serde_json::json!({"at_message_id": second.run_id, "unexpected": true}))
+            .json(&serde_json::json!({"at_message_id":second.message_id.get(),"unexpected":true}))
             .send()
             .await
             .unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
-
-        let streaming = client
-            .create_session(server.workspace_id, "streaming history", None)
-            .await
-            .unwrap();
-        let pending = store
-            .start_run(streaming.id, "execution", serde_json::json!({}), None)
-            .await
-            .unwrap();
-        store
-            .append_parts(
-                streaming.id,
-                pending.run_id,
-                vec![agena_storage::store::NewPart::pending(
-                    "text",
-                    agena_storage::store::PartRole::Assistant,
-                    serde_json::json!({"text": "partial answer"}),
-                )],
-            )
-            .await
-            .unwrap();
-        let streaming_original = store.load(streaming.id).await.unwrap();
-        let CommandResult::Execution(branch) = client
-            .command(Command::ForkSession(ForkSessionParams {
-                conversation_mode: None,
-                session_id: streaming.id,
-                at_message_id: None,
-                title: None,
-            }))
-            .await
-            .unwrap()
-        else {
-            panic!("streaming fork resource")
-        };
-        assert!(matches!(
-            branch.session.state,
-            agena_api::resource::SessionState::Ready { .. }
-        ));
-        let opened = client.get_session_state(branch.session.id).await.unwrap();
-        assert!(matches!(
-            opened.session.state,
-            agena_api::resource::SessionState::Ready { .. }
-        ));
-        assert_eq!(
-            store.load(branch.session.id).await.unwrap().parts,
-            streaming_original.parts
-        );
-        assert_eq!(
-            store.load(streaming.id).await.unwrap(),
-            streaming_original,
-            "opening the fork must not reconcile the parent's active history"
-        );
         provider.await.unwrap();
     }
 
@@ -3335,7 +3261,7 @@ mod router_contract_tests {
         let assistant_runs = terminal
             .parts
             .iter()
-            .filter(|part| part.kind == "run" && part.role == "assistant")
+            .filter(|part| part.is_message_boundary() && part.role == "assistant")
             .collect::<Vec<_>>();
         assert_eq!(assistant_runs.len(), 1);
         assert!(

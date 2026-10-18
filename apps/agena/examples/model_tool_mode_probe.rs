@@ -4,6 +4,8 @@
 //! --model deepseek-v4.1-flash --thinking max --scenario tool-loop
 
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+#[path = "support/observation.rs"]
+mod observation;
 
 use agena_domain::{
     ComposerDocument, ComposerNode, ExecutionLifecycle, ExecutionOutcome, ModelRef,
@@ -51,7 +53,6 @@ async fn main() -> anyhow::Result<()> {
         config_path: args.config,
         database_path: Some(probe_root.path().join("sessions.db")),
         scheduler_database_path: Some(probe_root.path().join("scheduler.db")),
-        initialize_schema: true,
         ..Default::default()
     })
     .await?;
@@ -59,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         let services = runtime.application_services();
         let commands = services.execution_commands.as_ref().ok_or_else(|| anyhow::anyhow!("no execution commands"))?;
         let control = services.execution_control.as_ref().ok_or_else(|| anyhow::anyhow!("no execution control"))?;
-        let store = services.session_store.as_ref().ok_or_else(|| anyhow::anyhow!("no session store"))?;
+        let application=agena_application::Application::from_composed_runtime_services(services.clone())?;
         let session_id = commands.create_session(SessionCreateRequest {
             title: "model tool mode probe".to_owned(),
             parent_session_id: None,
@@ -131,34 +132,25 @@ async fn main() -> anyhow::Result<()> {
             anyhow::ensure!(tokio::time::Instant::now() < deadline, "probe timed out");
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        let view = store.load(session_id).await?;
-        let tool_parts = view.parts.iter().filter(|part| part.kind == "tool_call").collect::<Vec<_>>();
+        let parts=observation::parts(&application,session_id).await?;
+        let metadata=application.session_kernel()?.reader.metadata(session_id.try_into()?).await?;
+        let tool_parts = parts.iter().filter(|part| part.kind == "tool_call").collect::<Vec<_>>();
         let tool_names = tool_parts.iter().filter_map(|part| part.content.get("name").and_then(serde_json::Value::as_str)).collect::<Vec<_>>();
         let mut final_text = String::new();
-        for part in view.parts.iter().filter(|part| part.kind == "text" && part.role.as_str() == "assistant") {
-            if let Some(refs) = part.content.get("resources").and_then(serde_json::Value::as_array) {
-                for value in refs {
-                    let reference: agena_domain::ContentRef = serde_json::from_value(value.clone())?;
-                    final_text.push_str(&store.contents().read_text(reference.resource_id, 64 * 1024).await?.text);
-                }
-            }
-            if let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str) {
-                final_text.push_str(text);
-            }
-        }
+        for part in parts.iter().filter(|part|part.kind=="text"&&part.role=="assistant") {final_text.push_str(&observation::text(&application,session_id,part).await?);}
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "scenario": format!("{:?}", args.scenario),
             "session_id": session_id,
-            "session_title": view.meta.title,
+            "session_title": metadata.title,
             "tool_names": tool_names,
             "tool_states": tool_parts.iter().map(|part| part.state.as_str()).collect::<Vec<_>>(),
             "native_tool_calls": tool_parts.iter().filter_map(|part| part.content.get("tool_api_call")).collect::<Vec<_>>(),
             "final_text": final_text,
-            "error_parts": view.parts.iter().filter(|part| part.kind == "error").map(|part| &part.content).collect::<Vec<_>>(),
+            "error_parts": parts.iter().filter(|part| part.kind == "error").map(|part| &part.content).collect::<Vec<_>>(),
         }))?);
         anyhow::ensure!(!final_text.trim().is_empty(), "no final answer");
         anyhow::ensure!(!final_text.contains("DSML"), "tool markup leaked into the answer");
-        anyhow::ensure!(view.parts.iter().all(|part| part.kind != "error" && part.state.as_str() == "completed"), "incomplete or failed transcript parts");
+        anyhow::ensure!(parts.iter().all(|part| part.kind != "error" && part.state.as_str() == "completed"), "incomplete or failed transcript parts");
         match args.scenario {
             Scenario::Greeting => {}
             Scenario::ToolLoop => {
@@ -166,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(tool_names.contains(&name), "missing execution: {name}");
                 }
                 anyhow::ensure!(tool_parts.iter().all(|part| part.content.get("tool_api_call").is_some_and(|value| !value.is_null())), "missing native Tool API provenance");
-                anyhow::ensure!(view.meta.title == "MODEL_TOOL_LOOP_OK", "rename did not persist");
+                anyhow::ensure!(metadata.title == "MODEL_TOOL_LOOP_OK", "rename did not persist");
                 anyhow::ensure!(final_text.contains("MODEL_TOOL_LOOP_OK") && final_text.contains(&args.model), "tool results did not reach final answer");
             }
             Scenario::Disabled => {

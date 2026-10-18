@@ -344,19 +344,30 @@ async fn cancelling_inflight_launch_cleans_child_and_returns_cancelled() {
         .with_cancellation_token(Some(cancellation.clone()));
     let mut input = python("import time;time.sleep(30)");
     input["yield_time_ms"] = json!(30000);
-    let task = tokio::spawn(async move {
+    // Shell detection and the shared startup snapshot precede PTY launch;
+    // their separate deadline must not consume the in-flight launch budget.
+    let (invocation, prepared_shell) = launching
+        .prepare_shell_invocation(&invoke("shell.open", input), 41, 1)
+        .await
+        .expect("prepare the real shell launch");
+    assert!(prepared_shell.is_some());
+    let mut task = tokio::spawn(async move {
         launching
-            .execute_invocation_detailed(&invoke("shell.open", input), 41, 1)
+            .execute_invocation_detailed_with_prepared_shell(&invocation, 41, 1, prepared_shell)
             .await
     });
     let registry = executor.monitor_registry().unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while registry.list().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::select! {
+        biased;
+        result = &mut task => panic!("shell.open completed before an in-flight launch: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(3), async {
+            while registry.list().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }) => {
+            result.expect("prepared shell launch registers its process");
         }
-    })
-    .await
-    .unwrap();
+    }
     cancellation.cancel();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(2), task)
@@ -375,19 +386,28 @@ async fn dropping_inflight_launch_does_not_leave_child_running() {
     let launching = executor.clone();
     let mut input = python("import time;time.sleep(30)");
     input["yield_time_ms"] = json!(30000);
-    let task = tokio::spawn(async move {
+    let (invocation, prepared_shell) = launching
+        .prepare_shell_invocation(&invoke("shell.open", input), 41, 1)
+        .await
+        .expect("prepare the real shell launch");
+    assert!(prepared_shell.is_some());
+    let mut task = tokio::spawn(async move {
         launching
-            .execute_invocation_detailed(&invoke("shell.open", input), 41, 1)
+            .execute_invocation_detailed_with_prepared_shell(&invocation, 41, 1, prepared_shell)
             .await
     });
     let registry = executor.monitor_registry().unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while registry.list().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::select! {
+        biased;
+        result = &mut task => panic!("shell.open completed before an in-flight launch: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(3), async {
+            while registry.list().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }) => {
+            result.expect("prepared shell launch registers its process");
         }
-    })
-    .await
-    .unwrap();
+    }
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     let id = registry.list()[0].process_id.clone();

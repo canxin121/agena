@@ -27,6 +27,11 @@ categories = ["os::windows-apis"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/microsoft/windows-rs"
 
+[package.metadata.cargo-machete]
+# Generated Win32 modules call windows_targets::link! to link native DLLs,
+# including src/Windows/Win32/Foundation/mod.rs. This is a macro dependency.
+ignored = ["windows-targets"]
+
 [package.metadata.docs.rs]
 all-features = true
 default-target = "x86_64-pc-windows-msvc"

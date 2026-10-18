@@ -148,6 +148,7 @@ mod tests {
             "output": {"text": "durable raw result"}
         });
         let resource = PartResource {
+            message_boundary: false,
             sections: Vec::new(),
             part_id: 1,
             kind: "tool_call".to_owned(),

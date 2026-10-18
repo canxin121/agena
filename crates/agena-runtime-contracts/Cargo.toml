@@ -14,7 +14,6 @@ agena-provider = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-tool = { workspace = true }
-chrono = { workspace = true }
 indexmap = { workspace = true }
 path-clean = { workspace = true }
 schemars = { workspace = true }

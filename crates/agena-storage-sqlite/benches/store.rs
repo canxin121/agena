@@ -1,287 +1,102 @@
-//! Runnable production-SQLite microbenchmarks required by P7.
-//!
-//! This intentionally uses a tiny custom harness instead of adding a benchmark
-//! framework dependency. It reports wall-clock latency for the three mandated
-//! Current store paths: warm facade reads, indexed usage aggregation, and D10 bounded
-//! streaming (including the run-end tail flush).
-
-use std::error::Error;
-use std::hint::black_box;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use agena_domain::SessionRelationKind;
-use agena_storage::WorkspaceRepository;
-use agena_storage::store::{
-    NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility, RunOutcome, SessionStore,
-    UsageQuery, UsageRecord,
-};
-use agena_storage_sqlite::{SeaWorkspaceRepository, initialize_schema, session_store};
-use sea_orm::Database;
-use serde_json::json;
-
+//! Production-kernel microbenchmarks. Every fixture owns a temporary database.
+use agena_domain::{ComposerDocument, ComposerNode};
+use agena_storage::kernel::{ExecutionPhase, RequestId};
+use agena_storage_sqlite::open_kernel_runtime;
+use std::{error::Error, hint::black_box, time::Instant};
 const READ_ITERATIONS: usize = 1_000;
-const USAGE_ROWS: usize = 2_000;
-const USAGE_ITERATIONS: usize = 200;
-const STREAM_SAMPLES: usize = 25;
-const STREAM_DELTAS: usize = 65;
-
+fn input(text: impl Into<String>) -> ComposerDocument {
+    ComposerDocument(vec![ComposerNode::Text { text: text.into() }])
+}
 fn main() -> Result<(), Box<dyn Error>> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(run())
 }
-
 async fn run() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
-    let database_path = directory.path().join("store-bench.db");
-    let db = Arc::new(
-        Database::connect(format!("sqlite://{}?mode=rwc", database_path.display())).await?,
-    );
-    initialize_schema(&db).await?;
-    let workspace_id = SeaWorkspaceRepository::new(Arc::clone(&db))
-        .ensure_id("/bench/workspace")
+    let path = directory.path().join("kernel-bench.db");
+    let runtime = open_kernel_runtime(&format!("sqlite://{}?mode=rwc", path.display())).await?;
+    let workspace = runtime
+        .workspaces
+        .create(directory.path().to_string_lossy().into_owned())
         .await?;
-    let facade = session_store(db, 32);
-    let session_id = facade
-        .create_session(NewSession {
-            workspace_id,
-            parent_id: None,
-            relation_kind: SessionRelationKind::Root,
-            cutoff_part_id: None,
-            title: "store benchmark".to_owned(),
-            task_id: None,
-            config_json: None,
-            provider_anchors_json: None,
-        })
+    let ports = &runtime.ports;
+    let session = ports
+        .sessions
+        .create(RequestId::new(), workspace.id, "kernel benchmark".into())
         .await?
+        .value
         .id;
-
-    seed_read_session(facade.as_ref(), session_id).await?;
-    benchmark_warm_read(facade.as_ref(), session_id).await?;
-    seed_usage(facade.as_ref(), workspace_id, session_id).await?;
-    benchmark_indexed_usage(facade.as_ref(), workspace_id).await?;
-    benchmark_streaming(facade.as_ref(), session_id).await?;
-    Ok(())
-}
-
-async fn seed_read_session(
-    facade: &dyn SessionStore,
-    session_id: i64,
-) -> Result<(), Box<dyn Error>> {
-    let parts = (0..256)
-        .map(|index| NewPart {
-            kind: "text".to_owned(),
-            role: PartRole::User,
-            content: json!({"text": format!("seed part {index}")}),
-            summary: None,
-            visibility: PartVisibility::Both,
-            parent_part_id: None,
-            state: PartState::Completed,
-        })
-        .collect();
-    let run_id = facade
-        .submit_user_run(session_id, parts, None)
-        .await?
-        .run_id;
-    facade
-        .complete_run(
-            session_id,
-            run_id,
-            RunOutcome {
-                status: PartState::Completed,
-                abort_reason: None,
-                content: None,
-                provider_state: None,
-            },
-        )
-        .await?;
-    // Populate and validate the facade cache before measuring the warm path.
-    assert_eq!(facade.load(session_id).await?.parts.len(), 257);
-    Ok(())
-}
-
-async fn benchmark_warm_read(
-    facade: &dyn SessionStore,
-    session_id: i64,
-) -> Result<(), Box<dyn Error>> {
+    for index in 0..256 {
+        let execution = ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                input(format!("seed input {index}")),
+            )
+            .await?
+            .value;
+        ports
+            .sessions
+            .cancel(RequestId::new(), session, execution.id)
+            .await?;
+    }
+    assert_eq!(ports.reader.summary(session).await?.user_message_count, 256);
     let started = Instant::now();
     for _ in 0..READ_ITERATIONS {
-        black_box(facade.load(session_id).await?);
+        black_box(ports.reader.history(session, None, 32).await?);
     }
-    report("read/warm_facade", started.elapsed(), READ_ITERATIONS);
-    Ok(())
-}
-
-async fn seed_usage(
-    facade: &dyn SessionStore,
-    workspace_id: i64,
-    session_id: i64,
-) -> Result<(), Box<dyn Error>> {
-    for index in 0..USAGE_ROWS {
-        facade
-            .record_usage(UsageRecord {
-                workspace_id,
-                session_id,
-                run_id: None,
-                provider_id: if index % 2 == 0 {
-                    "anthropic".to_owned()
-                } else {
-                    "openai".to_owned()
-                },
-                model_id: if index % 3 == 0 {
-                    "large".to_owned()
-                } else {
-                    "small".to_owned()
-                },
-                created_at_ms: 1_000_000 + index as i64,
-                input_tokens: 100,
-                output_tokens: 40,
-                reasoning_tokens: 10,
-                cache_write_tokens: 0,
-                cache_read_tokens: 5,
-                tool_use_tokens: 0,
-                other_tokens: 0,
-                total_cost_micros: 250,
-                recorded_cost_micros: None,
-                cost_estimate_incomplete: false,
-                detail_json: None,
-            })
-            .await?;
-    }
-    Ok(())
-}
-
-async fn benchmark_indexed_usage(
-    facade: &dyn SessionStore,
-    workspace_id: i64,
-) -> Result<(), Box<dyn Error>> {
-    let query = UsageQuery {
-        workspace_id: Some(workspace_id),
-        after_ms: Some(1_000_250),
-        before_ms: Some(1_001_750),
-        ..Default::default()
-    };
-    let expected_calls = facade.usage_stats(query.clone()).await?.total_calls;
-    assert_eq!(expected_calls, 1_500);
+    report("history/warm_bounded_32", started, READ_ITERATIONS);
     let started = Instant::now();
-    for _ in 0..USAGE_ITERATIONS {
-        let stats = facade.usage_stats(query.clone()).await?;
-        black_box(stats);
+    for _ in 0..READ_ITERATIONS {
+        black_box(ports.reader.summary(session).await?);
     }
-    report(
-        "usage/indexed_workspace_range",
-        started.elapsed(),
-        USAGE_ITERATIONS,
-    );
-    Ok(())
-}
-
-async fn benchmark_streaming(
-    facade: &dyn SessionStore,
-    session_id: i64,
-) -> Result<(), Box<dyn Error>> {
-    let mut measured = Duration::ZERO;
-    for _ in 0..STREAM_SAMPLES {
-        let run_id = facade
-            .submit_user_run(
-                session_id,
-                vec![NewPart {
-                    kind: "text".to_owned(),
-                    role: PartRole::Assistant,
-                    content: json!({"text": ""}),
-                    summary: None,
-                    visibility: PartVisibility::Both,
-                    parent_part_id: None,
-                    state: PartState::InProgress,
-                }],
-                None,
-            )
+    report("summary/indexed", started, READ_ITERATIONS);
+    let mut measured = std::time::Duration::ZERO;
+    for _ in 0..25 {
+        let execution = ports
+            .sessions
+            .send(RequestId::new(), session, input("stream benchmark"))
             .await?
-            .run_id;
-        let streamed_part_id = facade
-            .load(session_id)
+            .value;
+        let attempt = ports
+            .executor
+            .claim(RequestId::new(), session, execution.id)
             .await?
-            .parts
-            .into_iter()
-            .find(|part| part.run_id == Some(run_id))
-            .expect("streamed part")
-            .part_id;
-
-        let writer = facade
-            .contents()
-            .open(
-                session_id,
-                streamed_part_id,
-                agena_domain::ContentKind::Text,
-            )
-            .await?;
-        let reference = writer.resource().reference();
-        facade
-            .update_part(
-                session_id,
-                streamed_part_id,
-                PartDelta {
-                    content: Some(json!({"text": "", "resources": [reference]})),
-                    ..Default::default()
-                },
-            )
-            .await?;
+            .value;
+        let round = attempt.begin_current_round(RequestId::new()).await?.value;
+        let text = round.begin_text(RequestId::new(), false).await?.value;
         let started = Instant::now();
-        for _ in 0..STREAM_DELTAS {
-            writer.append_text("x").await?;
+        for _ in 0..65 {
+            text.append("x").await?;
         }
-        writer.finish().await?;
-        facade
-            .update_part(
-                session_id,
-                streamed_part_id,
-                PartDelta {
-                    state: Some(PartState::Completed),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        facade
-            .complete_run(
-                session_id,
-                run_id,
-                RunOutcome {
-                    status: PartState::Completed,
-                    abort_reason: None,
-                    content: None,
-                    provider_state: None,
-                },
-            )
+        text.finish(RequestId::new()).await?;
+        round.finish(RequestId::new(), None, true).await?;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
             .await?;
         measured += started.elapsed();
-
-        let persisted = facade
-            .load(session_id)
-            .await?
-            .parts
-            .into_iter()
-            .find(|part| part.part_id == streamed_part_id)
-            .expect("persisted streamed part");
-        assert_eq!(persisted.content["text"], "");
         assert_eq!(
-            persisted.revision, 3,
-            "source chunks never change Part revisions"
+            ports
+                .reader
+                .text_range(session, text.id(), None, 1024)
+                .await?
+                .bytes,
+            b"x".repeat(65)
         );
     }
-    report(
-        "streaming/65_deltas_plus_completion",
-        measured,
-        STREAM_SAMPLES,
+    println!(
+        "kernel/streaming/65_deltas_plus_completion: {} ns/op",
+        measured.as_nanos() / 25
     );
+    ports.clone().shutdown().await?;
     Ok(())
 }
-
-fn report(name: &str, elapsed: Duration, iterations: usize) {
-    let nanos_per_iteration = elapsed.as_nanos() / iterations as u128;
+fn report(name: &str, started: Instant, iterations: usize) {
     println!(
-        "store/{name}: {nanos_per_iteration} ns/op ({iterations} iterations, {:.3?} total)",
-        elapsed
+        "kernel/{name}: {} ns/op ({iterations} iterations)",
+        started.elapsed().as_nanos() / iterations as u128
     );
 }

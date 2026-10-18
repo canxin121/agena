@@ -341,12 +341,22 @@ async fn execute_managed_launch_async(
     let tool_name = mode.tool_name();
     validate_declared_filesystem_effects(tool_name, command.command.as_str(), &effects)?;
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
+    let activity_kind = if matches!(&mode, ManagedLaunch::Open(_)) {
+        agena_storage::kernel::BackgroundActivityKind::Terminal
+    } else {
+        agena_storage::kernel::BackgroundActivityKind::Process
+    };
+    let content_kind = if matches!(&mode, ManagedLaunch::Open(_)) {
+        agena_domain::ContentKind::Terminal
+    } else {
+        agena_domain::ContentKind::Log
+    };
+    let activity_context = context.clone();
     let ToolRuntimeContext {
         session_id,
         call_id,
         prepared_shell_command,
-        launch_provenance: _,
-        output,
+        ..
     } = context;
     let reserved_process_id = session_id
         .zip(call_id)
@@ -389,7 +399,11 @@ async fn execute_managed_launch_async(
     let worker_executor = executor.clone();
     let worker_command = command.clone();
     let worker_permit = launch_worker_permit(executor).await?;
-    super::terminal_tool::blocking(executor, move |cancel| {
+    let output = activity_context
+        .begin_activity_output(activity_kind, command.description.clone(), content_kind)
+        .await?;
+    let launch_output = output.clone();
+    let result = super::terminal_tool::blocking(executor, move |cancel| {
         let _worker_permit = worker_permit;
         let process_owner = super::terminal_tool::owner(&worker_executor, session_id)?;
         if let ManagedLaunch::Open(terminal_input) = mode {
@@ -429,13 +443,20 @@ async fn execute_managed_launch_async(
             &cancel,
         )
     })
-    .await
+    .await;
+    if let (Err(error), Some(output)) = (&result, launch_output) {
+        let diagnostic = error.to_string();
+        tokio::spawn(async move {
+            output.fail_activity(diagnostic).await;
+        });
+    }
+    result
 }
 
 struct SpawnDestination {
     reserved_process_id: Option<String>,
     owner: crate::TerminalOwner,
-    output: Option<agena_storage::content::ContentWriter>,
+    output: Option<crate::tool::ToolOutputStreams>,
 }
 
 fn execute_spawn_prepared(

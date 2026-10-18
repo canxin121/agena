@@ -1,9 +1,9 @@
 //! # agena-runtime-session
 //!
-//! Session model, persistence, history, and execution services.
+//! Bounded session projections and supervised kernel execution services.
 //!
 //! This crate implements the session layer of the runtime: it owns the
-//! session model ([`session::model`]), persists session state and events,
+//! session model ([`session::model`]), submits typed kernel commands,
 //! builds completion requests, governs context budgets, and executes model
 //! runs with tool invocation, permission handling, and task control.
 //!
@@ -11,10 +11,9 @@
 //!
 //! - [`AppError`] — the top-level application error type.
 //! - [`ContextGovernor`] — context window budgeting and compaction policy.
-//! - [`ExecutionRegistry`] / [`ExecutionControl`] — manage running
-//!   executions (pause/cancel/resume).
-//! - [`SessionStore`] (from `agena-storage`) — the sealed data facade; there
-//!   has no persisted event log.
+//! - [`SessionExecutionControl`] — durable execution cancellation and status.
+//! - [`SessionManager`] — supervised provider/tool effects using the one
+//!   transactional session kernel and bounded history/content readers.
 //!
 //! The crate also re-exports [`config`], [`provider`], [`plugins`], and the
 //! shared contracts (`authorization`, `identity`, `part`, `permission`,
@@ -34,7 +33,6 @@ mod compaction_policy;
 mod context_budget;
 mod context_governor;
 mod error;
-mod execution_registry;
 mod guards;
 mod installation_id;
 mod metrics;
@@ -60,9 +58,6 @@ pub use compaction_policy::*;
 pub use context_budget::*;
 pub use context_governor::ContextGovernor;
 pub use error::AppError;
-pub use execution_registry::{
-    ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,
-};
 pub use guards::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub use installation_id::resolve_installation_id;
 pub use metrics::{

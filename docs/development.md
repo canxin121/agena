@@ -767,53 +767,72 @@ Run the storage adapter independently when changing persistence:
 cargo test --locked -p agena-storage-sqlite
 ```
 
-The main store has no schema-version or migration layer. `initialize_schema`
-creates an empty database from the current table, index, seed, and invariant-
-trigger declarations. Reopening a non-empty database compares every Agena
-table, required index, and trigger with those declarations. Missing, extra, or
-changed durable objects are rejected without repair; startup tells the operator
-to recreate the database. The non-unique `PERFORMANCE_INDEXES` may be absent;
-only after durable validation passes are missing derived indexes added in one
-transaction. Present derived indexes must match exactly, and incompatible
-databases acquire no indexes. Initialization never upgrades columns, rewrites rows, refreshes
-triggers, or interprets a database as an older generation.
+The main database has one exact session-kernel schema and no migration or
+compatibility layer. `initialize_schema` delegates to the kernel's current
+table, index, trigger and infrastructure declarations. An empty database is
+created in one transaction. A non-empty database must match every declared
+Agena object exactly; missing, extra or changed objects are rejected without
+repair. Startup selects a fresh database path rather than upgrading an old
+Part database. No old tables, derived indexes, row conversion or archive
+conversion are installed beside the new model. See
+[current data contract](current-data-contract.md) for startup and archive
+commands. Never delete or rewrite a user's existing database to run validation.
 
-Creation failures require string `id`, `code`, and `user.fallback` fields.
-Missing JSON properties return SQL NULL; use NULL-aware comparisons in trigger
-conditions so those values cannot bypass validation. Subtask insertion and
-update both enforce a non-null status and the corresponding start/finish/failure
-shape. Invalid writes leave the old record and optimistic version untouched.
-These are minimum database invariants; they do not validate every field of the
-application `Failure` type or scan/repair already persisted business data.
+Session commands, executor/attempt handles and typed output capabilities are
+the only production authoring paths. Execution generations fence cancellation
+and retry; tool and interaction facts have one authority; permission rules and
+the winning decision share a transaction. Detached Part/Session values are
+read projections with no generic save or JSON-patch capability. The former
+Part store, separate memory business engine and ContentHub are deleted.
+Memory and file modes use the same SQLite command engine.
 
-Part content must be valid JSON on both insertion and content-only updates.
-Optional `provider_state` must be JSON or SQL NULL on both paths. Run markers
-require a string `run_kind`; its values remain open for extensions. An optional
-`abort_reason` must be a string or JSON null, completed markers must include
-it, and failed/cancelled markers require a string. Updating either `state` or
-`content` checks that shape. Duplicate top-level `run_kind`/`abort_reason` keys
-are rejected: SQLite selects the first duplicate whereas serde_json selects
-the last. Updating lifecycle timestamps also enforces the insertion bounds.
-The invariant tests exercise only the current declarations and verify that a
-modified table, index, or trigger is rejected without rewriting existing data.
+The kernel serializes writes through one bounded queue and batches commands
+inside one actual transaction, with a savepoint for each command. A rejected
+command leaves no partial facts; a successful receipt contains that command's
+committed position. Lost responses are retried with the same request identity.
+Commit uncertainty is distinct from a definite rollback. Typed content keeps
+accepted and committed heads separate and includes dependent tails in terminal
+commits. The storage suites cover real FULL/busy/rollback, exact receipts,
+permission winner/rollback, independent command state machines and process
+kill/reopen scenarios. The maintained
+[process recovery tests](../crates/agena-storage-sqlite/tests/kernel_process_recovery.rs)
+enumerate the injected prepare, publication, checkpoint and GC boundaries;
+the [public contract tests](../crates/agena-storage-sqlite/tests/session_kernel_contracts.rs)
+cover file and memory behavior. These fixtures do not prove every combination
+of external side effects, power loss or filesystem failure.
 
-The two storage backends share `prepare_part_update` and
-`prepare_run_completion`. They validate a complete candidate before publishing
-it, so an invalid text delta cannot leave an in-memory state transition behind.
-Run creation/completion also validates the control fields; errors do not advance
-part or session versions in the tested paths. Completion returns the revision
-and timestamps actually committed. Backwards update times, invalid finish times,
-and revision overflow return errors. SQLite passes its loaded row by value;
-the memory backend stages a clone so validation cannot mutate the stored part.
+The owned SQLite factory configures WAL and `synchronous = FULL` on file-backed
+connections, with foreign keys, `cache_size = -8192`, `mmap_size = 0`, a one-second
+busy timeout and a 1,000-page WAL autocheckpoint. The session kernel has one
+writer and up to four query-only readers. Separate scheduler/server-state
+infrastructure repositories use their own owned pools; they do not grant
+runtime/application callers raw session SQL access. FULL provides SQLite's
+stronger commit-sync guarantee; hardware/filesystem failure testing remains
+separate from ordinary process restart tests.
 
-These checks cover JSON syntax and the stated control/timestamp fields, not a
-complete typed decoder for every part kind, a scan of historical corruption,
-or every in-memory mutation's transaction boundary. Full state-transition and
-repeated/conflicting completion semantics remain separate audit work.
+Memory mode retains one private connection. Its pool disables checkout ping,
+idle timeout and maximum lifetime, and has no acquire/connect hooks. This
+follows SQLx's cancellation contract so a cancelled acquire cannot discard the
+only connection and destroy the in-memory database. The regression commits a
+marker, repeatedly cancels real acquires and queued waiters, then verifies both
+committed data and the kernel schema survive.
 
-The runtime configures WAL and `synchronous = NORMAL` on each file-backed pool
-connection. NORMAL preserves consistency but can lose recent, unsynced commits
-on a power failure; it does not provide the power-loss durability of FULL.
+A file pool retains an OS lock on the canonical database's `.owner-lock` file
+for its lifetime, including pool clones. A second service owner is rejected;
+clients connect to the owning service. Existing hard-linked database files are
+rejected because separate WAL filenames are unsafe. Lock files are never
+unlinked to release ownership. Current capabilities and production wiring are
+documented in the [kernel contract](session-kernel-contracts-2026-10-18.md).
+Use the maintained [experience probes](../scripts/probes/README.md) and
+[resource runners](../crates/agena-storage-sqlite/examples/support/README.md)
+to collect measurements in a new owned output directory.
+
+The immutable read cache separates capacity eviction from authority
+invalidation. Reclaiming cached entries does not advance the authority
+generation or revoke views already held by a consumer. COMMIT fences,
+explicit invalidation and close still reject stale fills. A sequential scan
+must remain valid when its own cache admission causes eviction; holding old
+views can still exhaust the separate read budget and return Busy.
 
 `run_transaction_effects` and `run_transaction_app_effects` preserve the
 operation's original error even when explicit rollback also fails. SQLite can
@@ -823,8 +842,8 @@ constraint code or an application-specific error variant. Queued effects run
 only after commit succeeds. Real trigger and deferred-constraint fixtures
 check the returned error, secondary log, skipped effects, rolled-back rows,
 and subsequent connection reuse. These public helpers are separate from the
-core engine/model-catalog wrappers, which still use combined diagnostics when
-their rollback fails.
+model-catalog wrappers, which still use combined diagnostics when their
+rollback fails.
 
 `is_sqlite_busy` checks primary code **5** in the low byte of a numeric SQLite
 code, including **261 / 517 / 773** (recovery/snapshot/timeout). A known non-busy
@@ -1010,18 +1029,25 @@ use the current `packages/agena-web` package. The scripts require `cargo-deny`,
 The Rust advisory exceptions are documented in `deny.toml` and must stay in
 sync with the cargo-audit arguments.
 
+For verification with a separately owned RustSec checkout, set
+`AGENA_DEPENDENCY_ADVISORY_DB=/absolute/path/to/advisory-db` when running the
+entrypoint. This passes cargo-audit's `--db` option without changing the user's
+Cargo home, audit scope, or advisory exceptions. The checkout must be refreshed
+and its revision recorded with the result.
+
 The remaining Rust advisory exception is RSA: jsonwebtoken's rust_crypto
 backend includes it, while MCP OAuth uses EdDSA exclusively. The lockfile also
 includes the disabled sqlx-mysql dependency path. Reassess the exception before
 enabling RSA algorithms or MySQL. Tantivy now uses the fixed LRU version via
 the dependency patch in `third_party/tantivy/AGENA_PATCH.md`.
 
-The Web package currently overrides DOMPurify to **3.4.13**. Monaco 0.55.1 pins
-the vulnerable 3.2.7 release, and even Monaco 0.56.0 pins 3.4.8. The override
-keeps the current editor API while bringing its HTML sanitizer to a fixed
-release. Remove the override when the selected Monaco release resolves to a
-safe sanitizer without it. Keep `bun.lock` committed and audit dependency
-updates, including transitive dependencies.
+The Web package overrides DOMPurify to **3.4.16**, KaTeX to **0.18.2**,
+source-map-js to **1.2.2**, and postcss-selector-parser to **7.1.6** so nested
+Monaco, Mermaid, PostCSS, and typography dependencies also use the security
+fixes. Direct Vue and markdown-it versions move with their safe releases.
+Remove an override when its consumers resolve a safe version themselves.
+Keep `bun.lock` committed and verify renderer, editor and typography behavior
+alongside audits when changing these transitive dependencies.
 
 If the advisory database cannot be refreshed, `cargo deny --offline check
 advisories` checks the cached database. Record its Git revision and timestamp

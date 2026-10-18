@@ -182,17 +182,28 @@ impl SessionAccumulator {
 
 /// Aggregate storage-projected usage records into the Runtime-owned reporting
 /// document. This deliberately does not depend on private message/session types.
-pub fn summarize_usage_records(
-    records: &[UsageStatRecord],
-    query: &UsageStatsQuery,
-    generated_at: DateTime<Utc>,
-) -> UsageStats {
-    let mut totals = TotalsAccumulator::default();
-    let mut by_day = BTreeMap::<String, TotalsAccumulator>::new();
-    let mut by_provider = BTreeMap::<String, TotalsAccumulator>::new();
-    let mut by_model = BTreeMap::<(String, String), TotalsAccumulator>::new();
-    let mut by_session = BTreeMap::<i64, SessionAccumulator>::new();
-    for record in records {
+#[derive(Default)]
+pub(crate) struct UsageStatsAccumulator {
+    totals: TotalsAccumulator,
+    by_day: BTreeMap<String, TotalsAccumulator>,
+    by_provider: BTreeMap<String, TotalsAccumulator>,
+    by_model: BTreeMap<(String, String), TotalsAccumulator>,
+    by_session: BTreeMap<i64, SessionAccumulator>,
+}
+impl UsageStatsAccumulator {
+    pub(crate) fn observe(&mut self, record: &UsageStatRecord, query: &UsageStatsQuery) {
+        if query.from.is_some_and(|from| record.created_at < from)
+            || query.to.is_some_and(|to| record.created_at >= to)
+        {
+            return;
+        }
+        let Self {
+            totals,
+            by_day,
+            by_provider,
+            by_model,
+            by_session,
+        } = self;
         let date_key = usage_date_key(record.created_at, query.timezone_offset_minutes);
         for_each_usage_observation(
             record.provider_id.as_str(),
@@ -232,76 +243,97 @@ pub fn summarize_usage_records(
             },
         );
     }
-    let mut by_provider = by_provider
-        .into_iter()
-        .map(|(provider_id, totals)| ProviderUsageBreakdown {
-            provider_id,
-            totals: totals.into_totals(),
-        })
-        .collect::<Vec<_>>();
-    by_provider.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
-    let mut by_model = by_model
-        .into_iter()
-        .map(|((provider_id, model_id), totals)| ModelUsageBreakdown {
-            provider_id,
-            model_id,
-            totals: totals.into_totals(),
-        })
-        .collect::<Vec<_>>();
-    by_model.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
-    let mut by_session = by_session
-        .into_iter()
-        .map(|(session_id, item)| SessionUsageBreakdown {
-            session_id,
-            title: item.title,
-            is_subagent: item.is_subagent,
-            first_message_at: item.first_message_at,
-            last_message_at: item.last_message_at,
-            totals: item.totals.into_totals(),
-        })
-        .collect::<Vec<_>>();
-    by_session.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
-    let by_day = by_day
-        .into_iter()
-        .map(|(date, totals)| UsageDailyBreakdown {
-            date,
-            totals: totals.into_totals(),
-        })
-        .collect::<Vec<_>>();
-    let totals = totals.into_totals();
-    let peak_cost = by_day.iter().max_by(|left, right| {
-        left.totals
-            .total_cost_usd
-            .partial_cmp(&right.totals.total_cost_usd)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let peak_tokens = by_day.iter().max_by_key(|day| day.totals.total_tokens);
-    UsageStats {
-        generated_at,
-        period: query.period,
-        period_label: query.period.label().to_string(),
-        from: query.from.to_owned(),
-        to: query.to.to_owned(),
-        timezone_offset_minutes: query.timezone_offset_minutes,
-        active_days: by_day.len() as u64,
-        average_cost_per_request_usd: average(totals.total_cost_usd, totals.requests),
-        average_tokens_per_request: average(totals.total_tokens as f64, totals.requests),
-        average_cost_per_active_day_usd: average(totals.total_cost_usd, by_day.len() as u64),
-        average_tokens_per_active_day: average(totals.total_tokens as f64, by_day.len() as u64),
-        peak_cost_date: peak_cost.map(|item| item.date.clone()),
-        peak_cost_usd: peak_cost
-            .map(|item| item.totals.total_cost_usd)
-            .unwrap_or_default(),
-        peak_tokens_date: peak_tokens.map(|item| item.date.clone()),
-        peak_tokens: peak_tokens
-            .map(|item| item.totals.total_tokens)
-            .unwrap_or_default(),
-        totals,
-        by_day,
-        by_provider,
-        by_model,
-        by_session,
+    pub(crate) fn finish(self, query: &UsageStatsQuery, generated_at: DateTime<Utc>) -> UsageStats {
+        let Self {
+            totals,
+            by_day,
+            by_provider,
+            by_model,
+            by_session,
+        } = self;
+        let mut by_provider = by_provider
+            .into_iter()
+            .map(|(provider_id, totals)| ProviderUsageBreakdown {
+                provider_id,
+                totals: totals.into_totals(),
+            })
+            .collect::<Vec<_>>();
+        by_provider.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
+        let mut by_model = by_model
+            .into_iter()
+            .map(|((provider_id, model_id), totals)| ModelUsageBreakdown {
+                provider_id,
+                model_id,
+                totals: totals.into_totals(),
+            })
+            .collect::<Vec<_>>();
+        by_model.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
+        let mut by_session = by_session
+            .into_iter()
+            .map(|(session_id, item)| SessionUsageBreakdown {
+                session_id,
+                title: item.title,
+                is_subagent: item.is_subagent,
+                first_message_at: item.first_message_at,
+                last_message_at: item.last_message_at,
+                totals: item.totals.into_totals(),
+            })
+            .collect::<Vec<_>>();
+        by_session.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
+        let by_day = by_day
+            .into_iter()
+            .map(|(date, totals)| UsageDailyBreakdown {
+                date,
+                totals: totals.into_totals(),
+            })
+            .collect::<Vec<_>>();
+        let totals = totals.into_totals();
+        let peak_cost = by_day.iter().max_by(|left, right| {
+            left.totals
+                .total_cost_usd
+                .partial_cmp(&right.totals.total_cost_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let peak_tokens = by_day.iter().max_by_key(|day| day.totals.total_tokens);
+        UsageStats {
+            generated_at,
+            period: query.period,
+            period_label: query.period.label().to_string(),
+            from: query.from.to_owned(),
+            to: query.to.to_owned(),
+            timezone_offset_minutes: query.timezone_offset_minutes,
+            active_days: by_day.len() as u64,
+            average_cost_per_request_usd: average(totals.total_cost_usd, totals.requests),
+            average_tokens_per_request: average(totals.total_tokens as f64, totals.requests),
+            average_cost_per_active_day_usd: average(totals.total_cost_usd, by_day.len() as u64),
+            average_tokens_per_active_day: average(totals.total_tokens as f64, by_day.len() as u64),
+            peak_cost_date: peak_cost.map(|item| item.date.clone()),
+            peak_cost_usd: peak_cost
+                .map(|item| item.totals.total_cost_usd)
+                .unwrap_or_default(),
+            peak_tokens_date: peak_tokens.map(|item| item.date.clone()),
+            peak_tokens: peak_tokens
+                .map(|item| item.totals.total_tokens)
+                .unwrap_or_default(),
+            totals,
+            by_day,
+            by_provider,
+            by_model,
+            by_session,
+        }
     }
+}
+
+pub fn summarize_usage_records(
+    records: &[UsageStatRecord],
+    query: &UsageStatsQuery,
+    generated_at: DateTime<Utc>,
+) -> UsageStats {
+    let mut result = UsageStatsAccumulator::default();
+    for record in records {
+        result.observe(record, query);
+    }
+    result.finish(query, generated_at)
 }
 
 fn compare_totals(left: &UsageTotals, right: &UsageTotals) -> std::cmp::Ordering {

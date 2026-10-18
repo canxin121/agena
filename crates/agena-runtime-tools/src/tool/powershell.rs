@@ -55,7 +55,7 @@ pub(super) async fn execute_async(
     let output_resource = context
         .output
         .as_ref()
-        .map(|writer| writer.resource().reference());
+        .map(super::ToolOutputStreams::reference);
     render_execution(&request, execution, output_resource, input.max_output_bytes)
 }
 

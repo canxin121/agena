@@ -133,27 +133,25 @@ impl Application {
         .clone()
     }
 
-    /// Facts and semantic sections use one projection across all transports.
-    pub async fn project_part(
+    /// Read-time detail projection never grants write access to a transcript entry.
+    pub(crate) async fn project_part_resource(
         &self,
-        fact: &agena_storage::store::Part,
+        part: &mut agena_api::part::PartResource,
         sections: &[agena_api::live::ToolDetailSection],
-    ) -> agena_api::part::PartResource {
-        let mut part = crate::session::part_resource_from_fact(fact);
+    ) {
         part.sections = sections
             .iter()
             .map(|section| agena_api::part::LoadedPartSection {
                 section: *section,
-                revision: fact.revision,
+                revision: part.revision,
             })
             .collect();
         if sections.contains(&agena_api::live::ToolDetailSection::Presentation) {
-            part.presentation = self.part_document(&part).await;
+            part.presentation = self.part_document(part).await;
         }
-        if fact.kind == agena_runtime_contracts::part_content::ToolCallContent::kind() {
+        if part.kind == agena_runtime_contracts::part_content::ToolCallContent::kind() {
             part.content = project_tool_content(&part.content, sections);
         }
-        part
     }
     /// Produce ephemeral model/human views from the invocation and the sole
     /// durable raw result. Callers may serialize the human side in a response,
@@ -502,7 +500,6 @@ mod media_presentation_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn media_part_projection_keeps_images_and_captions_across_snapshot_paths() {
         use agena_api::live::ToolDetailSection;
-        use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
         let workspace = tempfile::tempdir().unwrap();
         let runtime =
@@ -511,7 +508,6 @@ mod media_presentation_tests {
                 config_path: Some(workspace.path().join("global.json")),
                 database_url: Some("sqlite::memory:".into()),
                 scheduler_database_path: Some(workspace.path().join("scheduler.db")),
-                initialize_schema: true,
                 ..Default::default()
             })
             .await
@@ -520,26 +516,18 @@ mod media_presentation_tests {
             Application::from_composed_runtime_services(runtime.application_services()).unwrap();
         let mut content = image_result();
         content.state = agena_domain::ToolResultState::Completed;
-        let fact = Part {
+        let mut projected = agena_api::part::PartResource {
+            message_boundary: false,
             part_id: 45589,
             kind: "tool_call".into(),
-            role: PartRole::Assistant,
-            state: PartState::Completed,
+            role: "assistant".into(),
+            state: "completed".into(),
             content: content.as_value(),
-            summary: None,
-            visibility: PartVisibility::Both,
-            parent_part_id: None,
-            run_id: Some(45587),
-            origin_session_id: 781,
             revision: 1,
-            started_at_ms: 1,
-            finished_at_ms: Some(2),
-            created_at_ms: 1,
-            updated_at_ms: 2,
-            provider_state: None,
+            ..Default::default()
         };
-        let projected = app
-            .project_part(&fact, &[ToolDetailSection::Presentation])
+        let raw = projected.clone();
+        app.project_part_resource(&mut projected, &[ToolDetailSection::Presentation])
             .await;
         assert_eq!(projected.content["resources"].as_array().unwrap().len(), 1);
         let document = projected.presentation.as_ref().unwrap();
@@ -573,13 +561,15 @@ mod media_presentation_tests {
             1
         );
 
-        let mut transcript = vec![crate::session::part_resource_from_fact(&fact)];
+        let mut transcript = vec![raw.clone()];
         app.render_transcript_presentations(&mut transcript).await;
         assert_eq!(transcript[0].content, projected.content);
         assert_eq!(transcript[0].presentation, projected.presentation);
-        let detail = app.project_part(&fact, &ToolDetailSection::ALL).await;
-        assert_eq!(detail.content["output"], fact.content["output"]);
+        let mut detail = raw.clone();
+        app.project_part_resource(&mut detail, &ToolDetailSection::ALL)
+            .await;
+        assert_eq!(detail.content["output"], raw.content["output"]);
         assert_eq!(detail.presentation, projected.presentation);
-        assert_eq!(fact.content["resources"].as_array().unwrap().len(), 3);
+        assert_eq!(raw.content["resources"].as_array().unwrap().len(), 3);
     }
 }

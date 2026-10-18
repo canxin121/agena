@@ -987,6 +987,50 @@ fn should_strip_request_header(header_name: &HeaderName) -> bool {
     )
 }
 
+fn should_strip_response_header(header_name: &HeaderName) -> bool {
+    let key = header_name.as_str().to_ascii_lowercase();
+    matches!(
+        key.as_str(),
+        "connection"
+            | "content-encoding"
+            | "content-length"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "set-cookie"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn is_websocket_handshake_header(header_name: &HeaderName) -> bool {
+    let key = header_name.as_str().to_ascii_lowercase();
+    key.starts_with("sec-websocket-")
+}
+
+fn is_websocket_upgrade_request(headers: &HeaderMap, method: &axum::http::Method) -> bool {
+    if method != axum::http::Method::GET {
+        return false;
+    }
+
+    let has_upgrade = headers
+        .get(header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    let has_connection_upgrade = headers
+        .get(header::CONNECTION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+        });
+
+    has_upgrade && has_connection_upgrade
+}
+
 #[cfg(test)]
 mod request_body_tests {
     use super::*;
@@ -1033,48 +1077,4 @@ mod request_body_tests {
         assert_eq!(data["authorization"], false);
         assert_eq!(data["cookie"], false);
     }
-}
-
-fn should_strip_response_header(header_name: &HeaderName) -> bool {
-    let key = header_name.as_str().to_ascii_lowercase();
-    matches!(
-        key.as_str(),
-        "connection"
-            | "content-encoding"
-            | "content-length"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "set-cookie"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
-fn is_websocket_handshake_header(header_name: &HeaderName) -> bool {
-    let key = header_name.as_str().to_ascii_lowercase();
-    key.starts_with("sec-websocket-")
-}
-
-fn is_websocket_upgrade_request(headers: &HeaderMap, method: &axum::http::Method) -> bool {
-    if method != axum::http::Method::GET {
-        return false;
-    }
-
-    let has_upgrade = headers
-        .get(header::UPGRADE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
-    let has_connection_upgrade = headers
-        .get(header::CONNECTION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
-        });
-
-    has_upgrade && has_connection_upgrade
 }

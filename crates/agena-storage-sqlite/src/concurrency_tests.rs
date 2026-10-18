@@ -26,29 +26,6 @@ async fn connect_file(tempdir: &tempfile::TempDir, name: &str) -> DatabaseConnec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_schema_initialization_is_idempotent() {
-    let directory = tempfile::tempdir().expect("temporary database directory");
-    // Two independent connection pools race to initialize the same database
-    // file, as two cold-started processes would.
-    let db_a = connect_file(&directory, "schema.db").await;
-    let db_b = connect_file(&directory, "schema.db").await;
-
-    let (r_a, r_b) = tokio::join!(
-        crate::initialize_schema(&db_a),
-        crate::initialize_schema(&db_b),
-    );
-    r_a.expect("first schema initialization succeeds");
-    r_b.expect("concurrent schema initialization must not fail with SQLITE_BUSY");
-
-    // Both connections see the same exact current schema.
-    for db in [&db_a, &db_b] {
-        crate::schema::validation::validate_existing_schema(db)
-            .await
-            .expect("current schema remains exact");
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_ensure_id_returns_one_shared_workspace() {
     let directory = tempfile::tempdir().expect("temporary database directory");
     let db_a = Arc::new(connect_file(&directory, "ws.db").await);
@@ -169,9 +146,8 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "INSERT OR IGNORE INTO agena_sessions \
-             (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, \
-              lifecycle_state, created_at_ms, updated_at_ms) \
-             VALUES (1, NULL, 0, 0, 1, 'root', 'parent', 1, 'ready', 1, 1)"
+             (id, parent_session_id, depth, root_session_id, workspace_id, relation_kind, title, created_at_ms, updated_at_ms) \
+             VALUES (1, NULL, 0, 1, 1, 'root', 'parent', 1, 1)"
                 .to_owned(),
         ))
         .await
@@ -179,7 +155,7 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
     }
 
     // Both pools race the same read-then-write shape. Each child session reads
-    // the parent's depth/root_id and then INSERTs its own row. Each pool uses a
+    // the parent's depth/root_session_id and then INSERTs its own row. Each pool uses a
     // disjoint id range so the only contention is the shared write lock.
     async fn run_read_before_write(db: &DatabaseConnection, id_offset: i64) {
         for attempt in 0..25i64 {
@@ -190,23 +166,24 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
             let row = txn
                 .query_one(Statement::from_string(
                     DatabaseBackend::Sqlite,
-                    "SELECT depth, root_id FROM agena_sessions WHERE id = 1".to_owned(),
+                    "SELECT depth, root_session_id FROM agena_sessions WHERE id = 1".to_owned(),
                 ))
                 .await
                 .expect("read parent")
                 .expect("parent row");
             let depth: i64 = row.try_get("", "depth").expect("depth value");
-            let root_id: i64 = row.try_get("", "root_id").expect("root_id value");
+            let root_session_id: i64 = row
+                .try_get("", "root_session_id")
+                .expect("root_session_id value");
             txn.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "INSERT INTO agena_sessions \
-                 (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, \
-                  lifecycle_state, created_at_ms, updated_at_ms) \
-                 VALUES (?, 1, ?, ?, 1, 'child', ?, 1, 'ready', ?, ?)",
+                 (id, parent_session_id, depth, root_session_id, workspace_id, relation_kind, title, created_at_ms, updated_at_ms) \
+                 VALUES (?, 1, ?, ?, 1, 'child', ?, ?, ?)",
                 [
                     (id_offset + attempt).into(),
                     (depth + 1).into(),
-                    root_id.into(),
+                    root_session_id.into(),
                     format!("child-{attempt}").into(),
                     1i64.into(),
                     1i64.into(),
@@ -227,7 +204,7 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
     let count: i64 = db_a
         .query_one(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "SELECT COUNT(*) AS count FROM agena_sessions WHERE parent_id = 1".to_owned(),
+            "SELECT COUNT(*) AS count FROM agena_sessions WHERE parent_session_id = 1".to_owned(),
         ))
         .await
         .expect("count")

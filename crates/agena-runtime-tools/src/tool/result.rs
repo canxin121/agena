@@ -55,17 +55,31 @@ impl ToolExecutionView {
     }
 
     pub fn raw_output(&self, output: &ToolOutput) -> agena_domain::RawOutput {
-        let mut payload: serde_json::Map<String, serde_json::Value> = self
-            .metadata
+        let mut payload: serde_json::Map<String, serde_json::Value> = output
+            .payload
+            .fields
             .iter()
-            .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+            .map(|field| {
+                (
+                    field.name.clone(),
+                    serde_json::Value::from(field.value.clone()),
+                )
+            })
             .collect();
-        payload.extend(output.payload.fields.iter().map(|field| {
-            (
-                field.name.clone(),
-                serde_json::Value::from(field.value.clone()),
-            )
-        }));
+        // Presentation metadata is string-valued. Keeping it out of the
+        // result's field namespace also preserves typed defaults that serde
+        // omits, such as Read::truncated=false. Tool-owned metadata wins.
+        if !self.metadata.is_empty()
+            && let serde_json::Value::Object(metadata) = payload
+                .entry("metadata".to_owned())
+                .or_insert_with(|| serde_json::Value::Object(Default::default()))
+        {
+            for (key, value) in &self.metadata {
+                metadata
+                    .entry(key.clone())
+                    .or_insert_with(|| serde_json::Value::String(value.clone()));
+            }
+        }
         if output.payload.is_empty() && !self.output_text.is_empty() {
             payload
                 .entry("text".to_owned())
@@ -248,7 +262,10 @@ mod tests {
 
         let raw = view.raw_output(&output);
         assert_eq!(raw.payload.as_ref().unwrap()["exit_code"], 0);
-        assert_eq!(raw.payload.as_ref().unwrap()["duration_ms"], "42");
+        assert_eq!(
+            raw.payload.as_ref().unwrap()["metadata"]["duration_ms"],
+            "42"
+        );
         assert_eq!(
             raw.payload.as_ref().unwrap()["metadata"]["tool_owned"],
             true
@@ -272,9 +289,36 @@ mod tests {
         let raw = view.raw_output(&agena_domain::ToolOutput::default());
         assert_eq!(
             raw.payload,
-            Some(serde_json::json!({"text": "complete result", "status": "completed"}))
+            Some(serde_json::json!({
+                "text": "complete result",
+                "metadata": {"status": "completed"}
+            }))
         );
         assert!(serde_json::to_value(&raw).unwrap().get("text").is_none());
+    }
+
+    #[test]
+    fn raw_output_preserves_tool_owned_metadata_types_and_values() {
+        let mut view = ToolExecutionView::simple("Tool", "Completed", "preview");
+        view.metadata.insert("attempt".into(), "2".into());
+        view.metadata.insert("duration_ms".into(), "42".into());
+        let output = agena_domain::ToolOutput::from_json_payload(Some(&serde_json::json!({
+            "metadata": {"attempt": 1, "retained": false}
+        })))
+        .unwrap();
+
+        let raw = view.raw_output(&output);
+        assert_eq!(
+            raw.payload,
+            Some(serde_json::json!({
+                "metadata": {"attempt": 1, "retained": false, "duration_ms": "42"}
+            }))
+        );
+        let opaque = agena_domain::ToolOutput::from_json_payload(Some(&serde_json::json!({
+            "metadata": [false, 7, "opaque"]
+        })))
+        .unwrap();
+        assert_eq!(view.raw_output(&opaque).payload, opaque.to_json_payload());
     }
 
     #[test]

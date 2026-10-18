@@ -225,16 +225,16 @@ pub trait ModelRuntime: Send + Sync {
     /// provider/model configuration declare them; the runtime never infers
     /// them from a model id, so an undeclared model simply has no thinking
     /// selector.
-    fn model_thinking_modes(&self, model: &ModelId) -> Vec<ModelThinkingMode> {
-        self.model_thinking_modes_for_adapter(None, model)
+    fn model_thinking_modes(&self, _model: &ModelId) -> Vec<ModelThinkingMode> {
+        Vec::new()
     }
 
     fn model_thinking_modes_for_adapter(
         &self,
         _adapter_id: Option<&AdapterId>,
-        _model: &ModelId,
+        model: &ModelId,
     ) -> Vec<ModelThinkingMode> {
-        Vec::new()
+        self.model_thinking_modes(model)
     }
 
     fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {

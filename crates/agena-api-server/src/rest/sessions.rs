@@ -80,14 +80,11 @@ pub async fn list_sessions(
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
-    let revisions = state.revisions()?;
-    let observed = revisions.token("sessions");
     let page = state
         .service()
         .list_sessions(query)
         .await
         .map_err(server_error_from_application)?;
-    revisions.seed_session_list(&page.items, &observed);
     read.json(page).await
 }
 
@@ -246,29 +243,30 @@ pub async fn get_session_tool_detail(
         .map_err(|error| {
             ServerError::bad_request_with_diagnostic("Unknown tool detail section.", error)
         })?;
-    let key = if section == agena_api::live::ToolDetailSection::Presentation {
-        format!("part:{part_id}")
-    } else {
-        format!("part:{part_id}:{}", section.as_str())
-    };
-    let read = crate::revisions::ConditionalRead::new(&state, &key).await?;
-    if let Some(response) = read.not_modified(&headers) {
-        return Ok(response);
-    }
-    let store = state.session_store()?;
-    let view = store
-        .load_part_ids(session_id, &[part_id])
-        .await
-        .map_err(crate::rest::server_error_from_store)?;
-    let part = view
+    let resource = state
+        .application()
+        .read_parts(agena_api::queries::ReadPartsParams {
+            session_id,
+            ids: vec![part_id],
+            sections: agena_api::live::ToolDetailSection::ALL.to_vec(),
+            ..Default::default()
+        })
+        .await?;
+    let part = resource
         .parts
         .into_iter()
-        .find(|part| part.part_id == part_id && part.visibility.visible_to_user())
-        .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
-    state.revisions()?.register_part(&part);
+        .find(|part| part.part_id == part_id)
+        .ok_or_else(|| ServerError::not_found("The tool entry was not found."))?;
     let detail = crate::live::project_tool_detail(&state, &part, section, query.locale.as_deref())
         .await
         .ok_or_else(|| ServerError::not_found("The tool part was not found."))?;
+    let read = crate::revisions::ConditionalRead::for_value(
+        &state,
+        &(&detail.section, &detail.part_state, &detail.value),
+    )?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
     read.json(detail).await
 }
 
@@ -318,13 +316,10 @@ pub async fn stream_session_changes(
         crate::live::subscribe(&state, agena_api::Scope::Session { session_id })?;
     #[cfg(test)]
     if let Some(probe) = query.test_subscription_probe.clone() {
-        super::mark_test_session_stream_subscription(probe);
+        super::mark_test_session_stream_subscription(probe.clone());
+        super::wait_test_session_stream_snapshot(&probe, &subscription).await;
     }
     let session_queries = state.application().session_query_service()?;
-    #[cfg(test)]
-    if let Some(delay_ms) = query.test_snapshot_delay_ms.filter(|delay| *delay > 0) {
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-    }
     let mut initial = crate::live::session_parts(&state, session_id).await?;
     agena_application::part_locale::localize_session_parts(&mut initial, locale.as_deref());
 
@@ -562,37 +557,94 @@ pub async fn export_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let services = state.application().session_execution_services()?;
-    let jsonl = services
-        .queries
-        .export_session_jsonl(session_id)
+    use futures_util::StreamExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    let application = state.application().clone();
+    let (mut target, mut source) = tokio::io::duplex(64 * 1024);
+    let mut producer = ArchiveExportTask(tokio::spawn(async move {
+        application.export_session_to(session_id, &mut target).await
+    }));
+    // Native snapshot creation validates ownership before it emits a header.
+    // Wait for that first bounded chunk so rejected exports retain HTTP errors.
+    let mut first = vec![0_u8; 64 * 1024];
+    let count = source
+        .read(&mut first)
         .await
-        .map_err(|error| ServerError::from_failure(*error.failure))?;
+        .map_err(|error| ServerError::internal_error(&error))?;
+    if count == 0 {
+        producer.finish().await?;
+        return Err(ServerError::internal("archive export produced no header"));
+    }
+    first.truncate(count);
+    let output = stream! {
+        yield Ok::<_, std::io::Error>(axum::body::Bytes::from(first));
+        let mut chunks = tokio_util::io::ReaderStream::with_capacity(source, 64 * 1024);
+        while let Some(chunk) = chunks.next().await {
+            yield chunk;
+        }
+        if let Err(error) = producer.finish().await {
+            yield Err(std::io::Error::other(error));
+        }
+    };
     Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
-        jsonl,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/x-ndjson"),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        axum::body::Body::from_stream(output),
     ))
 }
 
-#[derive(Debug, Clone, Deserialize)]
-/// Body of a session import request.
-pub struct SessionImportRequestBody {
-    pub jsonl: String,
+struct ArchiveExportTask(tokio::task::JoinHandle<Result<(), agena_application::ApplicationError>>);
+
+impl ArchiveExportTask {
+    async fn finish(&mut self) -> Result<(), agena_application::ApplicationError> {
+        (&mut self.0)
+            .await
+            .map_err(|error| agena_application::ApplicationError::internal_error(&error))?
+    }
+}
+
+impl Drop for ArchiveExportTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 pub async fn import_session(
     State(state): State<AppState>,
-    Json(request): Json<SessionImportRequestBody>,
-) -> Result<impl IntoResponse, ServerError> {
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .import_session_jsonl(&request.jsonl)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    Ok(Json(
-        state.session_execution_resource(outcome.session_id).await?,
-    ))
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Result<axum::response::Response, ServerError> {
+    use futures_util::TryStreamExt as _;
+
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next());
+    if !content_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("application/x-ndjson"))
+    {
+        let mut response = ServerError::bad_request(
+            "session archive import requires Content-Type: application/x-ndjson",
+        )
+        .into_response();
+        *response.status_mut() = axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE;
+        return Ok(response);
+    }
+    let request_id: agena_domain::CommandId = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ServerError::bad_request("session archive import requires Idempotency-Key"))?
+        .parse()
+        .map_err(|error| ServerError::bad_request_error(&error))?;
+    let stream = body.into_data_stream().map_err(std::io::Error::other);
+    let mut source = tokio_util::io::StreamReader::new(stream);
+    let imported = state
+        .application()
+        .import_session_archive(request_id, &mut source)
+        .await?;
+    Ok(Json(imported).into_response())
 }
 
 use super::{

@@ -1023,7 +1023,28 @@ impl ProviderRegistry {
     pub async fn complete_stream(
         &self,
         model: &ModelRef,
+        request: CompletionRequest,
+    ) -> Result<super::super::core::CompletionEventStream, ProviderError> {
+        self.complete_stream_inner(model, request, false).await
+    }
+
+    /// Emit Tool API fragments in provider order for consumers that retain
+    /// non-executable drafts. Validation still precedes execution. A protocol
+    /// error fails this stream instead of internally reissuing a request after
+    /// the consumer has published draft identities.
+    pub async fn complete_stream_with_tool_drafts(
+        &self,
+        model: &ModelRef,
+        request: CompletionRequest,
+    ) -> Result<super::super::core::CompletionEventStream, ProviderError> {
+        self.complete_stream_inner(model, request, true).await
+    }
+
+    async fn complete_stream_inner(
+        &self,
+        model: &ModelRef,
         mut request: CompletionRequest,
+        tool_drafts: bool,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
         ProviderError,
@@ -1399,7 +1420,7 @@ impl ProviderRegistry {
                                     );
                                 }
                             }
-                            if terminal_event_in_attempt {
+                            if terminal_event_in_attempt && !matches!(event, CompletionStreamEvent::Completed { .. }) {
                                 Err(ProviderError::Provider(format!(
                                     "provider `{provider_id}` emitted a stream event after Completed"
                                 )))?;
@@ -1420,10 +1441,13 @@ impl ProviderRegistry {
                                     &declared_tool_api_functions,
                                     &mut tool_api_calls,
                                 ) {
-                                    tool_api_error.get_or_insert(error);
+                                    if tool_drafts { Err(error)?; }
+                                    else { tool_api_error.get_or_insert(error); }
                                 }
-                                buffered_tool_api_turn.push(event);
-                                continue;
+                                if !tool_drafts {
+                                    buffered_tool_api_turn.push(event);
+                                    continue;
+                                }
                             }
 
                             if !buffered_tool_api_turn.is_empty()
@@ -1442,7 +1466,9 @@ impl ProviderRegistry {
                                 ) {
                                     tool_api_error.get_or_insert(error);
                                 }
-                                if let Some(error) = tool_api_error.take() {
+                                match tool_api_error.take() {
+                                    Some(error) if tool_drafts => { Err(error)?; }
+                                    Some(error) => {
                                     if protocol_repair_count < MAX_TOOL_API_REPAIRS {
                                         if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                             merge_completion_usage(&mut discarded_usage, usage.take());
@@ -1483,6 +1509,8 @@ impl ProviderRegistry {
                                                 | CompletionStreamEvent::ToolCallSnapshot { .. }
                                         )
                                     });
+                                    }
+                                    None => {}
                                 }
                                 if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                     merge_completion_usage(usage, discarded_usage.take());

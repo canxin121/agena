@@ -3,15 +3,12 @@
 use std::{str::FromStr, sync::Arc};
 
 use agena_storage::{StorageConfig, StorageConfigError};
-use agena_storage_sqlite::initialize_schema;
 use log::LevelFilter;
-use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
+use sea_orm::{DatabaseConnection, DbErr};
 use tracing_subscriber::EnvFilter;
 
 use crate::{DatabaseCompositionInputs, connect_or_initialize};
 pub use agena_runtime_config::RuntimeTracingConfiguration;
-
-static DATABASE_BOOTSTRAP: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 pub fn runtime_env_filter(
     config: &RuntimeTracingConfiguration,
@@ -45,46 +42,22 @@ pub(crate) fn database_log_level(
 
 /// Whether a database URL refers to an ephemeral in-memory SQLite database.
 ///
-/// In-memory databases are per-connection: each pooled connection sees its own
-/// empty database. Connection-pool sizing must therefore leave such URLs at
-/// the default single connection, and journal/busy pragmas are unnecessary.
+/// The owned SQLite factory retains one memory connection for its lifetime.
 pub(crate) fn is_in_memory_database(url: &str) -> bool {
-    url == "sqlite::memory:" || url.contains(":memory:")
+    agena_storage_sqlite::is_memory_database(url)
 }
 
 pub(crate) async fn connect_database(
     url: &str,
     config: &RuntimeTracingConfiguration,
 ) -> Result<DatabaseConnection, DbErr> {
-    let mut options = ConnectOptions::new(url.to_owned());
     let level = database_log_level(config).unwrap_or(LevelFilter::Error);
-    let enable_sqlx_statement_logging = matches!(
-        level,
-        LevelFilter::Warn | LevelFilter::Info | LevelFilter::Debug | LevelFilter::Trace
-    );
-    options.sqlx_logging(enable_sqlx_statement_logging);
-    if enable_sqlx_statement_logging {
-        options.sqlx_logging_level(level);
-    }
-    // SQLite connection hardening. These options apply to every connection in
-    // the pool, unlike the per-statement PRAGMAs in `initialize_schema` which
-    // only affect the connection that executes them.
-    if !is_in_memory_database(url) {
-        options.map_sqlx_sqlite_opts(|opts| {
-            use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
-            opts.journal_mode(SqliteJournalMode::Wal)
-                .synchronous(SqliteSynchronous::Normal)
-                .foreign_keys(true)
-                .busy_timeout(std::time::Duration::from_secs(1))
-        });
-        // A bounded connection pool lets concurrent reads proceed in parallel;
-        // Writers queue before checking out a connection, leaving the other
-        // connections available to readers even during cross-process contention.
-        options
-            .max_connections(16)
-            .acquire_timeout(std::time::Duration::from_secs(3));
-    }
-    Database::connect(options).await
+    let level = if level == LevelFilter::Error {
+        LevelFilter::Off
+    } else {
+        level
+    };
+    agena_storage_sqlite::connect_owned_database(url, level).await
 }
 
 /// Errors produced while Runtime composes the process database connection.
@@ -96,52 +69,29 @@ pub(crate) enum RuntimeDatabaseCompositionError {
     Database(#[from] DbErr),
 }
 
-/// Resolve, connect, and optionally initialize the concrete SQLite database.
+/// Resolve, own, and validate the session kernel's exact SQLite schema.
 ///
 /// Process entrypoints and Runtime composition supply only bootstrap inputs. The
-/// Runtime owns URL resolution, connection reuse, parent-directory creation,
+/// Runtime owns URL resolution, lifetime ownership, parent-directory creation,
 /// and schema initialization ordering.
 pub(crate) async fn connect_runtime_database(
-    inputs: DatabaseCompositionInputs<
-        Option<Arc<DatabaseConnection>>,
-        Option<String>,
-        &RuntimeTracingConfiguration,
-    >,
-) -> Result<Option<Arc<DatabaseConnection>>, RuntimeDatabaseCompositionError> {
+    inputs: DatabaseCompositionInputs,
+) -> Result<Option<Arc<agena_storage_sqlite::SqliteKernel>>, RuntimeDatabaseCompositionError> {
     let DatabaseCompositionInputs {
-        database_connection,
         database_url,
         database_path,
-        initialize_schema: should_initialize_schema,
-        tracing,
     } = inputs;
-    connect_or_initialize(
-        database_connection,
-        should_initialize_schema,
-        || async move {
-            let url = StorageConfig {
-                database_url,
-                database_path,
-            }
-            .resolve_url()?;
-            let parent_url = url.clone();
-            DATABASE_BOOTSTRAP
-                .run(move || StorageConfig::ensure_parent(parent_url.as_str()))
-                .await
-                .map_err(|error| {
-                    DbErr::Custom(format!("database directory worker failed: {error}"))
-                })??;
-            connect_database(url.as_str(), tracing)
-                .await
-                .map_err(RuntimeDatabaseCompositionError::from)
-        },
-        |database| async move {
-            initialize_schema(database.as_ref())
-                .await
-                .map_err(RuntimeDatabaseCompositionError::from)
-        },
-    )
-    .await
+    let url = StorageConfig {
+        database_url,
+        database_path,
+    }
+    .resolve_url()?;
+    let kernel = agena_storage_sqlite::open_kernel_runtime(&url)
+        .await
+        .map_err(|error| {
+            RuntimeDatabaseCompositionError::Database(DbErr::Custom(error.to_string()))
+        })?;
+    Ok(Some(Arc::new(kernel)))
 }
 
 /// Resolve the chat database URL exactly as `connect_runtime_database` does,
@@ -192,26 +142,18 @@ pub(crate) fn resolve_scheduler_database_url(
 /// Connect and initialize the dedicated scheduler SQLite database.
 ///
 /// Mirrors `connect_runtime_database` but targets the scheduler schema and the
-/// scheduler database location, so the scheduler no longer shares the chat
-/// database. An injected connection is reused; initialization is idempotent.
+/// scheduler database location. Each process acquires the same owned factory;
+/// no raw injected pool can bypass lifecycle ownership.
 pub(crate) async fn connect_scheduler_database(
-    existing: Option<Arc<DatabaseConnection>>,
     database_url: Option<String>,
     database_path: Option<std::path::PathBuf>,
     tracing: &RuntimeTracingConfiguration,
 ) -> Result<Option<Arc<DatabaseConnection>>, RuntimeDatabaseCompositionError> {
     connect_or_initialize(
-        existing,
+        None,
         true,
         || async move {
             let url = resolve_scheduler_database_url(database_url, database_path)?;
-            let parent_url = url.clone();
-            DATABASE_BOOTSTRAP
-                .run(move || StorageConfig::ensure_parent(parent_url.as_str()))
-                .await
-                .map_err(|error| {
-                    DbErr::Custom(format!("database directory worker failed: {error}"))
-                })??;
             connect_database(url.as_str(), tracing)
                 .await
                 .map_err(RuntimeDatabaseCompositionError::from)
@@ -243,11 +185,8 @@ mod tests {
     #[tokio::test]
     async fn runtime_database_composition_initializes_an_in_memory_database() {
         let database = connect_runtime_database(DatabaseCompositionInputs {
-            database_connection: None,
             database_url: Some("sqlite::memory:".to_owned()),
             database_path: None,
-            initialize_schema: true,
-            tracing: &RuntimeTracingConfiguration::default(),
         })
         .await
         .expect("compose in-memory runtime database");
@@ -264,7 +203,6 @@ mod tests {
         let db_path = dir.path().join("scheduler.db");
 
         let database = connect_scheduler_database(
-            None,
             None,
             Some(PathBuf::from(&db_path)),
             &RuntimeTracingConfiguration::default(),

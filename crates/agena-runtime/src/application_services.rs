@@ -37,14 +37,11 @@ pub struct RuntimeApplicationServices {
     pub status: Arc<dyn RuntimeStatusService>,
     pub tools: Arc<dyn RuntimeToolExecutionService>,
     pub activities: Option<Arc<dyn RuntimeActivityService>>,
-    /// Ephemeral runtime live signals (background activities, plugin events,
-    /// tool-registry changes). Session data live updates are `SessionChange`
-    /// on the sealed facade, not this stream (14.3).
+    /// Ephemeral runtime live signals for background activities, plugins and tools.
+    /// Durable session changes use the bounded kernel change feed.
     pub live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
-    /// Sealed session store facade (14.1): the only path application surfaces
-    /// use to read/write session data. Session data live updates are
-    /// `SessionChange` on this facade's notification bus, never an event log.
-    pub session_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
+    /// Typed session commands, executor authority and bounded read views.
+    pub session_kernel: Option<agena_storage::kernel::SessionKernel>,
     pub session_queries: Option<Arc<dyn SessionQueryService>>,
     pub execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
@@ -80,7 +77,7 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) tools: Arc<dyn RuntimeToolExecutionService>,
     pub(crate) activities: Option<Arc<dyn RuntimeActivityService>>,
     pub(crate) live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
-    pub(crate) session_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
+    pub(crate) session_kernel: Option<agena_storage::kernel::SessionKernel>,
     pub(crate) session_queries: Option<Arc<dyn SessionQueryService>>,
     pub(crate) execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub(crate) execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
@@ -106,7 +103,7 @@ pub(crate) fn compose_runtime_application_services(
         tools: inputs.tools,
         activities: inputs.activities,
         live_signals: inputs.live_signals,
-        session_store: inputs.session_store,
+        session_kernel: inputs.session_kernel,
         session_queries: inputs.session_queries,
         execution_control: inputs.execution_control,
         execution_commands: inputs.execution_commands,

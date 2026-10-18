@@ -275,7 +275,8 @@ function flushOutput() {
     return
   }
   const pieces: string[] = []
-  for (const { payload } of pending) {
+  for (const chunk of pending) {
+    const payload = chunk.payload.type === 'document_event' ? chunk.payload.input : chunk.payload
     if (payload.type === 'text' || payload.type === 'log') pieces.push(payload.text)
     else if (payload.type === 'terminal') {
       terminal.resize(payload.screen.cols, payload.screen.rows)
@@ -310,8 +311,9 @@ function connect() {
     loading.value = !buffer.resource && !buffer.chunks.length && !buffer.document && !frame.error
     needsReplay ||= frame.reset
     for (const { payload } of frame.appended) {
-      if (payload.type === 'log') hasStderr.value ||= payload.stream === 'stderr'
-      hasOutput.value ||= !('text' in payload) || payload.text.length > 0
+      const input = payload.type === 'document_event' ? payload.input : payload
+      if (input.type === 'log') hasStderr.value ||= input.stream === 'stderr'
+      hasOutput.value ||= !('text' in input) || input.text.length > 0
     }
     if (paused.value || selectionActive.value) unseen.value += frame.appended.length
     pending.push(...frame.appended)

@@ -38,6 +38,47 @@ pub fn render_entry_export(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
+    let expansions = export_expansions(message);
+    agena_tui_media::with_text_math_rendering(|| {
+        render_entry_detailed(
+            message,
+            TRANSCRIPT_EXPORT_WIDTH,
+            i18n,
+            defaults,
+            &expansions,
+        )
+        .lines
+    })
+}
+
+/// Render one part without a viewport budget or an extra message header.
+/// Source-backed bodies can be streamed separately by the export caller.
+pub fn render_entry_part_export(
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
+    i18n: &I18n,
+    defaults: &TranscriptDetailDefaults,
+) -> Vec<RenderedLine> {
+    let expansions = export_expansions(message);
+    agena_tui_media::with_text_math_rendering(|| {
+        let mut lines = Vec::new();
+        render_part_node(
+            message,
+            part,
+            TRANSCRIPT_EXPORT_WIDTH,
+            &mut lines,
+            i18n,
+            defaults,
+            &expansions,
+            &Default::default(),
+        );
+        lines
+    })
+}
+
+fn export_expansions(
+    message: &TranscriptEntry,
+) -> std::collections::BTreeMap<TranscriptNodeKey, bool> {
     // Exported documents expand the same canonical tool detail sections as
     // the interactive transcript.
     let mut expansions = std::collections::BTreeMap::new();
@@ -64,16 +105,7 @@ pub fn render_entry_export(
             );
         }
     }
-    agena_tui_media::with_text_math_rendering(|| {
-        render_entry_detailed(
-            message,
-            TRANSCRIPT_EXPORT_WIDTH,
-            i18n,
-            defaults,
-            &expansions,
-        )
-        .lines
-    })
+    expansions
 }
 
 #[derive(Debug, Clone)]

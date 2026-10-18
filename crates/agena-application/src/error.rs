@@ -129,6 +129,39 @@ impl ApplicationError {
         )
     }
 
+    /// The runtime has already confirmed the command. A failed follow-up
+    /// projection must never ask a caller to execute that command again.
+    pub fn committed_command_projection_unavailable(
+        outcome: agena_runtime::SessionExecutionCommandOutcome,
+        cause: Self,
+    ) -> Self {
+        let code = "session.command_committed_projection_unavailable";
+        Self {
+            failure: Box::new(Failure::new(
+                FailureCode::new(code),
+                FailureCategory::DependencyUnavailable,
+                FailureResponsibility::System,
+                RetryDirective::Never,
+                RecoveryDirective::Refresh,
+                FailureImpact::PartialSuccess,
+                UserPresentation::validated(
+                    code,
+                    format!(
+                        "The command for session {} was committed, but its current state could not be loaded. Refresh the session; do not submit the command again.",
+                        outcome.session_id
+                    ),
+                ),
+            )),
+            diagnostic: Some(format!(
+                "confirmed session command {outcome:?}; follow-up projection failed: {}: {}",
+                cause.failure.code.as_str(),
+                cause
+                    .diagnostic_message()
+                    .unwrap_or(cause.failure.user.fallback.as_str()),
+            )),
+        }
+    }
+
     pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         let diagnostic = diagnostic.to_string();
         Self {

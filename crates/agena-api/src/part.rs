@@ -18,6 +18,9 @@ fn is_false(value: &bool) -> bool {
 pub struct PartResource {
     pub part_id: i64,
     pub kind: String,
+    /// The real entry also establishes a stable message boundary.
+    #[serde(default)]
+    pub message_boundary: bool,
     pub role: String,
     pub state: String,
     pub content: Value,
@@ -40,15 +43,18 @@ pub struct PartResource {
     pub finished_at_ms: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
-    /// 1-based ordinal of this part among the session's user-send messages in
-    /// durable `(created_at_ms, part_id)` order. Present only on user-send run
-    /// markers. Derived from the durable order rather than a stored counter, so
-    /// it is always contiguous (`1..=user_message_count`) and never drifts
-    /// after rewind, fork, compaction, import, or withdrawal.
+    /// Optional presentation ordinal. History actions always use the real
+    /// entry identity; a bounded history page need not compute a global rank.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message_ordinal: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<Value>,
+}
+
+impl PartResource {
+    pub fn is_message_boundary(&self) -> bool {
+        self.message_boundary
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

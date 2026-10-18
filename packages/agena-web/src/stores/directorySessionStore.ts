@@ -2341,7 +2341,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       const change = evt.properties
       if (normalizedType === 'session_changed' && (change?.kind === 'part_updated' || change?.kind === 'part_added')) {
         const part = change.part
-        if (part && typeof part === 'object' && !Array.isArray(part) && part.kind !== 'run') return
+        if (part && typeof part === 'object' && !Array.isArray(part) && part.message_boundary !== true) return
       }
       if (normalizedType === 'runtime_signal') return
       scheduleSidebarRecoverySync(`event:${normalizedType}`, 180)

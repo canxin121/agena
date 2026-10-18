@@ -11,6 +11,9 @@ fn resource(kind: ContentKind) -> ContentResource {
         sequence: 0,
     };
     ContentResource {
+        dropped_packets: 0,
+        committed_dropped_bytes: 0,
+        committed_dropped_packets: 0,
         resource_id: id,
         owner_session_id: 1,
         part_id: 2,
@@ -18,7 +21,7 @@ fn resource(kind: ContentKind) -> ContentResource {
         state: ContentState::Active,
         cursor,
         committed_cursor: cursor,
-        total_bytes: 0,
+        total_bytes: (kind == ContentKind::Text).then_some(0),
         dropped_bytes: 0,
         retained_ranges: vec![],
         capture_error: None,
@@ -422,7 +425,10 @@ fn resource_backed_diff_and_plain_text_render_with_semantic_copy_text() {
     let diff = "--- a/src.rs\n+++ b/src.rs\n@@ -1 +1 @@\n-old\n+new\n";
     assert!(view.apply(page(
         &resource,
-        vec![(1, ContentPayload::Text { text: diff.into() })]
+        vec![(
+            diff.len() as u64,
+            ContentPayload::Text { text: diff.into() }
+        )]
     )));
     let mut rendered = vec![];
     render_content(
@@ -450,4 +456,75 @@ fn resource_backed_diff_and_plain_text_render_with_semantic_copy_text() {
         agena_domain::ContentFormat::Plain,
     );
     assert!(rendered.iter().any(|line| line.copy_text == "+new"));
+}
+
+#[test]
+fn native_text_byte_cursors_preserve_unicode_and_trim_overlapping_pages() {
+    let resource = resource(ContentKind::Text);
+    let mut view = ContentView::default();
+    assert!(view.apply(page(
+        &resource,
+        vec![(
+            7,
+            ContentPayload::Text {
+                text: "中🧪".into()
+            }
+        )]
+    )));
+    assert!(!view.frame.as_ref().unwrap().windowed);
+    assert!(view.apply(page(
+        &resource,
+        vec![(
+            10,
+            ContentPayload::Text {
+                text: "🧪文".into()
+            }
+        )]
+    )));
+    assert!(view.apply(page(
+        &resource,
+        vec![(
+            11,
+            ContentPayload::Text {
+                text: "中🧪文!".into()
+            }
+        )]
+    )));
+    assert_eq!(&*view.frame.as_ref().unwrap().text, "中🧪文!");
+    assert_eq!(view.cursor.unwrap().sequence, 11);
+}
+
+#[test]
+fn delayed_text_pages_never_rewind_durable_head_or_completion() {
+    let resource = resource(ContentKind::Text);
+    let mut view = ContentView::default();
+    let mut final_page = page(
+        &resource,
+        vec![(
+            6,
+            ContentPayload::Text {
+                text: "abcdef".into(),
+            },
+        )],
+    );
+    final_page.resource.committed_cursor = final_page.next_cursor;
+    final_page.resource.state = ContentState::Complete;
+    assert!(view.apply(final_page));
+    assert!(view.apply(page(
+        &resource,
+        vec![(3, ContentPayload::Text { text: "abc".into() })]
+    )));
+    let frame = view.frame.as_ref().unwrap();
+    assert_eq!(&*frame.text, "abcdef");
+    assert_eq!(frame.resource.state, ContentState::Complete);
+    assert_eq!(frame.resource.committed_cursor.sequence, 6);
+}
+
+#[test]
+fn zero_byte_dropped_packets_are_visible_in_content_frames() {
+    let mut resource = resource(ContentKind::Text);
+    resource.dropped_packets = 1;
+    let mut view = ContentView::default();
+    assert!(view.apply(page(&resource, vec![])));
+    assert!(view.frame.as_ref().unwrap().gap);
 }

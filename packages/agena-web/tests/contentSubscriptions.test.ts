@@ -4,7 +4,7 @@ import type { ContentPage, streamContent } from '../src/lib/content'
 
 function page(sequence: number, state: 'active' | 'complete' = 'active'): ContentPage {
   const cursor = { epoch: 'one', sequence }
-  return { resource: { resource_id: 'source', kind: 'log', state, owner_session_id: 1, part_id: 2, cursor, committed_cursor: cursor, retained_ranges: [{ first: 1, last: sequence }], dropped_bytes: 0, total_bytes: sequence },
+  return { resource: { resource_id: 'source', kind: 'log', state, owner_session_id: 1, part_id: 2, cursor, committed_cursor: cursor, retained_ranges: [{ first: 1, last: sequence }], dropped_packets: 0, committed_dropped_bytes: 0, committed_dropped_packets: 0, dropped_bytes: 0, total_bytes: null },
     chunks: [{ cursor, captured_at_ms: 1000, payload: { type: 'log', stream: 'stdout', text: String(sequence) } }], next_cursor: cursor, has_more: false, gap: false }
 }
 

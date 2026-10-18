@@ -1714,7 +1714,7 @@ pub enum CompletionStreamEvent {
         /// Authoritative hosted-operation failure. A terminal item can fail
         /// while the surrounding model response completes successfully.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        failure: Option<agena_failure::Failure>,
+        failure: Option<Box<agena_failure::Failure>>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output_text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

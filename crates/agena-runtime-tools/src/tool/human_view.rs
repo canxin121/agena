@@ -5110,55 +5110,74 @@ impl BuiltinHumanRenderer {
     }
 
     fn specific_content_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
-        let Ok(page) =
-            serde_json::from_value::<agena_domain::ContentTextPage>(Value::Object(object.clone()))
-        else {
+        let Some(source) = object.get("source").and_then(Value::as_object) else {
             return Vec::new();
         };
-        let position = page.next_position;
-        let state = match page.resource.state {
-            agena_domain::ContentState::Active => "Capturing",
-            agena_domain::ContentState::Complete => "Complete",
-            agena_domain::ContentState::Interrupted => "Capture interrupted",
+        let state = match source.get("state").and_then(Value::as_str) {
+            Some("open") => "Capturing",
+            Some("complete") => "Complete",
+            Some("interrupted") => "Capture interrupted",
+            _ => "Content",
         };
+        let next = object.get("next_position").unwrap_or(&Value::Null);
+        let more = object
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut summary = format!(
-            "### Content page\n{state} · {} bytes · {} slices{}\n\nNext position: record {}, byte {}.",
-            page.slices
-                .iter()
-                .map(|slice| slice.text.len())
-                .sum::<usize>(),
-            page.slices.len(),
-            if page.has_more {
-                " · more available"
-            } else {
-                ""
-            },
-            position.after.sequence,
-            position.offset,
+            "### Content page\n{state}{}\n\nNext position: {}, byte {}.",
+            if more { " · more available" } else { "" },
+            next.get("after").and_then(Value::as_u64).unwrap_or(0),
+            next.get("offset").and_then(Value::as_u64).unwrap_or(0),
         );
-        if page.gap || page.resource.dropped_bytes > 0 {
-            summary.push_str("\n\nSome source output is unavailable in the retained capture.");
+        if source
+            .get("capture_loss")
+            .and_then(|loss| loss.get("packets"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            != 0
+        {
+            summary.push_str("\n\nSome observed source output could not be captured.");
         }
-        if let Some(error) = &page.resource.capture_error {
+        if let Some(error) = source.get("capture_error").and_then(Value::as_str) {
             summary.push_str(&format!("\n\nCapture error: {}", Self::inline_code(error)));
         }
         let mut blocks = vec![Self::markdown_block("content-page", summary)];
-        for slice in page.slices {
-            let id = Some(format!(
-                "content-slice-{}-{}",
-                slice.cursor.sequence, slice.offset
-            ));
-            blocks.push(match slice.stream {
-                Some(stream) => ViewBlock::Log {
-                    id,
-                    stream,
-                    text: slice.text,
-                },
-                None => ViewBlock::Text {
-                    id,
-                    text: slice.text,
-                },
+        if let Some(text) = object.get("text").and_then(Value::as_str) {
+            blocks.push(ViewBlock::Text {
+                id: Some("content-text".into()),
+                text: text.into(),
             });
+        }
+        if let Some(fragments) = object.get("fragments").and_then(Value::as_array) {
+            for fragment in fragments {
+                let Some(text) = fragment.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
+                let id = Some(format!(
+                    "content-event-{}-{}",
+                    fragment
+                        .get("sequence")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    fragment.get("offset").and_then(Value::as_u64).unwrap_or(0)
+                ));
+                let stream = fragment
+                    .get("channel")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok());
+                blocks.push(match stream {
+                    Some(stream) => ViewBlock::Log {
+                        id,
+                        stream,
+                        text: text.into(),
+                    },
+                    None => ViewBlock::Text {
+                        id,
+                        text: text.into(),
+                    },
+                });
+            }
         }
         blocks
     }

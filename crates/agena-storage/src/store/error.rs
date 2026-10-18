@@ -1,9 +1,4 @@
-//! Error type for the parts-first store.
-//!
-//! One error type serves both the [`PersistenceEngine`](super::engine::PersistenceEngine)
-//! contract and the [`SessionStore`] facade. It carries no database types, so
-//! the backend-neutral contract crate stays free of SeaORM; the SQLite engine
-//! maps `sea_orm::DbErr` into [`StoreError::Database`] at its boundary.
+//! Validation failures of detached read-only transcript wire values.
 
 use std::fmt;
 

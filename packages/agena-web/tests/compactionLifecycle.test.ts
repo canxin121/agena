@@ -16,6 +16,7 @@ function transcript(state: string, detail = '', outcome = '') {
   const part = (id: number, kind: string, role: string, content: object, runId?: number) => ({
     part_id: id,
     kind,
+    message_boundary: kind === 'run',
     role,
     content,
     state: 'completed',

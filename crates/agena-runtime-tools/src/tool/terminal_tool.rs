@@ -87,7 +87,7 @@ pub(super) fn start_prepared(
     launch: Option<&agena_tool::shell::ShellLaunchSpec>,
     process_id: Option<String>,
     owner: TerminalOwner,
-    output: Option<agena_storage::content::ContentWriter>,
+    output: Option<crate::tool::ToolOutputStreams>,
     cancel: CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let mut env = super::shell::sanitize_env(&env);

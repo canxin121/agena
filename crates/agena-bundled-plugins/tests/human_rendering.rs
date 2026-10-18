@@ -60,16 +60,18 @@ fn sample_payload(tool: &str) -> Value {
 
     match tool {
         "content.read" => {
-            let cursor = json!({"epoch":"00000000-0000-0000-0000-000000000001", "sequence":1});
             json!({
-                "resource": {
-                    "resource_id":"00000000-0000-0000-0000-000000000002",
-                    "owner_session_id":1, "part_id":2, "kind":"text", "state":"complete",
-                    "cursor":cursor, "committed_cursor":cursor,
-                    "total_bytes":16, "dropped_bytes":0, "retained_ranges":[{"first":1,"last":1}]
+                "source": {
+                    "id":"00000000-0000-0000-0000-000000000002", "entry":2,
+                    "epoch":"00000000-0000-0000-0000-000000000001",
+                    "kind":"text", "activity_id":null, "ordinal":0,
+                    "accepted":15, "committed":15, "retained_start":0,
+                    "state":"complete", "capture_error":null,
+                    "capture_loss":{"bytes":0,"packets":0,"committed_bytes":0,"committed_packets":0}
                 },
-                "slices":[{"cursor":cursor,"captured_at_ms":1,"offset":0,"stream":null,"text":"  source page\n\n"}],
-                "next_position":{"after":cursor,"offset":0}, "has_more":false,"gap":false
+                "text":"  source page\n\n",
+                "next_position":{"epoch":"00000000-0000-0000-0000-000000000001","after":15,"offset":0},
+                "has_more":false
             })
         }
         "fs.read" => json!({

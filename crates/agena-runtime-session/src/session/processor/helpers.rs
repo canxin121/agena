@@ -1,68 +1,8 @@
 use super::{
-    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, FinishReason,
-    PartProviderState, ToolInvocation,
+    AssistantReasoningField, BTreeMap, CompletionFinishReason, FinishReason, PartProviderState,
+    ToolInvocation,
 };
 use agena_provider::{CompletionInputProviderState, provider_metadata_value_is_meaningful};
-use agena_storage::store::{Part, PartState};
-
-pub(crate) fn complete_part_status(parts: &mut [Part], part_id: i64) -> Result<(), AppError> {
-    let part = parts
-        .iter_mut()
-        .find(|part| part.part_id == part_id)
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "completing missing part on turn accumulator: {part_id}"
-            ))
-        })?;
-    if part.state == PartState::InProgress {
-        part.state = PartState::Completed;
-    }
-    Ok(())
-}
-
-pub(crate) fn terminalize_nonterminal_parts(
-    parts: &mut [Part],
-    terminal_state: PartState,
-    failure: &agena_failure::Failure,
-) -> Result<(), AppError> {
-    use crate::session::store::{
-        tool_call_from_operation, typed_content_from_value, typed_content_to_value,
-    };
-    use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
-    let outcome = match terminal_state {
-        PartState::Cancelled => agena_domain::ToolResultState::Cancelled,
-        PartState::Failed => agena_domain::ToolResultState::Failed,
-        _ => {
-            return Err(AppError::Internal(
-                "abort requires a failed or cancelled Part state".into(),
-            ));
-        }
-    };
-    for part in parts.iter_mut() {
-        if matches!(part.state, PartState::Pending | PartState::InProgress) {
-            // Started hosted calls already have durable identity. Their
-            // outcome and interval must agree with the Part terminal fact.
-            if part.part_id > 0
-                && part.kind == "tool_call"
-                && let TypedContent::ToolCall(call) =
-                    typed_content_from_value(&part.kind, &part.content)?
-            {
-                let mut operation = operation_from_tool_call(&call);
-                operation.state = outcome;
-                operation.error = Some(agena_domain::OperationError {
-                    failure: failure.clone(),
-                });
-                operation.lifecycle.end_ms = Some(chrono::Utc::now().timestamp_millis());
-                part.content = typed_content_to_value(&TypedContent::ToolCall(Box::new(
-                    tool_call_from_operation(&operation),
-                )))?;
-            }
-            part.state = terminal_state;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
     match reason {
         CompletionFinishReason::Stop => FinishReason::Stop,
@@ -193,9 +133,7 @@ pub(crate) fn provider_metadata_string_field<'a>(
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PendingToolCall {
-    pub(crate) part_id: Option<i64>,
     pub(crate) call_id: Option<i64>,
-    pub(crate) started_at_ms: Option<i64>,
     pub(crate) id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments_json: String,
@@ -389,9 +327,7 @@ pub(crate) fn pending_provider_native_tool_call_stream_key(
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PendingProviderNativeToolCall {
-    pub(crate) part_id: Option<i64>,
     pub(crate) call_id: Option<i64>,
-    pub(crate) started_at_ms: Option<i64>,
     pub(crate) id: Option<String>,
     pub(crate) invocation: Option<ToolInvocation>,
     pub(crate) raw: Option<serde_json::Value>,

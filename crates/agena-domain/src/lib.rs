@@ -95,6 +95,7 @@ mod user_input;
 mod user_input_events;
 
 pub mod activity_view;
+pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
@@ -136,8 +137,8 @@ pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{
-    ActivityId, AssistantReplyId, ContentId, ExecutionId, MessageId, PartId, RunId, TextSegmentId,
-    ToolCallId, TurnId,
+    ActivityId, AssistantReplyId, BlobId, CommandId, ContentEpoch, ContentId, ExecutionId,
+    KernelEpoch, MessageId, PartId, RunId, TextSegmentId, ToolCallId, TurnId,
 };
 pub use interaction_notification::InteractionNotificationLevel;
 pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_path};

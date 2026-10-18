@@ -170,7 +170,7 @@ test('fork and rewind retain the complete execution response', async () => {
 
 const marker = (id: number, role = 'user') => ({
   part_id: id,
-  kind: 'run',
+  message_boundary: true, kind: 'run',
   role,
   state: 'completed',
   content: {},

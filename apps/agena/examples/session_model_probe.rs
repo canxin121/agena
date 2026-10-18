@@ -23,7 +23,6 @@ async fn main() -> anyhow::Result<()> {
         database_path: Some(probe_root.join("probe.db")),
         scheduler_database_url: None,
         scheduler_database_path: Some(probe_root.join("probe-scheduler.db")),
-        initialize_schema: true,
         tracing_reload_handle: None,
     })
     .await?;

@@ -946,7 +946,7 @@ impl TranscriptState {
         let recent_runs = page
             .parts
             .iter()
-            .filter(|part| part.kind == "run")
+            .filter(|part| part.is_message_boundary())
             .map(|part| part.part_id)
             .collect::<BTreeSet<_>>();
         // Retire folds absent from this recent window, while leaving older
@@ -974,8 +974,7 @@ impl TranscriptState {
                     .parts
                     .iter()
                     .filter(|part| {
-                        part.kind != "run"
-                            && part.run_id.is_some_and(|id| run_ids.contains(&id))
+                        part.run_id.is_some_and(|id| run_ids.contains(&id))
                             && (part.created_at_ms, part.part_id) < *anchor
                     })
                     .count();
@@ -1056,7 +1055,7 @@ impl TranscriptState {
             self.parts
                 .iter()
                 .filter(|part| {
-                    (part.kind == "run" && run_ids.contains(&part.part_id))
+                    (part.is_message_boundary() && run_ids.contains(&part.part_id))
                         || part.run_id.is_some_and(|id| run_ids.contains(&id))
                 })
                 .map(|part| part.part_id),
@@ -1069,7 +1068,7 @@ impl TranscriptState {
             .collect::<BTreeMap<_, _>>();
         let newly_loaded = parts
             .iter()
-            .filter(|part| part.kind != "run" && !by_id.contains_key(&part.part_id))
+            .filter(|part| !by_id.contains_key(&part.part_id))
             .count();
         if changed_anchor && newly_loaded == 0 {
             return false;
@@ -1097,7 +1096,6 @@ impl TranscriptState {
 
         let next_anchor = parts
             .iter()
-            .filter(|part| part.kind != "run")
             .min_by_key(|part| (part.created_at_ms, part.part_id))
             .map(|part| part.part_id)
             .unwrap_or(anchor_part_id);
@@ -4709,6 +4707,7 @@ mod stall_recovery_tests {
             updated_at_ms: 0,
             part_id,
             kind: "run".to_owned(),
+            message_boundary: true,
             role: role.to_owned(),
             state: "completed".to_owned(),
             content: serde_json::json!({}),
@@ -4779,6 +4778,9 @@ mod stall_recovery_tests {
         let frame = |body: &str, sequence| {
             Arc::new(ContentFrame {
                 resource: ContentResource {
+                    dropped_packets: 0,
+                    committed_dropped_bytes: 0,
+                    committed_dropped_packets: 0,
                     resource_id: id,
                     owner_session_id: 1,
                     part_id: 501,
@@ -4786,7 +4788,7 @@ mod stall_recovery_tests {
                     state: ContentState::Active,
                     cursor: ContentCursor { sequence, ..cursor },
                     committed_cursor: cursor,
-                    total_bytes: body.len() as u64,
+                    total_bytes: Some(body.len() as u64),
                     dropped_bytes: 0,
                     retained_ranges: vec![],
                     capture_error: None,
@@ -5127,6 +5129,7 @@ mod stall_recovery_tests {
             updated_at_ms: 0,
             part_id: 1,
             kind: "run".to_owned(),
+            message_boundary: true,
             role: "assistant".to_owned(),
             state: "in_progress".to_owned(),
             content: serde_json::json!({}),

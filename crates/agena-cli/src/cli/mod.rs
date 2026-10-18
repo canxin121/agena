@@ -1169,6 +1169,9 @@ pub struct SessionImportArgs {
     /// Optional path. Reads from stdin if omitted.
     #[arg(long)]
     pub path: Option<std::path::PathBuf>,
+    /// Reuse this UUID when retrying the same archive after a lost response.
+    #[arg(long)]
+    pub idempotency_key: Option<agena_domain::CommandId>,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
@@ -1461,11 +1464,6 @@ struct SessionOutput {
 struct SessionForkOutput {
     source_session_id: i64,
     forked: SessionDetail,
-}
-
-#[derive(Debug, Serialize)]
-struct SessionImportOutput {
-    session: SessionDetail,
 }
 
 #[derive(Debug, Serialize)]

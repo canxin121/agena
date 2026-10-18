@@ -17,10 +17,19 @@ use std::{
 };
 
 use agena_api::{
-    commands::{Command, CommandResult, ResolveWorkspaceParams, SubmitRunParams},
-    resource::{RunOptions, ServerEndpointRecord, SessionExecutionResource, SessionState},
+    commands::{
+        Command, CommandResult, ForkSessionParams, ReplyPermissionParams, ResolveWorkspaceParams,
+        SubmitRunParams, UpdateSessionParams,
+    },
+    live::SessionChangeResource,
+    part::PartResource,
+    resource::{
+        PathAccessModesResource, PathPermissionConfigResource, PermissionConfigResource,
+        PermissionMode, PermissionReply, PermissionReplyKind, RunOptions, ServerEndpointRecord,
+        SessionExecutionResource, SessionState,
+    },
 };
-use agena_client::AgenaClient;
+use agena_client::{AgenaClient, NotificationSubscription, SubscriptionEvent};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Deserialize;
 use tokio::{
@@ -448,19 +457,58 @@ async fn read_http_json_request(stream: &mut TcpStream) -> (String, serde_json::
     }
 }
 
-async fn spawn_crash_recovery_provider() -> (
+struct ProcessProviderReply {
+    events: Vec<serde_json::Value>,
+    wait_for_disconnect: bool,
+}
+
+fn process_text_events(text: &str, response_id: &str) -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({"type":"response.output_text.delta","delta":text}),
+        serde_json::json!({"type":"response.completed","response":{
+            "id":response_id,"status":"completed",
+            "usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}
+        }}),
+    ]
+}
+
+fn process_permission_events() -> Vec<serde_json::Value> {
+    let call = serde_json::json!({"type":"function_call","id":"fc_process_read","call_id":"call_process_read","name":"tools_call"});
+    let mut added = call.clone();
+    added["arguments"] = serde_json::json!("");
+    let mut done = call;
+    done["arguments"] = serde_json::json!(
+        serde_json::json!({
+            "tool":"fs.read","input":{"file_path":"permission-fixture.txt"}
+        })
+        .to_string()
+    );
+    vec![
+        serde_json::json!({"type":"response.output_item.added","output_index":0,"item":added}),
+        serde_json::json!({"type":"response.output_item.done","output_index":0,"item":done}),
+        serde_json::json!({"type":"response.completed","response":{
+            "id":"resp_process_read","status":"completed","stop_reason":"tool_calls",
+            "usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}
+        }}),
+    ]
+}
+
+async fn spawn_process_provider(
+    plans: Vec<ProcessProviderReply>,
+    repeat: Option<Vec<serde_json::Value>>,
+) -> (
     String,
     mpsc::UnboundedReceiver<serde_json::Value>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
-        .expect("bind crash-recovery fake provider");
+        .expect("bind controlled process-test provider");
     let address = listener.local_addr().expect("fake provider address");
     let (request_tx, request_rx) = mpsc::unbounded_channel();
     let server = tokio::spawn(async move {
-        let mut post_index = 0_u64;
-        loop {
+        let mut plans = VecDeque::from(plans);
+        while !plans.is_empty() || repeat.is_some() {
             let (mut stream, _) = listener.accept().await.expect("accept provider request");
             let (request_line, request) = read_http_json_request(&mut stream).await;
             if !request_line.starts_with("POST /v1/responses ") {
@@ -482,7 +530,13 @@ async fn spawn_crash_recovery_provider() -> (
                 continue;
             }
 
-            post_index += 1;
+            let plan = plans.pop_front().unwrap_or_else(|| ProcessProviderReply {
+                events: repeat
+                    .as_ref()
+                    .expect("provider plan or repeating reply")
+                    .clone(),
+                wait_for_disconnect: false,
+            });
             request_tx
                 .send(request)
                 .expect("record fake provider request");
@@ -492,7 +546,13 @@ async fn spawn_crash_recovery_provider() -> (
                 )
                 .await
                 .expect("write provider SSE headers");
-            if post_index == 1 {
+            for event in plan.events {
+                let frame = format!("data: {event}\n\n");
+                if stream.write_all(frame.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+            if plan.wait_for_disconnect {
                 // Keep the original model turn in flight until the server is
                 // killed. EOF proves the provider socket belonged to the
                 // crashed process and lets this loop serve the restarted one.
@@ -506,34 +566,28 @@ async fn spawn_crash_recovery_provider() -> (
                 continue;
             }
 
-            let events = VecDeque::from([
-                serde_json::json!({
-                    "type": "response.output_text.delta",
-                    "delta": "recovered after server restart"
-                }),
-                serde_json::json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": "resp_restart_recovered",
-                        "status": "completed",
-                        "usage": {
-                            "input_tokens": 4,
-                            "output_tokens": 3,
-                            "total_tokens": 7
-                        }
-                    }
-                }),
-            ]);
-            for event in events {
-                let frame = format!("data: {event}\n\n");
-                if stream.write_all(frame.as_bytes()).await.is_err() {
-                    break;
-                }
-            }
             let _ = stream.shutdown().await;
         }
     });
     (format!("http://{address}/v1"), request_rx, server)
+}
+
+async fn spawn_crash_recovery_provider() -> (
+    String,
+    mpsc::UnboundedReceiver<serde_json::Value>,
+    tokio::task::JoinHandle<()>,
+) {
+    spawn_process_provider(
+        vec![ProcessProviderReply {
+            events: Vec::new(),
+            wait_for_disconnect: true,
+        }],
+        Some(process_text_events(
+            "recovered after server restart",
+            "resp_restart_recovered",
+        )),
+    )
+    .await
 }
 
 fn write_isolated_project_config(workspace: &Path, provider_base_url: &str) {
@@ -610,6 +664,60 @@ async fn execution_text(client: &AgenaClient, execution: &SessionExecutionResour
         );
     }
     text
+}
+
+async fn wait_for_session_change(
+    subscription: &mut NotificationSubscription,
+    predicate: impl Fn(&SessionChangeResource) -> bool,
+) -> SessionChangeResource {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match subscription
+                .recv()
+                .await
+                .expect("process-test SSE stays connected")
+                .expect("decode process-test SSE")
+            {
+                SubscriptionEvent::SessionChanged(change) if predicate(&change) => return change,
+                SubscriptionEvent::Lagged(skipped) => {
+                    panic!("bounded process fixture unexpectedly lagged by {skipped}")
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("receive committed process-test change over SSE")
+}
+
+fn changed_part(change: &SessionChangeResource) -> Option<&PartResource> {
+    match change {
+        SessionChangeResource::PartAdded { part, .. }
+        | SessionChangeResource::PartUpdated { part, .. } => Some(part),
+        _ => None,
+    }
+}
+
+fn permission_replies<'a>(
+    parts: &'a [PartResource],
+    request_id: &str,
+) -> Vec<&'a serde_json::Value> {
+    parts
+        .iter()
+        .filter_map(|part| {
+            part.content
+                .pointer("/authorization/permissions")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+        .filter(|permission| {
+            permission
+                .pointer("/request/request_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(request_id)
+        })
+        .filter_map(|permission| permission.get("reply"))
+        .collect()
 }
 
 fn unused_loopback_port() -> u16 {
@@ -690,7 +798,7 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     first_server.crash();
     drop(client_a);
 
-    // The crash left the run marker in flight with nobody executing it. That
+    // The crash left the attempt in flight with nobody executing it. That
     // durable fact is the entire recovery input: the process that opens this
     // data directory next terminalizes it (17.4). No clock is consulted, so
     // the regression is deterministic rather than time-dependent.
@@ -699,8 +807,9 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
         .await
         .expect("open killed server database");
     let orphaned = sqlx::query_scalar::<_, i64>(
-        "SELECT part_id FROM agena_parts \
-         WHERE kind = 'run' AND state IN ('pending', 'in_progress')",
+        "SELECT e.message_id FROM agena_executions e JOIN agena_attempts a \
+         ON a.execution_id=e.id AND a.generation=e.current_generation \
+         WHERE a.phase IN ('queued','running')",
     )
     .fetch_all(&pool)
     .await
@@ -733,6 +842,10 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
         overview.running.iter().all(|item| item.id != session.id),
         "an abandoned run must never remain visible as running after restart"
     );
+    assert!(
+        overview.attention.iter().any(|item| item.id == session.id),
+        "an interrupted attempt requires attention until explicitly continued"
+    );
 
     let mut reconciled = client_b
         .get_session_state(session.id)
@@ -744,12 +857,12 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
         .expect("read reconciled session parts");
     assert!(matches!(
         reconciled.session.state,
-        SessionState::Ready { .. }
+        SessionState::Failed { .. }
     ));
     assert!(reconciled.session.state.active_execution().is_none());
     assert!(reconciled.parts.iter().any(|part| {
-        part.kind == "run"
-            && part.role == "assistant"
+        part.is_message_boundary()
+            && part.role == "user"
             && part.state == "failed"
             && part
                 .content
@@ -787,14 +900,551 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
         completed
             .parts
             .iter()
-            .filter(|part| part.kind == "run" && part.role == "assistant")
+            .filter(|part| part.is_message_boundary() && part.role == "assistant")
             .count(),
-        2,
-        "the interrupted run and explicit recovery run must remain distinct"
+        1,
+        "the interrupted attempt has no fabricated assistant marker; recovery creates one real response"
     );
+    let pool = sqlx::SqlitePool::connect(database_url.as_str())
+        .await
+        .expect("inspect recovery attempt facts");
+    let attempts=sqlx::query_as::<_,(i64,String)>("SELECT a.generation,a.phase FROM agena_attempts a JOIN agena_executions e ON e.id=a.execution_id WHERE e.session_id=? ORDER BY a.generation")
+        .bind(session.id).fetch_all(&pool).await.expect("read interrupted and recovery attempts");
+    assert_eq!(
+        attempts,
+        vec![(1, "interrupted".into()), (2, "succeeded".into())],
+        "explicit recovery creates a fenced generation without losing the interrupted attempt"
+    );
+    pool.close().await;
 
     second_server.crash();
     provider.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_restart() {
+    let fixture = tempfile::tempdir().expect("create native HTTP process fixture");
+    let workspace = fixture.path().join("workspace");
+    let server_data = fixture.path().join("server-data");
+    let database_path = fixture.path().join("sessions.db");
+    let record_path = fixture.path().join("server.json");
+    let log_path = fixture.path().join("server.log");
+    std::fs::create_dir_all(&workspace).expect("create native process workspace");
+    std::fs::create_dir_all(&server_data).expect("create native process server data");
+    std::fs::write(
+        workspace.join("permission-fixture.txt"),
+        "permission fixture from the real tool\n",
+    )
+    .expect("write controlled permission target");
+    let answer = "permission allowed 中文 🧪  \n";
+    let partial = "partial branch output 中文 🧪  \n";
+    let (provider_url, mut requests, provider) = spawn_process_provider(
+        vec![
+            ProcessProviderReply {
+                events: process_permission_events(),
+                wait_for_disconnect: false,
+            },
+            ProcessProviderReply {
+                events: process_text_events(answer, "resp_process_permission_done"),
+                wait_for_disconnect: false,
+            },
+            ProcessProviderReply {
+                events: vec![
+                    serde_json::json!({"type":"response.output_text.delta","delta":partial}),
+                ],
+                wait_for_disconnect: true,
+            },
+        ],
+        None,
+    )
+    .await;
+    write_isolated_project_config(&workspace, &provider_url);
+    let mut first_server = spawn_server(
+        &workspace,
+        &database_path,
+        &record_path,
+        &server_data,
+        &log_path,
+        0,
+        &[],
+    );
+    let (client, first_identity) = wait_for_server(&first_server, &record_path).await;
+    let CommandResult::Workspace(directory) = client
+        .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
+            path: workspace.to_string_lossy().into_owned(),
+            create_if_missing: true,
+        }))
+        .await
+        .expect("resolve native process workspace")
+    else {
+        panic!("workspace result");
+    };
+    let parent = client
+        .create_session(directory.id, "native process parent", None)
+        .await
+        .expect("create process session");
+    client
+        .set_session_permission(
+            parent.id,
+            PermissionConfigResource {
+                path: Some(PathPermissionConfigResource {
+                    workspace: Some(PathAccessModesResource {
+                        read: Some(PermissionMode::Ask),
+                        write: Some(PermissionMode::Ask),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("configure a real path permission gate");
+    let mut original = client
+        .connect_session(parent.id)
+        .await
+        .expect("connect before submitting");
+    assert!(original.snapshot.session.state.active_execution().is_none());
+    client
+        .submit_message(SubmitRunParams {
+            session_id: parent.id,
+            options: RunOptions::default(),
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "read the controlled permission fixture".into(),
+            }]),
+        })
+        .await
+        .expect("submit through the real HTTP server");
+    tokio::time::timeout(Duration::from_secs(10), requests.recv())
+        .await
+        .expect("provider receives the user message")
+        .expect("record the permission-producing request");
+    let input_change = wait_for_session_change(&mut original.subscription, |change| {
+        changed_part(change).is_some_and(|part| part.is_message_boundary() && part.role == "user")
+    })
+    .await;
+    let input_id = changed_part(&input_change)
+        .expect("native user entry in SSE")
+        .part_id;
+    let pending = wait_for_execution(&client, parent.id, |execution| {
+        execution
+            .session
+            .state
+            .pending_interactive_requests()
+            .iter()
+            .any(|pending| pending.request.as_permission().is_some())
+    })
+    .await;
+    let permission = pending
+        .session
+        .state
+        .pending_interactive_requests()
+        .iter()
+        .find_map(|pending| pending.request.as_permission())
+        .expect("native permission in authoritative shell");
+    let request_id = permission.request_id.clone();
+    let interaction_id = request_id
+        .parse::<i64>()
+        .expect("permission identity is the real native interaction id");
+    assert!(interaction_id > 0);
+    let execution_id = pending
+        .session
+        .state
+        .active_execution()
+        .expect("permission wait retains its execution")
+        .execution_id;
+    original.subscription.close();
+    drop(original);
+
+    // The first SSE consumer is gone. Another client consumes the native gate
+    // while the same server-owned execution remains active.
+    let record: ServerEndpointRecord =
+        serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    let other = AgenaClient::new(record.url.as_str()).expect("attach the second HTTP client");
+    assert_eq!(
+        other
+            .get_session_state(parent.id)
+            .await
+            .unwrap()
+            .session
+            .state
+            .active_execution()
+            .map(|active| active.execution_id),
+        Some(execution_id)
+    );
+    other
+        .reply_permission(ReplyPermissionParams {
+            session_id: parent.id,
+            options: RunOptions::default(),
+            reply: PermissionReply {
+                request_id: request_id.clone(),
+                kind: PermissionReplyKind::AllowOnce,
+                reason: Some("approved from a different process client".into()),
+                scope: None,
+            },
+        })
+        .await
+        .expect("answer the durable permission through HTTP");
+    let resumed = tokio::time::timeout(Duration::from_secs(10), requests.recv())
+        .await
+        .expect("provider receives the permission continuation")
+        .expect("record continuation");
+    assert!(
+        serde_json::to_string(&resumed)
+            .unwrap()
+            .contains("permission fixture from the real tool"),
+        "the provider continuation must contain the actual fs.read result: {resumed}"
+    );
+    let completed = wait_for_execution(&other, parent.id, |execution| {
+        execution.session.state.active_execution().is_none()
+            && execution
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+            && execution.parts.iter().any(|part| {
+                part.role == "assistant" && part.kind == "text" && part.state == "completed"
+            })
+    })
+    .await;
+    let response = completed
+        .parts
+        .iter()
+        .find(|part| part.role == "assistant" && part.kind == "text")
+        .unwrap();
+    assert_eq!(
+        other
+            .part_text(parent.id, response, 64 * 1024)
+            .await
+            .unwrap(),
+        answer
+    );
+    assert!(completed.parts.iter().all(|part| part.kind != "run"));
+    let tool = completed
+        .parts
+        .iter()
+        .find(|part| part.kind == "tool_call")
+        .expect("real tool entry");
+    assert!(
+        tool.is_message_boundary(),
+        "the first real assistant entry owns the response boundary"
+    );
+    let replies = permission_replies(&completed.parts, &request_id);
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0]["kind"], "allow_once");
+    assert_eq!(
+        replies[0]["reason"],
+        "approved from a different process client"
+    );
+    let expected_reply = replies[0].clone();
+    let parent_ids = completed
+        .parts
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<Vec<_>>();
+    assert!(parent_ids.contains(&input_id));
+
+    // Reconnect after missed terminal changes, then consume a fresh live
+    // change. The snapshot and stream must both belong to the current owner.
+    let mut reconnected = other
+        .connect_session(parent.id)
+        .await
+        .expect("reconnect snapshot plus SSE");
+    assert!(
+        reconnected
+            .snapshot
+            .session
+            .state
+            .pending_interactive_requests()
+            .is_empty()
+    );
+    assert!(
+        reconnected
+            .snapshot
+            .session
+            .state
+            .active_execution()
+            .is_none()
+    );
+    assert!(
+        reconnected
+            .snapshot
+            .latest_event_seq
+            .expect("reconnected native control version")
+            > pending
+                .latest_event_seq
+                .expect("permission-wait native control version")
+    );
+    other
+        .command(Command::UpdateSession(UpdateSessionParams {
+            session_id: parent.id,
+            title: "parent after SSE reconnect".into(),
+            expected_version: None,
+        }))
+        .await
+        .expect("mutate after SSE reconnect");
+    wait_for_session_change(&mut reconnected.subscription,|change|matches!(change,
+        SessionChangeResource::SessionMetaUpdated{session_id,title,..} if *session_id==parent.id&&title=="parent after SSE reconnect"
+    )).await;
+
+    let CommandResult::Execution(fork) = other
+        .command(Command::ForkSession(ForkSessionParams {
+            session_id: parent.id,
+            at_message_id: None,
+            title: Some("native process child".into()),
+            conversation_mode: None,
+        }))
+        .await
+        .expect("fork the completed native history through HTTP")
+    else {
+        panic!("fork execution result");
+    };
+    let child_id = fork.session.id;
+    assert_eq!(fork.session.parent_id, Some(parent.id));
+    let inherited = other
+        .session_all_parts(child_id)
+        .await
+        .expect("read inherited membership");
+    assert_eq!(
+        inherited
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        parent_ids
+    );
+    assert!(
+        inherited
+            .iter()
+            .all(|part| part.origin_session_id == parent.id)
+    );
+    assert_eq!(permission_replies(&inherited, &request_id).len(), 1);
+    let inherited_response = inherited
+        .iter()
+        .find(|part| part.part_id == response.part_id)
+        .unwrap();
+    assert_eq!(
+        other
+            .part_text(child_id, inherited_response, 64 * 1024)
+            .await
+            .unwrap(),
+        answer
+    );
+
+    let mut child_connection = other
+        .connect_session(child_id)
+        .await
+        .expect("subscribe before child execution");
+    other
+        .submit_message(SubmitRunParams {
+            session_id: child_id,
+            options: RunOptions::default(),
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "child to cancel".into(),
+            }]),
+        })
+        .await
+        .expect("submit the independent child execution");
+    tokio::time::timeout(Duration::from_secs(10), requests.recv())
+        .await
+        .expect("provider receives child request")
+        .expect("record child request");
+    let child_running = wait_for_execution(&other, child_id, |execution| {
+        execution.session.state.active_execution().is_some()
+            && execution.parts.iter().any(|part| {
+                part.origin_session_id == child_id
+                    && part.role == "assistant"
+                    && part.kind == "text"
+            })
+    })
+    .await;
+    let partial_entry = child_running
+        .parts
+        .iter()
+        .find(|part| {
+            part.origin_session_id == child_id && part.role == "assistant" && part.kind == "text"
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if other
+                .part_text(child_id, partial_entry, 64 * 1024)
+                .await
+                .unwrap()
+                == partial
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("accept native text bytes before cancellation");
+    let child_execution = child_running
+        .session
+        .state
+        .active_execution()
+        .unwrap()
+        .execution_id;
+    let cancellation = client
+        .cancel_run(child_id, Some(agena_domain::ExecutionId(child_execution)))
+        .await
+        .expect("cancel from the other HTTP client");
+    assert_eq!(
+        cancellation.result,
+        agena_domain::CancellationResult::CancellationRequested
+    );
+    let cancelled = wait_for_execution(&other, child_id, |execution| {
+        execution.session.state.active_execution().is_none()
+            && execution
+                .parts
+                .iter()
+                .any(|part| part.part_id == partial_entry.part_id && part.state == "cancelled")
+    })
+    .await;
+    wait_for_session_change(&mut child_connection.subscription, |change| {
+        changed_part(change)
+            .is_some_and(|part| part.part_id == partial_entry.part_id && part.state == "cancelled")
+    })
+    .await;
+    assert_eq!(
+        other
+            .part_text(
+                child_id,
+                cancelled
+                    .parts
+                    .iter()
+                    .find(|part| part.part_id == partial_entry.part_id)
+                    .unwrap(),
+                64 * 1024
+            )
+            .await
+            .unwrap(),
+        partial,
+        "cancellation must seal accepted bytes"
+    );
+    let child_ids = cancelled
+        .parts
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        other
+            .session_all_parts(parent.id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        parent_ids,
+        "the child's send and cancellation must not mutate the parent's membership"
+    );
+    tokio::time::timeout(Duration::from_secs(5), provider)
+        .await
+        .expect("cancellation closes the provider socket")
+        .expect("controlled provider exits");
+    assert!(
+        requests.recv().await.is_none(),
+        "permission, fork and cancel must not duplicate provider continuations"
+    );
+    drop(child_connection);
+    drop(reconnected);
+    drop(other);
+    drop(client);
+    first_server.crash();
+
+    let mut second_server = spawn_server(
+        &workspace,
+        &database_path,
+        &record_path,
+        &server_data,
+        &log_path,
+        0,
+        &[],
+    );
+    let (restarted, second_identity) = wait_for_server(&second_server, &record_path).await;
+    assert_ne!(first_identity.id, second_identity.id);
+    let restored_parent = wait_for_execution(&restarted, parent.id, |execution| {
+        execution.session.state.active_execution().is_none()
+    })
+    .await;
+    let restored_child = wait_for_execution(&restarted, child_id, |execution| {
+        execution.session.state.active_execution().is_none()
+    })
+    .await;
+    assert_eq!(restored_parent.session.title, "parent after SSE reconnect");
+    assert_eq!(restored_child.session.parent_id, Some(parent.id));
+    assert_eq!(
+        restored_parent
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        parent_ids
+    );
+    assert_eq!(
+        restored_child
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        child_ids
+    );
+    assert_eq!(
+        permission_replies(&restored_parent.parts, &request_id),
+        vec![&expected_reply]
+    );
+    assert_eq!(
+        permission_replies(&restored_child.parts, &request_id),
+        vec![&expected_reply]
+    );
+    assert!(
+        restored_parent
+            .session
+            .state
+            .pending_interactive_requests()
+            .is_empty()
+    );
+    assert!(
+        restored_child
+            .session
+            .state
+            .pending_interactive_requests()
+            .is_empty()
+    );
+    assert_eq!(
+        restarted
+            .part_text(
+                child_id,
+                restored_child
+                    .parts
+                    .iter()
+                    .find(|part| part.part_id == partial_entry.part_id)
+                    .unwrap(),
+                64 * 1024
+            )
+            .await
+            .unwrap(),
+        partial
+    );
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rwc", database_path.display()))
+        .await
+        .expect("inspect native facts after restart");
+    let phases=sqlx::query_as::<_,(i64,String)>("SELECT e.session_id,a.phase FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.session_id IN (?,?) ORDER BY e.session_id")
+        .bind(parent.id).bind(child_id).fetch_all(&pool).await.unwrap();
+    assert_eq!(
+        phases,
+        vec![
+            (parent.id, "succeeded".into()),
+            (child_id, "cancelled".into())
+        ]
+    );
+    let decisions=sqlx::query_scalar::<_,i64>("SELECT count(*) FROM agena_interactions WHERE id=? AND session_id=? AND decision_json IS NOT NULL")
+        .bind(interaction_id).bind(parent.id).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        decisions, 1,
+        "the completed permission is one native interaction, including after process restart"
+    );
+    pool.close().await;
+    second_server.crash();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1017,9 +1667,9 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
     // owned by the single server Runtime that is holding the provider request
     // open. No client can add a second one (17.3).
     let in_flight_runs = sqlx::query_scalar::<_, i64>(
-        "SELECT part_id FROM agena_parts \
-         WHERE kind = 'run' AND state IN ('pending', 'in_progress') \
-           AND origin_session_id = ?",
+        "SELECT e.message_id FROM agena_executions e JOIN agena_attempts a \
+         ON a.execution_id=e.id AND a.generation=e.current_generation \
+         WHERE a.phase IN ('queued','running') AND e.session_id=?",
     )
     .bind(session.id)
     .fetch_all(&pool)

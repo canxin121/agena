@@ -60,17 +60,14 @@ async fn async_main() -> anyhow::Result<()> {
         workspace_root: Some(workspace),
         config_override_expressions: Vec::new(),
         database_url: Some("sqlite::memory:".to_string()),
-        initialize_schema: true,
         tracing_reload_handle: None,
         ..Default::default()
     })
     .await
     .context("start isolated probe runtime")?;
     let services = runtime.application_services();
-    let session_store = services
-        .session_store
-        .clone()
-        .context("runtime has no session store")?;
+    let application =
+        agena_application::Application::from_composed_runtime_services(services.clone())?;
     let commands = services
         .execution_commands
         .context("runtime does not provide session commands")?;
@@ -137,6 +134,7 @@ async fn async_main() -> anyhow::Result<()> {
     });
 
     let permission = wait_for_permission(
+        &application,
         queries.as_ref(),
         session.session_id,
         Duration::from_secs(args.permission_timeout_secs),
@@ -188,9 +186,9 @@ async fn async_main() -> anyhow::Result<()> {
     ) {
         bail!("session remained blocked after AllowOnce");
     }
-    let parts = part_observation::parts(session_store.as_ref(), session.session_id).await?;
+    let parts = part_observation::parts(&application, session.session_id).await?;
     assert_tool_api_trace(&parts, "web.fetch")?;
-    let transcript = part_observation::text(session_store.as_ref(), &parts)
+    let transcript = part_observation::text(&application, session.session_id, &parts)
         .await?
         .into_values()
         .collect::<Vec<_>>()
@@ -208,7 +206,7 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 fn assert_tool_api_trace(
-    parts: &[agena_storage::store::Part],
+    parts: &[agena_api::part::PartResource],
     tool_name: &str,
 ) -> anyhow::Result<()> {
     let operations = parts
@@ -256,14 +254,21 @@ fn assert_tool_api_trace(
 }
 
 async fn wait_for_permission(
+    application: &agena_application::Application,
     queries: &dyn SessionQueryService,
     session_id: i64,
     timeout: Duration,
 ) -> anyhow::Result<PermissionRequest> {
     tokio::time::timeout(timeout, async {
         loop {
+            let snapshot = application
+                .session_kernel()?
+                .reader
+                .control_snapshot(session_id.try_into()?, 128)
+                .await
+                .context("load control snapshot while waiting for permission")?;
             let pending = queries
-                .pending_interactive_requests(session_id)
+                .pending_interactive_requests(&snapshot)
                 .await
                 .context("load session while waiting for permission")?;
             if let Some(request) = pending

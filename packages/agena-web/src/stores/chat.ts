@@ -1030,10 +1030,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const fetchedContent = normalized.reduce(
           (total, entry) =>
             total +
-            entry.parts.filter((part) => {
-              const kind = String(part.agenaKind || '').toLowerCase()
-              return kind !== 'run' && !loadedIds.has(part.id)
-            }).length,
+            entry.parts.filter((part) => !loadedIds.has(part.id)).length,
           0,
         )
         // A recent snapshot can advance the reply tail while this older page
@@ -1050,10 +1047,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const nextAnchor =
           normalized
             .flatMap((entry) => entry.parts)
-            .find((part) => {
-              const kind = String(part.agenaKind || '').toLowerCase()
-              return kind !== 'run'
-            })?.id || currentFold.anchorPartId
+            .at(0)?.id || currentFold.anchorPartId
         const nextFold: MessageFold = {
           ...currentFold,
           anchorPartId: changedCursor ? currentFold.anchorPartId : String(nextAnchor),
@@ -2188,7 +2182,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           selectedSessionId.value !== sid &&
           !refreshMessagesInFlightBySession.has(sid)
         ) {
-          if (!props.resource_revisions && isRecord(part) && part.kind === 'run') scheduleSessionsRefresh(800)
+          if (!props.resource_revisions && isRecord(part) && part.message_boundary === true) scheduleSessionsRefresh(800)
           return
         }
         if (isRecord(part)) {
@@ -2201,7 +2195,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
             scheduleTranscriptEviction()
             const kind = readString(part.kind as JsonValue)
 
-            if (kind === 'run') {
+            if (part.message_boundary === true) {
               // New message (turn marker).
               const messageAlreadyKnown = binarySearchById(list, String(partId), (m) => m.info.id).found
               const runState = readString(part.state as JsonValue)
@@ -2230,7 +2224,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
               if (replyId) info.replyId = replyId
               const ordinalRaw = readNumber(part.user_message_ordinal)
               if (ordinalRaw != null && ordinalRaw > 0) info.userMessageOrdinal = Math.floor(ordinalRaw)
-              upsertMessageEntryIn(list, info)
+              const boundaryEntry=upsertMessageEntryIn(list, info)
+              const boundaryPart=normalizeAgenaPart(String(partId),sid,key,part as JsonValue)
+              if (boundaryPart) upsertPart(boundaryEntry,boundaryPart,'')
               if (info.role === 'user') {
                 const currentCount = historyUserMessageCountBySession.value[sid]
                 if (typeof info.userMessageOrdinal === 'number') {
@@ -2272,7 +2268,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               }
             }
             // Text tokens change content, not execution/interaction state.
-            if (!props.resource_revisions && (kind === 'run' || kind === 'tool_call')) scheduleSessionStatusRefresh(sid)
+            if (!props.resource_revisions && (part.message_boundary === true || kind === 'tool_call')) scheduleSessionStatusRefresh(sid)
           }
         }
       } else if (sid && changeKind === 'part_removed') {

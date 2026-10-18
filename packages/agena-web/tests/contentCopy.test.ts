@@ -4,7 +4,7 @@ import type { ContentCursor, ContentPage } from '../src/lib/content'
 
 function page(sequences: number[], last: number, dropped = 0): ContentPage {
   const cursor = { epoch: 'epoch', sequence: last }
-  return { resource: { resource_id:'source', kind:'log', owner_session_id:1,part_id:2,state:'complete',cursor,committed_cursor:cursor,total_bytes:10,dropped_bytes:dropped,retained_ranges:[] },
+  return { resource: { resource_id:'source', kind:'log', owner_session_id:1,part_id:2,state:'complete',cursor,committed_cursor:cursor,total_bytes:null,dropped_packets: 0, committed_dropped_bytes: 0, committed_dropped_packets: 0, dropped_bytes:dropped,retained_ranges:[] },
     chunks:sequences.map((sequence) => ({cursor:{...cursor,sequence},captured_at_ms:1000,payload:{type:'log',stream:'stdout',text:`  ${sequence}\n\n`}})),next_cursor:cursor,has_more:false,gap:dropped > 0 }
 }
 
@@ -23,4 +23,19 @@ test('content copy marks empty loss pages and missing leading and trailing range
 })
 test('content copy rejects a generation replacement rather than joining executions', async () => {
   await expect(copy({epoch:'replaced',sequence:2}, page([1,2],2))).rejects.toThrow('generation')
+})
+
+
+test('native UTF-8 byte offsets copy a fixed position across overlapping pages', async () => {
+  const value = page([], 7)
+  value.resource.kind = 'text'
+  value.chunks = [{ cursor: value.next_cursor, captured_at_ms: 1, payload: { type: 'text', text: '中🧪' } }]
+  expect(await copy({ epoch: 'epoch', sequence: 3 }, value)).toBe('中')
+  expect(await copy({ epoch: 'epoch', sequence: 7 }, value)).toBe('中🧪')
+})
+
+test('zero-byte capture loss is included in copy', async () => {
+  const value = page([], 0)
+  value.resource.dropped_packets = 1
+  expect(await copy(value.next_cursor, value)).toBe('\n[missing]\n')
 })

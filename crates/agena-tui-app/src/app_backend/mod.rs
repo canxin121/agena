@@ -26,6 +26,7 @@ pub(crate) mod provider_mappings;
 pub(crate) mod session_hub;
 pub(crate) mod session_refresh;
 pub(crate) mod timeline;
+pub(crate) mod transcript_export;
 mod transport;
 
 pub use self::transport::{BackendMode, TuiBackend};

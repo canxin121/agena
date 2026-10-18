@@ -629,16 +629,6 @@ pub fn project_text_lossy(run: &CompletionInputRun) -> String {
     }
 }
 
-/// Runtime-private lossy projection used while preparing the persisted prompt window.
-pub fn project_persisted_text_lossy(parts: &[Part]) -> String {
-    let projected = project_persisted(parts);
-    if projected.is_empty() {
-        parts_as_text_lossy(parts)
-    } else {
-        parts_text_lossy(projected.as_slice())
-    }
-}
-
 // ─── Classifier transcript projection ─────────────────────────────────────────
 
 /// Per-part character cap for the classifier transcript. One runaway tool
@@ -647,19 +637,10 @@ pub fn project_persisted_text_lossy(parts: &[Part]) -> String {
 /// needs the tail of a 200k-character build log.
 const CLASSIFIER_PART_CHARS: usize = 4_000;
 
-/// Render one run's parts as a role-labelled, tool-visible transcript block for
-/// the automatic-approval classifier.
-///
-/// This is deliberately *not* [`project_persisted_text_lossy`]: that projection
-/// is the lossy text fallback for providers whose protocol has no tool
-/// representation, so it collapses a call to `[tool_call:name:id]` and a result
-/// to `[tool_result:id]` — the arguments and the output are dropped. A
-/// permission reviewer cannot judge "does this exfiltrate data / delete the
-/// right thing" without seeing them. Both reference implementations show their
-/// reviewer the full exchange: codex renders `tool {name} call` with arguments
-/// and `tool {name} result` with output, and claude-code renders an XML
-/// transcript carrying tool inputs and outputs.
-pub fn project_classifier_run_text(parts: &[Part]) -> String {
+/// Adapt persisted-part golden fixtures to classifier input. Production
+/// classifiers receive resolved semantic runs directly.
+#[cfg(test)]
+fn project_classifier_run_text(parts: &[Part]) -> String {
     let run = project_completion_input(parts);
     project_classifier_input_run_text(&run)
 }
@@ -825,6 +806,7 @@ fn is_terminal_result_status(status: ExecutionStatus) -> bool {
 /// fallback over storage parts (run markers excluded;
 /// hook/notice/interaction/error parts
 /// contribute their human-facing summary).
+#[cfg(test)]
 fn parts_as_text_lossy(parts: &[Part]) -> String {
     let mut out: Vec<String> = Vec::new();
     for part in parts {
@@ -881,6 +863,7 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
 }
 
 /// Best-effort textual system fallback for an operation.
+#[cfg(test)]
 fn operation_text_lossy(operation: &OperationPart) -> Option<String> {
     let candidates = [
         operation.output_text(),

@@ -1381,7 +1381,7 @@ test('a settled transcript refresh keeps rendered identities and skips the page 
           parts: [
             {
               part_id: 997001,
-              kind: 'run',
+              message_boundary: true, kind: 'run',
               role: 'assistant',
               state: 'in_progress',
               content: {},

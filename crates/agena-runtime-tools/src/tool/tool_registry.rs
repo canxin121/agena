@@ -318,7 +318,7 @@ pub(crate) fn unique_registered_tool_match(
     aliases.next().is_none().then_some(first)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 /// Runtime context of a tool execution.
 pub struct ToolRuntimeContext {
     pub session_id: Option<i64>,
@@ -327,9 +327,51 @@ pub struct ToolRuntimeContext {
     /// Exact assistant tool receipt for durable child work created by this
     /// invocation. Application/host calls leave this empty.
     pub launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
-    /// Generic source owned by this invocation. A background launch transfers
-    /// the writer to its process; foreground execution seals it before receipt.
-    pub output: Option<agena_storage::content::ContentWriter>,
+    /// Typed sources owned by this tool. Tool completion commits their tails.
+    pub output: Option<super::ToolOutputStreams>,
+    /// The committed tool authority used to reserve independent activities.
+    pub tool: Option<agena_storage::kernel::ToolHandle>,
+}
+
+impl std::fmt::Debug for ToolRuntimeContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRuntimeContext")
+            .field("session_id", &self.session_id)
+            .field("call_id", &self.call_id)
+            .field("prepared_shell_command", &self.prepared_shell_command)
+            .field("launch_provenance", &self.launch_provenance)
+            .field("output", &self.output)
+            .field(
+                "tool",
+                &self
+                    .tool
+                    .as_ref()
+                    .map(agena_storage::kernel::ToolHandle::id),
+            )
+            .finish()
+    }
+}
+
+impl ToolRuntimeContext {
+    pub(crate) async fn begin_activity_output(
+        &self,
+        kind: agena_storage::kernel::BackgroundActivityKind,
+        label: String,
+        content: agena_domain::ContentKind,
+    ) -> Result<Option<super::ToolOutputStreams>, ToolError> {
+        match &self.tool {
+            Some(tool) => super::ToolOutputStreams::begin_activity(tool, kind, label, content)
+                .await
+                .map(Some)
+                .map_err(|error| {
+                    ToolError::plugin(format!("commit background launch authority: {error}"))
+                }),
+            // Stateless host calls can carry a plugin session correlation ID
+            // without being a kernel execution. They create no transcript
+            // source or durable authority. Session orchestration supplies tool.
+            None => Ok(None),
+        }
+    }
 }
 
 /// Internal-only diagnostic carried to the failure projection boundary.
@@ -597,7 +639,7 @@ pub(super) struct CloudToolAdapterGate {
 #[derive(Clone)]
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
-    pub(super) content_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
+    pub(super) content_reader: Option<agena_storage::kernel::KernelReader>,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,

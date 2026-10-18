@@ -173,23 +173,17 @@ use super::{
 mod tests {
     use std::{path::Path, sync::Arc};
 
-    use agena_storage::{MemoryStore, store::SessionStore};
+    use agena_storage::MemoryStore;
     use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository};
-    use sea_orm::Database;
 
     use super::{ApplicationService, MemoryWriteRequest, validate_memory_name};
 
     async fn service(workspace: &Path) -> ApplicationService {
-        let database = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("open in-memory SQLite database"),
-        );
-        agena_storage_sqlite::initialize_schema(database.as_ref())
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
             .await
-            .expect("initialize test schema");
-        let sessions: Arc<dyn SessionStore> =
-            agena_storage_sqlite::session_store(Arc::clone(&database), 16);
+            .expect("open kernel");
+        let database = runtime.database.clone();
+        let sessions = runtime.ports;
         ApplicationService::new(
             workspace.display().to_string(),
             Arc::new(MemoryStore::for_workspace(workspace)),

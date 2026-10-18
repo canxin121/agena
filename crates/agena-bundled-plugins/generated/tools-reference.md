@@ -2362,11 +2362,11 @@ Read canonical resource-backed text and tool output with resumable byte-bounded 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `after` | `integer` | — | `0` | Last fully consumed record sequence from next_position.after. |
+| `after` | `integer` | — | `0` | Text byte cursor, or last fully consumed event sequence, from next_position.after. |
 | `epoch` | `string / null` | — | — | Epoch returned with next_position. Omit only for the first read. |
 | `max_bytes` | `integer / null` | — | — | Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional. |
-| `offset` | `integer` | — | `0` | UTF-8 bytes consumed in the next record from next_position.offset. |
-| `resource_id` | `string` | ✓ | — | Canonical opaque resource id from a Part or tool result. |
+| `offset` | `integer` | — | `0` | UTF-8 bytes consumed within the successor event; zero for text sources. |
+| `resource_id` | `string` | ✓ | — | Canonical source identity from transcript or tool output. |
 
 **Input schema**:
 ```json
@@ -2375,7 +2375,7 @@ Read canonical resource-backed text and tool output with resumable byte-bounded 
   "properties": {
     "after": {
       "default": 0,
-      "description": "Last fully consumed record sequence from next_position.after.",
+      "description": "Text byte cursor, or last fully consumed event sequence, from next_position.after.",
       "format": "uint64",
       "minimum": 0,
       "type": "integer",
@@ -2403,14 +2403,14 @@ Read canonical resource-backed text and tool output with resumable byte-bounded 
     },
     "offset": {
       "default": 0,
-      "description": "UTF-8 bytes consumed in the next record from next_position.offset.",
+      "description": "UTF-8 bytes consumed within the successor event; zero for text sources.",
       "format": "uint",
       "minimum": 0,
       "type": "integer",
       "x-agena-order": "000003"
     },
     "resource_id": {
-      "description": "Canonical opaque resource id from a Part or tool result.",
+      "description": "Canonical source identity from transcript or tool output.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"

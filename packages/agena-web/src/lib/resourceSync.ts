@@ -347,7 +347,7 @@ export function applyResourceEvent(event: SseEvent) {
           keys.push(`session:${sid}:files`)
       }
     }
-    if (!part || part.kind === 'run') {
+    if (!part || part.message_boundary === true) {
       keys.push('sessions', 'workspaces', `session:${sid}:state`)
       keys.push(...[...listeners.keys()].filter((key) => key.startsWith('workspace:')))
     }

@@ -1,8 +1,7 @@
 //! Ephemeral runtime live signals (v2, design 14.3).
 //!
-//! Session data live updates are [`SessionChange`](agena_storage::SessionChange)
-//! part patches delivered by the sealed facade's notification bus (14.3) —
-//! never an event log. This module is the parallel, much smaller surface for
+//! Durable session updates use the bounded
+//! `agena_storage::kernel::KernelChange` feed. This module carries
 //! runtime signals that are not session parts: background-activity changes,
 //! plugin-published events, and tool-registry changes. They are observer
 //! notification only: never persisted, never replayed, no causality chain.
@@ -56,7 +55,7 @@ pub trait RuntimeLiveSignalSubscription: Send {
 
 /// Stable live-signal port replacing the v1 runtime event stream for
 /// ephemeral signals (14.3, D11). Session data does not flow through here —
-/// it is `SessionChange` on the facade.
+/// it uses the kernel change feed.
 pub trait RuntimeLiveSignalService: Send + Sync {
     fn subscribe(&self) -> Box<dyn RuntimeLiveSignalSubscription>;
     /// Cheap mutation observers run before publication. Resource clocks must

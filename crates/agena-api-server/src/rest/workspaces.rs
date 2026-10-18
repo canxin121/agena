@@ -54,10 +54,11 @@ pub async fn workspace_session_stats(
         .map(|id| (*id, revisions.token(&format!("workspace:{id}:stats"))))
         .collect::<std::collections::HashMap<_, _>>();
     let stats = state
-        .session_store()?
-        .workspace_session_stats(&ids)
+        .session_kernel()?
+        .reader
+        .workspace_statistics(&ids)
         .await
-        .map_err(crate::rest::server_error_from_store)?;
+        .map_err(|error| ServerError::internal_error(&error))?;
     Ok(Json(serde_json::json!({"items": ids.into_iter().map(|id| {
         let row = stats.get(&id).copied().unwrap_or_default();
         serde_json::json!({"workspace_id": id, "revision": tokens[&id], "stats": {
@@ -84,7 +85,7 @@ pub async fn create_workspace(
     let revisions = state.revisions()?;
     revisions.refresh_durable(&state).await?;
     let result = json_http(state.service().create_workspace(request)).await?;
-    revisions.refresh_workspaces(&state).await?;
+    revisions.observe_workspace_change();
     Ok(result)
 }
 
@@ -95,7 +96,7 @@ pub async fn resolve_workspace(
     let revisions = state.revisions()?;
     revisions.refresh_durable(&state).await?;
     let result = json_http(state.service().resolve_workspace(request)).await?;
-    revisions.refresh_workspaces(&state).await?;
+    revisions.observe_workspace_change();
     Ok(result)
 }
 
@@ -107,7 +108,7 @@ pub async fn replace_workspace(
     let revisions = state.revisions()?;
     revisions.refresh_durable(&state).await?;
     let result = json_http(state.service().replace_workspace(workspace_id, request)).await?;
-    revisions.refresh_workspaces(&state).await?;
+    revisions.observe_workspace_change();
     Ok(result)
 }
 
@@ -118,7 +119,7 @@ pub async fn delete_workspace(
     let revisions = state.revisions()?;
     revisions.refresh_durable(&state).await?;
     let result = json_http(state.service().delete_workspace(workspace_id)).await?;
-    revisions.refresh_workspaces(&state).await?;
+    revisions.observe_workspace_change();
     Ok(result)
 }
 

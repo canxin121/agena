@@ -25,6 +25,14 @@ test('refresh retains revealed parts and the older cursor across assistant runs'
   assert.equal(result.flatMap((message) => message.parts).length, 10)
 })
 
+test('a native content boundary is retained without counting it as a newly revealed hidden part', () => {
+  const previous = [entry(3, [3, 9, 10, 14, 15])]
+  const snapshot = [entry(3, [3, 14, 15], [fold(14, 10)])]
+  const result = reconcileTranscriptFolds(previous, snapshot, previous)
+  assert.equal(result[0]?.parts[0]?.text, '3')
+  assert.equal(result[0]?.folds?.[0]?.hiddenCount, 8)
+})
+
 test('a streaming gap uses the new cursor without forgetting an older loaded prefix', () => {
   const previous = [entry(3, [14, 15, 16, 17, 18], [fold(14, 10)]), entry(20, [21, 22, 23, 24, 25])]
   const snapshot = [entry(3, []), entry(20, [31, 32, 33, 34, 35], [fold(31, 30, 20)])]

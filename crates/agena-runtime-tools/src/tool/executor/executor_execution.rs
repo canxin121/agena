@@ -229,18 +229,12 @@ impl ToolExecutor {
         {
             let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
             return Ok(match payload {
-                ToolPayloadInput::Shell(crate::part::ShellToolInput::Open { .. }) => {
-                    Some(agena_domain::ContentKind::Terminal)
-                }
-                ToolPayloadInput::Shell(
-                    crate::part::ShellToolInput::Exec { .. }
-                    | crate::part::ShellToolInput::Spawn { .. },
-                ) => Some(agena_domain::ContentKind::Log),
-                ToolPayloadInput::Shell(crate::part::ShellToolInput::Watch { input })
-                    if matches!(input.as_ref(), crate::part::ShellWatchInput::Launch { .. }) =>
-                {
+                ToolPayloadInput::Shell(crate::part::ShellToolInput::Exec { .. }) => {
                     Some(agena_domain::ContentKind::Log)
                 }
+                // Managed launches commit activity-owned sources themselves.
+                // Opening an attempt source here would create an empty second
+                // capture with the wrong parent lifetime.
                 _ => None,
             });
         }
@@ -287,6 +281,7 @@ impl ToolExecutor {
                 prepared_shell_command,
                 launch_provenance,
                 output: None,
+                tool: None,
             },
         )
         .await
@@ -301,33 +296,19 @@ impl ToolExecutor {
     ) -> Result<ToolInvocationExecution, ToolError> {
         let writer = context.output.clone();
         let mut result = self.execute_invocation_inner(invocation, context).await;
-        if let Some(writer) = writer.filter(|writer| !writer.lifecycle_is_delegated()) {
-            let final_state = if matches!(result, Err(ToolError::Cancelled)) {
-                agena_domain::ContentState::Interrupted
-            } else {
-                agena_domain::ContentState::Complete
-            };
-            let capture_error = match writer.finalize(final_state).await {
-                Ok(resource) => resource.capture_error,
-                Err(error) => {
-                    tracing::error!(%error, "tool content capture did not commit its final descriptor");
-                    writer
-                        .resource()
-                        .capture_error
-                        .or_else(|| Some(error.to_string()))
-                }
-            };
-            if let (Some(error), Ok(execution)) = (capture_error, &mut result) {
-                execution
-                    .view
-                    .metadata
-                    .insert("output_capture_error".into(), error);
-                execution
-                    .view
-                    .metadata
-                    .insert("output_capture_state".into(), "interrupted".into());
-            }
+        if let Some(error) = writer.and_then(|output| output.capture_diagnostic())
+            && let Ok(execution) = &mut result
+        {
+            execution
+                .view
+                .metadata
+                .insert("output_capture_error".into(), error);
+            execution
+                .view
+                .metadata
+                .insert("output_capture_state".into(), "interrupted".into());
         }
+
         result
     }
 
@@ -594,13 +575,14 @@ impl ToolExecutor {
     }
 
     async fn capture_tool_chunk(
-        output: Option<&agena_storage::content::ContentWriter>,
+        output: Option<&crate::tool::ToolOutputStreams>,
         chunk: agena_plugin_host::sdk::ToolStreamChunk,
     ) -> Result<(), ToolError> {
         if let Some(output) = output {
             let bytes = chunk.payload.byte_len();
+            let kind = chunk.payload.kind();
             if let Err(error) = output.append(chunk.payload).await {
-                output.record_loss(bytes, &error);
+                output.record_loss(kind, bytes, &error.to_string());
             }
         }
         Ok(())

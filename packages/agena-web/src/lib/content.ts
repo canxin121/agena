@@ -32,7 +32,13 @@ export type TerminalSnapshot = {
     }
   }[]
 }
+export type DocumentInput =
+  | { type: 'text'; text: string }
+  | { type: 'log'; stream: 'stdout' | 'stderr'; text: string }
+  | { type: 'structured'; event: DocumentMutation }
+
 export type ContentPayload =
+  | { type: 'document_event'; input: DocumentInput; checkpoint: ContentDocument | null }
   | { type: 'text'; text: string }
   | { type: 'log'; stream: 'stdout' | 'stderr'; text: string }
   | { type: 'structured'; base_cursor: ContentCursor; event: DocumentMutation }
@@ -41,6 +47,18 @@ export type ContentPayload =
   | { type: 'terminal_patch'; base_cursor: ContentCursor; screen: TerminalSnapshot; rows_changed: number[] }
 export type ContentChunk = { cursor: ContentCursor; captured_at_ms: number; payload: ContentPayload }
 const contentEncoder = new TextEncoder()
+const contentDecoder = new TextDecoder('utf-8', { fatal: true })
+
+/** Text sources use UTF-8 byte offsets; event sources use record sequences. */
+export function contentChunkStart(chunk: ContentChunk, kind: ContentRef['kind']): number {
+  return kind === 'text' && chunk.payload.type === 'text'
+    ? chunk.cursor.sequence - contentEncoder.encode(chunk.payload.text).byteLength
+    : chunk.cursor.sequence - 1
+}
+
+export function contentTextAfter(text: string, bytes: number): string {
+  return contentDecoder.decode(contentEncoder.encode(text).subarray(bytes))
+}
 const chunkCosts = new WeakMap<ContentChunk, number>()
 export function contentChunkBytes(chunk: ContentChunk): number {
   let bytes = chunkCosts.get(chunk)
@@ -57,8 +75,12 @@ export type ContentResource = ContentRef & {
   cursor: ContentCursor
   committed_cursor: ContentCursor
   retained_ranges: { first: number; last: number }[]
-  total_bytes: number
+  /** Exact accepted UTF-8 byte count for text; event byte totals are unknown. */
+  total_bytes: number | null
   dropped_bytes: number
+  dropped_packets: number
+  committed_dropped_bytes: number
+  committed_dropped_packets: number
   capture_error?: string
 }
 export type ContentPage = {
@@ -111,6 +133,7 @@ export class ContentBuffer {
   gap = false
   windowed = false
   private recovering = false
+  private readonly retiredEpochs = new Set<string>()
   private documentCursor: ContentCursor | null = null
   document: ContentDocument | null = null
   private bytes = 0
@@ -126,9 +149,15 @@ export class ContentBuffer {
   apply(page: ContentPage): { appended: ContentChunk[]; reset: boolean; missing: boolean } {
     if (this.resource && this.resource.resource_id !== page.resource.resource_id)
       throw new Error(i18n.global.t('errors.content.bufferIdentityChanged'))
-    const reset = this.recovering || (this.cursor !== null && this.cursor.epoch !== page.next_cursor.epoch)
+    if (this.retiredEpochs.has(page.next_cursor.epoch)) return { appended: [], reset: false, missing: false }
+    const previousEpoch = this.resource?.cursor.epoch
+    const reset = this.recovering || (previousEpoch !== undefined && previousEpoch !== page.next_cursor.epoch)
     if (page.resource.cursor.epoch !== page.next_cursor.epoch)
       throw new Error(i18n.global.t('errors.content.mixedResourceEpochs'))
+    if (page.resource.committed_cursor.epoch !== page.next_cursor.epoch ||
+      page.resource.committed_cursor.sequence > page.resource.cursor.sequence ||
+      page.next_cursor.sequence > page.resource.cursor.sequence)
+      return { appended: [], reset: false, missing: true }
     const appended: ContentChunk[] = []
     let expected = reset ? undefined : this.cursor?.sequence
     let terminalCursor = reset ? null : this.terminalCursor
@@ -141,15 +170,36 @@ export class ContentBuffer {
       this.recovering = true
       return { appended: [], reset: false, missing: true }
     }
-    for (const chunk of page.chunks) {
+    for (const original of page.chunks) {
+      let chunk = original
       if (chunk.cursor.epoch !== page.next_cursor.epoch)
         throw new Error(i18n.global.t('errors.content.mixedContentEpochs'))
+      if (chunk.cursor.sequence > page.next_cursor.sequence) return { appended: [], reset: false, missing: true }
       if (expected !== undefined && chunk.cursor.sequence <= expected) continue
-      if (expected !== undefined && chunk.cursor.sequence !== expected + 1 && !page.gap)
+      const start = contentChunkStart(chunk, page.resource.kind)
+      if (start < 0 || (expected !== undefined && start > expected && !page.gap))
         return { appended: [], reset: false, missing: true }
+      if (expected !== undefined && start < expected) {
+        if (page.resource.kind !== 'text' || chunk.payload.type !== 'text')
+          return { appended: [], reset: false, missing: true }
+        try {
+          chunk = { ...chunk, payload: { type: 'text', text: contentTextAfter(chunk.payload.text, expected - start) } }
+        } catch {
+          return { appended: [], reset: false, missing: true }
+        }
+      }
       appended.push(chunk)
       expected = chunk.cursor.sequence
-      if (chunk.payload.type === 'structured_snapshot') {
+      if (chunk.payload.type === 'document_event') {
+        try {
+          if (chunk.payload.checkpoint) document = validateDocument(chunk.payload.checkpoint)
+          else if (chunk.payload.input.type === 'structured') {
+            if (!document || !documentCursor || documentCursor.sequence !== chunk.cursor.sequence - 1) return recover()
+            document = updateDocument(document, chunk.payload.input.event)
+          } else if (!document) document = { blocks: [] }
+          documentCursor = chunk.cursor
+        } catch { return recover() }
+      } else if (chunk.payload.type === 'structured_snapshot') {
         try {
           document = validateDocument(chunk.payload.document)
         } catch {
@@ -181,6 +231,10 @@ export class ContentBuffer {
       }
     }
     if (reset) {
+      if (previousEpoch && previousEpoch !== page.next_cursor.epoch) {
+        this.retiredEpochs.add(previousEpoch)
+        if (this.retiredEpochs.size > 16) this.retiredEpochs.delete(this.retiredEpochs.values().next().value!)
+      }
       this.chunks = []
       this.bytes = 0
       this.cursor = null
@@ -189,7 +243,7 @@ export class ContentBuffer {
       this.windowed = false
       this.terminalScreen = null
     }
-    if (!this.cursor && appended[0] && appended[0].cursor.sequence > 1 && page.resource.kind !== 'structured')
+    if (!this.cursor && appended[0] && contentChunkStart(appended[0], page.resource.kind) > 0 && page.resource.kind !== 'structured')
       this.windowed = true
     for (const chunk of appended) {
       if (chunk.payload.type === 'terminal') {
@@ -216,17 +270,22 @@ export class ContentBuffer {
     }
     if (trim) this.chunks = this.chunks.slice(trim)
     if (!this.cursor || page.next_cursor.sequence >= this.cursor.sequence) this.cursor = page.next_cursor
-    if (!this.resource || page.resource.cursor.sequence >= this.resource.cursor.sequence) {
-      // Terminal state wins an equal-position race with a delayed live page.
-      if (
-        this.resource?.state !== 'active' &&
-        page.resource.state === 'active' &&
-        this.resource?.cursor.sequence === page.resource.cursor.sequence
-      ) {
-        this.resource = { ...page.resource, state: this.resource.state }
-      } else this.resource = page.resource
+    if (!this.resource) this.resource = page.resource
+    else {
+      const previous = this.resource
+      const resource = page.resource.cursor.sequence >= previous.cursor.sequence ? page.resource : previous
+      this.resource = {
+        ...resource,
+        committed_cursor: { ...resource.committed_cursor, sequence: Math.max(previous.committed_cursor.sequence, page.resource.committed_cursor.sequence) },
+        dropped_bytes: Math.max(previous.dropped_bytes, page.resource.dropped_bytes),
+        dropped_packets: Math.max(previous.dropped_packets, page.resource.dropped_packets),
+        committed_dropped_bytes: Math.max(previous.committed_dropped_bytes, page.resource.committed_dropped_bytes),
+        committed_dropped_packets: Math.max(previous.committed_dropped_packets, page.resource.committed_dropped_packets),
+      }
+      if (previous.state !== 'active' && resource.state === 'active' && previous.cursor.sequence === resource.cursor.sequence)
+        this.resource.state = previous.state
     }
-    this.gap ||= page.gap || page.resource.dropped_bytes > 0
+    this.gap ||= page.gap || page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0
     this.recovering = false
     this.documentCursor = documentCursor
     this.terminalCursor = terminalCursor
@@ -235,7 +294,10 @@ export class ContentBuffer {
   }
 
   text(): string {
-    return this.chunks.map(({ payload }) => ('text' in payload ? payload.text : '')).join('')
+    return this.chunks.map(({ payload }) => {
+      const input = payload.type === 'document_event' ? payload.input : payload
+      return 'text' in input ? input.text : ''
+    }).join('')
   }
 
   replayChunks(): ContentChunk[] {

@@ -811,10 +811,19 @@ impl App {
                 self.download_terminal_file(terminal, &path, remove_after)
             }
             UiAction::ExportTranscript { path } => {
-                self.export_transcript_to_editor(terminal, path.as_deref())
+                self.request_transcript_export(path.as_deref());
+                Ok(())
             }
+            UiAction::PreparedTranscript {
+                session_id,
+                file,
+                destination,
+            } => self.open_prepared_transcript(terminal, session_id, file, destination),
             UiAction::OpenPath { path } => self.open_path_in_editor(terminal, path.as_path()),
-            UiAction::PageTranscript => self.page_transcript(terminal),
+            UiAction::PageTranscript => {
+                self.request_transcript_pager();
+                Ok(())
+            }
         }
     }
 

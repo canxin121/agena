@@ -1,9 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -16,7 +13,7 @@ use agena_runtime::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionPermissionReplyRequest,
     SessionRunOptions, SessionUserRunRequest,
 };
-use agena_storage::store::{PartState, SessionChange};
+
 use anyhow::{Context, bail, ensure};
 use serde_json::{Value, json};
 
@@ -28,7 +25,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub(super) struct SuiteTranscript {
     pub(super) workflow_state: agena_domain::WorkflowState,
-    pub(super) parts: Vec<agena_storage::store::Part>,
+    pub(super) parts: Vec<agena_api::part::PartResource>,
     pub(super) text_by_part: BTreeMap<i64, String>,
 }
 
@@ -71,6 +68,16 @@ impl SuiteOperation {
 }
 
 impl Harness {
+    pub(super) async fn message_count(&self, session_id: i64) -> anyhow::Result<usize> {
+        Ok(
+            super::part_observation::parts(&self.application, session_id)
+                .await?
+                .iter()
+                .filter(|part| part.is_message_boundary())
+                .count(),
+        )
+    }
+
     pub(super) async fn create_session(
         &self,
         title: &str,
@@ -126,20 +133,27 @@ impl Harness {
         input: Value,
         expected_text: &str,
     ) -> anyhow::Result<ToolApiOutcome> {
-        let (change_tx, mut changes) = tokio::sync::mpsc::channel(256);
-        let changes_overflowed = Arc::new(AtomicBool::new(false));
-        let callback_overflowed = Arc::clone(&changes_overflowed);
-        let _subscription = self.session_store.subscribe(
-            session_id,
-            Arc::new(move |change| {
-                if matches!(
-                    change_tx.try_send(change),
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_))
-                ) {
-                    callback_overflowed.store(true, Ordering::Release);
-                }
-            }),
-        );
+        let application = self.application.clone();
+        let tool = tool_name.to_owned();
+        let expected = expected_text.to_owned();
+        let stream_input = input.clone();
+        // Install the kernel feed before the model turn. Native content reads
+        // must observe the expected bytes while the outer operation is running.
+        let watch = application
+            .session_kernel()?
+            .reader
+            .watch(session_id.try_into()?, None)?;
+        let streaming = tokio::spawn(async move {
+            assert_outer_tool_api_stream_update(
+                application,
+                watch,
+                session_id,
+                &tool,
+                &stream_input,
+                &expected,
+            )
+            .await
+        });
         let outcome = self
             .run_execution_tool(
                 session_id,
@@ -149,15 +163,15 @@ impl Harness {
                 PendingReply::None,
                 true,
             )
-            .await?;
-        assert_outer_tool_api_stream_update(
-            &mut changes,
-            changes_overflowed.as_ref(),
-            tool_name,
-            &input,
-            expected_text,
-        )
-        .await?;
+            .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                streaming.abort();
+                return Err(error);
+            }
+        };
+        streaming.await.context("join live Tool API observer")??;
         Ok(outcome)
     }
 
@@ -180,12 +194,7 @@ impl Harness {
             "The requested invocation is intentionally expected to fail after the test denies its nested permission. Once it fails, do not retry the call and do not request another permission; reply with the terminal marker."
         };
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
-            let start_message_count = self
-                .session_store
-                .load_run_markers(session_id)
-                .await?
-                .parts
-                .len();
+            let start_message_count = self.message_count(session_id).await?;
             let retry_notice = (attempt > 1).then_some(
                 "A prior attempt omitted the exact required input and did not execute it. Correct that now; do not reuse an empty or partial object.",
             );
@@ -237,12 +246,7 @@ impl Harness {
         let marker = format!("DSV4F_{}_OK", marker_for(case));
         let input_text = serde_json::to_string(&input)?;
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
-            let start_message_count = self
-                .session_store
-                .load_run_markers(session_id)
-                .await?
-                .parts
-                .len();
+            let start_message_count = self.message_count(session_id).await?;
             let retry_notice = (attempt > 1).then_some(
                 "A prior attempt did not execute the exact supplied JSON. Correct that now and do not use defaults or partial arguments.",
             );
@@ -329,9 +333,15 @@ impl Harness {
                 run.abort();
                 bail!("model turn exceeded {} seconds", timeout.as_secs());
             }
+            let snapshot = self
+                .application
+                .session_kernel()?
+                .reader
+                .control_snapshot(session_id.try_into()?, 128)
+                .await?;
             let pending = self
                 .session_queries
-                .pending_interactive_requests(session_id)
+                .pending_interactive_requests(&snapshot)
                 .await?
                 .into_iter()
                 .next()
@@ -422,9 +432,9 @@ impl Harness {
             .session_presentation(session_id)
             .await
             .context("load completed model session")?;
-        let parts = super::part_observation::parts(self.session_store.as_ref(), session_id).await?;
+        let parts = super::part_observation::parts(&self.application, session_id).await?;
         let text_by_part =
-            super::part_observation::text(self.session_store.as_ref(), &parts).await?;
+            super::part_observation::text(&self.application, session_id, &parts).await?;
         Ok(SuiteTranscript {
             workflow_state: presentation.workflow_state,
             parts,
@@ -475,11 +485,11 @@ pub(super) fn marker_for(case: &str) -> String {
 fn parts_since(
     session: &SuiteTranscript,
     count: usize,
-) -> impl Iterator<Item = &agena_storage::store::Part> {
+) -> impl Iterator<Item = &agena_api::part::PartResource> {
     let runs = session
         .parts
         .iter()
-        .filter(|p| p.is_run_marker())
+        .filter(|p| p.is_message_boundary())
         .skip(count)
         .map(|p| p.part_id)
         .collect::<std::collections::BTreeSet<_>>();
@@ -505,10 +515,11 @@ pub(super) fn operations_since(
                     .get("agena.operation_id")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                status: match part.state {
-                    PartState::Pending | PartState::InProgress => ExecutionStatus::Pending,
-                    PartState::Completed => ExecutionStatus::Completed,
-                    PartState::Failed | PartState::Cancelled => ExecutionStatus::Failed,
+                status: match part.state.as_str() {
+                    "pending" => ExecutionStatus::Pending,
+                    "running" | "in_progress" => ExecutionStatus::InProgress,
+                    "completed" => ExecutionStatus::Completed,
+                    _ => ExecutionStatus::Failed,
                 },
                 value,
             })
@@ -739,95 +750,51 @@ pub(super) fn assert_contains(outcome: &ToolApiOutcome, expected: &str) -> anyho
 
 /// The final operation result is insufficient evidence that a plugin's
 /// streaming handler ran: the ordinary non-streaming handler may return the
-/// same text. Require a live v2 part patch where the outer Tool API operation
-/// is still in progress and contains a streamed chunk.
+/// same text. Require native content bytes while the outer Tool API operation
+/// is still in progress; final persisted output alone cannot satisfy this.
 pub(super) async fn assert_outer_tool_api_stream_update(
-    changes: &mut tokio::sync::mpsc::Receiver<SessionChange>,
-    changes_overflowed: &AtomicBool,
+    application: agena_application::Application,
+    mut watch: agena_storage::kernel::KernelWatch,
+    session_id: i64,
     tool_name: &str,
     input: &Value,
     expected_text: &str,
 ) -> anyhow::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut observed_operations = Vec::new();
-    loop {
-        ensure!(
-            !changes_overflowed.load(Ordering::Acquire),
-            "session change queue overflowed while awaiting streamed Tool API update"
-        );
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            bail!(
-                "did not receive an in-progress streamed update for outer {TOOLS_CALL_HANDLER_KEY} running {tool_name}; observed operation updates: {}",
-                if observed_operations.is_empty() {
-                    "<none>".to_string()
-                } else {
-                    observed_operations.join("; ")
-                }
-            );
-        }
-        let item = match tokio::time::timeout(remaining, changes.recv()).await {
-            Ok(item) => item.context(
-                "session part-patch stream closed while awaiting streamed Tool API update",
-            )?,
-            Err(_) => continue,
-        };
-        match item {
-            SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
-                if part.kind != "tool_call" {
-                    continue;
-                }
-                let content = &part.content;
-                let Ok(operation) = serde_json::from_value::<
-                    agena_runtime_contracts::part_content::ToolCallContent,
-                >(content.clone()) else {
-                    continue;
-                };
-                let name = operation.name.as_str();
-                let invocation_input = operation.input.clone();
-                let output = operation
-                    .output
-                    .as_ref()
-                    .map(|output| {
-                        if !output.text_content().is_empty() {
-                            output.text_content()
-                        } else {
-                            output
-                                .payload
-                                .as_ref()
-                                .and_then(|payload| {
-                                    payload
-                                        .as_str()
-                                        .or_else(|| payload.get("text").and_then(Value::as_str))
-                                })
-                                .unwrap_or_default()
-                        }
-                    })
-                    .unwrap_or_default();
-                if observed_operations.len() < 12 {
-                    observed_operations.push(format!(
-                        "name={} input={} status={:?} output={}",
-                        name, invocation_input, operation.state, output
-                    ));
-                }
-                if part.state != PartState::InProgress
-                    || operation.state != agena_domain::ToolResultState::Running
+    let observe = async {
+        loop {
+            let parts = super::part_observation::parts(&application, session_id).await?;
+            for part in parts.into_iter().filter(|part| {
+                part.kind == "tool_call" && matches!(part.state.as_str(), "running" | "in_progress")
+            }) {
+                let operation =
+                    agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content)
+                        .map_err(anyhow::Error::msg)?;
+                if operation.name != TOOLS_CALL_HANDLER_KEY
+                    || operation.input != json!({"tool":tool_name,"input":input})
                 {
                     continue;
                 }
-                if name != TOOLS_CALL_HANDLER_KEY
-                    || invocation_input != json!({"tool": tool_name, "input": input})
-                    || !output.contains(expected_text)
+                let bodies = super::part_observation::text(
+                    &application,
+                    session_id,
+                    std::slice::from_ref(&part),
+                )
+                .await?;
+                if bodies
+                    .get(&part.part_id)
+                    .is_some_and(|body| body.contains(expected_text))
                 {
-                    continue;
+                    return Ok::<(), anyhow::Error>(());
                 }
-                return Ok(());
             }
-            SessionChange::PartRemoved { .. }
-            | SessionChange::SessionMetaUpdated { .. }
-            | SessionChange::SessionDeleted { .. } => {}
+            tokio::select! {
+                change=watch.recv()=>{change.context("kernel stream reset before live output evidence")?;}
+                _=tokio::time::sleep(Duration::from_millis(5))=>{}
+            }
         }
-    }
+    };
+    tokio::time::timeout(Duration::from_secs(180),observe).await
+        .with_context(||format!("did not observe in-progress streamed outer {TOOLS_CALL_HANDLER_KEY} output for {tool_name}"))?
 }
 
 pub(super) fn payload_string(value: &Value, field: &str) -> anyhow::Result<String> {

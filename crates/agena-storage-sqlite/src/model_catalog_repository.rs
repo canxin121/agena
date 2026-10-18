@@ -376,28 +376,15 @@ impl ModelCatalogRepository for SeaModelCatalogRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::{Database, Statement};
+    use sea_orm::Database;
 
     async fn test_store() -> SeaModelCatalogRepository {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
-        for sql in [
-            // The write-lock fence (transaction.rs) inserts into agena_sequences,
-            // so the fixture must provide that table alongside the catalog tables.
-            "CREATE TABLE agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)"
-                .to_owned(),
-            format!(
-                "CREATE TABLE {ENTRY_TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
-            ),
-            format!(
-                "CREATE TABLE {STATE_TABLE} (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)"
-            ),
-        ] {
-            db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
-                .await
-                .expect("create catalog fixture table");
-        }
+        crate::initialize_schema(&db)
+            .await
+            .expect("catalog fixture schema");
         SeaModelCatalogRepository::new(Arc::new(db))
     }
 

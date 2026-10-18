@@ -49,7 +49,7 @@ export function extractSessionActivityUpdate(evt) {
     const changeKind = trimString(props.kind)
     if (changeKind !== 'part_added' && changeKind !== 'part_updated') return null
     const part = readRecord(props.part)
-    if (!part || trimString(part.kind) !== 'run') return null
+    if (!part || part.message_boundary !== true) return null
     const sessionID = readSessionId(props)
     if (!sessionID) return null
     const state = trimString(part.state).toLowerCase()

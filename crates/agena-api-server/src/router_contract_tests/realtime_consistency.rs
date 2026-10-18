@@ -1,11 +1,12 @@
 use super::*;
 use agena_api::live::SessionChangeResource;
+#[cfg(feature = "sse")]
 use agena_client::SubscriptionEvent;
-use agena_storage::store::{NewPart, PartDelta, PartRole, PartState, PartVisibility};
+use agena_storage::kernel::{RequestId, ToolPhase, ToolResult};
 use std::time::Duration;
 
 #[tokio::test]
-async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids_over_http() {
+async fn bounded_reconciliation_filters_memberships_and_validates_real_entry_ids_over_http() {
     let server = start_test_server("http://127.0.0.1:9").await;
     let client = AgenaClient::new(&server.url).unwrap();
     let source = client
@@ -16,47 +17,23 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
         .create_session(server.workspace_id, "unrelated", None)
         .await
         .unwrap();
-    let store = AppState::from_application(application_for_test(&server.runtime))
-        .session_store()
-        .unwrap();
-    let input = |text: &str| NewPart {
-        state: PartState::Completed,
-        ..NewPart::pending("text", PartRole::User, serde_json::json!({"text": text}))
-    };
-    let first = store
-        .submit_user_run(source.id, vec![input("first")], None)
-        .await
-        .unwrap();
-    let second = store
-        .submit_user_run(
-            source.id,
-            vec![
-                input("second"),
-                NewPart {
-                    visibility: PartVisibility::Ai,
-                    ..input("private")
-                },
-            ],
-            None,
-        )
-        .await
-        .unwrap();
-    let hidden = second
-        .parts
-        .iter()
-        .find(|part| part.visibility == PartVisibility::Ai)
-        .unwrap();
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
+    let first = kernel_fixture::completed_input(&application, source.id, "first").await;
+    let second = kernel_fixture::completed_input(&application, source.id, "second").await;
     let ids = [
-        second.run_id,
-        first.run_id,
-        first.run_id,
-        hidden.part_id,
+        second.message_id.get(),
+        first.message_id.get(),
+        first.message_id.get(),
         i64::MAX,
     ];
     let page = client.session_parts_by_ids(source.id, &ids).await.unwrap();
     assert_eq!(page.parts.len(), 2);
-    assert_eq!(page.parts[0].user_message_ordinal, Some(1));
-    assert_eq!(page.parts[1].user_message_ordinal, Some(2));
+    assert!(
+        page.parts
+            .iter()
+            .all(|part| part.message_boundary && part.run_id == Some(part.part_id))
+    );
     assert!(!page.page.has_more);
     assert!(
         client
@@ -85,8 +62,6 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
             "{query}"
         );
     }
-    // A UI language is an accepted transcript read parameter; the stored
-    // part data itself stays language-free.
     let response = reqwest::get(format!(
         "{}/api/v1/sessions/{}/parts?locale=zh-CN",
         server.url, source.id
@@ -94,24 +69,29 @@ async fn bounded_reconciliation_filters_memberships_visibility_and_validates_ids
     .await
     .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    store.delete(source.id).await.unwrap();
-    for endpoint in ["parts?ids=1", "parts", "runs", "state"] {
-        let response = reqwest::get(format!(
-            "{}/api/v1/sessions/{}/{endpoint}",
-            server.url, source.id
-        ))
+    kernel
+        .sessions
+        .delete(RequestId::new(), source.id.try_into().unwrap())
         .await
         .unwrap();
+    for endpoint in ["parts?ids=1", "parts", "runs", "state"] {
         assert_eq!(
-            response.status(),
+            reqwest::get(format!(
+                "{}/api/v1/sessions/{}/{endpoint}",
+                server.url, source.id
+            ))
+            .await
+            .unwrap()
+            .status(),
             reqwest::StatusCode::NOT_FOUND,
             "{endpoint}"
         );
     }
 }
 
+#[cfg(feature = "sse")]
 #[tokio::test]
-async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_deletion() {
+async fn resource_stream_delivers_live_text_without_entry_rewrites_and_workspace_deletion() {
     let server = start_test_server("http://127.0.0.1:9").await;
     let client = AgenaClient::new(&server.url).unwrap();
     let source = client
@@ -122,45 +102,20 @@ async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_de
         .create_session(server.workspace_id, "empty", None)
         .await
         .unwrap();
-    let store = AppState::from_application(application_for_test(&server.runtime))
-        .session_store()
-        .unwrap();
-    let run = store
-        .submit_user_run(
-            source.id,
-            vec![NewPart {
-                state: PartState::InProgress,
-                ..NewPart::pending("text", PartRole::Assistant, serde_json::json!({"text": ""}))
-            }],
-            None,
-        )
-        .await
-        .unwrap();
-    let part = run.parts.iter().find(|part| part.kind == "text").unwrap();
-    let writer = store
-        .contents()
-        .open(source.id, part.part_id, agena_domain::ContentKind::Text)
-        .await
-        .unwrap();
-    let part = store
-        .update_part(
-            source.id,
-            part.part_id,
-            PartDelta {
-                content: Some(
-                    serde_json::json!({"text": "", "resources": [writer.resource().reference()]}),
-                ),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    let before = store
-        .load_part_ids(source.id, &[])
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
+    let (_sent, _attempt, round) =
+        kernel_fixture::attempt(&application, source.id, "stream fixture").await;
+    let writer = round
+        .begin_text(RequestId::new(), false)
         .await
         .unwrap()
-        .meta
-        .version;
+        .value;
+    let part = kernel
+        .reader
+        .entry(source.id.try_into().unwrap(), writer.entry_id())
+        .await
+        .unwrap();
     let mut stream = client
         .stream_changes(agena_api::Scope::Workspace {
             workspace_id: server.workspace_id,
@@ -170,17 +125,17 @@ async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_de
     let mut content = client
         .stream_content(
             source.id,
-            writer.resource().resource_id,
+            writer.id(),
             Some(agena_domain::ContentCursor {
+                epoch: writer.epoch().into(),
                 sequence: 0,
-                ..writer.resource().cursor
             }),
             64 * 1024,
         )
         .await
         .unwrap();
     for _ in 0..10 {
-        writer.append_text("x").await.unwrap();
+        writer.append("x").await.unwrap();
     }
     let text = tokio::time::timeout(Duration::from_secs(5), async {
         let mut text = String::new();
@@ -194,22 +149,26 @@ async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_de
                 return text;
             }
         }
-        panic!("content stream closed before live cursor 10")
+        panic!("content stream closed before live cursor 10");
     })
     .await
-    .expect("resource bytes arrive while Part is running");
+    .expect("bytes arrive while entry is running");
     assert_eq!(text, "xxxxxxxxxx");
-    let unchanged = store
-        .load_part_ids(source.id, &[part.part_id])
+    let unchanged = kernel
+        .reader
+        .entry(source.id.try_into().unwrap(), writer.entry_id())
         .await
         .unwrap();
-    assert_eq!(unchanged.meta.version, before);
     assert_eq!(
-        unchanged.parts[0], part,
-        "streaming never mutates Part facts"
+        *part, *unchanged,
+        "accepted byte appends never rewrite entry facts"
     );
-    writer.finish().await.unwrap();
-    store.delete(empty.id).await.unwrap();
+    writer.finish(RequestId::new()).await.unwrap();
+    kernel
+        .sessions
+        .delete(RequestId::new(), empty.id.try_into().unwrap())
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some(Ok(SubscriptionEvent::SessionChanged(
@@ -226,7 +185,7 @@ async fn resource_stream_delivers_live_text_without_part_writes_and_workspace_de
         }
     })
     .await
-    .expect("empty deletion must survive workspace filtering");
+    .expect("empty deletion survives workspace filtering");
 }
 
 #[tokio::test]
@@ -239,37 +198,22 @@ async fn a_live_session_stream_localizes_tool_headlines_for_the_asked_language()
         .create_session(server.workspace_id, "live headline locale", None)
         .await
         .unwrap();
-    let store = AppState::from_application(application_for_test(&server.runtime))
-        .session_store()
-        .unwrap();
-    let tool = agena_runtime_contracts::part_content::ToolCallContent {
-        name: "shell.exec".into(),
-        input: serde_json::json!({"command":"echo hello"}),
-        state: agena_domain::ToolResultState::Running,
-        ..Default::default()
-    };
-    let run = store
-        .submit_user_run(
-            session.id,
-            vec![NewPart {
-                state: PartState::InProgress,
-                ..NewPart::pending("tool_call", PartRole::Assistant, tool.as_value())
-            }],
-            None,
-        )
-        .await
-        .unwrap();
-    let part = run
-        .parts
-        .iter()
-        .find(|part| part.kind == "tool_call")
-        .unwrap();
-
+    let application = application_for_test(&server.runtime);
+    let kernel = application.session_kernel().unwrap();
+    let (_attempt, _round, tool, entry) = kernel_fixture::tool(
+        &application,
+        session.id,
+        "shell.exec",
+        serde_json::json!({"command":"echo hello"}),
+    )
+    .await;
     // The stored headline stays English; a reader that names a language gets the
     // mapped vocabulary on both the snapshot and every later push.
     let endpoint = format!(
         "{}/api/v1/sessions/{}/parts/{}/tool-sections/presentation",
-        server.url, session.id, part.part_id
+        server.url,
+        session.id,
+        entry.get()
     );
     let english: serde_json::Value = http
         .get(endpoint)
@@ -319,17 +263,15 @@ async fn a_live_session_stream_localizes_tool_headlines_for_the_asked_language()
             .expect("read snapshot bytes");
         received.extend_from_slice(&chunk);
     }
-    store
-        .update_part(
-            session.id,
-            part.part_id,
-            PartDelta {
-                state: Some(PartState::Completed),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    tool.complete(
+        RequestId::new(),
+        ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !String::from_utf8_lossy(&received).contains("part_updated") {
         assert!(
@@ -355,5 +297,9 @@ async fn a_live_session_stream_localizes_tool_headlines_for_the_asked_language()
             .any(|character| ('\u{4e00}'..='\u{9fff}').contains(&character)),
         "the Chinese vocabulary should reach the live reader: {text}"
     );
-    store.delete(session.id).await.unwrap();
+    kernel
+        .sessions
+        .delete(RequestId::new(), session.id.try_into().unwrap())
+        .await
+        .unwrap();
 }

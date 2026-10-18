@@ -1,7 +1,9 @@
 //! Shared application state held by the HTTP/WS/SSE/JSON-RPC transports.
 
 use portable_atomic::AtomicI64;
-use std::sync::{Arc, Mutex, atomic::Ordering};
+#[cfg(feature = "http")]
+use std::sync::Mutex;
+use std::sync::{Arc, atomic::Ordering};
 
 use agena_application::Application;
 
@@ -13,7 +15,9 @@ pub struct AppState {
     application: Application,
     server: agena_api::resource::ServerIdentityResource,
     next_operator_call_id: Arc<AtomicI64>,
+    #[cfg(feature = "http")]
     revisions: Arc<Mutex<Option<Arc<crate::revisions::ResourceRevisions>>>>,
+    #[cfg(feature = "http")]
     file_changes: Arc<crate::rest::FileChangesProjectionCache>,
 }
 
@@ -28,7 +32,9 @@ impl AppState {
                 protocol_version: agena_api::PROTOCOL_VERSION,
             },
             next_operator_call_id: Arc::new(AtomicI64::new(1)),
+            #[cfg(feature = "http")]
             revisions: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "http")]
             file_changes: Arc::new(crate::rest::FileChangesProjectionCache::default()),
         }
     }
@@ -37,10 +43,12 @@ impl AppState {
         &self.server
     }
 
+    #[cfg(feature = "http")]
     pub(crate) fn file_changes_cache(&self) -> &crate::rest::FileChangesProjectionCache {
         &self.file_changes
     }
 
+    #[cfg(feature = "http")]
     pub(crate) fn revisions(
         &self,
     ) -> Result<Arc<crate::revisions::ResourceRevisions>, ServerError> {
@@ -74,12 +82,8 @@ impl AppState {
         self.application.runtime_control()
     }
 
-    pub fn session_store(
-        &self,
-    ) -> Result<Arc<dyn agena_storage::store::SessionStore>, ServerError> {
-        self.application
-            .session_store_facade()
-            .map_err(ServerError::from)
+    pub fn session_kernel(&self) -> Result<&agena_storage::kernel::SessionKernel, ServerError> {
+        self.application.session_kernel().map_err(ServerError::from)
     }
 
     pub fn live_signals(

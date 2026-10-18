@@ -13,11 +13,11 @@ use agena_api::{
     commands::{
         CancelRunParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
-        DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams, ForkSessionParams,
-        ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
-        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams, ListSessionTreeParams,
+        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams,
+        StopActivityParams, SubmitRunParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     notifications::Notification,
     queries::{
@@ -42,11 +42,11 @@ use tokio_util::{codec::FramedRead, io::StreamReader};
 use crate::error::ClientError;
 use crate::ws::SubscriptionEvent;
 
+mod archive;
 mod content;
 pub use content::ContentSubscription;
 
 const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_TEXT_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_BINARY_RESPONSE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
@@ -477,7 +477,8 @@ impl AgenaClient {
         body: Option<&serde_json::Value>,
         accept: Option<&str>,
     ) -> reqwest::RequestBuilder {
-        let bounded_read = method == reqwest::Method::GET && accept != Some("text/event-stream");
+        let bounded_read = method == reqwest::Method::GET
+            && !matches!(accept, Some("text/event-stream" | "application/x-ndjson"));
         let mut request = self.http.request(method, url);
         // Ordinary snapshots must release in-flight UI guards even if a peer
         // stops sending. Streaming/long-running mutation requests have their
@@ -872,20 +873,6 @@ impl AgenaClient {
             .send_request(reqwest::Method::DELETE, self.endpoint(path), None, None)
             .await?;
         self.parse_json(response).await
-    }
-
-    async fn get_text(&self, path: &str) -> Result<String, ClientError> {
-        let response = self
-            .send_request(reqwest::Method::GET, self.endpoint(path), None, None)
-            .await?;
-        let status = response.status();
-        let text =
-            read_response_text_bounded(response, MAX_TEXT_RESPONSE_BYTES, "text response").await?;
-        if !status.is_success() {
-            let api: agena_api::error::ApiError = serde_json::from_str(&text)?;
-            return Err(ClientError::Api(api));
-        }
-        Ok(text)
     }
 
     async fn send_notification_frame(
@@ -2601,20 +2588,6 @@ impl AgenaClient {
                         .await?,
                 ))
             }
-            Command::ExportSession(ExportSessionParams { session_id }) => {
-                Ok(CommandResult::SessionExport {
-                    jsonl: self
-                        .get_text(&format!("/api/v1/sessions/{session_id}/export"))
-                        .await?,
-                })
-            }
-            Command::ImportSession(ImportSessionParams { jsonl }) => Ok(CommandResult::Execution(
-                self.post_json(
-                    "/api/v1/sessions/import",
-                    serde_json::json!({ "jsonl": jsonl }),
-                )
-                .await?,
-            )),
             Command::ReplyPermission(params) => Ok(CommandResult::Execution(
                 self.reply_permission(params).await?,
             )),

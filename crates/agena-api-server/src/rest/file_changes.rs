@@ -1,11 +1,11 @@
 //! Complete durable membership, not the visible/paged transcript or Git tree.
 use crate::{error::ServerError, state::AppState};
+use agena_api::part::PartResource as Part;
 use agena_api::resource::{
     SessionFileChangeResource, SessionFileChangesResource, SessionFileEditResource,
 };
 use agena_domain::ToolResultState;
 use agena_runtime_contracts::part_content::ToolCallContent;
-use agena_storage::store::{Part, PartState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -49,25 +49,63 @@ pub async fn get_session_file_changes(
             .map_err(|error| ServerError::internal_error(&error))?;
         return read.json(projection).await;
     }
-    let session = state
-        .session_store()?
-        .load_owned_file_change_parts(id)
-        .await
-        .map_err(super::server_error_from_store)?;
-    let revisions = state.revisions()?.clone();
-    let token = read.token().to_owned();
-    let projection = FILE_PROJECTIONS
-        .run(move || {
-            revisions.register_file_facts(id, &session.parts);
-            let facts = Arc::new(collect_file_facts(id, &session.parts));
-            // A concurrent mutation must not attach its revision to an older read.
-            if revisions.token(&resource) == token {
-                state.file_changes_cache().insert(id, &token, facts.clone());
+    let mut cursor: Option<String> = None;
+    let mut facts = RecordedFileFacts::default();
+    let mut version = None;
+    loop {
+        let page = state
+            .application()
+            .read_owned_tool_parts(id, cursor.as_deref(), 128)
+            .await?;
+        if version.is_some_and(|value| value != page.control_version) {
+            return Err(ServerError::conflict(
+                "The session changed while loading its file history. Refresh and retry.",
+            ));
+        }
+        version = Some(page.control_version);
+        for part in &page.parts {
+            let contribution = recorded_file_facts(part);
+            facts.incomplete |= contribution.incomplete;
+            for (path, edits) in contribution.rows {
+                facts.rows.entry(path).or_default().extend(edits);
             }
-            project_facts(&facts, &query)
-        })
+        }
+        if facts.retained_bytes() > MAX_FILE_FACT_CACHE_BYTES {
+            return Err(ServerError::bad_request(
+                "This file history exceeds the read budget. Export the session to inspect the complete archive.",
+            ));
+        }
+        if !page.has_more {
+            break;
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return Err(ServerError::internal("The history page did not advance."));
+        }
+    }
+    for edits in facts.rows.values_mut() {
+        edits.sort_by_key(|edit| edit.part_id);
+    }
+    facts.rows.retain(|_, ops| {
+        !(ops.iter().all(|o| {
+            o.from_path.is_none() && o.before_sha256.is_some() && o.after_sha256.is_some()
+        }) && ops
+            .windows(2)
+            .all(|w| w[0].after_sha256 == w[1].before_sha256)
+            && ops.first().and_then(|o| o.before_sha256.as_ref())
+                == ops.last().and_then(|o| o.after_sha256.as_ref()))
+    });
+    let facts = Arc::new(facts);
+    let revisions = state.revisions()?;
+    if revisions.token(&resource) == read.token() {
+        state
+            .file_changes_cache()
+            .insert(id, read.token(), facts.clone());
+    }
+    let projection = FILE_PROJECTIONS
+        .run(move || project_facts(&facts, &query))
         .await
-        .map_err(|error| ServerError::internal_error(&error))?;
+        .map_err(|e| ServerError::internal_error(&e))?;
     read.json(projection).await
 }
 
@@ -337,7 +375,7 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
         if name.starts_with("shell.") {
             // A queued command has not executed yet. Once it can have run,
             // writes remain a declaration, even when the command fails.
-            incomplete = part.state != PartState::Pending
+            incomplete = part.state != "pending"
                 && part
                     .content
                     .pointer("/input/writes")
@@ -354,7 +392,7 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
         let Ok(tool) = ToolCallContent::try_from(&part.content) else {
             break 'record;
         };
-        if part.state != PartState::Completed
+        if part.state != "completed"
             || tool.state != ToolResultState::Completed
             || tool.error.is_some()
         {
@@ -461,57 +499,7 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
     RecordedFileFacts { rows, incomplete }
 }
 
-pub(crate) fn recorded_file_revision(part: &Part) -> Option<u64> {
-    let facts = recorded_file_facts(part);
-    if facts.rows.is_empty() && !facts.incomplete {
-        return None;
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    facts.hash(&mut hasher);
-    Some(hasher.finish())
-}
-
-pub(crate) fn recorded_file_source(part: &Part) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    if part.kind != "tool_call" {
-        return 0;
-    }
-    let name = part
-        .content
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if name.starts_with("shell.") {
-        // Running output, error messages and terminal status cannot change
-        // this declaration's contribution after the command started.
-        (part.state != PartState::Pending
-            && part
-                .content
-                .pointer("/input/writes")
-                .and_then(Value::as_array)
-                .is_some_and(|writes| !writes.is_empty()))
-        .hash(&mut hasher);
-    } else if matches!(
-        name,
-        "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
-    ) {
-        (
-            part.state,
-            name,
-            part.content.get("state"),
-            part.content.get("error"),
-            part.content.pointer("/input/apply"),
-            part.content.pointer("/input/expected_sha256"),
-            part.content.pointer("/output/payload"),
-            part.content.pointer("/output/truncated"),
-        )
-            .hash(&mut hasher);
-    } else {
-        return 0;
-    }
-    hasher.finish()
-}
-
+#[cfg(test)]
 fn collect_file_facts(id: i64, parts: &[Part]) -> RecordedFileFacts {
     let mut rows: BTreeMap<String, Vec<RecordedFileEdit>> = BTreeMap::new();
     let mut incomplete = false;
@@ -621,7 +609,7 @@ fn project_facts(
 mod tests {
     use super::*;
     use agena_domain::RawOutput;
-    use agena_storage::store::{PartRole, PartVisibility};
+
     use serde_json::json;
 
     fn part(id: i64, name: &str, payload: Value) -> Part {
@@ -638,19 +626,23 @@ mod tests {
         Part {
             part_id: id,
             kind: "tool_call".into(),
-            role: PartRole::Assistant,
-            state: PartState::Completed,
+            message_boundary: true,
+            role: "assistant".into(),
+            state: "completed".into(),
             content: tool.as_value(),
+            sections: Vec::new(),
+            presentation: None,
             summary: None,
-            visibility: PartVisibility::Both,
+            visibility: "both".into(),
             parent_part_id: None,
-            run_id: Some(10),
+            run_id: Some(id),
             origin_session_id: 1,
             revision: 1,
             started_at_ms: id,
             finished_at_ms: Some(id),
             created_at_ms: id,
             updated_at_ms: id,
+            user_message_ordinal: None,
             provider_state: None,
         }
     }
@@ -736,7 +728,7 @@ mod tests {
         let mut inherited = replace(2, "b", "c");
         inherited.origin_session_id = 2;
         let mut failed = replace(3, "b", "c");
-        failed.state = PartState::Failed;
+        failed.state = "failed".into();
         let mut pending = replace(4, "b", "c");
         pending.content["state"] = json!("running");
         let noop = replace(5, "a", "a");

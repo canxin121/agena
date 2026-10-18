@@ -59,10 +59,10 @@ pub(crate) async fn run_task_case(
                 .is_none()
             {
                 let parts =
-                    super::super::part_observation::parts(harness.session_store.as_ref(), child_id)
-                        .await?;
+                    super::super::part_observation::parts(&harness.application, child_id).await?;
                 return super::super::part_observation::text(
-                    harness.session_store.as_ref(),
+                    &harness.application,
+                    child_id,
                     &parts,
                 )
                 .await

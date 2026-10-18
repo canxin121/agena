@@ -14,15 +14,22 @@ agena-provider = { workspace = true }
 agena-storage = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true }
 path-clean = { workspace = true }
 sea-orm = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
-lru = { workspace = true }
+sha2 = { workspace = true }
+log = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "time"] }
 tracing = { workspace = true }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
+agena-runtime-session-core = { workspace = true }
 agena-storage = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

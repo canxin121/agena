@@ -514,7 +514,7 @@ impl App {
             Ok(page) => {
                 let next_cursor = page.next_cursor.clone();
                 let has_more = page.has_more;
-                let empty = page.parts.iter().all(|part| part.kind == "run");
+                let empty = page.parts.iter().all(|part| part.is_message_boundary());
                 let seen = self
                     .transcript
                     .transcript_fold_seen_cursors

@@ -15,7 +15,7 @@ export function transcriptNativeControl(target: Element): Element | null {
 /** Move through a reply's loading controls in their visible DOM order. */
 export function focusTranscriptPartControl(root: HTMLElement, direction: -1 | 1, from?: Element | null): boolean {
   const controls = Array.from(root.querySelectorAll<HTMLElement>('[data-part-control="true"]')).filter(
-    (control) => !control.matches(':disabled, [aria-disabled="true"]'),
+    (control) => !control.matches(':disabled, [aria-disabled="true"]') && isVisibleKeyboardTarget(control),
   )
   if (!controls.length) return false
   const current = controls.findIndex((control) => control === from || Boolean(from && control.contains(from)))

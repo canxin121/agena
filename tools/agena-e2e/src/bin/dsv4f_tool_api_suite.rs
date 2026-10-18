@@ -122,7 +122,6 @@ async fn async_main() -> anyhow::Result<()> {
         workspace_root: Some(fixture.workspace.clone()),
         config_override_expressions: Vec::new(),
         database_url: Some("sqlite::memory:".to_string()),
-        initialize_schema: true,
         tracing_reload_handle: None,
         ..Default::default()
     })
@@ -130,9 +129,8 @@ async fn async_main() -> anyhow::Result<()> {
     .context("start isolated dsv4f suite runtime")?;
     let services = runtime.application_services();
     assert_tool_api_surface(services.tools.as_ref()).await?;
-    let session_store = services
-        .session_store
-        .context("runtime does not provide the session store facade")?;
+    let application =
+        agena_application::Application::from_composed_runtime_services(services.clone())?;
     let session_queries = services
         .session_queries
         .context("runtime does not provide session queries")?;
@@ -143,7 +141,7 @@ async fn async_main() -> anyhow::Result<()> {
         .execution_commands
         .context("runtime does not provide session commands")?;
     let harness = Harness {
-        session_store,
+        application,
         session_queries,
         execution_control,
         execution_commands,
@@ -279,7 +277,7 @@ impl CaseSelector {
 }
 
 struct Harness {
-    session_store: Arc<dyn agena_storage::store::SessionStore>,
+    application: agena_application::Application,
     session_queries: Arc<dyn SessionQueryService>,
     execution_control: Arc<dyn SessionExecutionControl>,
     execution_commands: Arc<dyn SessionExecutionCommandService>,

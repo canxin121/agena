@@ -33,8 +33,8 @@ pub enum PermissionReplyKind {
     DenyOnce,
     DenyAlways,
     /// Ask the automatic-approval classifier to decide this request. The
-    /// runtime never records this kind: it classifies first, then downgrades
-    /// to `AllowOnce`/`DenyOnce` before the reply is persisted.
+    /// runtime records the complete reply together with the classifier's
+    /// resolved allow/deny outcome in the same interaction decision.
     AutoApprove,
 }
 

@@ -1,6 +1,6 @@
 type SessionCompositionInputs<'a> = agena_runtime::SessionCompositionInputs<
     Option<Arc<SessionManager>>,
-    &'a Arc<DatabaseConnection>,
+    &'a Arc<agena_storage_sqlite::SqliteKernel>,
     Arc<ProviderRegistry>,
     Arc<PluginHost>,
     Option<Arc<agena_lsp::LspRegistry>>,
@@ -58,7 +58,6 @@ pub(super) fn build_or_prepare_session_manager(
         default_selection: build_config.default_selection.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,
-        max_cached_sessions: build_config.max_cached_sessions,
         max_concurrent_tools: build_config.max_concurrent_tools,
         max_turns: build_config.max_turns,
     };
@@ -100,7 +99,7 @@ pub(super) fn build_or_prepare_session_manager(
         permission_inspector.clone(),
     );
     let manager = Arc::new(SessionManager::new(
-        db.as_ref().clone(),
+        Arc::clone(db),
         Arc::clone(&providers),
         ContextGovernor::new(ContextPolicy::default()),
         processor.clone(),

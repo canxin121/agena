@@ -57,21 +57,6 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
     ServerError::from(error)
 }
 
-pub(crate) fn server_error_from_store(error: agena_storage::store::StoreError) -> ServerError {
-    match error {
-        agena_storage::store::StoreError::NotFound(_) => {
-            ServerError::not_found("The session was not found.")
-        }
-        agena_storage::store::StoreError::Busy => {
-            ServerError::service_unavailable("database write capacity is temporarily unavailable")
-        }
-        agena_storage::store::StoreError::Conflict(_) => {
-            ServerError::conflict("The data changed concurrently. Refresh and try again.")
-        }
-        other => ServerError::internal_error(&other),
-    }
-}
-
 mod activities;
 mod auth;
 mod content;
@@ -118,6 +103,44 @@ pub use model_catalog::*;
 static TEST_SESSION_STREAM_SUBSCRIPTIONS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashSet<String>>,
 > = std::sync::OnceLock::new();
+
+#[cfg(test)]
+type TestSnapshotGate = std::sync::Arc<tokio::sync::Notify>;
+
+#[cfg(test)]
+static TEST_SESSION_STREAM_SNAPSHOT_GATES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, TestSnapshotGate>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn hold_test_session_stream_snapshot(probe: String) -> TestSnapshotGate {
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    TEST_SESSION_STREAM_SNAPSHOT_GATES
+        .get_or_init(Default::default)
+        .lock()
+        .expect("session snapshot gate lock")
+        .insert(probe, gate.clone());
+    gate
+}
+
+#[cfg(test)]
+pub(crate) async fn wait_test_session_stream_snapshot(
+    probe: &str,
+    subscription: &crate::live::LiveSubscription,
+) {
+    let gate = TEST_SESSION_STREAM_SNAPSHOT_GATES
+        .get_or_init(Default::default)
+        .lock()
+        .expect("session snapshot gate lock")
+        .remove(probe);
+    if let Some(gate) = gate {
+        while !subscription.has_queued_item() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        mark_test_session_stream_subscription(format!("{probe}:queued"));
+        gate.notified().await;
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn mark_test_session_stream_subscription(probe: String) {
@@ -169,13 +192,8 @@ pub struct SessionChangeStreamQuery {
     #[cfg(test)]
     #[serde(default)]
     pub test_queue_capacity: Option<usize>,
-    /// Keeps the subscription open before the initial snapshot read so the
-    /// transport test can commit changes into a deliberately tiny queue.
-    #[cfg(test)]
-    #[serde(default)]
-    pub test_snapshot_delay_ms: Option<u64>,
     /// Unique test-only probe marked after the handler has subscribed to the
-    /// live bus. This removes timing guesses from overflow tests.
+    /// live bus, with an optional registered snapshot gate for overflow tests.
     #[cfg(test)]
     #[serde(default)]
     pub test_subscription_probe: Option<String>,

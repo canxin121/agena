@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use agena_api::part::PartResource;
 use agena_api::queries::ListSessionsParams;
 use agena_api::resource::{
     PermissionReply, RunOptions, SessionExecutionResource, SessionOverviewResource,
@@ -13,7 +14,6 @@ use agena_api::resource::{
 };
 use agena_domain::{CancellationOutcome, ComposerDocument, ExecutionId, PermissionConfig};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
-use agena_storage::store::SessionPartView;
 
 use crate::dto::{
     CursorPaginationQuery, SearchPaginationQuery, SessionCreateRequest, SessionHierarchyRequest,
@@ -94,26 +94,11 @@ impl Application {
         &self,
         summaries: Vec<agena_domain::SessionSummary>,
     ) -> Result<Vec<SessionResource>, ApplicationError> {
-        let session_ids = summaries
-            .iter()
-            .map(|summary| summary.id)
-            .collect::<Vec<_>>();
-        let states = self
-            .session_store_facade()?
-            .session_states(session_ids.as_slice())
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
         let mut resources = Vec::with_capacity(summaries.len());
         for summary in summaries {
-            let mut resource = crate::session::session_resource_from_summary(summary);
-            let state = states.get(&resource.id).copied().ok_or_else(|| {
-                ApplicationError::internal(format!(
-                    "session {} disappeared while projecting processing state",
-                    resource.id
-                ))
-            })?;
-            resource.state = session_state_resource(state);
-            resources.push(resource);
+            if let Some(resource) = self.service().get_session(summary.id).await? {
+                resources.push(resource);
+            }
         }
         Ok(resources)
     }
@@ -125,13 +110,12 @@ impl Application {
         &self,
         session_id: i64,
     ) -> Result<agena_api::resource::SessionState, ApplicationError> {
-        let state = self
-            .session_store_facade()?
-            .session_state(session_id)
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .state;
-        Ok(session_state_resource(state))
+        Ok(self
+            .service()
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?
+            .state)
     }
 
     pub async fn list_child_sessions(
@@ -209,43 +193,15 @@ impl Application {
         &self,
         session_id: i64,
         limit: u64,
-    ) -> Result<Vec<SessionPartView>, ApplicationError> {
-        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let view = self
-            .session_store_facade()?
-            .load(session_id)
-            .await
-            .map_err(|error| {
-                ApplicationError::internal(format!(
-                    "failed to load session timeline parts: {error}"
-                ))
-            })?;
-        let visible = view
-            .parts
-            .into_iter()
-            .filter(|part| part.visibility.visible_to_user())
-            .collect::<Vec<_>>();
-        let skip = visible.len().saturating_sub(limit);
-        Ok(visible
-            .into_iter()
-            .skip(skip)
-            .map(|part| SessionPartView {
-                part_id: part.part_id,
-                kind: agena_runtime_contracts::part_content::canonical_kind(
-                    &part.kind,
-                    &part.content,
-                ),
-                role: part.role,
-                state: part.state,
-                summary: part.summary,
-                content: part.content,
-                parent_part_id: part.parent_part_id,
-                run_id: part.run_id,
-                revision: part.revision,
-                created_at_ms: part.created_at_ms,
-                updated_at_ms: part.updated_at_ms,
+    ) -> Result<Vec<PartResource>, ApplicationError> {
+        Ok(self
+            .read_parts(agena_api::queries::ReadPartsParams {
+                session_id,
+                limit: Some(limit.clamp(1, 256)),
+                ..Default::default()
             })
-            .collect())
+            .await?
+            .parts)
     }
 
     /// Shared read-back: project a session's execution resource after a
@@ -302,43 +258,20 @@ impl Application {
             // Attention and transcript travel independently. Include the real
             // operation owners even in a status shell, so clients never have
             // to fabricate a tool call while waiting for the transcript page.
-            let store = self.session_store_facade()?;
-            let controls = store
-                .load_control_parts(session_id)
-                .await
-                .map_err(|error| ApplicationError::internal_error(&error))?;
-            let run_ids = controls
-                .parts
-                .iter()
-                .filter_map(|part| part.run_id)
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let mut facts = controls.parts;
-            if !run_ids.is_empty() {
-                facts.extend(
-                    store
-                        .load_part_ids(session_id, &run_ids)
-                        .await
-                        .map_err(|error| ApplicationError::internal_error(&error))?
-                        .parts,
-                );
-            }
-            for fact in facts {
-                if !fact.visibility.visible_to_user() {
-                    continue;
-                }
-                let part = crate::session::part_resource_from_fact(&fact);
+            let controls = self
+                .read_parts(agena_api::queries::ReadPartsParams {
+                    session_id,
+                    limit: Some(128),
+                    ..Default::default()
+                })
+                .await?;
+            for part in controls.parts {
                 if let Some(existing) = resource
                     .parts
                     .iter_mut()
                     .find(|old| old.part_id == part.part_id)
                 {
-                    if (existing.revision, existing.updated_at_ms)
-                        < (part.revision, part.updated_at_ms)
-                    {
-                        *existing = part;
-                    }
+                    *existing = part;
                 } else {
                     resource.parts.push(part);
                 }
@@ -375,7 +308,8 @@ impl Application {
         session_id: i64,
         permission: PermissionConfig,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        self.session_execution_services()?
+        let outcome = self
+            .session_execution_services()?
             .commands
             .set_session_permission(session_id, permission)
             .await
@@ -384,23 +318,7 @@ impl Application {
                     "failed to set permission for session {session_id}: {error}"
                 ))
             })?;
-        self.session_execution_resource(session_id).await
-    }
-
-    async fn session_command_resource(
-        &self,
-        outcome: agena_runtime::SessionExecutionCommandOutcome,
-    ) -> Result<SessionExecutionResource, ApplicationError> {
-        let mut resource = self.session_execution_resource(outcome.session_id).await?;
-        resource.receipt =
-            outcome.receipt.map(
-                |receipt| agena_api::resource::SessionExecutionReceiptResource {
-                    execution_id: receipt.execution_id.0,
-                    turn_id: receipt.turn_id.0,
-                    reply_id: receipt.reply_id.0,
-                },
-            );
-        Ok(resource)
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     pub async fn rewind_session_to_message(
@@ -423,7 +341,7 @@ impl Application {
             })
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     // ── Unified session command family ────────────────────────────────────
@@ -449,7 +367,7 @@ impl Application {
             .submit_user_run(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Continue an existing session with the given run options.
@@ -465,7 +383,7 @@ impl Application {
             .continue_session(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Compact an existing session with the given run options.
@@ -481,7 +399,7 @@ impl Application {
             .compact_session(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Reply to a pending permission request.
@@ -502,7 +420,7 @@ impl Application {
             .reply_permission(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Reply to a pending interactive user-input request.
@@ -521,7 +439,7 @@ impl Application {
             .reply_user_input(request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Clone a session's full history into a new child session.
@@ -550,7 +468,7 @@ impl Application {
             })
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Cancel the active run of `session_id`.
@@ -585,7 +503,7 @@ impl Application {
             .mark_interactive_request_presented(session_id, request_id)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     /// Update the session's selected model/options without starting a run.
@@ -602,7 +520,7 @@ impl Application {
             .update_session_selection(session_id, options)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        self.session_command_resource(outcome).await
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
     pub async fn list_workspace_sessions(
@@ -770,16 +688,74 @@ impl Application {
     }
 }
 
-fn session_state_resource(
-    state: agena_storage::store::SessionState,
-) -> agena_api::resource::SessionState {
-    crate::service::sessions::session_state_from_storage(state)
-}
-
 fn session_attention_priority(state: &agena_api::resource::SessionState) -> u8 {
     match state {
         agena_api::resource::SessionState::Running { requests, .. } if !requests.is_empty() => 3,
         agena_api::resource::SessionState::AwaitingInteraction { .. } => 2,
         _ => 0,
+    }
+}
+
+/// Read-back is a separate observation after the runtime confirmation. Every
+/// execution command uses this boundary so a projection failure cannot change
+/// its acknowledgement into an ordinary rejected request.
+async fn session_command_resource(
+    outcome: agena_runtime::SessionExecutionCommandOutcome,
+    projection: impl std::future::Future<Output = Result<SessionExecutionResource, ApplicationError>>,
+) -> Result<SessionExecutionResource, ApplicationError> {
+    let mut resource = projection.await.map_err(|cause| {
+        ApplicationError::committed_command_projection_unavailable(outcome, cause)
+    })?;
+    resource.receipt =
+        outcome.receipt.map(
+            |receipt| agena_api::resource::SessionExecutionReceiptResource {
+                execution_id: receipt.execution_id.0,
+                turn_id: receipt.turn_id.0,
+                reply_id: receipt.reply_id.0,
+            },
+        );
+    Ok(resource)
+}
+
+#[cfg(test)]
+mod command_resource_tests {
+    use super::*;
+    use agena_failure::{FailureImpact, RecoveryDirective, RetryDirective};
+
+    #[tokio::test]
+    async fn confirmed_command_resource_marks_busy_deleted_and_conflicted_projection_as_committed()
+    {
+        for cause in [
+            ApplicationError::service_unavailable("control read capacity exhausted"),
+            ApplicationError::not_found("The session was not found."),
+            ApplicationError::conflict("The session changed."),
+        ] {
+            let original_code = cause.failure.code.as_str().to_owned();
+            let outcome = agena_runtime::SessionExecutionCommandOutcome::accepted(
+                42,
+                agena_domain::ExecutionId::new(),
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            );
+            let projected = session_command_resource(outcome, async move { Err(cause) }).await;
+            let confirmed = projected.expect_err("the state observation failed after confirmation");
+            assert_eq!(
+                confirmed.failure.code.as_str(),
+                "session.command_committed_projection_unavailable"
+            );
+            assert_eq!(confirmed.failure.impact, FailureImpact::PartialSuccess);
+            assert_eq!(confirmed.failure.retry, RetryDirective::Never);
+            assert_eq!(confirmed.failure.recovery, RecoveryDirective::Refresh);
+            assert!(!confirmed.is_not_found());
+            assert!(confirmed.to_string().contains("session 42 was committed"));
+            assert!(
+                confirmed
+                    .to_string()
+                    .contains("do not submit the command again")
+            );
+            let diagnostic = confirmed.diagnostic_message().unwrap();
+            assert!(diagnostic.contains(&original_code));
+            assert!(diagnostic.contains(&outcome.receipt.unwrap().execution_id.0.to_string()));
+        }
     }
 }

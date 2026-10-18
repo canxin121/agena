@@ -124,24 +124,6 @@ pub async fn dispatch_command(
             let resources = state.session_resources_from_summaries(summaries).await?;
             Ok(CommandResult::SessionTree(resources))
         }
-        Command::ExportSession(ExportSessionParams { session_id }) => {
-            let jsonl = session_services
-                .queries
-                .export_session_jsonl(session_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(*error.failure))?;
-            Ok(CommandResult::SessionExport { jsonl })
-        }
-        Command::ImportSession(ImportSessionParams { jsonl }) => {
-            let outcome = session_services
-                .commands
-                .import_session_jsonl(&jsonl)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            Ok(execution_command_result(
-                state.session_execution_resource(outcome.session_id).await?,
-            ))
-        }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
             options,
@@ -310,12 +292,11 @@ pub async fn dispatch_command(
 use super::{
     Application, ApplicationError, CancelRunParams, Command, CommandResult, CompactSessionParams,
     ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-    DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
-    ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
-    MarkInteractiveRequestPresentedParams, PermissionRuleWriteRequest, ReplacePermissionRuleParams,
-    ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
-    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+    DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams,
+    ListSessionTreeParams, MarkInteractiveRequestPresentedParams, PermissionRuleWriteRequest,
+    ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
+    SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
     UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };
 

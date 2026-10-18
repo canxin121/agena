@@ -22,6 +22,12 @@ async fn initialized_database() -> (tempfile::TempDir, DatabaseConnection) {
     options.max_connections(1).min_connections(1);
     let db = Database::connect(options).await.unwrap();
     crate::initialize_schema(&db).await.unwrap();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA journal_mode=WAL",
+    ))
+    .await
+    .unwrap();
     for sql in [
         "CREATE TABLE rollback_probe (id INTEGER PRIMARY KEY)",
         "CREATE TRIGGER rollback_probe_reject BEFORE INSERT ON rollback_probe WHEN NEW.id = 2 BEGIN SELECT RAISE(ROLLBACK, 'primary rollback probe rejection'); END",

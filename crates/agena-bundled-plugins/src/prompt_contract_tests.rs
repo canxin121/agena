@@ -52,6 +52,14 @@ fn prompt_call_examples_match_live_gateway_and_execution_schemas() {
         let Some((function, arguments)) = code.split_once('(') else {
             continue;
         };
+        // The rich-output instructions also document the iframe's local UI
+        // bridge. Those JavaScript methods are not model tool invocations.
+        if matches!(
+            function,
+            "agena.getState" | "await agena.setState" | "await agena.fetch"
+        ) {
+            continue;
+        }
         let binding = gateways
             .get(function)
             .unwrap_or_else(|| panic!("prompt calls an undeclared function: {code}"));

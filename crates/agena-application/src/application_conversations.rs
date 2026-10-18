@@ -1,117 +1,16 @@
 //! Temporary, read-only questions with an execution independent of the parent.
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-
+use crate::{Application, ApplicationError};
 use agena_api::resource::{BtwAnswer, BtwRequest};
 use agena_domain::{
     ComposerDocument, ComposerNode, ConversationMode, ExecutionLifecycle, ExecutionOutcome,
     ExecutionPhase,
 };
-use agena_storage::store::{PartRole, SessionChange};
+use std::{collections::BTreeMap, time::Duration};
 use tokio::sync::mpsc;
-
-use crate::{Application, ApplicationError};
-
 const MAX_QUESTION_BYTES: usize = 16 * 1024;
 const MAX_ANSWER_BYTES: usize = 256 * 1024;
 static BTW_CAPACITY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
-
-#[derive(Default)]
-struct AnswerProjection {
-    question: Option<String>,
-    parts: BTreeMap<(i64, i64), String>,
-    resources: BTreeMap<(i64, i64), Vec<agena_domain::ContentId>>,
-    bytes: usize,
-    oversized: bool,
-}
-
-impl AnswerProjection {
-    fn apply(&mut self, change: SessionChange, session_id: i64) {
-        match change {
-            SessionChange::PartAdded { part, .. }
-                if part.origin_session_id == session_id
-                    && part.role == PartRole::User
-                    && part.kind == "text" =>
-            {
-                self.question = part
-                    .content
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-            }
-            SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. }
-                if part.origin_session_id == session_id
-                    && part.role == PartRole::Assistant
-                    && part.kind == "text"
-                    && part.visibility.visible_to_user() =>
-            {
-                let key = (part.created_at_ms, part.part_id);
-                let resources = part
-                    .content
-                    .get("resources")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|value| {
-                        serde_json::from_value::<agena_domain::ContentRef>(value.clone()).ok()
-                    })
-                    .filter(|reference| reference.kind == agena_domain::ContentKind::Text)
-                    .map(|reference| reference.resource_id)
-                    .collect();
-                self.resources.insert(key, resources);
-                let text = part
-                    .content
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                let previous = self.parts.get(&key).map_or(0, String::len);
-                let bytes = self
-                    .bytes
-                    .saturating_sub(previous)
-                    .saturating_add(text.len());
-                if bytes > MAX_ANSWER_BYTES {
-                    self.oversized = true;
-                    return;
-                }
-                self.bytes = bytes;
-                self.parts.insert(key, text.to_owned());
-            }
-            SessionChange::PartRemoved { part_id, .. } => {
-                self.parts.retain(|(_, id), _| *id != part_id);
-                self.resources.retain(|(_, id), _| *id != part_id);
-                self.bytes = self.parts.values().map(String::len).sum();
-            }
-            _ => {}
-        }
-    }
-
-    fn text(
-        &self,
-        sources: &BTreeMap<agena_domain::ContentId, (agena_domain::ContentCursor, String, bool)>,
-    ) -> String {
-        self.parts
-            .iter()
-            .map(|(key, text)| {
-                let mut body = self
-                    .resources
-                    .get(key)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|id| sources.get(id))
-                    .map(|(_, body, _)| body.as_str())
-                    .collect::<String>();
-                body.push_str(text);
-                body
-            })
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
-}
 
 impl Application {
     /// The returned channel owns the question. Dropping it cancels only the
@@ -194,18 +93,7 @@ impl Application {
         if tx.is_closed() {
             return Ok(());
         }
-        let store = self.session_store_facade()?;
-        let projection = Arc::new(Mutex::new(AnswerProjection::default()));
-        let observer = Arc::clone(&projection);
-        let _subscription = store.subscribe(
-            session_id,
-            Arc::new(move |change| {
-                observer
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .apply(change, session_id);
-            }),
-        );
+        let document_text = request.question.clone();
         let document = ComposerDocument(vec![ComposerNode::Text {
             text: request.question,
         }]);
@@ -218,14 +106,7 @@ impl Application {
             .submit_user_run(run)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        let question = projection
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .question
-            .clone()
-            .ok_or_else(|| {
-                ApplicationError::internal("The committed BTW question was not observed.")
-            })?;
+        let question = document_text;
         if tx
             .send(BtwAnswer {
                 question: Some(question.clone()),
@@ -243,6 +124,7 @@ impl Application {
         let mut last_text = String::new();
         let mut sources =
             BTreeMap::<agena_domain::ContentId, (agena_domain::ContentCursor, String, bool)>::new();
+        let mut source_order = Vec::new();
         loop {
             tokio::select! {
                 _ = tx.closed() => return Ok(()),
@@ -253,14 +135,34 @@ impl Application {
                 .execution_control
                 .active_execution(session_id)
                 .await;
-            let ids = projection
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .resources
-                .values()
-                .flatten()
-                .copied()
-                .collect::<std::collections::BTreeSet<_>>();
+            let entries = self
+                .read_parts(agena_api::queries::ReadPartsParams {
+                    session_id,
+                    limit: Some(128),
+                    ..Default::default()
+                })
+                .await?;
+            let ids = entries
+                .parts
+                .iter()
+                .filter(|part| {
+                    part.origin_session_id == session_id
+                        && part.role == "assistant"
+                        && part.kind == "text"
+                })
+                .flat_map(|part| {
+                    part.content
+                        .get("resources")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .filter_map(|value| {
+                    serde_json::from_value::<agena_domain::ContentRef>(value.clone()).ok()
+                })
+                .filter(|source| source.kind == agena_domain::ContentKind::Text)
+                .map(|source| source.resource_id)
+                .collect::<Vec<_>>();
             let mut source_bytes = sources
                 .values()
                 .map(|(_, text, _)| text.len())
@@ -271,11 +173,8 @@ impl Application {
                     continue;
                 }
                 if let std::collections::btree_map::Entry::Vacant(entry) = sources.entry(id) {
-                    let descriptor = store
-                        .contents()
-                        .describe(id)
-                        .await
-                        .map_err(|error| ApplicationError::internal_error(&error))?;
+                    source_order.push(id);
+                    let descriptor = self.watch_content(session_id, id).await?.resource;
                     entry.insert((
                         agena_domain::ContentCursor {
                             sequence: 0,
@@ -287,11 +186,9 @@ impl Application {
                 }
                 let source = sources.get_mut(&id).expect("registered answer source");
                 loop {
-                    let page = store
-                        .contents()
-                        .read(id, Some(source.0), 64 * 1024)
-                        .await
-                        .map_err(|error| ApplicationError::internal_error(&error))?;
+                    let page = self
+                        .read_content(session_id, id, Some(source.0), 64 * 1024)
+                        .await?;
                     if page.gap {
                         return Err(ApplicationError::internal(
                             "The BTW answer content was not retained.",
@@ -318,13 +215,13 @@ impl Application {
                     break;
                 }
             }
-            let (text, oversized) = {
-                let projection = projection.lock().unwrap_or_else(|error| error.into_inner());
-                let text = projection.text(&sources);
-                let oversized =
-                    projection.oversized || source_oversized || text.len() > MAX_ANSWER_BYTES;
-                (text, oversized)
-            };
+            let text = source_order
+                .iter()
+                .filter_map(|id| sources.get(id))
+                .map(|(_, text, _)| text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let oversized = source_oversized || text.len() > MAX_ANSWER_BYTES;
             let (done, error) = if oversized {
                 (
                     true,
@@ -397,10 +294,8 @@ impl Application {
             );
             return;
         }
-        if let Ok(store) = self.session_store_facade()
-            && let Err(error) = store.delete(session_id).await
-        {
-            tracing::warn!(session_id, %error, "failed to remove temporary BTW conversation");
+        if let Err(error) = self.service().delete_session(session_id).await {
+            tracing::warn!(session_id,%error,"failed to remove temporary BTW conversation");
         }
     }
 }

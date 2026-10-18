@@ -1,4 +1,6 @@
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
+#[path = "support/observation.rs"]
+mod observation;
 
 use agena_domain::{ComposerDocument, ComposerNode, ExecutionLifecycle, ModelRef};
 use agena_runtime::{
@@ -14,16 +16,15 @@ async fn main() -> anyhow::Result<()> {
             "error,agena::adapter=trace,agena_storage=trace,agena::session::lease=debug",
         ))
         .init();
-    let probe_root = PathBuf::from("/tmp/agena-tool-e2e.zrCBcK");
+    let probe_root = tempfile::tempdir()?;
     let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
-        workspace_root: Some(PathBuf::from("/Volumes/Rc20/Projects/agena")),
+        workspace_root: Some(std::env::current_dir()?),
         config_path: None,
         config_override_expressions: Vec::new(),
         database_url: None,
-        database_path: Some(probe_root.join("probe-trace.db")),
+        database_path: Some(probe_root.path().join("probe-trace.db")),
         scheduler_database_url: None,
-        scheduler_database_path: Some(probe_root.join("probe-trace-scheduler.db")),
-        initialize_schema: true,
+        scheduler_database_path: Some(probe_root.path().join("probe-trace-scheduler.db")),
         tracing_reload_handle: None,
     })
     .await?;
@@ -36,10 +37,9 @@ async fn main() -> anyhow::Result<()> {
         .execution_control
         .clone()
         .ok_or_else(|| anyhow::anyhow!("execution control unavailable"))?;
-    let store = services
-        .session_store
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("session store unavailable"))?;
+    let application =
+        agena_application::Application::from_composed_runtime_services(services.clone())?;
+    let kernel = application.session_kernel()?;
     let queries = services
         .session_queries
         .clone()
@@ -89,7 +89,15 @@ async fn main() -> anyhow::Result<()> {
         if poll {
             // Observe the bounded, factual run window and resource cursors.
             let t0 = tokio::time::Instant::now();
-            if let Ok(window) = store.load_run_window(session_id, None, 8, 32).await {
+            if let Ok(window) = application
+                .read_runs(agena_api::queries::ReadRunsParams {
+                    session_id,
+                    limit: Some(8),
+                    part_limit: Some(32),
+                    ..Default::default()
+                })
+                .await
+            {
                 let elapsed_ms = t0.elapsed().as_millis();
                 let mut runs = Vec::new();
                 let mut overlay_think = 0u64;
@@ -112,13 +120,16 @@ async fn main() -> anyhow::Result<()> {
                             for value in resources {
                                 let reference: agena_domain::ContentRef =
                                     serde_json::from_value(value.clone())?;
-                                let content =
-                                    store.contents().describe(reference.resource_id).await?;
+                                let content = kernel
+                                    .reader
+                                    .watch_content(session_id.try_into()?, reference.resource_id)
+                                    .await?
+                                    .head()?;
                                 if part.kind == "think" {
-                                    think_bytes += content.total_bytes;
+                                    think_bytes += content.accepted;
                                 }
                                 if part.kind == "text" {
-                                    text_bytes += content.total_bytes;
+                                    text_bytes += content.accepted;
                                 }
                             }
                         }
@@ -127,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
                     runs.push(format!(
                         "run{}:{:?} text_bytes={} think_bytes={} calls={}",
                         run.run_id,
-                        marker.map(|part| part.state),
+                        marker.map(|part| part.state.as_str()),
                         text_bytes,
                         think_bytes,
                         tool_calls
@@ -166,53 +177,31 @@ async fn main() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    let view = store.load(session_id).await?;
-    let tool_parts = view
-        .parts
+    let parts = observation::parts(&application, session_id).await?;
+    let tool_parts = parts
         .iter()
         .filter(|part| part.kind == "tool_call")
         .collect::<Vec<_>>();
-    let final_part = view
-        .parts
+    let final_part = parts
         .iter()
         .rev()
         .find(|part| part.kind == "text" && part.role.as_str() == "assistant");
     let mut final_text = String::new();
     if let Some(part) = final_part {
-        if let Some(refs) = part
-            .content
-            .get("resources")
-            .and_then(serde_json::Value::as_array)
-        {
-            for value in refs {
-                let reference: agena_domain::ContentRef = serde_json::from_value(value.clone())?;
-                final_text.push_str(
-                    &store
-                        .contents()
-                        .read_text(reference.resource_id, 64 * 1024)
-                        .await?
-                        .text,
-                );
-            }
-        }
-        if let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str) {
-            final_text.push_str(text);
-        }
+        final_text = observation::text(&application, session_id, part).await?;
     }
-    let error_parts = view
-        .parts
+    let error_parts = parts
         .iter()
         .filter(|part| part.kind == "error")
         .collect::<Vec<_>>();
-    let run_markers = view
-        .parts
+    let run_markers = parts
         .iter()
-        .filter(|part| part.kind == "run")
+        .filter(|part| part.is_message_boundary())
         .map(|part| {
             serde_json::json!({
                 "part_id": part.part_id,
-                "role": format!("{:?}", part.role),
-                "state": format!("{:?}", part.state),
+                "role": part.role,
+                "state": part.state,
             })
         })
         .collect::<Vec<_>>();
@@ -240,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     // round-trip.
     let assistant_markers = run_markers
         .iter()
-        .filter(|marker| marker["role"] == "Assistant")
+        .filter(|marker| marker["role"] == "assistant")
         .collect::<Vec<_>>();
     anyhow::ensure!(
         assistant_markers.len() == 1,

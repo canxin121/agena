@@ -1289,6 +1289,13 @@ pub struct SessionUsageResource {
     pub model_max_output_tokens: Option<u32>,
 }
 
+/// Identity of the session atomically published by an archive import.
+/// This receipt does not require a provider or a subsequent state/history read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SessionArchiveImportResource {
+    pub session_id: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Full execution view of a session.
 pub struct SessionExecutionResource {

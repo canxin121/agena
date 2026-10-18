@@ -74,7 +74,9 @@ impl agena_plugin_host::sdk::Plugin for RenderingFixture {
                 let summary = format!(
                     "Exit {} in {} ms",
                     payload["exit_code"],
-                    payload["duration_ms"].as_str().expect("duration field")
+                    payload["metadata"]["duration_ms"]
+                        .as_str()
+                        .expect("duration field")
                 );
                 Ok(Some(agena_plugin_host::sdk::ToolRenderOutput {
                     model: Some(serde_json::to_string(payload).expect("serialize tool output")),
@@ -756,6 +758,20 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
             .output_text
             .contains("plugin adapter must not execute")
     );
+    assert_eq!(read_execution.view.metadata["truncated"], "false");
+    let raw = read_execution.view.raw_output(&read_execution.output);
+    let restored = agena_domain::ToolOutput::from_json_payload(raw.payload.as_ref())
+        .expect("persisted read output remains structured");
+    let typed = super::ToolPayloadOutput::from_tool_output("fs.read", &restored)
+        .expect("presentation metadata cannot replace omitted typed defaults");
+    assert!(matches!(
+        typed,
+        super::ToolPayloadOutput::Read {
+            preview: Some(preview),
+            truncated: false,
+            ..
+        } if preview.contains("direct fs dispatch")
+    ));
 
     std::fs::remove_dir_all(workspace_root).expect("remove direct builtin workspace");
 }

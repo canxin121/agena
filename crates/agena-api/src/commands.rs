@@ -39,8 +39,6 @@ pub enum Command {
     // ── tree / fork / portability ──
     ForkSession(ForkSessionParams),
     ListSessionTree(ListSessionTreeParams),
-    ExportSession(ExportSessionParams),
-    ImportSession(ImportSessionParams),
 
     // ── interactive replies ──
     ReplyPermission(ReplyPermissionParams),
@@ -69,7 +67,6 @@ pub enum CommandResult {
     Session(SessionResource),
     SessionDeleted { id: i64 },
     SessionTree(Vec<SessionResource>),
-    SessionExport { jsonl: String },
     Execution(SessionExecutionResource),
     Cancellation(agena_domain::CancellationOutcome),
     PermissionRule(crate::resource::PermissionRuleResource),
@@ -215,18 +212,6 @@ pub struct ForkSessionParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListSessionTreeParams {
     pub root_id: i64,
-}
-
-/// Export a session as a portable JSONL bundle.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExportSessionParams {
-    pub session_id: i64,
-}
-
-/// Replay a JSONL bundle into the current workspace as a fresh session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportSessionParams {
-    pub jsonl: String,
 }
 
 // ─── interactive replies ────────────────────────────────────────────────

@@ -84,7 +84,7 @@ fn classify_session_subscription_event(
                 change,
                 agena_api::live::SessionChangeResource::PartAdded { part, .. }
                     | agena_api::live::SessionChangeResource::PartUpdated { part, .. }
-                    if part.kind == "run"
+                    if part.is_message_boundary()
             );
             SessionSubscriptionDispatch::Emit {
                 refresh_plugin_presentation,
@@ -2609,7 +2609,7 @@ impl TuiBackend {
                             part,
                         },
                     )) = &item
-                        && (part.kind != "run" || *origin != session_id)
+                        && (!part.is_message_boundary() || *origin != session_id)
                     {
                         if tx
                             .send(LiveEvent {
@@ -2818,6 +2818,8 @@ fn provider_model_from_resource(
             "supports_parallel_tool_calls": metadata.supports_parallel_tool_calls,
             "supports_verbosity": metadata.supports_verbosity,
             "default_verbosity": metadata.default_verbosity,
+            "verbosity_levels": metadata.verbosity_levels,
+            "provider_default_verbosity": metadata.provider_default_verbosity,
             "default_temperature": metadata.default_temperature,
             "default_top_p": metadata.default_top_p,
             "default_top_k": metadata.default_top_k,
@@ -2914,6 +2916,8 @@ mod tests {
                 context_window_tokens: Some(128_000),
                 supports_verbosity: Some(true),
                 default_verbosity: Some("medium".to_owned()),
+                verbosity_levels: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
+                provider_default_verbosity: Some("low".to_owned()),
                 ..Default::default()
             },
             thinking_modes: Vec::new(),
@@ -2926,6 +2930,10 @@ mod tests {
         assert_eq!(model.id.as_ref(), "model-1");
         assert_eq!(model.display_name.as_deref(), Some("Model One"));
         assert_eq!(model.metadata.limits.context_window_tokens, Some(128_000));
+        assert_eq!(
+            model.metadata.provider_default_verbosity.as_deref(),
+            Some("low")
+        );
         assert_eq!(
             model
                 .metadata

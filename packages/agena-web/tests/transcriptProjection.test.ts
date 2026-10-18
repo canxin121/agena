@@ -23,6 +23,24 @@ function message(id: string, role: string, parts: MessagePartLike[], runState = 
 }
 
 describe('TUI-parity transcript projection', () => {
+  test('native composer documents preserve activity identity, resource metadata and exact text', () => {
+    const resourceId='4e1af70c-3b18-4a6e-a03a-c45c83e5c5c0'
+    const artifactId='b6354fc1-7f1e-4561-b91c-169868bcc976'
+    const native=part('41','text',{text:'  exact\n',document:[
+      {type:'text',text:'  exact\n'},
+      {type:'activity',activity:{id:resourceId,payload:{activity_type:'resource',kind:'pdf',reference:{reference_type:'workspace_path',path:'uploads/report.pdf'},name:'report.pdf',media_type:'application/pdf',size_bytes:123}}},
+      {type:'activity',activity:{id:artifactId,payload:{activity_type:'text_artifact',text:' artifact \n',label:'snippet',language:'text'}}},
+    ]})
+    const blocks=projectTranscriptBlocks([message('41','user',[native])])
+    expect(blocks[0]?.kind).toBe('message')
+    const parts=blocks[0]?.kind==='message'?blocks[0].displayParts:[]
+    const resource=parts.find(entry=>entry.id===resourceId)
+    expect(resource?.kind).toBe('resource')
+    expect(resource?.source.agenaContent).toMatchObject({path:'uploads/report.pdf',name:'report.pdf',mime:'application/pdf',size_bytes:123})
+    expect(parts.find(entry=>entry.id===artifactId)?.copyText).toContain(' artifact \n')
+    expect(parts.filter(entry=>entry.id==='41')).toHaveLength(1)
+  })
+
   test('does not reinterpret removed type-only tool rows', () => {
     expect(durablePartKind({ type: 'tool' })).toBe('unknown')
     expect(durablePartKind({ type: 'reasoning' })).toBe('unknown')

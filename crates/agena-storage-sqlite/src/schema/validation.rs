@@ -5,9 +5,6 @@ use std::collections::BTreeMap;
 
 use sea_orm::{ConnectionTrait, DbErr, Statement};
 
-use super::{INDEXES, PERFORMANCE_INDEXES, TABLES};
-use crate::schema_invariants::INVARIANT_TRIGGERS;
-
 pub(crate) struct Declaration<'a> {
     pub kind: &'static str,
     pub name: &'a str,
@@ -61,66 +58,4 @@ where
         ))
     })
     .collect()
-}
-
-fn incompatible(detail: impl std::fmt::Display) -> DbErr {
-    DbErr::Custom(format!(
-        "database schema does not match this Agena build: {detail}; delete the database and start with a fresh one"
-    ))
-}
-
-pub(crate) async fn validate_existing_schema<C>(db: &C) -> Result<Vec<&'static str>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    let mut actual = schema_objects(db).await?;
-    let mut missing_indexes = Vec::new();
-    for sql in PERFORMANCE_INDEXES {
-        let index = declaration(sql)?;
-        match actual.remove(&(index.kind.to_owned(), index.name.to_owned())) {
-            None => missing_indexes.push(*sql),
-            Some(found) if found != index.stored_sql => {
-                return Err(incompatible(format!(
-                    "index {} has a different definition",
-                    index.name
-                )));
-            }
-            Some(_) => {}
-        }
-    }
-    let mut expected = BTreeMap::new();
-    for sql in TABLES.iter().chain(INDEXES).chain(INVARIANT_TRIGGERS) {
-        let declaration = declaration(sql)?;
-        expected.insert(
-            (declaration.kind.to_owned(), declaration.name.to_owned()),
-            declaration.stored_sql,
-        );
-    }
-    if actual == expected {
-        return Ok(missing_indexes);
-    }
-    for (identity, sql) in &expected {
-        match actual.get(identity) {
-            None => {
-                return Err(incompatible(format!(
-                    "required {} {} is missing",
-                    identity.0, identity.1
-                )));
-            }
-            Some(found) if found != sql => {
-                return Err(incompatible(format!(
-                    "{} {} has a different definition",
-                    identity.0, identity.1
-                )));
-            }
-            Some(_) => {}
-        }
-    }
-    if let Some(((kind, name), _)) = actual
-        .iter()
-        .find(|(identity, _)| !expected.contains_key(*identity))
-    {
-        return Err(incompatible(format!("unexpected {kind} {name}")));
-    }
-    Err(incompatible("schema differs from the current declarations"))
 }

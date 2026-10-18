@@ -224,7 +224,7 @@ impl RuntimeHostClient {
             .get_session(session_id)
             .await
             .map_err(plugin_error)?;
-        Ok(Some(session.runtime().execution.clone()))
+        Ok(Some(session.execution.clone()))
     }
 
     async fn callback_scoped_tool_executor(
@@ -813,8 +813,10 @@ impl HostClient for RuntimeHostClient {
         let model_status = manager
             .session_model_status(&session)
             .map_err(plugin_error)?;
-        let prompt_window = &session.runtime().prompt_window;
-        let compaction = prompt_window.compaction.as_ref();
+        let prompt_window = manager
+            .compaction_status(session_id)
+            .await
+            .map_err(plugin_error)?;
         Ok(HostContextStatusResponse {
             session_id,
             current_tokens: usage.current_tokens,
@@ -836,11 +838,14 @@ impl HostClient for RuntimeHostClient {
             speed_mode: model_status.speed_mode,
             verbosity: model_status.verbosity,
             prompt_window_generation: prompt_window.generation,
-            compacted: compaction.is_some(),
-            last_compaction_before_tokens: compaction.map(|value| value.before_tokens),
-            last_compaction_after_tokens: compaction.map(|value| value.after_tokens),
+            compacted: prompt_window.checkpoint_entry_id.is_some(),
+            last_compaction_before_tokens: prompt_window.last_before_tokens,
+            last_compaction_after_tokens: prompt_window.last_after_tokens,
             auto_compaction_disabled: prompt_window.auto_compaction_disabled,
-            consecutive_compaction_failures: prompt_window.consecutive_compaction_failures,
+            consecutive_compaction_failures: u8::try_from(
+                prompt_window.consecutive_compaction_failures,
+            )
+            .unwrap_or(u8::MAX),
         })
     }
 
@@ -927,16 +932,15 @@ impl HostClient for RuntimeHostClient {
             .await
             .map_err(plugin_error)?;
         let snapshot = self.snapshot()?;
-        let model = session
-            .runtime()
-            .effective_model_ref()
+        let provider_registry = snapshot.provider_registry();
+        let model = provider_registry
+            .resolve_default_model_selection(&session.execution.selection)
             .map_err(plugin_error)?
             .ok_or_else(|| {
                 host_unavailable(
                     "the active session has no selected model; select a model before requesting image generation",
                 )
             })?;
-        let provider_registry = snapshot.provider_registry();
         let capabilities = provider_registry
             .image_capabilities(&model)
             .map_err(plugin_error)?

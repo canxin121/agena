@@ -86,11 +86,14 @@ async fn authenticated_application_bootstrap_and_reload_serve_plugin_callbacks()
     let plugin = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let config_path = workspace.join(".agena/agena.json");
     let write_config = |locale| {
+        // Only the explicit reloads below may rotate this fixture's callback
+        // authority. Keep provider-client maintenance disabled across rewrites.
         std::fs::write(
             &config_path,
             serde_json::to_vec(&json!({
                 "ui": {"locale": locale},
-            "plugins": {"list": {KEY: {"package": {"kind": "http", "url": plugin_url}}}}
+                "runtime": {"providers": {"client_versions": {"auto_update": false}}},
+                "plugins": {"list": {KEY: {"package": {"kind": "http", "url": plugin_url}}}}
             }))
             .unwrap(),
         )

@@ -4,7 +4,7 @@
 //! It never opens the session database, creates an Application, or starts a
 //! scheduler/plugin host.
 
-use std::{collections::BTreeMap, fs, io::Read as _, path::Path, time::Duration};
+use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 use super::{
     AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs, AuthListOutput,
@@ -22,17 +22,17 @@ use super::{
     PluginLogsOutput, PluginStatusArgs, PluginStatusOutput, PrArgs, PrOutput,
     ProviderCapabilitiesOutput, ProviderCommand, ProviderListArgs, ProviderListOutput,
     ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs,
-    SessionDetail, SessionForkOutput, SessionImportOutput, SessionListArgs, SessionListOutput,
-    SessionListView, SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand,
-    ToolDescriptor, UsageArgs, async_trait, browser_login_redirect_uri,
-    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
-    format_plugin_logs_output, memory_type_label, normalize_login_provider,
-    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
-    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
+    SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput, SessionListView,
+    SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand, ToolDescriptor, UsageArgs,
+    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
+    format_debug_session_output, format_plugin_logs_output, memory_type_label,
+    normalize_login_provider, paginate_session_summaries, permission_rule_output,
+    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
+    usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
-        Command, CommandResult, ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
+        Command, CommandResult, ForkSessionParams, ListSessionTreeParams,
         ReplacePermissionRuleParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
         SubmitRunParams, UpsertPermissionRuleParams,
     },
@@ -50,9 +50,6 @@ use agena_application::dto::{
 };
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
-
-#[cfg(test)]
-use agena_api::part::PartResource;
 
 struct ServerSessionClient {
     client: AgenaClient,
@@ -1260,21 +1257,13 @@ impl AgenaCli {
     ) -> Result<String, AppError> {
         let server = ServerSessionClient::connect(self, None).await?;
         let execution = server.execution(args.session_id).await?;
-        let parts = server
-            .client
-            .session_all_parts(args.session_id)
-            .await
-            .map_err(|error| client_error("failed to read session content", error))?;
+        let parts = &execution.parts;
         let mut text_by_run = std::collections::BTreeMap::<i64, String>::new();
         for part in parts.iter().filter(|p| p.kind == "text") {
             let Some(run_id) = part.run_id else {
                 continue;
             };
-            let text = server
-                .client
-                .part_text(args.session_id, part, 1024 * 1024)
-                .await
-                .map_err(|error| client_error("failed to read session content", error))?;
+            let text = complete_part_text(&server.client, args.session_id, part).await?;
             let body = text_by_run.entry(run_id).or_default();
             if !body.is_empty() {
                 body.push('\n');
@@ -1283,7 +1272,7 @@ impl AgenaCli {
         }
         let runs = parts
             .iter()
-            .filter(|part| part.kind == "run")
+            .filter(|part| part.is_message_boundary())
             .map(|run| {
                 Ok(DebugRunOutput {
                     id: run.part_id,
@@ -1508,12 +1497,12 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_server_sessions_command(
+    pub(super) async fn run_server_sessions_command(
         &self,
         command: SessionsCommand,
-    ) -> Result<String, AppError> {
+    ) -> Result<(), AppError> {
         let server = ServerSessionClient::connect(self, None).await?;
-        match command
+        let output = match command
             .command
             .unwrap_or(SessionsSubcommand::List(SessionListArgs {
                 limit: 20,
@@ -1534,54 +1523,34 @@ impl AgenaCli {
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
             SessionsSubcommand::Export(args) => {
-                let result = server
+                let mut output = tokio::io::stdout();
+                server
                     .client
-                    .command(Command::ExportSession(
-                        agena_api::commands::ExportSessionParams {
-                            session_id: args.session_id,
-                        },
-                    ))
+                    .export_session_archive(args.session_id, &mut output)
                     .await
                     .map_err(|error| client_error("failed to export session from server", error))?;
-                let CommandResult::SessionExport { jsonl } = result else {
-                    return Err(AppError::Internal(
-                        "server returned the wrong session-export result".to_owned(),
-                    ));
-                };
-                Ok(jsonl)
+                return Ok(());
             }
             SessionsSubcommand::Import(args) => {
-                let bundle = match args.path {
-                    Some(path) => std::fs::read_to_string(&path).map_err(|error| {
-                        AppError::Internal(format!(
-                            "read import bundle {}: {error}",
-                            path.display()
-                        ))
-                    })?,
-                    None => {
-                        let mut buffer = String::new();
-                        std::io::stdin()
-                            .read_to_string(&mut buffer)
-                            .map_err(|error| AppError::Internal(format!("read stdin: {error}")))?;
-                        buffer
+                let source: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match args.path {
+                    Some(path) => {
+                        Box::new(tokio::fs::File::open(&path).await.map_err(|error| {
+                            AppError::Internal(format!(
+                                "open import archive {}: {error}",
+                                path.display()
+                            ))
+                        })?)
                     }
+                    None => Box::new(tokio::io::stdin()),
                 };
-                let result = server
+                let imported = server
                     .client
-                    .command(Command::ImportSession(ImportSessionParams {
-                        jsonl: bundle,
-                    }))
+                    .import_session_archive(args.idempotency_key.unwrap_or_default(), source)
                     .await
                     .map_err(|error| {
                         client_error("failed to import session through server", error)
                     })?;
-                let execution = expect_execution(result, "session-import")?;
-                render_serialized(
-                    args.format,
-                    &SessionImportOutput {
-                        session: session_detail(&execution),
-                    },
-                )
+                render_serialized(args.format, &imported)
             }
             SessionsSubcommand::Tree(args) => {
                 let result = server
@@ -1611,7 +1580,9 @@ impl AgenaCli {
                 }
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
-        }
+        }?;
+        println!("{output}");
+        Ok(())
     }
 
     pub(super) async fn render_server_resume_command(
@@ -1760,7 +1731,7 @@ impl AgenaCli {
             .create_session(server.workspace_id, title, None)
             .await
             .map_err(|error| client_error("failed to create session through server", error))?;
-        let execution = server
+        let mut execution = server
             .client
             .submit_message(SubmitRunParams {
                 session_id: session.id,
@@ -1771,16 +1742,33 @@ impl AgenaCli {
             })
             .await
             .map_err(|error| client_error("failed to submit run through server", error))?;
+        // Submission acknowledges the committed command while its execution
+        // continues on the server. One-shot commands print the settled reply.
+        while execution.session.state.is_running() && !execution.session.state.is_attention() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            execution = server
+                .client
+                .get_session_state(session.id)
+                .await
+                .map_err(|error| client_error("failed to read run state from server", error))?;
+        }
         if execution.session.state.is_attention() {
             return Err(AppError::Config(
                 "command requires session interaction or recovery".to_owned(),
             ));
         }
+        execution.parts = server
+            .client
+            .session_all_parts(session.id)
+            .await
+            .map_err(|error| {
+                client_error("failed to read completed run parts from server", error)
+            })?;
         let run_id = execution
             .parts
             .iter()
             .rev()
-            .find(|part| part.kind == "run" && part.role == "assistant")
+            .find(|part| part.is_message_boundary() && part.role == "assistant")
             .map(|part| part.part_id);
         let mut bodies = Vec::new();
         for part in execution
@@ -1788,13 +1776,7 @@ impl AgenaCli {
             .iter()
             .filter(|part| part.kind == "text" && part.role == "assistant" && part.run_id == run_id)
         {
-            bodies.push(
-                server
-                    .client
-                    .part_text(session.id, part, 1024 * 1024)
-                    .await
-                    .map_err(|error| client_error("failed to read assistant content", error))?,
-            );
+            bodies.push(complete_part_text(&server.client, session.id, part).await?);
         }
         let text = bodies.join("\n");
         if json {
@@ -2354,6 +2336,20 @@ fn mcp_servers_mut(
         .ok_or_else(|| AppError::Config("MCP servers must be an object".to_owned()))
 }
 
+async fn complete_part_text(
+    client: &AgenaClient,
+    session_id: i64,
+    part: &agena_api::part::PartResource,
+) -> Result<String, AppError> {
+    let mut text = Vec::new();
+    client
+        .write_part_text(session_id, part, &mut text)
+        .await
+        .map_err(|error| client_error("failed to read complete session content", error))?;
+    String::from_utf8(text)
+        .map_err(|error| AppError::Internal(format!("session text was not valid UTF-8: {error}")))
+}
+
 fn client_error(context: &str, error: ClientError) -> AppError {
     AppError::Config(format!("{context}: {}", error.operator_diagnostic()))
 }
@@ -2419,35 +2415,6 @@ fn expect_execution(
         )));
     };
     Ok(execution)
-}
-
-#[cfg(test)]
-fn last_assistant_text(parts: &[PartResource]) -> Option<String> {
-    let run_id = parts
-        .iter()
-        .rev()
-        .find(|part| part.kind == "run" && part.role == "assistant")
-        .map(|part| part.part_id)?;
-    let text = run_visible_text(parts, run_id);
-    (!text.trim().is_empty()).then_some(text)
-}
-
-#[cfg(test)]
-fn run_visible_text(parts: &[PartResource], run_id: i64) -> String {
-    parts
-        .iter()
-        .filter(|part| part.part_id != run_id && part.run_id == Some(run_id))
-        .filter_map(|part| {
-            part.content
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| part.content.as_str().map(str::to_owned))
-                .or_else(|| part.summary.clone())
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]
@@ -2729,35 +2696,5 @@ mod tests {
                 .expect("servers object")
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn cli_text_projection_uses_the_latest_assistant_run() {
-        let part = |part_id, kind: &str, role: &str, run_id, text: Option<&str>| PartResource {
-            revision: 0,
-            updated_at_ms: 0,
-            part_id,
-            kind: kind.to_owned(),
-            role: role.to_owned(),
-            state: "completed".to_owned(),
-            content: text
-                .map(|text| serde_json::json!({ "text": text }))
-                .unwrap_or_else(|| serde_json::json!({})),
-            presentation: None,
-            summary: None,
-            created_at_ms: part_id,
-            parent_part_id: None,
-            run_id,
-            ..Default::default()
-        };
-        let parts = vec![
-            part(1, "run", "assistant", Some(1), None),
-            part(2, "text", "assistant", Some(1), Some("old")),
-            part(3, "run", "user", Some(3), None),
-            part(4, "text", "user", Some(3), Some("question")),
-            part(5, "run", "assistant", Some(5), None),
-            part(6, "text", "assistant", Some(5), Some("new")),
-        ];
-        assert_eq!(last_assistant_text(&parts).as_deref(), Some("new"));
     }
 }

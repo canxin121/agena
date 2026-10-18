@@ -7,7 +7,7 @@ impl ToolExecutor {
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     ) -> Self {
         Self {
-            content_store: None,
+            content_reader: None,
             conversation: None,
             workspace_root: workspace_root.into(),
             principal,
@@ -30,11 +30,8 @@ impl ToolExecutor {
         self.scheduler.as_ref()
     }
 
-    pub fn with_content_store(
-        mut self,
-        store: Arc<dyn agena_storage::store::SessionStore>,
-    ) -> Self {
-        self.content_store = Some(store);
+    pub fn with_kernel_reader(mut self, reader: agena_storage::kernel::KernelReader) -> Self {
+        self.content_reader = Some(reader);
         self
     }
 

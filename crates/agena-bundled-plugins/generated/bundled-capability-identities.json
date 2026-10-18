@@ -528,9 +528,9 @@
         {
           "canonical_name": "agena.content.read",
           "conditional": null,
-          "definition_identity": "efe94a16e60d34f80b18a5bc8fe0b729ed9f992c269fd5971d94e67adc64ca2e",
+          "definition_identity": "11ea8c098050a7b3148c376f58ecfced5d6707ed8e55e352003aa31926353d33",
           "gateway": false,
-          "input_schema_sha256": "c6b785ffb3bc9140dea8745f7023e70ff41862d95a57d2cc8377de9f0aa8bcf7",
+          "input_schema_sha256": "0e4499229faea4efd3bbfc220cf4c004ab4904ba93776ead1501239b2c5303eb",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -957,9 +957,9 @@
         {
           "canonical_name": "agena.interaction.ask",
           "conditional": null,
-          "definition_identity": "56b38a4554fba1e3f273acb900bcfbac7b5357bf93fcd1c927b0871d6aafaa43",
+          "definition_identity": "8cf2724d1a2b1c63817785c32b67425cd4230c66a6ddf66022cb66da28faf87e",
           "gateway": false,
-          "input_schema_sha256": "7c061e6aa68e4c74dc7109154424f3fcbc463f04f13badadf9cd13976198bb7c",
+          "input_schema_sha256": "bb0d221ef886e5f002e9d907a04f73cdb06f763b2e88e5fc97e1f7617030963d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "interactive"

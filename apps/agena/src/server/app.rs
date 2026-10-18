@@ -638,7 +638,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         database_path: args.database_path.clone(),
         scheduler_database_url: None,
         scheduler_database_path: None,
-        initialize_schema: true,
         tracing_reload_handle: None,
     })
     .await

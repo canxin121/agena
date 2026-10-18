@@ -118,7 +118,6 @@ server = [
 ]
 server-side-http = [
     "uuid",
-    "dep:rand",
     "dep:tokio-stream",
     "dep:http",
     "dep:http-body",
@@ -769,10 +768,6 @@ version = "0.2"
 [dependencies.process-wrap]
 version = "9.0"
 features = ["tokio1"]
-optional = true
-
-[dependencies.rand]
-version = "0.10"
 optional = true
 
 [dependencies.reqwest]

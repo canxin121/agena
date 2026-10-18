@@ -39,7 +39,7 @@ impl App {
                     } {
                         use agena_api::live::SessionChangeResource as Change;
                         use agena_client::SubscriptionEvent as Event;
-                        let relevant = !matches!(&event, Ok(Event::SessionChanged(Change::PartUpdated { part, .. })) if part.kind != "run");
+                        let relevant = !matches!(&event, Ok(Event::SessionChanged(Change::PartUpdated { part, .. })) if !part.is_message_boundary());
                         if relevant && tx.send(AppMessage::CatalogInvalidated).await.is_err() {
                             return;
                         }

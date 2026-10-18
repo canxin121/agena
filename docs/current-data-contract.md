@@ -23,7 +23,13 @@ Agena 以当前仓库状态作为唯一支持基线，只维护**一个当前数
 - 不刷新旧 trigger。
 - 不修改已有行来“升级”数据。
 
-开发环境在 schema 改变后应删除旧数据库并重新创建。
+schema 改变后使用新的数据库路径。程序不转换、修补或自动删除用户原数据库；当前格式的导入导出只在新内核之间使用。
+
+主库总是验证当前 schema，不提供跳过初始化/验证的启动开关。验证已有文件先于 WAL 模式切换和恢复写入，旧模型不匹配时保留原数据库文件。
+
+文件模式由一个 writer 与最多四个 readers 访问同一数据库，所有连接使用 FULL 持久性策略；池的整个生命周期保有同一规范化路径的 owner 锁。内存模式复用同一 SQLite 引擎，并保留唯一私有连接；连接池不执行获取前探测、连接回调或自动轮换，防止取消读取时丢弃唯一连接而重建空库。内存模式不承诺跨进程恢复。
+
+正文与历史读取受字节和并发预算约束。缓存容量回收只移除可重建条目，不撤销调用方已持有的只读视图，也不改变读取权限的 generation；提交围栏、显式失效和关闭仍会阻止旧 snapshot 回填。缓存记账不是进程 RSS 硬上限，调用方长期持有的视图仍计入各自预算。
 
 ### Scheduler SQLite
 
@@ -58,7 +64,7 @@ Server state 使用唯一当前目录和 `agena.db`，没有旧目录候选选�
 - cloud-media handle records；
 - memory frontmatter。
 
-client 不持有自己的 session 状态：session / execution / background-activity 的权威状态只在服务端，TUI、Web、CLI、IDE 都是纯展示客户端，不落盘自己的副本，也不写入共享数据库。每个数据目录同时只有一个服务端进程；服务端启动、打开会话和每次执行结束时收敛该目录里所有被遗留的 in-flight run（`process_restart`），客户端不参与这一过程。
+client 不持有自己的 session 状态：session / execution / background-activity 的权威状态只在服务端，TUI、Web、CLI、IDE 都是纯展示客户端，不落盘自己的副本，也不写入共享数据库。每个数据目录同时只有一个服务端进程；内核在服务启动时将遗留的 running attempt、tool、provider round、background activity 和子任务标记为 interrupted；未认领的 queued 输入保留为已确认事实。服务端不会据此重放外部工具或进程，客户端不参与恢复。
 
 共同规则：
 
@@ -72,7 +78,9 @@ client 不持有自己的 session 状态：session / execution / background-acti
 
 ## 用户消息提交与显示
 
-用户消息提交接口在输入校验、插件处理和附件准备完成后，原子保存用户 run 与全部内容 part，并发布变更，随后才返回成功确认。模型生成继续在后台执行，确认和用户消息显示均不等待模型回复。REST、RPC 与 TUI 使用同一个提交服务。
+用户消息提交接口在输入校验、插件处理和附件准备完成后，原子保存用户消息 entry、execution、当前 generation 与附件引用，并在提交后发布变更，随后才返回成功确认。模型生成继续在后台执行，确认和用户消息显示均不等待模型回复。REST、RPC 与 TUI 使用同一个提交服务。公共 Part 仅是按需读取的展示投影，没有整块保存或覆盖会话的写入能力。
+
+命令的 receipt 保存本次实际提交的身份和结果；其 `CommitPosition` 不能由之后的状态读取重建。Application 返回的 execution resource 是命令确认后的独立观测，可以包含更晚提交的事实。已确认命令的后续状态投影若失败，返回 `session.command_committed_projection_unavailable`，明确标记 `PartialSuccess`、`Never` retry 与 `Refresh` recovery：调用方应刷新会话，不能把它当作命令未提交而再次发送。
 
 Web 与 TUI 的消息列表只显示服务端的真实 part，不创建本地用户消息占位、临时消息 ID，也不通过文本或消息数量猜测确认。提交响应、实时事件和后续刷新按相同的 part ID 与 revision 合并。提交前的失败返回错误以恢复草稿；确认后的模型失败属于已接受执行的结果。取消时，以服务端返回的撤回记录和原始文档恢复输入。
 
@@ -101,27 +109,61 @@ session / execution / background-activity / notification 的状态类型只有�
 
 ## 会话历史操作
 
-上下文压缩使用普通的 assistant 内容 part：`kind = "compaction"`，独立的 `part_id`，以及指向执行 envelope 的 `run_id`。`run_kind = "compaction"` 的 run marker 只记录执行归属与结束原因，不保存正文或 checkpoint，也不能由客户端转换成内容 part。
+会话由 `SessionCommands` 修改配置与历史，由 executor 签发的 `AttemptHandle`、`RoundHandle`、`ToolHandle` 和 typed content producer 记录执行事实。Execution、attempt、round、tool、interaction、content 的权威行各自唯一；普通调用者不能通过通用 JSON 或可变 Session 写回状态。`PartResource` 是只读展示投影，没有与内核并行维护的 run marker。
 
-- 压缩开始通过标准 `append_parts` 写入 `in_progress` part；原生压缩、本地回退、成功、无需压缩、失败、取消都通过标准 `update_part` 更新同一身份，并通过通用 PartAdded / PartUpdated 同步。
-- checkpoint 及其摘要只存一份，位于内容 part 的 `content.checkpoint`。成功提交的内容 part 才能关闭之前的 prompt window；仍在运行、失败、取消及 `outcome = "unchanged"` 均保留原窗口。run 的重启收敛不会撤销已经完成的 checkpoint。
-- part 的 `visibility = "user"`；模型由 prompt-window 投影读取 checkpoint，不把展示 part 当成新一条 assistant 回复重放。原生 provider 的 opaque 数据不作为展示或复制正文。
-- Web 与 TUI 按 `run_id` 归属、按持久化内容顺序合并相邻 assistant run，使用各自标准 part 的状态、折叠、复制与导航。压缩执行状态由压缩 part 表达，不改写同一可视消息中已有回复的结果，也不创建“回复进行中”占位正文。
+配置使用独立的 metadata version 进行乐观并发校验；每个会话另有持久化 control version，在语义命令的同一事务内递增，幂等重放不递增。`KernelReader::control_snapshot` 在一个短 SQLite 读事务固定 metadata、summary、configuration、control version、有界 pending/active 页和从索引控制事实派生的执行阶段，显式完成回滚后返回受预算管理的不可变读值。Application 在该观测上叠加当前 runtime defaults，不重读其中已固定的会话事实；根 pending 复用同一观测，descendant task、历史、正文、用量、provider retry 与 scheduler 各自保留读取边界。整个响应不承诺全库同一时刻的原子快照。列表通知携带事务内捕获的 before/after 和最多两个受影响父行，只推进实际相关的列表、分组计数与工作区统计版本。
+
+正文 cursor 的单位随 kind 明确区分：Text 使用 UTF-8 byte offset，Log、Mixed、Document 和 Terminal 使用 event sequence。对外 `total_bytes` 仅在 Text 已知时给出数字，事件源返回空值，不把事件数当作字节数。
+
+事件分页只共享已校验的不可变物理块与仍有效的授权 context；缓存和块定位索引共同受 16 MiB / 2,048 entries 的上限及写入 COMMIT fence 管理，不保存整个 source 的目录。open head 每次实时捕获，小页只截取所需尾部；缓存不会把旧 accepted/committed head 当作当前事实。跨提交、撤权或裁剪的竞态会重新验证或明确重试，过期 epoch 和已删除前缀继续返回 reset/gap。frozen provider 输入仍按原 committed boundary 读取，后续追加不会进入该输入。
+
+- 用户发送将真实 user EntryId、输入文档、附件 blob 引用和 queued attempt 一起提交后确认。
+- 助手消息使用该 generation 第一条真实 assistant entry 作为稳定边界；后续正文、推理和工具属于同一 response。重试创建新 generation，历史响应身份不变。
+- 压缩使用独立 provider round 与不可变摘要源；只有成功的 `commit_compaction` 才同时提交 checkpoint、覆盖边界与 prompt-window generation。失败、取消及 unchanged 保留原窗口。
+- 普通 provider 请求在 round 开始时冻结 entry revision、tool/interaction 决定、capture head 与 opaque replay。后续正文或后台通知不会改写已经构造的请求。
+- 文本为按 UTF-8 字节定位的不可变块；log/structured/terminal/mixed 使用独立事件序列。PTY 原始日志与屏幕分属两个源，screen patch 的 base 只使用 screen event cursor。
+- plugin mixed 输出在单一事件流中保留 Text、Log 与 Structured 原顺序；document checkpoint 不替换或吞掉触发 checkpoint 的原始事件。
+
 - 原生压缩的独立 `/responses/compact` 请求使用自己的协议结构，不复用普通生成请求的工具定义、推理、输出格式或流式控制字段。共享请求覆盖仅传递该接口支持的缓存和服务等级选项，模型、系统指令、完整输入与 continuation 边界由 runtime 持有。
 - 只有包含有效加密 compaction 项的原生输出才可成为 checkpoint；返回的整个窗口原样保留，后续工具结果可以引用窗口内保留下来的调用。普通成功响应、空输出或普通 assistant 回答不会被当成压缩成功。
 - 自动压缩记忆明确的原生路由不可用状态（404 / 405 / 501）；参数错误、输入溢出、认证或临时服务错误不构成能力判定。手动压缩可重新探测，成功后持久化清除旧记录；能力快照与失败抑制均受压缩策略版本约束。
 - 本地摘要使用独立的无工具文本请求，保留路由和速度选项，移除普通回答的内容覆盖、格式、停止条件和 continuation 参数。完整历史能装入预算时不按固定单条长度截断；重复压缩必须把上一轮 checkpoint 的有效约束和状态交给摘要模型。历史 system / tool 文本作为带来源标记的 assistant 历史数据，不能变成新的系统指令或用户轮次。
 - 近期窗口保留实际用户任务；输入溢出与空摘要／输出耗尽分别允许一次有界恢复。候选未减小且原窗口仍可用时完成为 `unchanged`，超限、失败、取消时保留原历史和 checkpoint。
 
-历史操作使用持久化 `run` marker 的数值 `part_id` 作为消息身份，HTTP、command、Web 与 TUI 都通过 `at_message_id` 指定目标。
+历史操作使用真实用户 EntryId 或助手 response 的第一条 EntryId；HTTP、command、Web 与 TUI 都通过 `at_message_id` 指定目标。后续 generation 不改变先前消息边界。
 
 - `fork` 创建子会话，保留截至目标消息末尾的历史（包含目标消息）；省略目标时保留源会话的完整历史。源会话必须已有可用的历史边界。
 - `rewind` 只接受源会话中的已完成用户消息，创建只保留该消息之前历史的子会话，并把目标输入恢复到新分支的输入框。回退首条用户消息时，新分支历史为空。
 - 两种操作都返回包含新会话的 execution resource；客户端打开返回的新会话。原会话及其输入草稿继续保留，分支后续写入不会改写原会话。
-- 继承的历史可以包含仍在流式更新的父会话 part；它们只作为历史展示，不计入新分支的运行、待执行工具或待答交互。新分支的执行状态只由它自己创建的 part 决定。
+- 继承的历史可以包含仍在流式更新的父会话 part；它们只作为历史展示，不计入新分支的运行、待执行工具或待答交互。新分支的执行状态只由它 origin-owned 的 attempt、tool 与 interaction 决定。
 - 显式复制或导出对话记录读取完整的用户可见分页历史；聊天界面的当前加载窗口不构成导出边界。
 
 `fork` / `rewind` 不恢复工作区文件。已完成的文件修改通过项目 Git 历史恢复；`fs.apply_patch` 只输出操作标识、文件变更、diff 和进度，不提供反向补丁或撤销哈希。Git 提交、危险操作确认和发布的行为约定见 [Git 工作流程与文件恢复](git-workflow.md)。
+
+## 当前格式归档与新数据库启动
+
+内部 schema 改变后，启动时显式选择一个新的空主库路径，例如：
+
+```sh
+agena --database-path /absolute/new-data/session-kernel.db server \
+  --host 127.0.0.1 --port 3211 --workspace /absolute/workspace
+```
+
+该参数选择主会话库，不是所有本地状态的隔离开关。原主库保持原样；不要删除原文件来绕过格式检查。旧数据库和旧 archive 不提供转换入口。当前格式 archive 用于当前内核之间复制会话，不是完整数据库备份。
+
+CLI 通过服务端流式传输 JSONL；导出核对完整 footer、记录数量、字节数、SHA-256 和 EOF，导入成功只返回已提交的新会话身份：
+
+```sh
+agena --server http://127.0.0.1:3211 sessions export 42 > session.jsonl
+agena --server http://127.0.0.1:3211 sessions import --path session.jsonl \
+  --idempotency-key 7c7fef97-e321-4b1f-b608-d92297864670
+```
+
+丢失导入响应后，重试同一份文件时复用相同 UUID；相同键和相同输入返回相同结果，相同键与不同输入冲突。省略 `--path` 时从 stdin 读取；SDK 不会隐式重放已经消费的输入流。
+
+HTTP 导出是 `GET /api/v1/sessions/{id}/export`，正文为原始 `application/x-ndjson`；导入是 `POST /api/v1/sessions/import`，使用相同 Content-Type 并要求 UUID `Idempotency-Key` header。HTTP 不包裹完整 archive 的 JSON 字符串，也没有整包 16 MiB 上限；单条编码记录上限为 32 MiB。导入先在私有临时文件与 staging 数据库中完整校验，再一次事务发布。坏 footer、截断上传或校验失败不发布部分会话。
+
+归档固定 metadata 和历史 membership 的快照边界，entry/control/source head 按声明的记录观察范围读取；它不承诺全库同一时刻的原子备份。缺少成功 footer 的流不能作为有效归档。Web/TUI 的可读 Markdown 导出与该机器归档格式是两个用途明确的入口。
 
 ## 配置
 
@@ -156,7 +198,11 @@ Plugin SDK 的通用参数 alias DSL 是当前插件开发能力，不是 Agena 
 
 工具图片、音频与视频通过 `output.attachments` 保存资源事实，统一投影为 `ViewBlock::Media { artifact: { uri, mime, name, ... } }`。Web 使用同一附件预览显示内联图片、远端媒体与本地文件；本地 `file://` 资源通过所属会话工作区的文件 API 读取，图片可打开查看器。OpenAI 原生图片生成在协议边界将 `result` 图片编码归入附件，结果元信息与 provider 调试记录不重复保存该编码。当前数据中已经同时包含图片附件与 `/result` 编码文本资源的记录，在读取展示时只排除对应编码资源，保留其他文字资源和显式 Output 原始详情。provider 调试资源只作为 metadata 引用，不进入普通正文的资源列表或客户端兜底展示；附件元信息也不展示图片编码。
 
-provider 回放状态只保存在 run 的对应 round 中，不同时复制到 run 的独立 provider-state 列；其中与 think 正文或 encrypted content 重复的文本保存为 part 内容引用，在发送请求前恢复原始协议值，签名、顺序和不同的 opaque 事实保留。Web 与 TUI 的默认策略仅展开 answer 和 text，think、工具、附件及待答交互默认折叠；用户显式配置和手动展开优先。
+provider 回放状态只保存在 execution 对应的 round 中，不同时复制到 execution 的独立 provider-state 列。每轮保存固定的输入身份、revision、source head 与回放引用；读取时按这些边界恢复正文与原始 opaque 协议值，保留签名、顺序和不同的 opaque 事实。成功的 native compaction 同时保存可移植摘要和 opaque 状态；无法生成有效摘要时不安装 checkpoint。Web 与 TUI 的默认策略仅展开 answer 和 text，think、工具、附件及待答交互默认折叠；用户显式配置和手动展开优先。
+
+权限决定将原始回复的类型、原因、scope、request identity 和实际分类结果一起提交；记住规则与决定共用事务。重复相同决定保持身份和决定时间，冲突回复不能覆盖已提交记录。后台活动有独立于父 attempt 的生命周期；子任务指导绑定原 execution，通过可靠投递进入下一个模型边界，成功结束不能越过尚未消费的指导。
+
+会话列表读取维护于同一事务的紧凑统计与索引，不读取完整历史或配置 JSON。子会话数量和处理状态随事实更新；创建、重挂父节点或删除子会话时，同时使相关父会话的摘要缓存失效。
 
 ## Commands 与项目指导
 
@@ -214,20 +260,20 @@ Agena 仍需要与真实外部生态交互，因此保留：
 
 会话、part 和文件的权威状态属于服务器。实时通知是可丢失的失效提示或完整 part 快照，不是可持久回放的事件日志；客户端不能仅凭连接正常或某个事件游标就认定缓存已经完整。
 
-- 服务端先建立订阅，再允许客户端读取快照。Web 在每次 SSE 建立连接后重新核对所有仍挂载的聊天面板；TUI 重连后读取同一会话版本的执行状态和最近一页 transcript。断线、队列溢出、恢复前台和显式删除都有恢复路径。
-- `SessionTranscriptPart`、实时 part 和工具详情携带 `revision` 与 `updated_at_ms`。客户端按这两个字段依次比较，拒绝旧响应覆盖新内容；完整快照中省略的字段不能继续沿用旧值。执行状态和会话摘要使用会话 `version`，执行响应中的 `latest_event_seq` 对应其实际读取的会话版本。
-- 流式文本和推理仍先保留在内存中，正常情况下在完成时落盘，超长流沿用有界检查点。每个缓冲 part 最多每 100 ms 发布一次末尾快照，暂停输出后也会发布最后一次变化；该快照不增加持久 revision，使用单调递增的更新时间区分同一 revision 内的内容。fork 中已加载的共享 part 同样更新。
+- 服务端先建立订阅，再允许客户端读取快照。Web 在每次 SSE 建立连接后重新核对所有仍挂载的聊天面板；TUI 重连后分别读取执行状态和最近一页 transcript，按各自版本、cursor 与请求身份合并。断线、队列溢出、恢复前台和显式删除都有恢复路径。
+- `SessionTranscriptPart`、实时 part 和工具详情携带 `revision` 与 `updated_at_ms`。客户端按这两个字段依次比较，拒绝旧响应覆盖新内容；完整快照中省略的字段不能继续沿用旧值。数据库的 `metadata_version` 用于配置与元数据的乐观并发控制；`SessionResource.version` 投影该 metadata version。`control_version` 在同一事务内随该会话的语义命令递增，相同 request 的重放不重复递增；`SessionExecutionResource.latest_event_seq` 标识原生 control snapshot 实际读取的 control version。两者均不等于命令的 `CommitPosition`，也不替代 history membership generation 或 content byte/event cursor。原生控制字段共享同一读事务，响应中的其他资源仍按各自声明的边界读取；不再通过等待整个响应组装期间版本静止来确认一个已经提交的命令。
+- 流式正文区分 accepted 与 committed head：typed producer 被接收后及时发布 live head，由共享 checkpoint 在约 64 KiB／500 ms 阈值下提交；完成、取消、交互决定等业务屏障提交所需尾部。正文 chunk 不推进 entry revision。每个 source 使用自己的 epoch/cursor/watch；fork 中同一个 ContentId 继续共享 live 内容，重启后的旧 epoch 必须 reset。外部输入被丢弃时记录独立 capture-loss 窗口与 observed/committed byte/packet 计数，不伪造 accepted cursor；达到终态但有 capture loss 的源保持 interrupted，工具退出成功与捕获中断可以同时成立。
 - `GET /api/v1/sessions/{id}/parts?ids=...` 每次最多接收 256 个正整数 ID，与分页参数互斥，只返回该会话中对用户可见的对应成员。客户端重连时按批核对**已经加载**的 ID，移除缺失成员；不会为了恢复而遍历尚未展开的历史。SQLite 按成员关系查询这些 ID，工具详情也通过单个 ID 读取。
 - 交互控件的可操作性同时取决于工具 part 的持久化记录和完整执行快照中的待答列表。已回复、已终止或从待答列表移除的请求不再显示可提交控件；执行状态发现旧的已加载审批仍未收敛时，按 ID 重新读取其所属 part，即使该 part 已不在最近一页中。历史内容不因状态变化而伪造回复，未提交草稿也不作为已提交答案展示。
 - Web 的权限批准、提交答案和取消回答共用提交前校验：强制向服务端校验执行快照，确认请求仍在待答列表，并使用请求上下文的 `session_id` 路由到真正的所属会话。继承的 part 只读；runtime 回复查找和展示确认也校验 `origin_session_id`。已知已回复或已终止请求的重试保持幂等；不再能匹配当前会话的请求返回 `interaction.request_not_pending` / HTTP 409，客户端重新同步状态。更高版本的状态不会因并发的展示确认而被丢弃。
-- 会话删除有独立的 `session_deleted` 通知，包括空会话和被级联删除的子会话。通知保留 workspace ID，删除数据库记录后仍能按工作区投递。不存在的会话读取返回 404；客户端保留删除标记，拒绝迟到请求重新创建已删除内容。
+- 会话删除有独立的 `session_deleted` 通知，包括空会话。通知保留 workspace ID 与临时会话可见性；origin 被 tombstone 后仍能按工作区投递，分支继续保有自己引用的不可变历史。不存在的会话读取返回 404；客户端保留删除标记，拒绝迟到请求重新创建已删除内容。
 - Web 核心 API 的资源版本是 `server UUID:monotonic_updated_at_ms`。逻辑更新时间取墙钟时间与上次值加一的较大值，同毫秒修改、墙钟回拨和服务端重启都不能复用旧版本。版本按会话列表、工作区列表、工作区会话列表、会话执行状态、会话正文、文件修改、计划、part、工具 input/metadata/output 分区和 activity 描述/日志独立维护。SSE 通知携带相关 `resource_revisions`，只唤醒版本实际变化的订阅者。已显示的文本、推理和完整 activity 描述直接合并流快照，日志变化不触发全量列表或执行状态重读。核心 API 与预览 registry 的 UUID 属于独立来源，分别检测重启与拒绝旧响应；预览版本不能使核心 API 版本失效。
 - 侧栏按 `workspaces:catalog`、`workspace:{id}:sessions:roots`、`workspace:{id}:sessions:parent:{parent}`、`workspace:{id}:sessions:bucket:{kind}`、`workspace:{id}:stats` 和全局 `sessions:bucket:{kind}` 隔离。目录 A 内某个子会话的标题变化只核对其直接父级的已展开列表；根列表、其他父级分支、无关置顶列表和 B、C 目录保持不变。子会话增删或更换父级会改变父行的 child count，必须连带核对父行所在列表。分页或排序发生真实变化时重读该查询的当前页，未改变的实际 Vue 行对象继续复用。关闭分支释放对应订阅，每个当前查询保留一页及其实际响应版本，独立于共享正文缓存的淘汰。
 - 统计使用 `GET /api/v1/workspaces/session-stats?ids=...` 合批，只返回受影响目录的计数和读取前捕获的版本，单批最多 128 个目录。项目目录 GET 不附带会话统计。新增或删除项目才核对目录集合，移动会话更新旧、新目录；未展开目录只更新统计，不枚举历史。全局置顶、收藏及 recent/running/attention 汇总的行版本与 `sessions:bucket:{kind}:count` 分离。折叠 footer 使用 `count_only=true`，只计算 total，不加载会话行或投影状态；已知 membership 不变时的标题或行内容变化不唤醒计数读取。遇到未知执行状态、关联 memo 淘汰或跨进程修改时保守核对相关汇总及受影响目录，避免错误地认为成员数未变。
 - 已挂载会话的恢复先合批核对 `session:{id}:transcript` 和 `session:{id}:state`。正文与状态各自保留实际 HTTP 响应版本，未改变时不下载正文、不核对 loaded part membership，共享正文缓存被淘汰也保持这一行为。正文确实变化后只恢复最近一页和已经加载的成员；其他可见会话保留原值。发送或 continue 的确认仍强制条件读取，不能因为完成通知丢失而复用发送前的正文。计划文档和已初始化 activity 列表也保留自己的实际响应版本，恢复前台时未变的内容直接复用；手动刷新仍执行条件校验。
 - 侧栏创建、删除、收藏和置顶操作，以及单目录手动刷新、展开和分页，同样进入相应范围的读取。全局聊天 bootstrap 列表的实时 metadata 和删除直接更新缓存，可见会话执行状态单独订阅；只有版本兜底发现通知缺口，或重连恰好撞上未完成的首次列表读取，才恢复该列表。
 - 工具详情只订阅已经展开的 `part:{id}:input|metadata|output` 分区，输出变化不会调度其他分区。组件保留当前分区正文对应的实际 HTTP 响应版本，即使共享正文缓存被淘汰，未变化的已显示分区仍直接使用现有值。终态只核对 output 和被取消的未完成读取；正文先进入终态、详情版本通知尚未到达时，直接条件校验尚未追上终态的 output，避免等到慢速兜底。隐藏、折叠或卸载解除对应订阅并取消请求。
-- 同一页面实例内所有挂载订阅者共用一个 30 秒版本兜底队列，通过 `GET /api/v1/changes/revisions?resources=...` 每批核对至多 128 个资源，未变化时不读取正文。通用可见资源读取器在首次打开没有缓存的资源时直接读取正文，以响应 ETag 初始化版本，避免额外的先查版本请求。恢复前台、重连或通知缺口先合并失效提示，再核对版本；隐藏时停止周期检查。跨进程的持久化修改通过服务端共享的 30 秒元数据检查发现，只读取 session ID、workspace ID、version 和 workspace revision rows，不加载历史、part 或统计全文；客户端与服务端两层检查的边界可能叠加，不承诺所有外部修改在 30 秒内到达。
+- 同一页面实例内所有挂载订阅者共用一个 30 秒版本兜底队列，通过 `GET /api/v1/changes/revisions?resources=...` 每批核对至多 128 个资源，未变化时不读取正文。通用可见资源读取器在首次打开没有缓存的资源时直接读取正文，以响应 ETag 初始化版本，避免额外的先查版本请求。恢复前台、重连或通知缺口先合并失效提示，再核对版本；隐藏时停止周期检查。同一个数据目录由单个服务端持有，其他进程不能直接改写其会话库。服务端 change feed 以进程 epoch 与 commit position 恢复；明确列出受影响 EntryId，无法完整列出或共享 membership 变化时触发 snapshot/reset。慢消费者与重启通过有界权威页面收敛。
 - part、会话 metadata、workspace 和 plan 的写入先比较实际内容。可证明的 no-op 不写数据库、不增加 revision 或更新时间、不发布失效通知；真实修改的更新时间单调增加。运行时 activity 与 plan 的资源时钟由同步 mutation observer 在发布通知前推进，不依赖异步消息消费者的速度。activity 描述使用 `activity:{id}`，日志使用 `activity:{id}:logs`；progress/message 的变化不读取日志，`LogsChanged` 可在同一游标内更新委派任务的流式文本且不重读描述、列表或会话状态。退出状态、日志游标、分页及 dropped-lines 的真实变化仍更新日志时钟。
 - 条件正文接口使用弱 ETag、`If-None-Match` 和空正文 304；服务端在历史读取、投影和序列化前比较版本，并在读取前捕获响应版本，防止旧正文携带新版本，transcript 同样在重型历史扫描前返回 304。Web 缓存按 backend、认证作用域、资源与完整 URL 隔离，最多保留 80 个表示、估计 8 MiB，单个表示最多缓存 2 MiB。局部保留的正文使用它自身响应的 ETag，不能读取完成时从版本索引取一个较新 token 来冒充已同步；缺少 ETag 时不建立可复用版本。迟到的响应不能回退版本或覆盖重启后的 epoch。同 URL 读取共享一次请求，消费者独立取消，最后一个消费者取消时中止传输；显示正文读取共用最多四个并发名额。
 - Rust HTTP 客户端保留最多 64 个正文、合计 4 MiB，单个正文上限 2 MiB，显示读取同样限制为四个并发。相同 URL 的排队读取合并，派发前到达的强制核对共享该次结果，派发之后到达的强制核对保留后续条件读取。强制核对仍发送 ETag；没有全局实时订阅的普通显式读取也要向服务器验证 ETag，不能假定缓存还有效。
@@ -246,13 +292,13 @@ Agena 仍需要与真实外部生态交互，因此保留：
 
 运行中的工具 Presentation 展示命令代码块和当前输出；按需读取的 Output 详情也可以投影这个实时尾部。投影不写成持久化完成结果。Output 详情携带自身 `part_state`，使只因 sibling section 修改而过期的整 part 时间戳不会让有效的缓存 Output 被反复拒绝。Web 与 TUI 保留已经展示的详情，在运行状态内接受有用的中间快照并继续追赶；进入终态后拒绝旧运行请求覆盖最终结果。Web 各分节独立记录待更新与失败退避，成功读取其他分节不能重置失败分节的退避；关闭 disclosure、切换会话或隐藏页面会取消相应读取。
 
-后台任务的启动 part 是已完成的启动回执，后台生命周期由独立 activity 和 durable operation 表示。输入框上方的任务面板从 activity 状态和日志接口读取输出，不以启动回执的 completed 状态判断进程结束。普通管道和 PTY 日志用 `chunk=true` 保留原始换行；带正则条件的 monitor 使用行记录。委派任务的日志游标标识 run，同一个 run 的回复继续生成时，客户端替换该游标的文本快照，不重复追加，也不跳过其后续内容。
+后台任务的启动 part 是已完成的启动回执，后台生命周期由 kernel 的独立 background activity 事实表示，完成通知使用有稳定业务 key 的 durable delivery。输入框上方的任务面板从 activity 状态和日志接口读取输出，不以启动回执的 completed 状态判断进程结束。普通管道和 PTY 日志用 `chunk=true` 保留原始换行；带正则条件的 monitor 使用行记录。委派任务的日志游标标识 run，同一个 run 的回复继续生成时，客户端替换该游标的文本快照，不重复追加，也不跳过其后续内容。
 
 展开的启动 part 按 `source_part_id` 关联 activity，展示独立的实时状态与日志，保留 durable 回执的原始含义。Web 任务面板和 part 共用日志资源与条件读取；TUI 只为主界面视口内展开的 part 读取日志，最多同时跟随 16 个 activity，保留至多 64 个展示尾部，并优先淘汰视口外缓存。关闭、离开视口、切换会话和退出 TUI 都释放适用的读取。委派任务中的前台命令同样把运行输出投影进其当前 run 的日志快照。
 
-正常 `agent.stop` 只在当前执行没有待处理输入、没有未被 provider 完整观察的后台通知、没有仍可唤醒会话的后台操作或定时任务时派发。后台等待会释放当前 execution，让 durable 通知可以唤醒会话；它不会发出正常完成 hook。正常停止决策与通知提交通过同一会话 mutation lane 排序，该决策之后的新到达事件由后续唤醒处理。已暂停、删除或完成的定时任务不阻止停止；周期任务只要还有下一次触发，仍属于等待。已完成 provider round 的一次性定时通知可以证明本次触发已被处理，不依赖必须等 execution 释放的 scheduler ack。失败仍携带 `run_error` 到达 stop hook；终端 Done 提醒只在所有 stop 决策 hook 同意停止后发出。
+正常 `agent.stop` 只在当前执行没有待处理输入、没有未被 provider 完整观察的后台通知、没有仍可唤醒会话的后台活动或定时任务时派发。后台等待会释放当前 execution，让 durable 通知可以唤醒会话；它不会发出正常完成 hook，也不通过额外模型调用轮询。`prepare_stop` 与通知提交通过同一个 kernel writer 排序；成功 round 只确认其冻结输入中的通知。Ready 决策会拒绝迟到的定向 guidance，stop hook 请求续跑后在新 round 清除该限制；普通业务事件仍由后续唤醒处理。Scheduler 使用独立数据库，stop 决策前读取其 session-scoped 快照，不承诺跨库事务。已暂停、删除或完成的定时任务不阻止停止；周期任务只要还有下一次触发，仍属于等待。已完成 provider round 的精确一次性定时通知可以证明本次触发已被处理，不依赖必须等 execution 释放的 scheduler ack。失败仍携带 `run_error` 到达 stop hook；终端 Done 提醒只在所有 stop 决策 hook 同意停止后发出。
 
-`GET /api/v1/sessions/{id}/file-changes` 使用会话 membership 内归属本会话的工具记录投影编辑。SQLite 在查询和反序列化前限制 `origin_session_id` 与 kind，不加载普通文本、run 或 fork 继承的工具内容；存储 facade 仍合并适用的流式 overlay。只接受成功完成的 `fs.write`、`fs.replace`、实际应用的 `code.rewrite_ast` 和 `fs.apply_patch` 结果。fork 继承的编辑、预览、失败和可证明的 no-op 不计入新会话。连续且完整的 before/after SHA 链回到起始 revision 时可以消除净零变更；缺少基线或存在断开的链时展示记录的操作历史。该 API 支持摘要、文件分页和单文件详情，diff 返回预算上限为 2 MiB。一个文件只占据一行：该行合并此路径所有已记录操作的新增/删除行数，`fs.apply_patch` 只按本文件段落计数，整体缺基线时不补造净差异。
+`GET /api/v1/sessions/{id}/file-changes` 使用会话 membership 内归属本会话的工具记录投影编辑。服务端使用公开 `owned_tool_entries` 能力，按 origin、工具 kind 与 EntryId 索引分页，并验证当前 membership；普通文本和 provider opaque replay 不进入查询与反序列化。每页最多 128 项，先读取 generated body/input/result 字节数，按 1 MiB 预算选定 identities，再读取工具事实。cursor 绑定 session、membership 和 control version，页投影后再次核对 control version；变化中的历史明确返回冲突，保留的编辑事实也受字节预算限制。完成结果从 kernel 的工具事实读取，不维护另一份流式 overlay。只接受成功完成的 `fs.write`、`fs.replace`、实际应用的 `code.rewrite_ast` 和 `fs.apply_patch` 结果。fork 继承的编辑、预览、失败和可证明的 no-op 不计入新会话。连续且完整的 before/after SHA 链回到起始 revision 时可以消除净零变更；缺少基线或存在断开的链时展示记录的操作历史。该 API 支持摘要、文件分页和单文件详情，diff 返回预算上限为 2 MiB。一个文件只占据一行：该行合并此路径所有已记录操作的新增/删除行数，`fs.apply_patch` 只按本文件段落计数，整体缺基线时不补造净差异。
 
 每个文件摘要携带由该路径完整编辑事实计算的 fingerprint，不依赖其他文件或当前 diff 截断预算。已选 diff 只在其自身 fingerprint 变化时自动读取，其他文件的变化只更新文件列表；同一 fingerprint 在隐藏恢复和重新展开时复用当前保留的 diff。服务端为了计算净 SHA 链仍读取本会话工具记录，并未实现持久化的逐文件增量索引。
 

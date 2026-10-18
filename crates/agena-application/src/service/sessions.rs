@@ -1,10 +1,11 @@
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
-    SessionCreateRequest, SessionCursor, SessionResource, SessionState, SessionUpdateRequest,
-    SubtaskStatus, build_page, decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc,
-    trim_page,
+    SessionCreateRequest, SessionResource, SessionState, SessionUpdateRequest, build_page,
+    decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc,
 };
-use agena_storage::store::SessionListQuery;
+use agena_storage::kernel::{
+    MetadataChange, RequestId, SessionSummaryCursor, SessionSummaryView, SummaryQuery,
+};
 
 impl ApplicationService {
     pub async fn list_sessions(
@@ -12,108 +13,80 @@ impl ApplicationService {
         query: crate::dto::SessionListQuery,
     ) -> ApplicationResult<PaginatedResponse<SessionResource>> {
         let limit = normalize_limit(query.pagination.limit());
-        let cursor = query
+        let before = query
             .pagination
             .cursor()
-            .map(decode_cursor::<SessionCursor>)
-            .transpose()?
-            .map(|cursor| agena_storage::store::SessionCursor {
-                updated_at_ms: cursor.updated_at_ms,
-                id: cursor.id,
-            });
-        let fetch_limit = i64::try_from(limit.saturating_add(1)).map_err(|_| {
-            ApplicationError::internal("page limit cannot be represented in storage")
-        })?;
-        if cursor.is_some() && query.offset > 0 {
+            .map(decode_cursor::<SessionSummaryCursor>)
+            .transpose()?;
+        if before.is_some() && query.offset > 0 {
             return Err(ApplicationError::bad_request(
-                "use either cursor or offset pagination",
+                "Use either cursor or offset pagination.",
             ));
         }
         use agena_api::queries::SessionListBucket;
-        let storage_query = SessionListQuery {
-            temporary_only: false,
-            workspace_id: query.workspace_id,
-            parent_id: query.parent_id,
-            roots_only: query.roots,
-            exclude_subagents: query.exclude_subagents,
-            search: non_empty(query.pagination.search()).map(ToString::to_string),
-            limit: Some(fetch_limit),
-            before: cursor,
-            offset: query.offset,
-            favorite: (query.bucket == Some(SessionListBucket::Favorite)).then_some(true),
-            pinned: (query.bucket == Some(SessionListBucket::Pinned)).then_some(true),
-            states: match query.bucket {
-                Some(SessionListBucket::Running) => vec![
-                    agena_storage::store::SessionState::Running,
-                    agena_storage::store::SessionState::Creating,
-                ],
-                Some(SessionListBucket::Attention) => vec![
-                    agena_storage::store::SessionState::AwaitingInteraction,
-                    agena_storage::store::SessionState::Failed,
-                ],
-                Some(SessionListBucket::Recent) => vec![agena_storage::store::SessionState::Ready],
-                _ => Vec::new(),
-            },
-        };
-        let total = if query.include_total || query.count_only {
-            Some(
-                self.session_store
-                    .count_session_summaries(storage_query.clone())
-                    .await
-                    .map_err(|error| ApplicationError::internal_error(&error))?,
-            )
-        } else {
-            None
-        };
-        if query.count_only {
-            let mut page = build_page::<SessionResource, SessionCursor>(
-                Vec::new(),
-                false,
-                None,
-                PageOrder::Desc,
-                limit,
-            )?;
-            page.total = total;
-            return Ok(page);
-        }
-        let rows = self
-            .session_store
-            .list_session_summaries(storage_query)
+        let page = self
+            .session_kernel
+            .reader
+            .query_summaries(SummaryQuery {
+                workspace_id: query.workspace_id,
+                parent_id: query.parent_id.map(crate::kernel_session_id).transpose()?,
+                roots_only: query.roots,
+                exclude_subagents: query.exclude_subagents,
+                temporary_only: false,
+                tasks_only: false,
+                search: non_empty(query.pagination.search()).map(str::to_owned),
+                before,
+                offset: query.offset,
+                limit: limit as usize,
+                favorite: (query.bucket == Some(SessionListBucket::Favorite)).then_some(true),
+                pinned: (query.bucket == Some(SessionListBucket::Pinned)).then_some(true),
+                states: match query.bucket {
+                    Some(SessionListBucket::Running) => vec![
+                        agena_domain::SessionStateKind::Running,
+                        agena_domain::SessionStateKind::Creating,
+                    ],
+                    Some(SessionListBucket::Attention) => vec![
+                        agena_domain::SessionStateKind::AwaitingInteraction,
+                        agena_domain::SessionStateKind::Failed,
+                    ],
+                    Some(SessionListBucket::Recent) => vec![agena_domain::SessionStateKind::Ready],
+                    _ => Vec::new(),
+                },
+            })
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
-        let (slice, has_more) = trim_page(rows, limit)?;
-        let next_cursor = slice.last().map(|row| SessionCursor {
-            updated_at_ms: row.updated_at_ms,
-            id: row.id,
-        });
-        let resources = session_list_resources(self.session_store.as_ref(), &slice).await?;
-
-        let mut page = build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)?;
-        page.total = total;
-        Ok(page)
+            .map_err(crate::kernel_error)?;
+        let items = if query.count_only {
+            Vec::new()
+        } else {
+            page.sessions
+                .iter()
+                .map(session_resource_from_kernel_summary)
+                .collect::<ApplicationResult<Vec<_>>>()?
+        };
+        let mut result = build_page(
+            items,
+            !query.count_only && page.has_more,
+            if query.count_only { None } else { page.next },
+            PageOrder::Desc,
+            limit,
+        )?;
+        if query.include_total || query.count_only {
+            result.total = page.total;
+        }
+        Ok(result)
     }
 
     pub async fn get_session(&self, session_id: i64) -> ApplicationResult<Option<SessionResource>> {
-        let Some(summary) = self
-            .session_store
-            .get_session_summary(session_id)
+        match self
+            .session_kernel
+            .reader
+            .summary(crate::kernel_session_id(session_id)?)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-        else {
-            return Ok(None);
-        };
-        if summary.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
-            return Ok(None);
+        {
+            Ok(summary) => session_resource_from_kernel_summary(&summary).map(Some),
+            Err(agena_storage::kernel::KernelError::NotFound(_)) => Ok(None),
+            Err(error) => Err(crate::kernel_error(error)),
         }
-        let state = self
-            .session_store
-            .session_state(session_id)
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .state;
-        Ok(Some(session_resource_from_storage_summary(
-            &summary, state,
-        )?))
     }
 
     pub async fn create_session(
@@ -121,35 +94,33 @@ impl ApplicationService {
         request: SessionCreateRequest,
     ) -> ApplicationResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
-        if let Some(parent_id) = request.session.parent_id {
-            let parent = self.ensure_session_model(parent_id).await?;
-            if parent.workspace_id != request.workspace_id {
-                return Err(ApplicationError::bad_request(
-                    "parent session must belong to the same workspace",
-                ));
-            }
-        }
-
-        let relation_kind = if request.session.parent_id.is_some() {
-            agena_domain::SessionRelationKind::Child
-        } else {
-            agena_domain::SessionRelationKind::Root
+        let configuration = agena_storage::kernel::SessionConfiguration {
+            parent_session_id: request
+                .session
+                .parent_id
+                .map(crate::kernel_session_id)
+                .transpose()?,
+            relation_kind: if request.session.parent_id.is_some() {
+                agena_domain::SessionRelationKind::Child
+            } else {
+                agena_domain::SessionRelationKind::Root
+            },
+            ..Default::default()
         };
         let created = self
-            .session_store
-            .create_session(agena_storage::store::NewSession {
-                workspace_id: request.workspace_id,
-                parent_id: request.session.parent_id,
-                relation_kind,
-                cutoff_part_id: None,
-                title: request.session.title,
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
+            .session_kernel
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                request.workspace_id,
+                request.session.title,
+                configuration,
+            )
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
-        session_resource_from_storage_meta(&created, agena_storage::store::SessionState::Ready)
+            .map_err(crate::kernel_error)?;
+        self.get_session(created.value.id.get())
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))
     }
 
     pub async fn replace_session(
@@ -157,85 +128,73 @@ impl ApplicationService {
         session_id: i64,
         request: SessionUpdateRequest,
     ) -> ApplicationResult<SessionResource> {
-        self.ensure_session_model(session_id).await?;
-
         if request.title.is_none() && request.favorite.is_none() && request.pinned.is_none() {
             return Err(ApplicationError::bad_request(
-                "session metadata update must include title, favorite, or pinned",
+                "Include title, favorite, or pinned in a metadata update.",
             ));
         }
-        if request
-            .title
-            .as_deref()
-            .is_some_and(|title| title.trim().is_empty())
-        {
-            return Err(ApplicationError::bad_request(
-                "session title cannot be empty",
-            ));
-        }
-
-        let updated = self
-            .session_store
+        self.session_kernel
+            .sessions
             .update_metadata(
-                session_id,
-                agena_storage::store::SessionMetadataPatch {
+                RequestId::new(),
+                crate::kernel_session_id(session_id)?,
+                MetadataChange {
                     title: request.title,
                     favorite: request.favorite,
                     pinned: request.pinned,
                 },
             )
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
-        let state = self
-            .session_store
-            .session_state(session_id)
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .state;
-        session_resource_from_storage_meta(&updated, state)
+            .map_err(crate::kernel_error)?;
+        self.get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))
     }
 
     pub async fn delete_session(&self, session_id: i64) -> ApplicationResult<SessionResource> {
-        let summary = self.ensure_session_model(session_id).await?;
-        let state = self
-            .session_store
-            .session_state(session_id)
+        let resource = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
+        self.session_kernel
+            .sessions
+            .delete(RequestId::new(), crate::kernel_session_id(session_id)?)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .state;
-        let resource = session_resource_from_storage_summary(&summary, state)?;
-        self.session_store
-            .delete(session_id)
-            .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
+            .map_err(crate::kernel_error)?;
         Ok(resource)
     }
 }
 
-async fn session_list_resources(
-    store: &dyn agena_storage::store::SessionStore,
-    summaries: &[agena_storage::store::SessionSummary],
-) -> ApplicationResult<Vec<SessionResource>> {
-    let ids = summaries
-        .iter()
-        .map(|summary| summary.id)
-        .collect::<Vec<_>>();
-    let states = store
-        .session_states(&ids)
-        .await
-        .map_err(|error| ApplicationError::internal_error(&error))?;
-    let mut resources = Vec::with_capacity(summaries.len());
-    for summary in summaries {
-        // Listing and state projection are separate reads. A committed
-        // deletion between them is ordinary concurrency, not a server error.
-        // Keep the cursor from the original slice so a removed final row does
-        // not prevent the caller from advancing through the remaining pages.
-        let Some(state) = states.get(&summary.id).copied() else {
-            continue;
-        };
-        resources.push(session_resource_from_storage_summary(summary, state)?);
-    }
-    Ok(resources)
+pub(crate) fn session_resource_from_kernel_summary(
+    summary: &SessionSummaryView,
+) -> ApplicationResult<SessionResource> {
+    Ok(SessionResource {
+        id: summary.id.get(),
+        parent_id: summary.parent_session_id.map(|id| id.get()),
+        depth: i64::from(summary.depth),
+        root_id: summary.root_session_id.get(),
+        workspace_id: summary.workspace_id,
+        title: summary.title.clone(),
+        favorite: summary.favorite,
+        pinned: summary.pinned,
+        version: summary.metadata_version.get(),
+        relation_kind: summary.relation_kind,
+        lifecycle_state: agena_domain::SessionLifecycleState::Ready,
+        state: session_state_from_storage(summary.state),
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+        is_subagent: summary.relation_kind.is_subagent(),
+        task_id: summary.task_id.clone(),
+        subtask_status: summary.subtask_status,
+        created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
+        updated_at: timestamp_millis_to_utc(summary.updated_at_ms)?,
+        message_count: summary.user_message_count,
+        child_session_count: summary.child_session_count,
+        last_message_at: summary
+            .last_message_at_ms
+            .map(timestamp_millis_to_utc)
+            .transpose()?,
+    })
 }
 
 pub(crate) fn session_resource_from_summary(
@@ -253,7 +212,11 @@ pub(crate) fn session_resource_from_summary(
         version: summary.version,
         relation_kind: summary.relation_kind,
         lifecycle_state: summary.lifecycle_state,
-        state: session_state_from_lifecycle(summary.lifecycle_state),
+        state: match summary.lifecycle_state {
+            agena_domain::SessionLifecycleState::Creating => SessionState::Creating,
+            agena_domain::SessionLifecycleState::Failed => SessionState::Failed { failure: None },
+            _ => SessionState::Ready { last_failure: None },
+        },
         source_cutoff_seq_global: summary.source_cutoff_seq_global,
         source_message_id: summary.source_message_id,
         is_subagent: summary.relation_kind.is_subagent(),
@@ -267,577 +230,20 @@ pub(crate) fn session_resource_from_summary(
     }
 }
 
-fn session_resource_from_storage_summary(
-    summary: &agena_storage::store::SessionSummary,
-    state: agena_storage::store::SessionState,
-) -> ApplicationResult<SessionResource> {
-    let subtask_status = if summary.relation_kind.is_subagent() {
-        summary
-            .subtask_status
-            .as_deref()
-            .and_then(agena_domain::SubtaskStatus::parse)
-            .or(Some(SubtaskStatus::default()))
-    } else {
-        None
-    };
-    Ok(SessionResource {
-        id: summary.id,
-        parent_id: summary.parent_id,
-        depth: summary.depth,
-        root_id: summary.root_id,
-        workspace_id: summary.workspace_id,
-        title: summary.title.clone(),
-        favorite: summary.favorite,
-        pinned: summary.pinned,
-        version: summary.version,
-        relation_kind: summary.relation_kind,
-        lifecycle_state: summary.lifecycle_state,
-        state: session_state_from_storage(state),
-        source_cutoff_seq_global: None,
-        source_message_id: None,
-        is_subagent: summary.relation_kind.is_subagent(),
-        task_id: summary.task_id.clone(),
-        subtask_status,
-        created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
-        updated_at: timestamp_millis_to_utc(summary.updated_at_ms)?,
-        message_count: u64::try_from(summary.message_count).map_err(|_| {
-            ApplicationError::internal(format!(
-                "invalid negative message count for session {}",
-                summary.id
-            ))
-        })?,
-        child_session_count: u64::try_from(summary.child_session_count).map_err(|_| {
-            ApplicationError::internal(format!(
-                "invalid negative child session count for session {}",
-                summary.id
-            ))
-        })?,
-        last_message_at: summary
-            .last_message_at_ms
-            .map(timestamp_millis_to_utc)
-            .transpose()?,
-    })
-}
-
-/// Project a `SessionMeta` (returned by create/rename) into the public
-/// resource. Counts are zero — a freshly created/renamed session has no parts
-/// yet, and callers re-fetch via `get_session` when they need full stats.
-fn session_resource_from_storage_meta(
-    meta: &agena_storage::store::SessionMeta,
-    state: agena_storage::store::SessionState,
-) -> ApplicationResult<SessionResource> {
-    let subtask_status = if meta.relation_kind.is_subagent() {
-        meta.subtask_status
-            .as_deref()
-            .and_then(agena_domain::SubtaskStatus::parse)
-            .or(Some(SubtaskStatus::default()))
-    } else {
-        None
-    };
-    Ok(SessionResource {
-        id: meta.id,
-        parent_id: meta.parent_id,
-        depth: meta.depth,
-        root_id: meta.root_id,
-        workspace_id: meta.workspace_id,
-        title: meta.title.clone(),
-        favorite: meta.favorite,
-        pinned: meta.pinned,
-        version: meta.version,
-        relation_kind: meta.relation_kind,
-        lifecycle_state: meta.lifecycle_state,
-        state: session_state_from_storage(state),
-        source_cutoff_seq_global: None,
-        source_message_id: None,
-        is_subagent: meta.relation_kind.is_subagent(),
-        task_id: meta.task_id.clone(),
-        subtask_status,
-        created_at: timestamp_millis_to_utc(meta.created_at_ms)?,
-        updated_at: timestamp_millis_to_utc(meta.updated_at_ms)?,
-        message_count: 0,
-        child_session_count: 0,
-        last_message_at: None,
-    })
-}
-
-fn session_state_from_lifecycle(value: agena_domain::SessionLifecycleState) -> SessionState {
+pub(crate) fn session_state_from_storage(value: agena_domain::SessionStateKind) -> SessionState {
     match value {
-        agena_domain::SessionLifecycleState::Creating => SessionState::Creating,
-        agena_domain::SessionLifecycleState::Ready => SessionState::Ready { last_failure: None },
-        agena_domain::SessionLifecycleState::Failed => SessionState::Failed { failure: None },
-    }
-}
-
-pub(crate) fn session_state_from_storage(
-    value: agena_storage::store::SessionState,
-) -> SessionState {
-    match value {
-        agena_storage::store::SessionState::Creating => SessionState::Creating,
-        agena_storage::store::SessionState::Ready => SessionState::Ready { last_failure: None },
-        agena_storage::store::SessionState::Running => SessionState::Running {
+        agena_domain::SessionStateKind::Creating => SessionState::Creating,
+        agena_domain::SessionStateKind::Ready => SessionState::Ready { last_failure: None },
+        agena_domain::SessionStateKind::Running => SessionState::Running {
             execution: None,
             workflow: agena_api::resource::WorkflowState::Quiescent,
             requests: Vec::new(),
         },
-        agena_storage::store::SessionState::AwaitingInteraction => {
-            SessionState::AwaitingInteraction {
-                run_id: None,
-                execution: None,
-                requests: Vec::new(),
-            }
-        }
-        agena_storage::store::SessionState::Failed => SessionState::Failed { failure: None },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use agena_domain::SessionRelationKind;
-    use agena_storage::WorkspaceRepository;
-    use agena_storage::store::{NewPart, NewSession, PartRole, SessionStore};
-    use sea_orm::Database;
-    use serde_json::json;
-
-    use super::*;
-
-    async fn test_service() -> (ApplicationService, Arc<dyn SessionStore>, i64) {
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("open test database"),
-        );
-        agena_storage_sqlite::initialize_schema(&db)
-            .await
-            .expect("initialize test schema");
-        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::clone(&db))
-            .ensure_id("/test/workspace")
-            .await
-            .expect("create test workspace");
-        let facade = agena_storage_sqlite::session_store(Arc::clone(&db), 64);
-        let service = ApplicationService::new(
-            "/test/workspace",
-            Arc::new(agena_storage::MemoryStore::for_workspace(
-                std::path::Path::new("/test/workspace"),
-            )),
-            Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
-                Arc::clone(&db),
-            )),
-            Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
-                Arc::clone(&db),
-            )),
-            Arc::clone(&facade),
-        );
-        (service, facade, workspace_id)
-    }
-
-    /// One user content part. `submit_user_run` creates the D9 run marker.
-    fn marker_part() -> NewPart {
-        NewPart::pending("text", PartRole::User, json!({ "text": "hello" }))
-    }
-
-    #[tokio::test]
-    async fn subagent_transcripts_remain_readable_through_task_lifecycle() {
-        let (service, store, workspace_id) = test_service().await;
-        let parent = store
-            .create_session(NewSession {
-                workspace_id,
-                parent_id: None,
-                relation_kind: SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "Parent".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
-            .await
-            .unwrap();
-
-        for terminal_status in ["completed", "failed", "cancelled"] {
-            let child_id = store
-                .create_subagent_session(parent.id, terminal_status.to_owned(), "Child".to_owned())
-                .await
-                .unwrap();
-            let created = service
-                .get_session(child_id)
-                .await
-                .unwrap()
-                .expect("a committed subagent must be openable before its task starts");
-            assert_eq!(
-                created.lifecycle_state,
-                agena_domain::SessionLifecycleState::Ready
-            );
-            assert!(created.is_subagent);
-            assert_eq!(created.parent_id, Some(parent.id));
-
-            let mut part = marker_part();
-            part.state = agena_storage::store::PartState::Completed;
-            store
-                .submit_user_run(child_id, vec![part], None)
-                .await
-                .unwrap();
-            store
-                .update_subtask_state(child_id, Some("running".to_owned()), Some(1000), None, None)
-                .await
-                .unwrap();
-            assert!(service.get_session(child_id).await.unwrap().is_some());
-
-            let failure = (terminal_status == "failed").then(|| {
-                json!({
-                    "id": "task-failure",
-                    "code": "execution_failed",
-                    "user": {"fallback": "The task failed."}
-                })
-            });
-            store
-                .update_subtask_state(
-                    child_id,
-                    Some(terminal_status.to_owned()),
-                    Some(1000),
-                    Some(1001),
-                    failure,
-                )
-                .await
-                .unwrap();
-            let finished = service.get_session(child_id).await.unwrap().unwrap();
-            assert_eq!(
-                finished.lifecycle_state,
-                agena_domain::SessionLifecycleState::Ready
-            );
-            assert_eq!(finished.message_count, 1);
-            let view = store.load(child_id).await.unwrap();
-            assert!(
-                view.parts
-                    .iter()
-                    .any(|part| part.kind == "text" && part.content["text"] == "hello")
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn session_list_survives_deletion_between_summary_and_state_reads() {
-        let (service, store, workspace_id) = test_service().await;
-        let mut sessions = Vec::new();
-        for index in 0..3 {
-            sessions.push(
-                service
-                    .create_session(crate::dto::SessionCreateRequest {
-                        workspace_id,
-                        session: crate::dto::SessionHierarchyRequest {
-                            parent_id: None,
-                            title: format!("Concurrent session {index}"),
-                        },
-                    })
-                    .await
-                    .unwrap(),
-            );
-        }
-        let summaries = store
-            .list_session_summaries(SessionListQuery::default())
-            .await
-            .unwrap();
-        service.delete_session(sessions[1].id).await.unwrap();
-        let resources = session_list_resources(store.as_ref(), &summaries)
-            .await
-            .unwrap();
-        assert_eq!(resources.len(), 2);
-        assert!(resources.iter().all(|row| row.id != sessions[1].id));
-        assert!(resources.iter().any(|row| row.id == sessions[0].id));
-        assert!(resources.iter().any(|row| row.id == sessions[2].id));
-
-        service.delete_session(sessions[0].id).await.unwrap();
-        service.delete_session(sessions[2].id).await.unwrap();
-        assert!(
-            session_list_resources(store.as_ref(), &summaries)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn filtered_pages_keep_totals_and_reject_mixed_cursor_and_offset() {
-        let (service, _, workspace_id) = test_service().await;
-        for index in 0..7 {
-            let session = service
-                .create_session(crate::dto::SessionCreateRequest {
-                    workspace_id,
-                    session: crate::dto::SessionHierarchyRequest {
-                        parent_id: None,
-                        title: format!("Session {index}"),
-                    },
-                })
-                .await
-                .unwrap();
-            if index % 2 == 0 {
-                service
-                    .replace_session(
-                        session.id,
-                        SessionUpdateRequest {
-                            favorite: Some(true),
-                            title: None,
-                            pinned: None,
-                        },
-                    )
-                    .await
-                    .unwrap();
-            }
-        }
-        let query = |offset| {
-            serde_json::from_value::<crate::dto::SessionListQuery>(json!({
-            "workspace_id": workspace_id, "bucket": "favorite", "include_total": true, "limit": 2, "offset": offset,
-        })).unwrap()
-        };
-        let first = service.list_sessions(query(0)).await.unwrap();
-        let second = service.list_sessions(query(2)).await.unwrap();
-        assert_eq!(first.total, Some(4));
-        assert_eq!(second.total, Some(4));
-        assert_eq!(first.items.len(), 2);
-        assert_eq!(second.items.len(), 2);
-        assert!(first.page.has_more);
-        assert!(!second.page.has_more);
-        assert!(
-            first
-                .items
-                .iter()
-                .chain(&second.items)
-                .all(|session| session.favorite)
-        );
-        assert!(
-            first
-                .items
-                .iter()
-                .all(|left| second.items.iter().all(|right| left.id != right.id))
-        );
-        let mixed = serde_json::from_value::<crate::dto::SessionListQuery>(json!({
-            "cursor": first.page.next_cursor, "offset": 2,
-        }))
-        .unwrap();
-        assert!(service.list_sessions(mixed).await.is_err());
-        let plain = service
-            .list_sessions(crate::dto::SessionListQuery::default())
-            .await
-            .unwrap();
-        assert_eq!(
-            plain.total, None,
-            "ordinary lists must not pay for a total query"
-        );
-        let workspaces = service
-            .list_workspaces(serde_json::from_value(json!({"offset": 1, "limit": 2})).unwrap())
-            .await
-            .unwrap();
-        assert!(workspaces.items.is_empty());
-        let workspaces = service
-            .list_workspaces(
-                serde_json::from_value(json!({"include_session_count": true})).unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(workspaces.items[0].session_stats.unwrap().total, 7);
-    }
-
-    #[tokio::test]
-    async fn session_list_materializes_message_and_child_counts() {
-        let (service, facade, workspace_id) = test_service().await;
-        let session = facade
-            .create_session(NewSession {
-                workspace_id,
-                parent_id: None,
-                relation_kind: SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "Counted session".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
-            .await
-            .expect("create test session");
-        facade
-            .create_session(NewSession {
-                workspace_id,
-                parent_id: Some(session.id),
-                relation_kind: SessionRelationKind::Child,
-                cutoff_part_id: None,
-                title: "Child session".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
-            .await
-            .expect("create child session");
-        // Two runs over the parent session → message_count 2, last message at
-        // the second run's timestamp.
-        facade
-            .submit_user_run(session.id, vec![marker_part()], None)
-            .await
-            .expect("first run");
-        let first_run = facade
-            .load(session.id)
-            .await
-            .expect("load first run")
-            .parts
-            .into_iter()
-            .find(|part| part.kind == "run")
-            .expect("first marker")
-            .part_id;
-        facade
-            .complete_run(
-                session.id,
-                first_run,
-                agena_storage::store::RunOutcome {
-                    status: agena_storage::store::PartState::Completed,
-                    abort_reason: None,
-                    content: None,
-                    provider_state: None,
-                },
-            )
-            .await
-            .expect("complete first run");
-        facade
-            .submit_user_run(session.id, vec![marker_part()], None)
-            .await
-            .expect("second run");
-
-        let page = service
-            .list_sessions(crate::dto::SessionListQuery {
-                workspace_id: Some(workspace_id),
-                ..Default::default()
-            })
-            .await
-            .expect("list test sessions");
-        let resource = page
-            .items
-            .iter()
-            .find(|resource| resource.id == session.id)
-            .expect("listed parent session");
-
-        assert_eq!(resource.message_count, 2);
-        assert_eq!(resource.child_session_count, 1);
-        assert!(resource.last_message_at.is_some());
-        assert!(resource.state.is_running());
-    }
-
-    #[tokio::test]
-    async fn list_exclude_subagents_hides_only_task_children() {
-        let (service, facade, workspace_id) = test_service().await;
-        let parent = facade
-            .create_session(NewSession {
-                workspace_id,
-                parent_id: None,
-                relation_kind: agena_domain::SessionRelationKind::Root,
-                cutoff_part_id: None,
-                title: "Parent".to_owned(),
-                task_id: None,
-                config_json: None,
-                provider_anchors_json: None,
-            })
-            .await
-            .expect("create parent");
-        // A task child via the store's dedicated subagent path.
-        facade
-            .create_subagent_session(parent.id, "task-1".to_owned(), "Sub task".to_owned())
-            .await
-            .expect("create subagent");
-
-        let all = service
-            .list_sessions(crate::dto::SessionListQuery {
-                workspace_id: Some(workspace_id),
-                ..Default::default()
-            })
-            .await
-            .expect("list all");
-        assert!(
-            all.items.iter().any(|item| item.is_subagent),
-            "without the filter the task child is listed"
-        );
-
-        let parents_only = service
-            .list_sessions(crate::dto::SessionListQuery {
-                workspace_id: Some(workspace_id),
-                exclude_subagents: true,
-                ..Default::default()
-            })
-            .await
-            .expect("list excluding subagents");
-        assert!(
-            parents_only.items.iter().all(|item| !item.is_subagent),
-            "task child must be hidden by exclude_subagents"
-        );
-        assert_eq!(parents_only.items.len(), 1);
-        assert_eq!(parents_only.items[0].id, parent.id);
-    }
-
-    #[tokio::test]
-    async fn get_create_rename_delete_round_trip_on_the_facade() {
-        let (service, _facade, workspace_id) = test_service().await;
-        let created = service
-            .create_session(crate::dto::SessionCreateRequest {
-                workspace_id,
-                session: crate::dto::SessionHierarchyRequest {
-                    parent_id: None,
-                    title: "New session".to_owned(),
-                },
-            })
-            .await
-            .expect("create session");
-        assert_eq!(created.title, "New session");
-        assert_eq!(
-            created.lifecycle_state,
-            agena_domain::SessionLifecycleState::Ready
-        );
-
-        let renamed = service
-            .replace_session(
-                created.id,
-                SessionUpdateRequest {
-                    title: Some("Renamed".to_owned()),
-                    favorite: Some(true),
-                    pinned: Some(true),
-                },
-            )
-            .await
-            .expect("rename session");
-        assert_eq!(renamed.title, "Renamed");
-        assert!(renamed.favorite);
-        assert!(renamed.pinned);
-        assert_eq!(renamed.version, created.version + 1);
-
-        let unpinned = service
-            .replace_session(
-                created.id,
-                SessionUpdateRequest {
-                    title: None,
-                    favorite: None,
-                    pinned: Some(false),
-                },
-            )
-            .await
-            .expect("update only pinned state");
-        assert_eq!(unpinned.title, "Renamed");
-        assert!(unpinned.favorite);
-        assert!(!unpinned.pinned);
-
-        let fetched = service
-            .get_session(created.id)
-            .await
-            .expect("get session")
-            .expect("session exists");
-        assert_eq!(fetched.title, "Renamed");
-        assert!(fetched.favorite);
-        assert!(!fetched.pinned);
-
-        let deleted = service
-            .delete_session(created.id)
-            .await
-            .expect("delete session");
-        assert_eq!(deleted.title, "Renamed");
-        assert!(
-            service
-                .get_session(created.id)
-                .await
-                .expect("get session")
-                .is_none()
-        );
+        agena_domain::SessionStateKind::AwaitingInteraction => SessionState::AwaitingInteraction {
+            run_id: None,
+            execution: None,
+            requests: Vec::new(),
+        },
+        agena_domain::SessionStateKind::Failed => SessionState::Failed { failure: None },
     }
 }

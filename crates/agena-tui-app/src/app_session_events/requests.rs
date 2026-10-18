@@ -826,20 +826,26 @@ fn rewind_targets_from_parts(
     }
     parts
         .iter()
-        .filter(|part| part.kind == "run" && part.role == "user")
+        .filter(|part| part.is_message_boundary() && part.role == "user")
         .enumerate()
         .filter(|(_, marker)| marker.state == "completed")
         .map(|(index, marker)| {
-            let document = inputs_by_run
-                .get(&marker.part_id)
-                .into_iter()
-                .flatten()
-                .map(|part| rewind_composer_node(part))
-                .collect::<anyhow::Result<Vec<_>>>()?;
+            let document = if let Some(document) = marker.content.get("document") {
+                serde_json::from_value::<agena_domain::ComposerDocument>(document.clone())?
+            } else {
+                agena_domain::ComposerDocument(
+                    inputs_by_run
+                        .get(&marker.part_id)
+                        .into_iter()
+                        .flatten()
+                        .map(|part| rewind_composer_node(part))
+                        .collect::<anyhow::Result<Vec<_>>>()?,
+                )
+            };
             Ok(crate::RewindTarget::from_run(
                 marker,
                 index as i64 + 1,
-                agena_domain::ComposerDocument(document),
+                document,
             ))
         })
         .collect()
@@ -991,6 +997,7 @@ mod rewind_tests {
             updated_at_ms: 0,
             part_id: id,
             kind: kind.to_owned(),
+            message_boundary: kind == "run",
             role: role.to_owned(),
             state: state.to_owned(),
             content,

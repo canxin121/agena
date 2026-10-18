@@ -39,7 +39,7 @@ Terminal.prototype.write = function (value, callback) {
 const encoder = new TextEncoder()
 const epoch = '00000000-0000-0000-0000-000000000001'
 function resource(id, kind) {
-  if (!resources.has(id)) resources.set(id, { resource_id: id, kind, owner_session_id:1, part_id:2, state:'active', cursor:{epoch,sequence:0}, committed_cursor:{epoch,sequence:0}, total_bytes:0, dropped_bytes:0, retained_ranges:[], chunks:[] })
+  if (!resources.has(id)) resources.set(id, { resource_id: id, kind, owner_session_id:1, part_id:2, state:'active', cursor:{epoch,sequence:0}, committed_cursor:{epoch,sequence:0}, total_bytes:kind==='text'?0:null, dropped_packets: 0, committed_dropped_bytes: 0, committed_dropped_packets: 0, dropped_bytes:0, retained_ranges:[], chunks:[] })
   return resources.get(id)
 }
 const nativeFetch = window.fetch.bind(window)
@@ -100,7 +100,6 @@ fixture.emit = (id, payload, state='active') => {
   value.cursor = chunk.cursor
   value.committed_cursor = chunk.cursor
   value.state = state
-  value.total_bytes += 'text' in payload ? encoder.encode(payload.text).length : 0
   value.retained_ranges = [{first:1,last:chunk.cursor.sequence}]
   const page = {resource:{...value,chunks:undefined},chunks:[chunk],next_cursor:chunk.cursor,has_more:false,gap:false}
   streams.get(id)?.enqueue(encoder.encode(`event: content\ndata: ${JSON.stringify(page)}\n\n`))

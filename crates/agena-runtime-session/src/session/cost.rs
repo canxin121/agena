@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 
 use agena_domain::{ModelCostBreakdown, SessionCostSummary};
 use agena_provider::CompletionUsage;
-use agena_storage::store::{Part, PartRole};
 
 fn fold_billable_units(
     totals: &mut Vec<agena_domain::UsageBillableUnitTotal>,
@@ -142,84 +141,54 @@ fn for_each_usage_observation(
     }
 }
 
-/// Parse a `usage` object embedded in a run marker's content into a provider
-/// `CompletionUsage`. Tolerant: any subset of fields parses (serde defaults
-/// fill the rest); empty objects are ignored.
-fn usage_from_run_marker_content(content: &serde_json::Value) -> Option<CompletionUsage> {
-    let usage = content.get("usage")?;
-    let parsed: CompletionUsage = match serde_json::from_value(usage.clone()) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "decode persisted run-marker usage for cost summary",
-                    &error,
-                ),
-                "session cost summary skipped malformed persisted usage"
-            );
-            return None;
-        }
-    };
-    (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
+/// Incremental aggregation over provider-round observations. No transcript
+/// Parts or full-session materialization are needed.
+#[derive(Default)]
+pub(crate) struct CostAccumulator {
+    result: SessionCostSummary,
+    by_model: BTreeMap<(String, String), ModelCostBreakdown>,
 }
-
-/// Build a per-session summary from the parts projection.
-///
-/// Usage and model identity are read from the assistant run markers, which are
-/// the durable home for run cost input (the engine folds attributed usage into
-/// `content["usage"]`, mirroring the `aggregate_usage()` projection).
-pub(crate) fn summarize(parts: &[Part]) -> SessionCostSummary {
-    let mut result = SessionCostSummary::default();
-    let mut by_model: BTreeMap<(String, String), ModelCostBreakdown> = BTreeMap::new();
-    for part in parts {
-        if !part.is_run_marker() || part.role != PartRole::Assistant {
-            continue;
-        }
-        let Some(usage) = usage_from_run_marker_content(&part.content) else {
-            continue;
-        };
-        let provider_id = part
-            .content
-            .get("provider_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let model_id = part
-            .content
-            .get("model_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
+impl CostAccumulator {
+    pub(crate) fn observe(&mut self, provider_id: &str, model_id: &str, usage: &CompletionUsage) {
         for_each_usage_observation(
             provider_id,
             model_id,
-            &usage,
+            usage,
             &mut |provider_id, model_id, observation| {
-                fold_session_cost(&mut result, provider_id, model_id, observation);
-                let item = by_model
-                    .entry((provider_id.to_owned(), model_id.to_owned()))
+                fold_session_cost(&mut self.result, provider_id, model_id, observation);
+                let item = self
+                    .by_model
+                    .entry((provider_id.into(), model_id.into()))
                     .or_insert_with(|| ModelCostBreakdown {
-                        provider_id: provider_id.to_owned(),
-                        model_id: model_id.to_owned(),
-                        ..ModelCostBreakdown::default()
+                        provider_id: provider_id.into(),
+                        model_id: model_id.into(),
+                        ..Default::default()
                     });
                 fold_model_cost(item, observation);
             },
         );
     }
-    result.billable_units.sort_by(|left, right| {
-        left.kind
-            .cmp(&right.kind)
-            .then_with(|| left.unit.cmp(&right.unit))
-    });
-    result.by_model = by_model
-        .into_values()
-        .map(|mut item| {
-            item.billable_units.sort_by(|left, right| {
-                left.kind
-                    .cmp(&right.kind)
-                    .then_with(|| left.unit.cmp(&right.unit))
-            });
-            item
-        })
-        .collect();
-    result
+    pub(crate) fn finish(self) -> SessionCostSummary {
+        let Self {
+            mut result,
+            by_model,
+        } = self;
+        result.billable_units.sort_by(|left, right| {
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| left.unit.cmp(&right.unit))
+        });
+        result.by_model = by_model
+            .into_values()
+            .map(|mut item| {
+                item.billable_units.sort_by(|left, right| {
+                    left.kind
+                        .cmp(&right.kind)
+                        .then_with(|| left.unit.cmp(&right.unit))
+                });
+                item
+            })
+            .collect();
+        result
+    }
 }

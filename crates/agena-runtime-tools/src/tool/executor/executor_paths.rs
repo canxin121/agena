@@ -45,7 +45,7 @@ impl ToolExecutor {
     pub(crate) async fn execute_shell_command_with_live(
         &self,
         request: &ShellRequest,
-        live: Option<agena_storage::content::ContentWriter>,
+        live: Option<crate::tool::ToolOutputStreams>,
     ) -> Result<ShellOutput, ToolError> {
         match shell::execute_with_sink(request, self.cancellation_token(), live).await {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),

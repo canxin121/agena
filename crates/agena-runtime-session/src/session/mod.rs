@@ -1,30 +1,12 @@
-//! Session model: state, persistence, history, and execution services.
-
-mod content_result;
-pub(crate) mod cost;
-mod doom_loop;
+//! Session orchestration and bounded kernel projections.
+pub mod kernel;
 mod manager;
 pub use agena_runtime_session_core::model;
+pub(crate) mod cost;
 mod processor;
-mod prompt;
-mod prompt_window;
-mod store;
-mod transcript;
-
 pub use agena_runtime_session_core::model::Session;
-pub(crate) use agena_runtime_session_core::model::{
-    PromptCompactionMessage, SessionRuntimeState, SubtaskRuntimeState,
-};
 pub use manager::{
     SessionManager, SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest,
     SessionSubtaskResponse,
 };
 pub use processor::SessionProcessor;
-
-pub(crate) type ExecutionControl =
-    agena_runtime::ExecutionControl<agena_runtime_contracts::part_content::TypedContent>;
-pub(crate) type ExecutionRegistry =
-    agena_runtime::ExecutionRegistry<agena_runtime_contracts::part_content::TypedContent>;
-pub(crate) type ExecutionPermit =
-    agena_runtime::ExecutionPermit<agena_runtime_contracts::part_content::TypedContent>;
-pub(crate) use agena_runtime::ExecutionControlError;

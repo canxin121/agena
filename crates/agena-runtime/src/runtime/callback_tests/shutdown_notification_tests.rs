@@ -1,6 +1,7 @@
 use super::*;
 
 async fn active_session(fixture: &Fixture, runtime: &AgenaRuntime) -> i64 {
+    let provider = install_execution_provider(fixture, runtime, None);
     let manager = runtime.session_manager().unwrap();
     let session = manager
         .create_session(crate::SessionCreateRequest {
@@ -13,26 +14,15 @@ async fn active_session(fixture: &Fixture, runtime: &AgenaRuntime) -> i64 {
         manager.as_ref(),
         crate::SessionUserRunRequest::new(
             session.id,
-            crate::SessionRunOptions {
-                model_supports_parallel_tool_calls: None,
-                model: agena_domain::ModelRef::new("fixture", "held-before-provider"),
-                thinking_mode: None,
-                speed_mode: None,
-                verbosity: None,
-                thinking: None,
-                request_override: Default::default(),
-                system: None,
-                temperature: None,
-                max_output_tokens: None,
-            },
+            fixture_run_options(),
             agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
-                text: "hold this execution in the prompt hook".into(),
+                text: "hold this execution in the controlled provider".into(),
             }]),
         ),
     )
     .await
     .unwrap();
-    tokio::time::timeout(WAIT, fixture.observed.prompt_entered.notified())
+    tokio::time::timeout(WAIT, provider.called.notified())
         .await
         .unwrap();
     assert!(manager.is_run_active(session.id).await);

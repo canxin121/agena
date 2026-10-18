@@ -1,7 +1,7 @@
 //! SeaORM transaction execution for the SQLite infrastructure adapter.
 //!
-//! Agena databases are shared by multiple processes (one TUI, server, or CLI
-//! per process), so write transactions must tolerate concurrent writers.
+//! The process kernel owns session facts; infrastructure repositories use
+//! the same database writer queue for short independent transactions.
 //! SQLite serializes writers with its single-write lock; the failure mode to
 //! avoid is `SQLITE_BUSY` ("database is locked").
 
@@ -17,19 +17,10 @@ use agena_async::{WritePermit, WriteQueue};
 use agena_storage::TransactionEffects;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, Statement, TransactionTrait,
-    Value,
 };
 
 #[cfg(test)]
 mod failure_tests;
-
-/// Reserved `agena_sequences` row used purely to acquire the SQLite write lock.
-///
-/// The write-lock fence inserts (or ignores) this row as the first statement of
-/// every write transaction. It is never read by the sequence allocators, which
-/// only touch their own named rows (`seq_global`, `message_id`, `part_id`, and
-/// per-session rows).
-const WRITE_LOCK_SEQUENCE: &str = "__agena_write_lock__";
 
 /// Number of times a write transaction retries a busy lock before giving up.
 const MAX_BUSY_RETRIES: usize = 5;
@@ -107,16 +98,13 @@ pub async fn acquire_write_permit(db: &DatabaseConnection) -> Result<WritePermit
 /// as the first statement moves the lock acquisition to the point where the
 /// busy timeout applies, so concurrent writers wait instead of failing.
 ///
-/// The write is `INSERT OR IGNORE` on a reserved `agena_sequences` row: the
-/// first call inserts the sentinel, every later call is a no-op, and it still
-/// acquires the write lock every time (SQLite takes the write lock before it
-/// evaluates whether the statement changes anything).
+/// A benign update of the kernel commit row acquires the lock without
+/// changing a commit position or publishing a session fact.
 pub async fn acquire_write_lock(transaction: &DatabaseTransaction) -> Result<(), DbErr> {
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute(Statement::from_string(
             transaction.get_database_backend(),
-            "INSERT OR IGNORE INTO agena_sequences (seq_name, next_val) VALUES (?, 1)",
-            [Value::from(WRITE_LOCK_SEQUENCE)],
+            "UPDATE agena_commits SET sequence=sequence WHERE id=1",
         ))
         .await
         .map(|_| ())
@@ -323,26 +311,25 @@ mod tests {
     #[tokio::test]
     async fn write_lock_fence_is_idempotent_across_transactions() {
         let db = initialized_database().await;
-        // First transaction inserts the sentinel row; later ones ignore it.
         for _ in 0..3 {
             run_transaction_effects(&db, |_transaction, _effects| Box::pin(async { Ok(()) }))
                 .await
-                .expect("transaction with write-lock fence");
+                .expect("transaction with write fence");
         }
-        let count: i64 = db
+        let sequence: i64 = db
             .query_one(sea_orm::Statement::from_string(
                 sea_orm::DatabaseBackend::Sqlite,
-                format!(
-                    "SELECT COUNT(*) AS count FROM agena_sequences WHERE seq_name = '{}'",
-                    super::WRITE_LOCK_SEQUENCE
-                ),
+                "SELECT sequence FROM agena_commits WHERE id=1".to_owned(),
             ))
             .await
-            .expect("count sentinel")
-            .expect("count row")
-            .try_get("", "count")
-            .expect("count value");
-        assert_eq!(count, 1, "write-lock sentinel row is inserted exactly once");
+            .unwrap()
+            .unwrap()
+            .try_get("", "sequence")
+            .unwrap();
+        assert_eq!(
+            sequence, 0,
+            "infrastructure lock fences never advance session commits"
+        );
     }
 
     #[tokio::test]

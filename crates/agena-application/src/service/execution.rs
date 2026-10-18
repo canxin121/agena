@@ -5,7 +5,7 @@ impl ApplicationService {
         expected_version: i64,
     ) -> ApplicationResult<()> {
         let existing = self.ensure_session_model(session_id).await?;
-        if existing.version == expected_version {
+        if existing.metadata_version.get() == expected_version {
             return Ok(());
         }
 
@@ -13,21 +13,23 @@ impl ApplicationService {
             "The session changed. Refresh it and try again.",
             format!(
                 "session version mismatch for {session_id}: expected {expected_version}, current {}",
-                existing.version
+                existing.metadata_version.get()
             ),
         ))
     }
 
     pub async fn latest_session_event_seq(
         &self,
-        session_queries: &dyn agena_runtime::SessionQueryService,
+        _session_queries: &dyn agena_runtime::SessionQueryService,
         session_id: i64,
     ) -> ApplicationResult<Option<i64>> {
         self.ensure_session_exists(session_id).await?;
-        session_queries
-            .latest_event_seq(session_id)
+        self.session_kernel
+            .reader
+            .control_version(crate::kernel_session_id(session_id)?)
             .await
-            .map_err(session_query_error)
+            .map(|version| Some(*version))
+            .map_err(crate::kernel_error)
     }
 
     pub async fn resolve_run_options(
@@ -265,50 +267,49 @@ impl ApplicationService {
         session_id: i64,
         include_parts: bool,
     ) -> ApplicationResult<SessionExecutionResource> {
-        // Runtime execution_context is the public reconcile-on-open boundary:
-        // after a server restart it terminalizes an abandoned in-flight run
-        // before projecting workflow and transcript state. Run it before the
-        // direct storage resource read so one response cannot combine a
-        // reconciled transcript with a pre-reconcile session row.
-        let context = match session_queries.execution_context(session_id).await {
-            Ok(context) => context,
-            Err(error) => {
-                // Runtime lookup failures include deletion. Preserve a typed
-                // 404 so clients discard the missing session and stop retrying.
-                self.ensure_session_exists(session_id).await?;
-                return Err(session_query_error(error));
-            }
-        };
-        let session_resource = self
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
+        // One short kernel read transaction captures all durable control facts.
+        // Executing a command can immediately wake its owner, so requiring a
+        // quiet interval across independently awaited reads can reject an
+        // already committed command indefinitely. Runtime defaults are applied
+        // to this immutable snapshot without rereading persisted state.
+        let snapshot = self
+            .session_kernel
+            .reader
+            .control_snapshot(crate::kernel_session_id(session_id)?, 128)
+            .await
+            .map_err(crate::kernel_error)?;
+        let context = session_queries
+            .execution_context(&snapshot)
+            .map_err(session_query_error)?;
+        let session_resource =
+            super::sessions::session_resource_from_kernel_summary(&snapshot.summary)?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await?;
         let (transcript, part_page) = if include_parts {
-            let (parts, page) = session_transcript_parts(session_queries, session_id).await?;
+            let (parts, page) =
+                session_transcript_parts(&self.session_kernel.reader, session_id).await?;
             (parts, Some(page))
         } else {
             (Vec::new(), None)
         };
         let pending_interactive_requests =
-            pending_interactive_requests(session_queries, session_id).await?;
-        // Workflow readiness and execution liveness are separate facts. A
-        // rewind can be ready for a model while no task exists, so cancellation
-        // and steering must consult the registry-backed lifecycle only.
-        let active_execution = execution_control
-            .active_execution(session_id)
-            .await
-            .and_then(|lifecycle| match lifecycle {
-                agena_domain::ExecutionLifecycle::Active {
-                    execution_id,
-                    phase,
-                } => Some(ActiveExecutionResource {
-                    execution_id: execution_id.0,
-                    phase,
-                }),
-                agena_domain::ExecutionLifecycle::Terminal { .. } => None,
-            });
+            pending_interactive_requests(session_queries, &snapshot).await?;
+        // Readiness and durable execution ownership are separate facts. Both
+        // are taken from the same control snapshot, including the phase.
+        let active_execution =
+            snapshot
+                .active_execution
+                .clone()
+                .and_then(|lifecycle| match lifecycle {
+                    agena_domain::ExecutionLifecycle::Active {
+                        execution_id,
+                        phase,
+                    } => Some(ActiveExecutionResource {
+                        execution_id: execution_id.0,
+                        phase,
+                    }),
+                    agena_domain::ExecutionLifecycle::Terminal { .. } => None,
+                });
 
         let mut session_resource = session_resource;
         session_resource.state = session_resource.state.with_execution_snapshot(
@@ -317,13 +318,15 @@ impl ApplicationService {
             pending_interactive_requests,
         );
 
-        let snapshot_version = session_resource.version;
         Ok(SessionExecutionResource {
             receipt: None,
             session: session_resource,
             parts: transcript,
             part_page,
-            latest_event_seq: Some(snapshot_version),
+            // This cursor identifies the durable control snapshot. History,
+            // scheduler, retry, usage and background activity observations have
+            // their own read boundaries; they do not form a database backup.
+            latest_event_seq: Some(snapshot.control_version),
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
@@ -542,10 +545,10 @@ fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJo
 
 async fn pending_interactive_requests(
     session_queries: &dyn agena_runtime::SessionQueryService,
-    session_id: i64,
+    snapshot: &agena_storage::kernel::SessionControlSnapshot,
 ) -> ApplicationResult<Vec<PendingInteractiveRequestResource>> {
     let contexts = session_queries
-        .pending_interactive_requests(session_id)
+        .pending_interactive_requests(snapshot)
         .await
         .map_err(session_query_error)?;
     Ok(contexts
@@ -565,33 +568,29 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
 
 /// Bounded factual window. Clients own visual grouping and expansion.
 async fn session_transcript_parts(
-    session_queries: &dyn agena_runtime::SessionQueryService,
+    reader: &agena_storage::kernel::KernelReader,
     session_id: i64,
 ) -> ApplicationResult<(
     Vec<agena_api::part::PartResource>,
     agena_api::pagination::PageInfo,
 )> {
-    let page = session_queries
-        .read_part_window(session_id, None, 256)
+    let session = crate::kernel_session_id(session_id)?;
+    let page = reader
+        .message_history(session, None, 8, 16)
         .await
-        .map_err(session_query_error)?;
-    let next = page.parts.last().map(|p| agena_storage::store::PartCursor {
-        created_at_ms: p.created_at_ms,
-        part_id: p.part_id,
-    });
-    let mut parts = page
-        .parts
-        .iter()
-        .filter(|part| part.visibility.visible_to_user())
-        .map(crate::session::part_resource_from_fact)
-        .collect::<Vec<_>>();
-    parts.sort_unstable_by_key(|p| (p.created_at_ms, p.part_id));
-    let info = agena_api::pagination::PageInfo {
-        returned: parts.len() as u64,
-        has_more: page.has_more,
-        next_cursor: crate::application_parts::encode_part_cursor(session_id, next)?,
-    };
-    Ok((parts, info))
+        .map_err(crate::kernel_error)?;
+    let mut parts = Vec::with_capacity(page.entries.len());
+    for entry in &page.entries {
+        parts.push(crate::application_parts::project_kernel_entry(reader, session, entry).await?);
+    }
+    Ok((
+        parts,
+        agena_api::pagination::PageInfo {
+            returned: page.entries.len() as u64,
+            has_more: page.has_more,
+            next_cursor: crate::application_parts::encode_part_cursor(session_id, page.next)?,
+        },
+    ))
 }
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {

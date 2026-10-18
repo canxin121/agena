@@ -81,6 +81,7 @@ mod tests {
 
     fn tool_part(title: &str) -> PartResource {
         let mut part = PartResource {
+            message_boundary: false,
             part_id: 1,
             kind: "tool_call".to_owned(),
             ..PartResource::default()

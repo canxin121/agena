@@ -1,101 +1,76 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
-use chrono::Utc;
-
-use crate::error::AppError;
-use crate::part::OperationPart;
-use crate::provider_state::PartProviderState;
-use agena_domain::ModelRef;
-use agena_domain::{
-    AssistantReasoningField, FinishReason, StructuredObject, TimeRange, ToolInvocation,
-};
-use agena_provider::CompletionFinishReason;
-use agena_provider::CompletionRequest;
-use agena_provider::CompletionStreamEvent;
-
-use super::store::{ProcessorPartIdAllocator, StoreAdapter};
-
-const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
+//! Provider orchestration contains no transcript accumulator or mutable session.
+use crate::{AppError, provider_state::PartProviderState};
+use agena_domain::{AssistantReasoningField, FinishReason, StructuredObject, ToolInvocation};
+use agena_provider::{CompletionFinishReason, CompletionRequest};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
-pub(crate) struct SessionRunRequest {
-    pub content_writers:
-        Arc<std::sync::Mutex<BTreeMap<i64, agena_storage::content::ContentWriter>>>,
-    pub retry_registry: retry::RetryRegistry,
-    pub session_id: i64,
-    pub model: ModelRef,
-    pub completion: CompletionRequest,
-    pub next_message_id: i64,
-    /// The run marker's content at turn start. Multi-round turns (one user
-    /// message == one run marker) carry the accumulated round records in
-    /// `content["rounds"]`; the processor appends one record after every
-    /// successful provider round so prompt projection can re-split the turn
-    /// and delivery recovery can prove its exact notification inputs.
-    pub marker_content: serde_json::Value,
-    /// Background notification parts that were actually present in the
-    /// provider prompt for this round. Persisted into the round record so a
-    /// delivery can prove model handling without confusing a concurrently
-    /// arriving notification with output from an older in-flight request.
-    pub input_notification_part_ids: Vec<i64>,
-    /// Request identity and input cursor for the usage committed with this round.
-    pub prompt_tokens: Option<super::model::PromptTokenRuntime>,
-    pub part_ids: ProcessorPartIdAllocator,
-    pub next_call_id: i64,
-    /// The facade-backed store commits Part identities, resource references
-    /// and semantic state transitions. Tokens go through `content_writers`;
-    /// their final cursors are sealed before the run is terminalized.
-    pub store: Arc<StoreAdapter>,
-    /// Optional cancel handle. When the token fires the stream loop
-    /// terminates between provider events and surfaces a `RunAbortReason::
-    /// Cancelled`-shaped terminal error. `None` runs the turn to completion.
-    pub cancel: Option<tokio_util::sync::CancellationToken>,
-}
-
-/// Result of one processor model turn. The turn's durable state is carried as
-/// persisted parts: the run marker plus every content part under it.
-#[derive(Debug)]
-pub(crate) struct SessionRunResult {
-    /// The run marker part id — the durable identity of this assistant message.
-    pub assistant_message_id: i64,
-    /// Store-issued rows for this turn, including its marker and children.
-    pub part_snapshot: agena_storage::store::PartSnapshot,
-    pub provider_metadata: Option<serde_json::Value>,
-    pub termination: SessionRunTermination,
-    /// True when the provider terminal event carried an explicit
-    /// `end_turn=false` signal: the model asked for another turn even though
-    /// it did not request any tool call.
-    pub follow_up_requested: bool,
-    /// Normalized terminal finish reason for the model turn. Defaults to
-    /// `Stop` when the provider stream did not report a terminal reason.
-    pub finish_reason: FinishReason,
-}
-
-#[derive(Debug)]
-pub(crate) enum SessionRunTermination {
-    Completed,
-    Cancelled,
-    Failed(AppError),
-}
-
-#[derive(Clone)]
-/// Processor executing session runs against providers and tools. Keeps only
-/// the run-specific plugin host; provider and context-budget state live on
-/// `SessionManagerState`.
 pub struct SessionProcessor {
     plugins: Arc<agena_plugin_host::PluginHost>,
 }
 
 mod helpers;
-mod parts;
-pub(crate) mod retry;
-mod run;
 mod tool_call_helpers;
-mod tool_calls;
+pub(crate) use helpers::*;
+pub(crate) use tool_call_helpers::*;
 
-pub(crate) use self::helpers::*;
-pub(crate) use self::run::MARKER_ROUNDS_KEY;
-pub(crate) use self::tool_call_helpers::*;
+impl SessionProcessor {
+    pub fn new(plugins: Arc<agena_plugin_host::PluginHost>) -> Self {
+        Self { plugins }
+    }
+
+    /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
+    /// before sending it to the provider.
+    pub(crate) async fn apply_chat_params_hook(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        session_id: i64,
+        request: &mut CompletionRequest,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) {
+        let plugins = &self.plugins;
+        if plugins.is_empty() {
+            return;
+        }
+        let mut params = serde_json::Map::new();
+        if let Some(t) = request.temperature {
+            params.insert("temperature".into(), serde_json::json!(t));
+        }
+        if let Some(m) = request.max_output_tokens {
+            params.insert("max_output_tokens".into(), serde_json::json!(m));
+        }
+        let input = agena_plugin_host::ChatParamsInput {
+            provider: provider_id.to_string(),
+            model: model_id.to_string(),
+            params: serde_json::Value::Object(params),
+            session_id: Some(session_id),
+        };
+        match plugins
+            .dispatch_chat_params_cancellable(input, cancellation)
+            .await
+        {
+            Ok(updated) => {
+                if let Some(t) = updated.params.get("temperature").and_then(|v| v.as_f64()) {
+                    request.temperature = Some(t as f32);
+                }
+                if let Some(m) = updated
+                    .params
+                    .get("max_output_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    request.max_output_tokens = Some(m as u32);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_params",
+                    "chat.params hook failed: {err}"
+                );
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -56,7 +56,7 @@ import {
   type TranscriptTextProjection,
   type TranscriptVisualRow,
 } from './transcriptDomCursor'
-import { transcriptNativeControl } from './transcriptControls'
+import { focusTranscriptPartControl, transcriptNativeControl } from './transcriptControls'
 import {
   actionCursorNeighbour,
   focusTranscriptAction,
@@ -626,6 +626,20 @@ export function useChatTranscriptVim(opts: {
 
   /** Text keeps its grapheme cursor; native actions are atomic spatial stops. */
   function moveActionCursor(direction: ActionCursorDirection): boolean {
+    const horizontal = direction === 'left' || direction === 'right'
+    const nativeFocus = document.activeElement
+    if (
+      horizontal &&
+      nativeFocus instanceof HTMLElement &&
+      nativeFocus.matches(`${NODE_SELECTOR}[data-part-kind="activity_summary"]`)
+    ) {
+      const group = nativeFocus.querySelector<HTMLElement>('[data-part-controls="true"]')
+      if (group && focusTranscriptPartControl(group, direction === 'right' ? 1 : -1)) {
+        takeCount()
+        removeCursorOverlay()
+        return true
+      }
+    }
     const focused = focusedAction()
     const point = cursorPoint()
     const entry = activeTextEntry()
@@ -635,8 +649,30 @@ export function useChatTranscriptVim(opts: {
     const current = candidate && !candidate.matches(':disabled, [aria-disabled="true"]') ? candidate : null
     const origin = current ? transcriptActionRect(current) : point ? cursorRectForPoint(point) : null
     if (!origin) return false
-    const horizontal = direction === 'left' || direction === 'right'
     if (horizontal && !current) return false
+    // Loading rows have an explicit DOM-order control group. Entering the
+    // row from its native summary starts at the first loading action; spatial
+    // distance must not skip that action in favour of its adjacent input.
+    const loadingGroup = current?.closest<HTMLElement>('[data-part-controls="true"]')
+    const loadingOwner = current?.closest<HTMLElement>(NODE_SELECTOR)
+    if (
+      horizontal &&
+      current &&
+      loadingGroup &&
+      focusTranscriptPartControl(loadingGroup, direction === 'right' ? 1 : -1, current)
+    ) {
+      takeCount()
+      removeCursorOverlay()
+      return true
+    }
+    if (horizontal && current && !loadingGroup && loadingOwner?.dataset.partKind === 'activity_summary') {
+      const group = loadingOwner.querySelector<HTMLElement>('[data-part-controls="true"]')
+      if (group && focusTranscriptPartControl(group, direction === 'right' ? 1 : -1)) {
+        takeCount()
+        removeCursorOverlay()
+        return true
+      }
+    }
 
     const elements = cursorElements()
     const owner = current?.closest<HTMLElement>(NODE_SELECTOR) || activeElement()

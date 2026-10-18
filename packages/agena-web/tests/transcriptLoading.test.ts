@@ -82,8 +82,9 @@ test('the rendered reply exposes left-aligned busy/retry controls even with a fi
 
 const part = (id: number) => ({
   part_id: id,
-  run_id: id === 3 ? null : 3,
-  kind: id === 3 ? 'run' : 'text',
+  run_id: 3,
+  message_boundary: id === 3,
+  kind: 'text',
   role: 'assistant',
   state: 'completed',
   content: { text: `part ${id}` },
@@ -99,7 +100,7 @@ const fold = (anchor = 14, hidden = 10) => ({
 const page = (ids: number[], cursor: string | null, folds: ReturnType<typeof fold>[] = []) => ({
   parts: ids.map(part),
   runs: folds.map((fold) => {
-    const returned = ids.filter((id) => id !== 3).length
+    const returned = ids.length
     return {
       run_id: 3,
       part_count: returned + fold.hidden_count,
@@ -157,7 +158,7 @@ test('history and reply paging are independent, empty fold pages advance, refres
     const current = chat.getMessagesForSession('7')[0]!
     assert.equal(current.folds![0]!.nextCursor, 'before-9')
     assert.equal(current.folds![0]!.hiddenCount, 5)
-    assert.equal(current.parts.filter((part) => part.agenaKind !== 'run').length, 10)
+    assert.equal(current.parts.filter((part) => part.id !== '3').length, 10)
     // Entry and older pages are two messages, and every message loads only its
     // newest five parts; the rest stays behind the reply's fold cursor.
     const entry = requests.find((url) => !url.searchParams.has('run_ids') && !url.searchParams.has('cursor'))!

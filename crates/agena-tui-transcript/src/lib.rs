@@ -27,16 +27,16 @@ pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
 pub use parts::{
-    TranscriptFold, folds_from_run_window, last_assistant_reply_text, part_state_is_terminal,
-    parts_entries, parts_entries_with_folds, parts_have_non_terminal_runs,
+    TranscriptFold, folds_from_run_window, part_state_is_terminal, parts_entries,
+    parts_entries_with_folds, parts_have_non_terminal_runs,
 };
 pub use render_model::*;
 pub use renderer::{
     COLLAPSED_ACTIVITY_VISIBLE_COUNT, RenderedMessageBlock, entry_activity_summary_keys,
     render_diff_document, render_diff_document_with_i18n, render_entry_detailed,
     render_entry_detailed_with_interactions, render_entry_detailed_with_progressive_expansion,
-    render_entry_export, render_markdown_document, render_markdown_document_with_i18n,
-    render_parts_export_markdown, rewind_message_preview,
+    render_entry_export, render_entry_part_export, render_markdown_document,
+    render_markdown_document_with_i18n, render_parts_export_markdown, rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
 pub use text as ui_text;

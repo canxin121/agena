@@ -13,6 +13,7 @@ ipc = ["ws"]
 jsonrpc = ["http"]
 
 [dependencies]
+blake3.workspace = true
 portable-atomic = { workspace = true }
 agena-async = { workspace = true }
 agena-application = { workspace = true }
@@ -23,7 +24,6 @@ agena-notification = { workspace = true }
 agena-runtime-notifications = { workspace = true }
 agena-runtime = { workspace = true }
 agena-runtime-contracts = { workspace = true }
-agena-tool = { workspace = true }
 agena-storage = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-marketplace = { workspace = true }
@@ -40,6 +40,7 @@ smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util", "fs"] }
 tokio-stream = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
@@ -47,6 +48,7 @@ uuid = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 sea-orm = { workspace = true }
 agena-client = { workspace = true }
 agena-runtime-tools = { workspace = true }

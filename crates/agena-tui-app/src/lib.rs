@@ -209,7 +209,6 @@ use agena_tui_platform::clipboard::{
     ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, set_clipboard_text,
 };
 use agena_tui_platform::external_editor::{edit_text, open_path};
-use agena_tui_platform::external_pager::page_text;
 use agena_tui_platform::terminal::TerminalRuntime;
 use agena_tui_platform::terminal_transfer::{download_providers, request_download};
 
@@ -327,10 +326,7 @@ use agena_tui_transcript::{
     transcript_vertical_navigation_step,
 };
 
-use self::transcript_view::{
-    current_spinner_millis, refresh_spinner_line, render_entry_export,
-    render_parts_export_markdown, spinner_frame,
-};
+use self::transcript_view::{current_spinner_millis, refresh_spinner_line, spinner_frame};
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 
 #[cfg(test)]

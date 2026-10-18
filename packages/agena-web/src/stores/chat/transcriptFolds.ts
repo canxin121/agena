@@ -55,7 +55,7 @@ export function reconcileTranscriptFolds(
       result
         .filter((entry) => runIds.has(Number(entry.info.runId ?? entry.info.id)))
         .flatMap((entry) => entry.parts)
-        .filter((part) => part.agenaKind !== 'run' && compareChatIds(part.id, source.anchorPartId) < 0)
+        .filter((part) => !runIds.has(Number(part.id)) && compareChatIds(part.id, source.anchorPartId) < 0)
         .map((part) => part.id),
     )
     let fold = { ...source, hiddenCount: Math.max(0, source.hiddenCount - loaded.size) }

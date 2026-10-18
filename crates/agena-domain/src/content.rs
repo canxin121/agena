@@ -305,9 +305,17 @@ pub struct ContentResource {
     pub state: ContentState,
     pub cursor: ContentCursor,
     pub committed_cursor: ContentCursor,
-    pub total_bytes: u64,
+    /// Exact source byte count when available. Native text sources expose
+    /// their accepted UTF-8 bytes; event sequence counts are never byte totals.
+    pub total_bytes: Option<u64>,
     /// Observed source bytes that could not be retained. Independent of exit.
     pub dropped_bytes: u64,
+    #[serde(default)]
+    pub dropped_packets: u64,
+    #[serde(default)]
+    pub committed_dropped_bytes: u64,
+    #[serde(default)]
+    pub committed_dropped_packets: u64,
     pub retained_ranges: Vec<ContentRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_error: Option<String>,
@@ -325,6 +333,10 @@ impl ContentResource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ContentPayload {
+    DocumentEvent {
+        input: Box<ContentInput>,
+        checkpoint: Option<Box<ContentDocument>>,
+    },
     Text {
         text: String,
     },
@@ -352,6 +364,18 @@ pub enum ContentPayload {
 impl ContentPayload {
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::DocumentEvent { input, checkpoint } => {
+                if !matches!(
+                    input.kind(),
+                    ContentKind::Text | ContentKind::Log | ContentKind::Structured
+                ) {
+                    return Err("document events only accept text, log and document mutations");
+                }
+                input.validate()?;
+                checkpoint
+                    .as_ref()
+                    .map_or(Ok(()), |document| document.validate())
+            }
             Self::Terminal { screen } => screen.validate(None),
             Self::Structured { base_cursor, event } => {
                 if base_cursor.sequence == 0 {
@@ -375,6 +399,7 @@ impl ContentPayload {
     }
     pub fn kind(&self) -> ContentKind {
         match self {
+            Self::DocumentEvent { .. } => ContentKind::Document,
             Self::Text { .. } => ContentKind::Text,
             Self::Log { .. } => ContentKind::Log,
             Self::Structured { .. } | Self::StructuredSnapshot { .. } => ContentKind::Structured,
@@ -384,6 +409,7 @@ impl ContentPayload {
 
     pub fn text_content(&self) -> Option<&str> {
         match self {
+            Self::DocumentEvent { input, .. } => input.text_content(),
             Self::Text { text } | Self::Log { text, .. } => Some(text),
             _ => None,
         }
@@ -392,6 +418,11 @@ impl ContentPayload {
     /// UTF-8 byte cost, not client string length or terminal display width.
     pub fn byte_len(&self) -> usize {
         match self {
+            Self::DocumentEvent { input, checkpoint } => input.byte_len().saturating_add(
+                checkpoint
+                    .as_ref()
+                    .map_or(0, |document| document.byte_len()),
+            ),
             Self::Text { text } | Self::Log { text, .. } => text.len(),
             Self::Structured { event, .. } => serde_json::to_vec(event)
                 .expect("document event serializes")

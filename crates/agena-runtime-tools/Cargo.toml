@@ -23,7 +23,6 @@ agena-lsp = { workspace = true }
 agena-tool = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
-bytes = { workspace = true }
 chrono = { workspace = true }
 content_inspector = { workspace = true }
 futures-util = { workspace = true }
@@ -61,5 +60,6 @@ url = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+agena-storage-sqlite = { workspace = true }
 async-trait = { workspace = true }
 sea-orm = { workspace = true }

@@ -1,95 +1,78 @@
-//! User send is the authorization gesture for explicitly selected model-input
-//! resources. References and UI thumbnails remain lazy. Snapshot bytes before
-//! persistence and bind them to the selected route; history cannot silently
-//! transfer them to another provider/model.
-use super::{AppError, Session, SessionManager};
-use agena_domain::{AccessKind, AttachmentSource, ModelRef, PermissionDecision};
-use agena_runtime_contracts::part_content::{TypedContent, attachment_from_file_ref};
+//! Explicit user-authorized media preparation into immutable kernel blobs.
+use super::*;
+use crate::session::kernel::media::{MediaBinding, uri};
+use agena_domain::{
+    AccessKind, ActivityPayload, AttachmentSource, PermissionDecision, ResourceDelivery,
+    ResourceReference,
+};
 use agena_runtime_tools::media_input;
-
-static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
-
+pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+#[cfg(test)]
+pub(super) static PREPARATION_BARRIER: StdMutex<
+    Option<(RequestId, tokio::sync::oneshot::Sender<()>)>,
+> = StdMutex::new(None);
 impl SessionManager {
-    /// A trusted destination for model-requested filesystem media reads.
-    /// Resolve and validate the same provider route used by conversation sends.
-    pub(super) fn media_input_binder(
-        state: &super::SessionManagerState,
-        selection: &agena_domain::ExecutionSelection,
-    ) -> std::sync::Arc<crate::tool::MediaInputBinder> {
-        let registry = state.provider_registry.clone();
-        let selection = selection.clone();
-        std::sync::Arc::new(move |mut item| {
-            let model = registry
-                .resolve_default_model_selection(&selection)
-                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?
-                .ok_or_else(|| {
-                    crate::tool::ToolError::invalid_input(
-                        "fs.read_media requires a selected conversation provider and model",
-                    )
-                })?;
-            registry
-                .validate_media_inputs(&model, std::slice::from_ref(&item))
-                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?;
-            let route = registry
-                .media_route_binding(&model)
-                .map_err(|error| crate::tool::ToolError::invalid_input(error.to_string()))?;
-            let AttachmentSource::Base64 { data } = item.source else {
-                return Err(crate::tool::ToolError::invalid_input(
-                    "media reader must return a local byte snapshot",
-                ));
-            };
-            item.source = AttachmentSource::ProviderData { route, data };
-            Ok(item)
-        })
-    }
-
-    pub(super) async fn materialize_user_media(
+    pub(super) async fn prepare_user_media(
         &self,
-        session: &Session,
+        session: SessionId,
         model: &ModelRef,
-        mut parts: Vec<TypedContent>,
-    ) -> Result<Vec<TypedContent>, AppError> {
-        if !parts.iter().any(|part|matches!(part,TypedContent::FileRef(reference) if reference.extra.get("delivery").and_then(serde_json::Value::as_str)==Some("model_input"))) {return Ok(parts);}
-        let state = self.execution_state();
-        let executor = state
-            .tool_executor
-            .for_session_context_async(&session.runtime.execution)
-            .await;
+        mut document: ComposerDocument,
+        request: RequestId,
+    ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
+        if !document.0.iter().any(|node|matches!(node,ComposerNode::Activity{activity} if matches!(&activity.payload,ActivityPayload::Resource(resource) if resource.delivery==ResourceDelivery::ModelInput))){return Ok((document,Vec::new()));}
+        #[cfg(test)]
+        {
+            let mut barrier = PREPARATION_BARRIER.lock().unwrap();
+            if barrier
+                .as_ref()
+                .is_some_and(|(target, _)| *target == request)
+                && let Some((_, reached)) = barrier.take()
+            {
+                let _ = reached.send(());
+            }
+        }
+        let _preparation = MEDIA_PREPARATIONS
+            .acquire()
+            .await
+            .map_err(|_| AppError::Cancelled)?;
+        let state = self.state.load_full();
+        let context = self.execution_context_value(session).await?;
+        let executor = state.executor.for_session_context_async(&context).await;
         let root = executor
             .workspace_root()
             .canonicalize()
-            .map_err(|error| AppError::Internal(format!("media workspace unavailable: {error}")))?;
-        let route = state.provider_registry.media_route_binding(model)?;
-        let mut used = 0usize;
-        let mut count = 0usize;
-        for part in &mut parts {
-            let TypedContent::FileRef(reference) = part else {
+            .map_err(|e| AppError::Config(e.to_string()))?;
+        let route = state.providers.media_route_binding(model)?;
+        let mut blobs = Vec::new();
+        let mut bytes = 0usize;
+        for (index, node) in document.0.iter_mut().enumerate() {
+            let ComposerNode::Activity { activity } = node else {
                 continue;
             };
-            if reference
-                .extra
-                .get("delivery")
-                .and_then(serde_json::Value::as_str)
-                != Some("model_input")
-            {
+            let ActivityPayload::Resource(resource) = &mut activity.payload else {
+                continue;
+            };
+            if resource.delivery != ResourceDelivery::ModelInput {
                 continue;
             }
-            let current = attachment_from_file_ref(reference);
-            if current.attachments.len() != 1 {
+            if blobs.len() >= media_input::MAX_MEDIA_INPUTS {
                 return Err(AppError::Config(
-                    "one user resource must reference exactly one input file".into(),
+                    "at most eight media resources may be sent in one message".into(),
                 ));
             }
-            let attachment = &current.attachments[0];
-            let AttachmentSource::LocalPath { path } = &attachment.source else {
-                return Err(AppError::Config("direct model input requires an explicitly selected workspace file; provider IDs and arbitrary URLs are not portable".into()));
+            let ResourceReference::WorkspacePath { path } = &resource.reference else {
+                return Err(AppError::Config(
+                    "model input must be an explicitly selected workspace file".into(),
+                ));
             };
-            let path_buf = root.join(path);
-            let target = path_buf.canonicalize().map_err(|error| {
-                AppError::Config(format!("selected attachment is unavailable: {error}"))
+            let target = root.join(path).canonicalize().map_err(|e| {
+                AppError::Config(format!("selected attachment is unavailable: {e}"))
             })?;
             if !target.starts_with(&root) {
-                return Err(AppError::Config("selected attachment escapes the active workspace; copy it through the explicit upload action".into()));
+                return Err(AppError::Config(
+                    "selected attachment escapes the active workspace".into(),
+                ));
             }
             if !matches!(
                 executor
@@ -101,65 +84,50 @@ impl SessionManager {
                     "attachment read requires permission; no content was sent".into(),
                 ));
             }
-            count += 1;
-            if count > media_input::MAX_MEDIA_INPUTS {
-                return Err(AppError::Config(
-                    "at most eight media resources may be sent in one message".into(),
-                ));
-            }
-            let expected = reference.sha.clone();
-            let selected_path = path.clone();
-            let selected_root = root.clone();
-            let selected_route = route.clone();
-            let (prepared, bound) = MEDIA_WORKERS
-                .run(move || {
-                    let prepared = media_input::read_local(
-                        &selected_root,
-                        &selected_path,
-                        expected.as_deref(),
-                    )?;
-                    let bound = prepared.attachment(Some(&selected_route));
-                    Ok::<_, String>((prepared, bound))
-                })
+            let root = root.clone();
+            let path = path.clone();
+            let expected = activity.provenance.content_hash.clone();
+            let prepared = MEDIA_WORKERS
+                .run(move || media_input::read_local(&root, &path, expected.as_deref()))
                 .await
-                .map_err(|e| AppError::Internal(format!("media preparation failed: {e}")))?
+                .map_err(|e| AppError::Internal(e.to_string()))?
                 .map_err(AppError::Config)?;
-            used = used.saturating_add(prepared.bytes.len());
-            if used > media_input::MAX_MEDIA_BATCH_BYTES {
+            bytes = bytes.saturating_add(prepared.bytes.len());
+            if bytes > media_input::MAX_MEDIA_BATCH_BYTES {
                 return Err(AppError::Config(
-                    "message media exceeds the 40 MiB total input limit".into(),
+                    "message media exceeds the 40 MiB input limit".into(),
                 ));
             }
+            let bound = prepared.attachment(Some(&route));
             state
-                .provider_registry
+                .providers
                 .validate_media_inputs(model, std::slice::from_ref(&bound))?;
-            let path = reference.path.clone();
-            let mut value =
-                super::super::store::file_ref_from_attachment(&crate::part::AttachmentPart {
-                    attachments: vec![bound],
-                });
-            // Keep local presentation path, but do not duplicate the base64
-            // payload into both canonical source and attachments snapshot.
-            value.path = path;
-            value.extra.remove("source");
-            value
-                .extra
-                .insert("delivery".into(), serde_json::json!("model_input"));
-            value.extra.insert(
-                "delivery_route".into(),
-                serde_json::json!(model.to_string()),
-            );
-            value
-                .extra
-                .insert("input_sha256".into(), serde_json::json!(prepared.sha256));
-            value
-                .extra
-                .insert("input_transport".into(), serde_json::json!("inline"));
-            *reference = value;
+            let blob_request =
+                request_key(&format!("media:{session:?}:{request}"), &index.to_string());
+            let blob = self
+                .prepare_immutable_blob(blob_request, session, &prepared.bytes)
+                .await?;
+            let mut attachment = bound;
+            attachment.source = AttachmentSource::Base64 {
+                data: String::new(),
+            };
+            let binding = MediaBinding {
+                version: 1,
+                model: model.clone(),
+                route: route.clone(),
+                blob: blob.descriptor().id,
+                attachment,
+            };
+            resource.reference = ResourceReference::Artifact {
+                sha256: prepared.sha256,
+                uri: uri(&binding).map_err(kernel_error)?,
+            };
+            resource.media_type = Some(prepared.mime);
+            resource.size_bytes = Some(prepared.size_bytes);
+            resource.width = prepared.width;
+            resource.height = prepared.height;
+            blobs.push(blob);
         }
-        Ok(parts)
+        Ok((document, blobs))
     }
 }
-
-#[cfg(test)]
-mod tests;

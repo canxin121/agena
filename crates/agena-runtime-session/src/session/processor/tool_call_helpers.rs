@@ -194,13 +194,6 @@ pub(crate) fn tool_api_binding_for_name<'a>(
     available_tools.iter().find(|tool| tool.name == name)
 }
 
-pub(crate) fn tool_api_definition_identity(
-    name: &str,
-    available_tools: &[ToolApiDefinition],
-) -> Option<String> {
-    tool_api_binding_for_name(name, available_tools).map(|tool| tool.definition_identity.clone())
-}
-
 pub(crate) fn tool_invocation_for_definition(
     tool: &ToolApiDefinition,
     input: StructuredObject,

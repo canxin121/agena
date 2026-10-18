@@ -182,13 +182,6 @@ pub(crate) use agena_runtime_session::{
     prompt_token_budget, session_output_token_budget,
 };
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
-pub(crate) use agena_runtime_session::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTION_OUTPUT_TOKENS,
-    MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
-};
-pub(crate) use agena_runtime_session::{
-    ExecutionControl, ExecutionControlError, ExecutionPermit, ExecutionRegistry,
-};
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,

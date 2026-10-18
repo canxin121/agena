@@ -86,6 +86,10 @@ uuid_id!(AssistantReplyId);
 uuid_id!(TextSegmentId);
 uuid_id!(ActivityId);
 uuid_id!(ContentId);
+uuid_id!(CommandId);
+uuid_id!(KernelEpoch);
+uuid_id!(ContentEpoch);
+uuid_id!(BlobId);
 
 impl ActivityId {
     /// Deterministic stable activity id for a reply's error presentation.

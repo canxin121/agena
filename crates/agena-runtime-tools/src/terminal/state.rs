@@ -32,7 +32,7 @@ pub(super) struct State {
     pub started_at_ms: i64,
     pub interaction: Mutex<()>,
     pub stopping: AtomicU8,
-    output: Option<agena_storage::content::ContentWriter>,
+    output: Option<crate::tool::ToolOutputStreams>,
     inner: Mutex<Inner>,
     changed: Condvar,
     controls: mpsc::SyncSender<Request>,
@@ -56,10 +56,35 @@ struct Inner {
     osc_guard: super::osc_guard::OscGuard,
     screen_dirty: bool,
     last_screen_at: Instant,
-    emitted_screen: Option<(agena_domain::ContentCursor, agena_domain::TerminalSnapshot)>,
+    emitted_screen: Option<(
+        agena_storage::kernel::EventCursor,
+        agena_domain::TerminalSnapshot,
+    )>,
     last_snapshot_at: Instant,
     bytes_since_snapshot: usize,
     patches_since_snapshot: u32,
+}
+
+enum ScreenInput {
+    Snapshot {
+        screen: agena_domain::TerminalSnapshot,
+    },
+    Patch {
+        base_cursor: agena_storage::kernel::EventCursor,
+        screen: agena_domain::TerminalSnapshot,
+        rows_changed: Vec<u16>,
+    },
+}
+
+impl ScreenInput {
+    fn byte_len(&self) -> usize {
+        let screen = match self {
+            Self::Snapshot { screen } | Self::Patch { screen, .. } => screen,
+        };
+        serde_json::to_vec(screen)
+            .expect("terminal screen serializes")
+            .len()
+    }
 }
 
 impl State {
@@ -70,10 +95,7 @@ impl State {
         listener: Option<Arc<dyn MonitorListener>>,
     ) -> Self {
         Self {
-            output: params
-                .output
-                .as_ref()
-                .map(agena_storage::content::ContentWriter::delegate_lifecycle),
+            output: params.output.clone(),
             id,
             owner: params.owner.clone(),
             command: params.display_command.clone(),
@@ -117,12 +139,15 @@ impl State {
 
     pub fn mark_partial(&self, reason: &str) {
         if let Some(writer) = &self.output {
-            writer.record_loss(0, &reason);
+            writer.record_loss(agena_domain::ContentKind::Terminal, 0, reason);
         }
     }
 
     pub fn is_running(&self) -> bool {
         lock(&self.inner).status == ProcessStatus::Running
+    }
+    pub fn output_matches(&self, output: &Option<crate::tool::ToolOutputStreams>) -> bool {
+        self.output.as_ref() == output.as_ref()
     }
     pub fn mark_spawned(&self) {
         lock(&self.inner).spawned = true;
@@ -179,7 +204,7 @@ impl State {
             output_resource: self
                 .output
                 .as_ref()
-                .map(|writer| writer.resource().reference()),
+                .map(crate::tool::ToolOutputStreams::reference),
             tty: true,
             command: self.command.clone(),
             description: self.description.clone(),
@@ -238,12 +263,14 @@ impl State {
             Self::push(&mut inner, text)
         };
         if let Some(writer) = &self.output
-            && let Err(error) = writer.capture(agena_domain::ContentInput::Log {
-                stream: agena_domain::CommandOutputStream::Stdout,
-                text: event.line.clone(),
-            })
+            && let Err(error) =
+                writer.try_log(agena_domain::CommandOutputStream::Stdout, &event.line)
         {
-            writer.record_loss(event.line.len(), &error);
+            writer.record_loss(
+                agena_domain::ContentKind::Log,
+                event.line.len(),
+                &error.to_string(),
+            );
         }
         self.changed.notify_all();
         if let Some(listener) = &self.listener {
@@ -307,7 +334,7 @@ impl State {
                         != (snapshot.rows, snapshot.cols, snapshot.alternate_screen)
                 });
             let mut payload = if is_snapshot {
-                agena_domain::ContentInput::Terminal {
+                ScreenInput::Snapshot {
                     screen: snapshot.clone(),
                 }
             } else {
@@ -330,7 +357,7 @@ impl State {
                     .collect::<Vec<_>>();
                 let mut patch = snapshot.clone();
                 patch.cells.retain(|run| rows_changed.contains(&run.row));
-                agena_domain::ContentInput::TerminalPatch {
+                ScreenInput::Patch {
                     base_cursor: *base_cursor,
                     screen: patch,
                     rows_changed,
@@ -339,13 +366,20 @@ impl State {
             let patch_bytes = payload.byte_len();
             if !is_snapshot && inner.bytes_since_snapshot.saturating_add(patch_bytes) >= 64 * 1024 {
                 is_snapshot = true;
-                payload = agena_domain::ContentInput::Terminal {
+                payload = ScreenInput::Snapshot {
                     screen: snapshot.clone(),
                 };
             }
             (snapshot, payload, is_snapshot, patch_bytes)
         };
-        match writer.capture(payload) {
+        match match payload {
+            ScreenInput::Snapshot { screen } => writer.try_snapshot(screen),
+            ScreenInput::Patch {
+                base_cursor,
+                screen,
+                rows_changed,
+            } => writer.try_patch(base_cursor, screen, rows_changed),
+        } {
             Ok(cursor) => {
                 let mut inner = lock(&self.inner);
                 inner.emitted_screen = Some((cursor, snapshot));
@@ -360,7 +394,7 @@ impl State {
             }
             Err(error) => {
                 lock(&self.inner).emitted_screen = None;
-                writer.record_loss(0, &error);
+                writer.record_loss(agena_domain::ContentKind::Terminal, 0, &error.to_string());
             }
         }
     }
@@ -402,16 +436,23 @@ impl State {
         if let Some(writer) = &self.output {
             if let Some(text) = final_text {
                 let bytes = text.len();
-                if let Err(error) = writer.capture(agena_domain::ContentInput::Log {
-                    stream: agena_domain::CommandOutputStream::Stdout,
-                    text,
-                }) {
-                    writer.record_loss(bytes, &error);
+                if let Err(error) = writer.try_log(agena_domain::CommandOutputStream::Stdout, &text)
+                {
+                    writer.record_loss(agena_domain::ContentKind::Log, bytes, &error.to_string());
                 }
             }
             self.publish_screen(true);
-            if let Err(error) = writer.finalize_blocking(agena_domain::ContentState::Complete) {
-                tracing::error!(%error, "terminal content seal failed");
+            let output = writer.clone();
+            let summary = self.summary();
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(async move {
+                        output.finish_activity(&summary).await;
+                    });
+                }
+                Err(error) => {
+                    tracing::error!(%error, "terminal activity outcome has no runtime supervisor");
+                }
             }
         }
         self.changed.notify_all();

@@ -10,7 +10,7 @@ function page(first: number, values: string[], options: { epoch?: string; state?
     resource: {
       resource_id: 'resource-1', kind: 'log', owner_session_id: 1, part_id: 2,
       state: options.state || 'active', cursor, committed_cursor: cursor,
-      total_bytes: values.join('').length, dropped_bytes: 0, retained_ranges: [{ first, last }],
+      total_bytes: null, dropped_packets: 0, committed_dropped_bytes: 0, committed_dropped_packets: 0, dropped_bytes: 0, retained_ranges: [{ first, last }],
     },
     chunks: values.map((text, index) => ({ cursor: { epoch, sequence: first + index }, captured_at_ms: 1000, payload: { type: 'log', stream: 'stdout', text } })),
     next_cursor: cursor, has_more: false, gap: options.gap || false,
@@ -126,4 +126,64 @@ describe('content resource reduction', () => {
     expect(buffer.text()).toBe('')
     expect(buffer.document).toBe(initial)
   })
+})
+
+function textPage(start: number, text: string, options: { epoch?: string; committed?: number; state?: 'active' | 'complete' } = {}): ContentPage {
+  const end = start + new TextEncoder().encode(text).byteLength
+  const value = page(1, [], options)
+  const cursor = { epoch: options.epoch || 'epoch-1', sequence: end }
+  value.resource = { ...value.resource, kind: 'text', cursor, committed_cursor: { ...cursor, sequence: options.committed ?? end }, total_bytes: end }
+  value.chunks = text ? [{ cursor, captured_at_ms: 1, payload: { type: 'text', text } }] : []
+  value.next_cursor = cursor
+  return value
+}
+
+test('native text cursors count UTF-8 bytes and overlapping pages append only their suffix', () => {
+  const buffer = new ContentBuffer()
+  expect(buffer.apply(textPage(0, '中🧪')).missing).toBe(false)
+  expect(buffer.windowed).toBe(false)
+  expect(buffer.cursor?.sequence).toBe(7)
+  expect(buffer.apply(textPage(3, '🧪文')).missing).toBe(false)
+  expect(buffer.text()).toBe('中🧪文')
+  expect(buffer.cursor?.sequence).toBe(10)
+  expect(buffer.apply(textPage(0, '中🧪文!')).missing).toBe(false)
+  expect(buffer.text()).toBe('中🧪文!')
+})
+
+test('delayed text metadata cannot rewind the committed head or completion', () => {
+  const buffer = new ContentBuffer()
+  buffer.apply(textPage(0, 'abcdef', { committed: 6, state: 'complete' }))
+  buffer.apply(textPage(0, 'abc', { committed: 2 }))
+  expect(buffer.text()).toBe('abcdef')
+  expect(buffer.resource?.committed_cursor.sequence).toBe(6)
+  expect(buffer.resource?.state).toBe('complete')
+})
+
+test('reconnect replaces an uncommitted suffix and rejects pages from the retired epoch', () => {
+  const buffer = new ContentBuffer()
+  buffer.apply(textPage(0, 'durable+lost', { committed: 7 }))
+  expect(buffer.apply(textPage(0, 'durable', { epoch: 'recovered' })).reset).toBe(true)
+  buffer.apply(textPage(7, '+lost'))
+  expect(buffer.text()).toBe('durable')
+  expect(buffer.cursor?.epoch).toBe('recovered')
+})
+
+test('capture loss remains visible when a dropped packet contains zero bytes', () => {
+  const buffer = new ContentBuffer()
+  const value = textPage(0, '')
+  value.resource.dropped_packets = 1
+  buffer.apply(value)
+  expect(buffer.gap).toBe(true)
+})
+
+test('mixed events keep text and checkpoint together and advance document bases across logs', () => {
+  const buffer = new ContentBuffer()
+  const value = page(1, ['', '', ''])
+  value.resource.kind = 'document'
+  value.chunks[0]!.payload = { type: 'document_event', input: { type: 'text', text: 'prefix' }, checkpoint: { blocks: [{ type: 'text', id: 'body', text: 'first' }] } }
+  value.chunks[1]!.payload = { type: 'document_event', input: { type: 'log', stream: 'stderr', text: 'warning' }, checkpoint: null }
+  value.chunks[2]!.payload = { type: 'document_event', input: { type: 'structured', event: { type: 'append_text', block_id: 'body', text: ' tail' } }, checkpoint: null }
+  expect(buffer.apply(value).missing).toBe(false)
+  expect(buffer.text()).toBe('prefixwarning')
+  expect(contentDocumentText(buffer.document!)).toBe('first tail')
 })

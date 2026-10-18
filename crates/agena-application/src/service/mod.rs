@@ -31,10 +31,9 @@ use crate::{
         SearchPaginationQuery, SessionAutomationResource, SessionCreateRequest,
         SessionExecutionContextResource, SessionExecutionResource, SessionResource,
         SessionRunOptionsRequest, SessionState, SessionUpdateRequest, SessionUsageResource,
-        SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode,
-        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceFileUploadRequest,
-        WorkspaceFileUploadResource, WorkspaceListQuery, WorkspacePathRequest,
-        WorkspaceResolveRequest, WorkspaceResource,
+        WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+        WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,
+        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
@@ -107,30 +106,17 @@ pub struct ApplicationService {
     memory_repository: Arc<dyn agena_storage::MemoryRepository>,
     workspace_repository: Arc<dyn WorkspaceRepository>,
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
-    /// Sealed session store facade (14.1) — the only path application session
-    /// reads/writes take. removed session repos and the runtime event publisher are
-    /// gone; session data lives in parts, surfaced through this facade.
-    session_store: Arc<dyn agena_storage::store::SessionStore>,
+    session_kernel: agena_storage::kernel::SessionKernel,
 }
 
 impl ApplicationService {
-    /// The sealed session store facade backing this service. The notification
-    /// aggregator subscribes through it for `SessionChange` live updates (14.3).
-    pub(crate) fn session_store_facade(
-        &self,
-    ) -> Option<Arc<dyn agena_storage::store::SessionStore>> {
-        Some(Arc::clone(&self.session_store))
+    pub fn session_kernel(&self) -> &agena_storage::kernel::SessionKernel {
+        &self.session_kernel
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct WorkspaceCursor {
-    updated_at_ms: i64,
-    id: i64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct SessionCursor {
     updated_at_ms: i64,
     id: i64,
 }
@@ -147,14 +133,14 @@ impl ApplicationService {
         memory_repository: Arc<dyn agena_storage::MemoryRepository>,
         workspace_repository: Arc<dyn WorkspaceRepository>,
         permission_rule_repository: Arc<dyn PermissionRuleRepository>,
-        session_store: Arc<dyn agena_storage::store::SessionStore>,
+        session_kernel: agena_storage::kernel::SessionKernel,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
             memory_repository,
             workspace_repository,
             permission_rule_repository,
-            session_store,
+            session_kernel,
         }
     }
 
@@ -182,25 +168,13 @@ impl ApplicationService {
     async fn ensure_session_model(
         &self,
         session_id: i64,
-    ) -> ApplicationResult<agena_storage::store::SessionSummary> {
-        let summary = self
-            .session_store
-            .get_session_summary(session_id)
+    ) -> ApplicationResult<agena_storage::kernel::ReadView<agena_storage::kernel::SessionSummaryView>>
+    {
+        self.session_kernel
+            .reader
+            .summary(crate::kernel_session_id(session_id)?)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .ok_or_else(|| {
-                ApplicationError::not_found_with_diagnostic(
-                    "The session was not found.",
-                    format!("session not found: {session_id}"),
-                )
-            })?;
-        if summary.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
-            return Err(ApplicationError::not_found_with_diagnostic(
-                "The session was not found.",
-                format!("session not found: {session_id}"),
-            ));
-        }
-        Ok(summary)
+            .map_err(crate::kernel_error)
     }
 
     async fn workspace_id_by_path(&self, path: &str) -> ApplicationResult<Option<i64>> {
@@ -214,22 +188,16 @@ impl ApplicationService {
         &self,
         workspace_ids: &[i64],
     ) -> ApplicationResult<HashMap<i64, u64>> {
-        self.session_store
-            .session_counts_by_workspace(workspace_ids)
+        let stats = self
+            .session_kernel
+            .reader
+            .workspace_statistics(workspace_ids)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .into_iter()
-            .map(|(workspace_id, count)| {
-                Ok((
-                    workspace_id,
-                    u64::try_from(count).map_err(|_| {
-                        ApplicationError::internal(format!(
-                            "invalid negative session count for workspace {workspace_id}"
-                        ))
-                    })?,
-                ))
-            })
-            .collect()
+            .map_err(crate::kernel_error)?;
+        Ok(stats
+            .iter()
+            .map(|(id, statistics)| (*id, statistics.total))
+            .collect())
     }
 }
 

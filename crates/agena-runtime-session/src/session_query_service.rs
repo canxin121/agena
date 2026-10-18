@@ -98,18 +98,18 @@ pub trait SessionQueryService: Send + Sync {
         session_id: i64,
     ) -> Result<SessionPresentation, SessionQueryError>;
 
-    async fn read_part_window(
-        &self,
-        session_id: i64,
-        before: Option<agena_storage::store::PartCursor>,
-        limit: i64,
-    ) -> Result<agena_storage::store::SessionPartPage, SessionQueryError>;
     async fn list_session_tree(
         &self,
         root_id: i64,
     ) -> Result<Vec<SessionSummary>, SessionQueryError>;
 
-    async fn export_session_jsonl(&self, session_id: i64) -> Result<String, SessionQueryError>;
+    /// Stream a complete session archive with bounded memory. The sink owns
+    /// any partial output if export fails or the caller cancels it.
+    async fn export_session_to(
+        &self,
+        session_id: i64,
+        sink: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+    ) -> Result<(), SessionQueryError>;
 
     async fn latest_event_seq(&self, session_id: i64) -> Result<Option<i64>, SessionQueryError>;
 
@@ -124,12 +124,14 @@ pub trait SessionQueryService: Send + Sync {
 
     async fn pending_interactive_requests(
         &self,
-        session_id: i64,
+        snapshot: &agena_storage::kernel::SessionControlSnapshot,
     ) -> Result<Vec<PendingInteractiveRequestContext>, SessionQueryError>;
 
-    async fn execution_context(
+    /// Apply the current runtime defaults to one immutable kernel control
+    /// snapshot. This projection must not reload persisted session facts.
+    fn execution_context(
         &self,
-        session_id: i64,
+        snapshot: &agena_storage::kernel::SessionControlSnapshot,
     ) -> Result<SessionExecutionContext, SessionQueryError>;
 
     /// Whether `descendant_id` is a strict descendant of `ancestor_id` in the
@@ -173,14 +175,6 @@ mod tests {
             })
         }
 
-        async fn read_part_window(
-            &self,
-            _session_id: i64,
-            _before: Option<agena_storage::store::PartCursor>,
-            _limit: i64,
-        ) -> Result<agena_storage::store::SessionPartPage, SessionQueryError> {
-            Err(SessionQueryError::internal("fixture has no part window"))
-        }
         async fn list_session_tree(
             &self,
             _root_id: i64,
@@ -188,8 +182,15 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn export_session_jsonl(&self, session_id: i64) -> Result<String, SessionQueryError> {
-            Ok(format!("{{\"session_id\":{session_id}}}"))
+        async fn export_session_to(
+            &self,
+            session_id: i64,
+            sink: &mut (dyn tokio::io::AsyncWrite + Unpin + Send),
+        ) -> Result<(), SessionQueryError> {
+            use tokio::io::AsyncWriteExt;
+            sink.write_all(format!("{{\"session_id\":{session_id}}}").as_bytes())
+                .await
+                .map_err(|error| SessionQueryError::internal_error(&error))
         }
 
         async fn latest_event_seq(
@@ -254,15 +255,15 @@ mod tests {
 
         async fn pending_interactive_requests(
             &self,
-            _session_id: i64,
+            _snapshot: &agena_storage::kernel::SessionControlSnapshot,
         ) -> Result<Vec<agena_domain::PendingInteractiveRequestContext>, SessionQueryError>
         {
             Ok(Vec::new())
         }
 
-        async fn execution_context(
+        fn execution_context(
             &self,
-            _session_id: i64,
+            _snapshot: &agena_storage::kernel::SessionControlSnapshot,
         ) -> Result<super::SessionExecutionContext, SessionQueryError> {
             Ok(super::SessionExecutionContext {
                 conversation: None,
@@ -300,9 +301,11 @@ mod tests {
     async fn trait_object_only_exposes_stable_query_results() {
         let service: &dyn SessionQueryService = &FakeQueries;
         assert!(service.list_session_tree(7).await.expect("tree").is_empty());
-        assert_eq!(
-            service.export_session_jsonl(7).await.expect("export"),
-            "{\"session_id\":7}"
-        );
+        let mut output = Vec::new();
+        service
+            .export_session_to(7, &mut output)
+            .await
+            .expect("export");
+        assert_eq!(output, b"{\"session_id\":7}");
     }
 }

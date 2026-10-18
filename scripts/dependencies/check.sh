@@ -35,6 +35,27 @@ check_bun_version() {
   [[ "$actual" == "$expected" ]]
 }
 
+audit_dependencies() {
+  local audit_args=(--ignore RUSTSEC-2023-0071)
+  # CI and isolated verification may own their advisory checkout separately
+  # from the developer's Cargo home. This changes only the database location;
+  # the audit and its documented advisory exception remain identical.
+  if [[ -n "${AGENA_DEPENDENCY_ADVISORY_DB:-}" ]]; then
+    audit_args+=(--db "$AGENA_DEPENDENCY_ADVISORY_DB")
+  fi
+  cargo audit "${audit_args[@]}"
+}
+
+deny_dependencies() {
+  local deny_args=()
+  # An isolated checkout may use the identical policy with an owned advisory
+  # cache path, without replacing the developer's Cargo-home configuration.
+  if [[ -n "${AGENA_DEPENDENCY_DENY_CONFIG:-}" ]]; then
+    deny_args+=(--config "$AGENA_DEPENDENCY_DENY_CONFIG")
+  fi
+  cargo deny "${deny_args[@]}" check "$@"
+}
+
 check_dependencies() {
   require_command cargo-deny
   require_command cargo-audit
@@ -44,8 +65,8 @@ check_dependencies() {
 
   check_bun_version
   cargo metadata --locked --format-version 1 > /dev/null
-  cargo deny check bans licenses sources advisories
-  cargo audit --ignore RUSTSEC-2023-0071
+  deny_dependencies bans licenses sources advisories
+  audit_dependencies
   cargo machete
 
   (
@@ -71,9 +92,9 @@ report_dependencies() {
       --exclude ratex-render \
       --exclude ratex-types
   run_report "Cargo lockfile freshness" cargo update --workspace --dry-run
-  run_report "RustSec and cargo-deny" cargo deny check advisories
+  run_report "RustSec and cargo-deny" deny_dependencies advisories
   # Keep the same documented exceptions as deny.toml.
-  run_report "Complete Cargo.lock audit" cargo audit --ignore RUSTSEC-2023-0071
+  run_report "Complete Cargo.lock audit" audit_dependencies
   run_report "Unused direct Cargo dependencies" cargo machete
   run_report "Web package upgrades" bash -c \
     'cd packages/agena-web && bun outdated'

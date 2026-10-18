@@ -93,7 +93,7 @@ pub(super) fn responses_provider_native_tool_event(
                 invocation,
                 title,
                 summary,
-                failure: hosted_tool_failure(item),
+                failure: hosted_tool_failure(item).map(Box::new),
                 output_text,
                 blocks,
                 details,

@@ -21,8 +21,8 @@ const resource = {
   state: 'active',
   cursor: { epoch, sequence: 0 },
   committed_cursor: { epoch, sequence: 0 },
-  total_bytes: 0,
-  dropped_bytes: 0,
+  total_bytes: null,
+  dropped_packets: 0, committed_dropped_bytes: 0, committed_dropped_packets: 0, dropped_bytes: 0,
   retained_ranges: [],
 }
 const chunks = []
@@ -132,7 +132,7 @@ window.fetch = async (input, options) => {
     })
   }
   if (url.pathname.endsWith('/content/loading-text/stream')) {
-    const cursor = { epoch, sequence: 1 }
+    const cursor = { epoch, sequence: encoder.encode('Loaded answer content').length }
     return contentStreamResponse(
       {
         resource: {
@@ -142,6 +142,7 @@ window.fetch = async (input, options) => {
           state: 'complete',
           cursor,
           committed_cursor: cursor,
+          total_bytes: cursor.sequence,
         },
         chunks: [{ cursor, captured_at_ms: Date.now(), payload: { type: 'text', text: 'Loaded answer content' } }],
         next_cursor: cursor,
@@ -197,7 +198,6 @@ fixture.emit = (text) => {
   }
   chunks.push(chunk)
   resource.cursor = resource.committed_cursor = chunk.cursor
-  resource.total_bytes += encoder.encode(text).length
   resource.retained_ranges = [{ first: 1, last: chunk.cursor.sequence }]
   const page = { resource, chunks: [chunk], next_cursor: chunk.cursor, has_more: false, gap: false }
   for (const stream of streams) stream.enqueue(encoder.encode(`event: content\ndata: ${JSON.stringify(page)}\n\n`))

@@ -111,9 +111,14 @@ pub trait SessionExecutionCommandService: Send + Sync {
         request: SessionForkRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
-    async fn import_session_jsonl(
+    /// Import a complete archive from a caller-owned file without materializing
+    /// it in memory. The file must remain available until this call completes
+    /// or is cancelled. Reusing the request ID with the same archive returns
+    /// the original session. Imported work is never scheduled.
+    async fn import_session_file(
         &self,
-        jsonl: &str,
+        request_id: agena_domain::CommandId,
+        path: &std::path::Path,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
     async fn reply_permission(
@@ -216,9 +221,10 @@ mod tests {
             ))
         }
 
-        async fn import_session_jsonl(
+        async fn import_session_file(
             &self,
-            _jsonl: &str,
+            _request_id: agena_domain::CommandId,
+            _path: &std::path::Path,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
             Ok(SessionExecutionCommandOutcome::completed(1))
         }
@@ -277,7 +283,13 @@ mod tests {
     #[tokio::test]
     async fn trait_object_returns_only_the_stable_session_id_outcome() {
         let service: &dyn SessionExecutionCommandService = &FakeService;
-        let outcome = service.import_session_jsonl("{}").await.expect("import");
+        let outcome = service
+            .import_session_file(
+                agena_domain::CommandId::new(),
+                std::path::Path::new("session.jsonl"),
+            )
+            .await
+            .expect("import");
         assert_eq!(outcome.session_id, 1);
     }
 }

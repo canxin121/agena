@@ -33,7 +33,7 @@ const { transcriptNativeControl } = await vite.ssrLoadModule('/src/pages/chat/tr
 const requestId = 'host-input:7:2:0'
 const question = { header: 'Plan', question: 'Approve?', options: [{ label: 'Approve' }] }
 const request = { request_id: requestId, session_id: 7, kind: 'review', questions: [question] }
-const marker = { part_id: 1, kind: 'run', role: 'assistant', state: 'in_progress', content: {}, revision: 1 }
+const marker = { part_id: 1, message_boundary: true, kind: 'run', role: 'assistant', state: 'in_progress', content: {}, revision: 1 }
 const tool = (resolved = false) => ({
   part_id: 2,
   run_id: 1,

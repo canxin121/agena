@@ -582,38 +582,9 @@ mod tests {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            format!(
-                "CREATE TABLE {TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
-            ),
-        ))
-        .await
-        .expect("create permission rule fixture");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)"
-                .to_owned(),
-        ))
-        .await
-        .expect("create id sequence fixture");
-        // Mirror the three partial unique indexes from the real schema so the
-        // ON CONFLICT upsert clauses resolve to a matching constraint.
-        for sql in [
-            format!(
-                "CREATE UNIQUE INDEX uq_rule_global ON {TABLE}(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL"
-            ),
-            format!(
-                "CREATE UNIQUE INDEX uq_rule_workspace ON {TABLE}(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL"
-            ),
-            format!(
-                "CREATE UNIQUE INDEX uq_rule_session ON {TABLE}(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL"
-            ),
-        ] {
-            db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
-                .await
-                .expect("create permission rule fixture index");
-        }
+        crate::initialize_schema(&db)
+            .await
+            .expect("permission fixture schema");
         SeaPermissionRuleRepository::new(Arc::new(db))
     }
 

@@ -27,6 +27,11 @@ license = "MIT"
 repository = "https://github.com/wezterm/wezterm"
 resolver = "2"
 
+[package.metadata.cargo-machete]
+# serde_derive expands the serde_support derives in src/lib.rs and
+# src/cmdbuilder.rs into ::serde trait paths; the runtime dependency is required.
+ignored = ["serde"]
+
 [lib]
 name = "portable_pty"
 path = "src/lib.rs"

@@ -17,6 +17,7 @@ pub(crate) mod lsp;
 pub(crate) mod monitor_tool;
 pub(crate) mod orchestrator;
 mod output_helpers;
+mod output_streams;
 pub mod payload;
 mod post_edit;
 pub(crate) mod powershell;
@@ -67,6 +68,7 @@ pub use self::tool_registry::*;
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};
 pub use builtin_tools::BuiltinToolSet;
 pub use output_helpers::{bounded_model_output_preview, line_count, model_output_exceeds_boundary};
+pub use output_streams::ToolOutputStreams;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use tool_registry::{

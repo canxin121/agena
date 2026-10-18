@@ -23,15 +23,15 @@ use agena_domain::TimeRange;
 )]
 #[serde(deny_unknown_fields)]
 pub struct ContentReadToolInput {
-    /// Canonical opaque resource id from a Part or tool result.
+    /// Canonical source identity from transcript or tool output.
     pub resource_id: String,
     /// Epoch returned with next_position. Omit only for the first read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epoch: Option<String>,
-    /// Last fully consumed record sequence from next_position.after.
+    /// Text byte cursor, or last fully consumed event sequence, from next_position.after.
     #[serde(default)]
     pub after: u64,
-    /// UTF-8 bytes consumed in the next record from next_position.offset.
+    /// UTF-8 bytes consumed within the successor event; zero for text sources.
     #[serde(default)]
     pub offset: usize,
     /// Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional.

@@ -72,9 +72,6 @@ version = "1"
 version = "0.4.31"
 features = ["serde"]
 
-[dependencies.http]
-version = "1"
-
 [dependencies.http-body-util]
 version = "0.1"
 
@@ -135,9 +132,6 @@ features = [
 
 [dependencies.tracing]
 version = "0.1.29"
-
-[dependencies.tracing-futures]
-version = "0.2.5"
 
 [dependencies.url]
 version = "2"

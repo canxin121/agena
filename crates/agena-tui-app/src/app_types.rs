@@ -836,14 +836,29 @@ pub(super) enum AppMessage {
 pub(super) type UiCompletion = Box<dyn FnOnce(&mut App) + Send + 'static>;
 pub(super) type UiCommand = Pin<Box<dyn Future<Output = UiCompletion> + Send + 'static>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) enum UiAction {
-    CopyText { text: String, success: String },
+    CopyText {
+        text: String,
+        success: String,
+    },
     PasteClipboard,
     EditComposerExternally,
-    DownloadTerminalFile { path: PathBuf, remove_after: bool },
-    ExportTranscript { path: Option<PathBuf> },
-    OpenPath { path: PathBuf },
+    DownloadTerminalFile {
+        path: PathBuf,
+        remove_after: bool,
+    },
+    ExportTranscript {
+        path: Option<PathBuf>,
+    },
+    PreparedTranscript {
+        session_id: i64,
+        file: tempfile::NamedTempFile,
+        destination: Option<PathBuf>,
+    },
+    OpenPath {
+        path: PathBuf,
+    },
     PageTranscript,
 }
 

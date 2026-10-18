@@ -18,10 +18,24 @@ pub(crate) async fn execute_async(
             timeout_ms,
             description,
         } => {
+            let owner = super::terminal_tool::owner_async(executor, context.session_id).await?;
+            let registry = executor
+                .monitor_registry()
+                .cloned()
+                .ok_or_else(|| ToolError::invalid_input("monitor registry unavailable"))?;
+            let permit = super::shell_tool::launch_worker_permit(executor).await?;
+            let output = context
+                .begin_activity_output(
+                    agena_storage::kernel::BackgroundActivityKind::Monitor,
+                    description.clone(),
+                    agena_domain::ContentKind::Log,
+                )
+                .await?;
+            let launch_output = output.clone();
             let params = StartParams {
-                output: context.output.clone(),
+                output,
                 argv: None,
-                owner: Some(super::terminal_tool::owner_async(executor, context.session_id).await?),
+                owner: Some(owner),
                 process_id: context
                     .session_id
                     .zip(context.call_id)
@@ -45,17 +59,18 @@ pub(crate) async fn execute_async(
                 capture_stderr: true,
                 env: Default::default(),
             };
-            let registry = executor
-                .monitor_registry()
-                .cloned()
-                .ok_or_else(|| ToolError::invalid_input("monitor registry unavailable"))?;
-            let permit = super::shell_tool::launch_worker_permit(executor).await?;
             let started = super::terminal_tool::blocking(executor, move |_cancel| {
                 let _permit = permit;
                 registry.start(params).map_err(into_tool_error)
             })
-            .await?;
-            Ok(render_start(started))
+            .await;
+            if let (Err(error), Some(output)) = (&started, launch_output) {
+                let diagnostic = error.to_string();
+                tokio::spawn(async move {
+                    output.fail_activity(diagnostic).await;
+                });
+            }
+            Ok(render_start(started?))
         }
         MonitorToolInput::Stop { monitor_id } => {
             super::shell_tool::execute_async(

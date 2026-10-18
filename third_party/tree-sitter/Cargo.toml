@@ -69,7 +69,6 @@ default = ["std"]
 std = [
     "regex/std",
     "regex/perf",
-    "regex-syntax/unicode",
 ]
 wasm = [
     "std",
@@ -83,10 +82,6 @@ path = "binding_rust/lib.rs"
 [dependencies.regex]
 version = "1.11.3"
 features = ["unicode"]
-default-features = false
-
-[dependencies.regex-syntax]
-version = "0.8.6"
 default-features = false
 
 [dependencies.streaming-iterator]

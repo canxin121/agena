@@ -3,7 +3,7 @@
 mod message_render;
 mod operation_render;
 
-pub(crate) fn render_content_document(
+pub fn render_content_document(
     document: &agena_domain::ContentDocument,
     out: &mut Vec<crate::RenderedLine>,
     width: u16,

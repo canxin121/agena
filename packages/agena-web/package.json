@@ -32,15 +32,15 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.32",
-    "markdown-it": "^14.2.0",
+    "katex": "0.18.2",
+    "markdown-it": "14.3.1",
     "markdown-it-texmath": "^1.0.0",
     "mermaid": "^11.16.1",
     "monaco-editor": "^0.55.1",
     "pinia": "^3.0.0",
     "radix-vue": "^1.9.17",
     "tailwind-merge": "^3.3.1",
-    "vue": "^3.5.24",
+    "vue": "3.5.42",
     "vue-i18n": "^11",
     "vue-router": "^5.0.0",
     "vue-sonner": "^2.0.9"
@@ -63,6 +63,9 @@
     "vue-tsc": "^3.1.4"
   },
   "overrides": {
-    "dompurify": "3.4.13"
+    "dompurify": "3.4.16",
+    "katex": "0.18.2",
+    "postcss-selector-parser": "7.1.6",
+    "source-map-js": "1.2.2"
   }
 }

@@ -269,9 +269,10 @@ impl WorkspacePreviewRuntime {
         let updated = match self.registry.mark_running_by_id(trimmed, pid).await {
             Ok(updated) => updated,
             Err(error) => {
-                running_map.remove(trimmed);
                 if let Err(cleanup) = kill_pid(pid, true).await {
                     tracing::error!(session_id = trimmed, pid, %cleanup, "failed to clean up preview after persistence error");
+                } else {
+                    running_map.remove(trimmed);
                 }
                 return Err(error);
             }
@@ -292,12 +293,13 @@ impl WorkspacePreviewRuntime {
             };
 
             if should_apply {
-                running_map.remove(&session_id);
                 // A launcher can exit while its server child is still alive.
                 #[cfg(unix)]
-                if let Err(error) = signal_unix_process(pid, true, libc::SIGKILL, "SIGKILL") {
+                if let Err(error) = force_kill_unix_processes(pid, true).await {
                     tracing::error!(session_id, pid, %error, "failed to stop exited preview's children");
+                    return;
                 }
+                running_map.remove(&session_id);
             }
 
             let exit_detail = match status {
@@ -360,11 +362,14 @@ async fn kill_pid(pid: u32, owned_group: bool) -> ApiResult<()> {
 
     #[cfg(unix)]
     {
-        signal_unix_process(pid, owned_group, libc::SIGTERM, "SIGTERM")?;
+        if let Err(error) = signal_unix_process(pid, owned_group, libc::SIGTERM, "SIGTERM") {
+            if !unix_target_has_live_processes(pid, owned_group).await? {
+                return Ok(());
+            }
+            return Err(error);
+        }
         tokio::time::sleep(Duration::from_millis(650)).await;
-        // ESRCH after the grace period means SIGTERM already did its job.
-        signal_unix_process(pid, owned_group, libc::SIGKILL, "SIGKILL")?;
-        return Ok(());
+        return force_kill_unix_processes(pid, owned_group).await;
     }
 
     #[cfg(windows)]
@@ -398,6 +403,202 @@ async fn kill_pid(pid: u32, owned_group: bool) -> ApiResult<()> {
 }
 
 #[cfg(unix)]
+async fn force_kill_unix_processes(pid: u32, owned_group: bool) -> ApiResult<()> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        if let Err(error) = signal_unix_process(pid, owned_group, libc::SIGKILL, "SIGKILL") {
+            // Darwin can report EPERM for an all-zombie group. Accept an already
+            // dead target only after checking its members, not just the errno.
+            if !unix_target_has_live_processes(pid, owned_group).await? {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        loop {
+            if !unix_target_has_live_processes(pid, owned_group).await? {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        AppError::internal(format!(
+            "preview process {pid} was sent SIGKILL but termination was not confirmed within two seconds"
+        ))
+    })?
+}
+
+#[cfg(unix)]
+fn checked_unix_pid(pid: u32) -> ApiResult<libc::pid_t> {
+    libc::pid_t::try_from(pid)
+        .ok()
+        .filter(|pid| *pid > 1)
+        .ok_or_else(|| AppError::internal(format!("invalid preview process id: {pid}")))
+}
+
+#[cfg(unix)]
+async fn unix_target_has_live_processes(pid: u32, owned_group: bool) -> ApiResult<bool> {
+    let pid = checked_unix_pid(pid)?;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        PREVIEW_FILE_WORKERS.run(move || inspect_unix_processes(pid, owned_group)),
+    )
+    .await
+    .map_err(|_| AppError::internal("preview process inspection exceeded two seconds"))?
+    .map_err(|error| AppError::internal_error(&error))?
+    .map_err(|error| {
+        AppError::internal_error_with_context("inspect preview process termination", &error)
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn inspect_unix_processes(pid: libc::pid_t, owned_group: bool) -> std::io::Result<bool> {
+    let candidates = if owned_group {
+        preview_process_ids()?
+    } else {
+        vec![pid]
+    };
+    for candidate in candidates {
+        // SAFETY: getpgid only queries metadata for a positive process id.
+        let group = unsafe { libc::getpgid(candidate) };
+        if group == -1 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                continue;
+            }
+            return Err(error);
+        }
+        if owned_group && group != pid {
+            continue;
+        }
+        if preview_process_is_live(candidate, owned_group.then_some(pid))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn preview_process_ids() -> std::io::Result<Vec<libc::pid_t>> {
+    let mut ids = vec![0; 4096];
+    loop {
+        // SAFETY: ids has exactly the initialized capacity advertised to libproc.
+        let count = unsafe {
+            libc::proc_listallpids(
+                ids.as_mut_ptr().cast(),
+                std::mem::size_of_val(ids.as_slice()) as libc::c_int,
+            )
+        };
+        if count <= 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if (count as usize) < ids.len() {
+            ids.truncate(count as usize);
+            ids.retain(|pid| *pid > 1);
+            return Ok(ids);
+        }
+        if ids.len() >= 262_144 {
+            return Err(std::io::Error::other(
+                "process table exceeds preview cleanup bound",
+            ));
+        }
+        ids.resize(ids.len() * 2, 0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn preview_process_is_live(pid: libc::pid_t, group: Option<libc::pid_t>) -> std::io::Result<bool> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    // SAFETY: info provides the full-size destination advertised to libproc.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size as libc::c_int,
+        )
+    };
+    if read != size as libc::c_int {
+        let error = std::io::Error::last_os_error();
+        // A member may have exited or left the group during metadata lookup.
+        // SAFETY: getpgid only queries metadata for a positive process id.
+        let current_group = unsafe { libc::getpgid(pid) };
+        if current_group == -1 {
+            let lookup_error = std::io::Error::last_os_error();
+            if lookup_error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(false);
+            }
+            return Err(lookup_error);
+        }
+        if group.is_some_and(|group| current_group != group) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    // SAFETY: the full-size successful libproc read initialized info.
+    let info = unsafe { info.assume_init() };
+    Ok(group.is_none_or(|group| info.pbi_pgid == group as u32) && info.pbi_status != libc::SZOMB)
+}
+
+#[cfg(target_os = "linux")]
+fn preview_process_ids() -> std::io::Result<Vec<libc::pid_t>> {
+    let mut ids = Vec::new();
+    for entry in std::fs::read_dir("/proc")? {
+        let entry = entry?;
+        if let Some(name) = entry.file_name().to_str()
+            && let Ok(pid) = name.parse::<libc::pid_t>()
+            && pid > 1
+        {
+            ids.push(pid);
+            if ids.len() > 262_144 {
+                return Err(std::io::Error::other(
+                    "process table exceeds preview cleanup bound",
+                ));
+            }
+        }
+    }
+    Ok(ids)
+}
+
+#[cfg(target_os = "linux")]
+fn preview_process_is_live(pid: libc::pid_t, group: Option<libc::pid_t>) -> std::io::Result<bool> {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    // The comm field may contain spaces and parentheses. Its last ')' precedes
+    // state, ppid and pgrp, so splitting the complete line on spaces is invalid.
+    let (_, fields) = stat
+        .rsplit_once(')')
+        .ok_or_else(|| std::io::Error::other("invalid preview process stat"))?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next();
+    let _parent = fields.next();
+    let actual_group = fields
+        .next()
+        .and_then(|group| group.parse::<libc::pid_t>().ok())
+        .ok_or_else(|| std::io::Error::other("invalid preview process group stat"))?;
+    Ok(group.is_none_or(|group| actual_group == group) && !matches!(state, Some("Z" | "X" | "x")))
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn inspect_unix_processes(pid: libc::pid_t, owned_group: bool) -> std::io::Result<bool> {
+    let target = if owned_group { -pid } else { pid };
+    // SAFETY: signal 0 only queries existence for a validated process/group id.
+    if unsafe { libc::kill(target, 0) } == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(false);
+    }
+    Err(error)
+}
+
+#[cfg(unix)]
 fn signal_unix_process(
     pid: u32,
     owned_group: bool,
@@ -406,10 +607,11 @@ fn signal_unix_process(
 ) -> ApiResult<()> {
     // SAFETY: libc::kill does not dereference pointers; pid and signal are
     // validated scalar values supplied by this process registry.
+    let checked_pid = checked_unix_pid(pid)?;
     let target = if owned_group {
-        -(pid as i32)
+        -checked_pid
     } else {
-        pid as i32
+        checked_pid
     };
     if unsafe { libc::kill(target, signal) } == 0 {
         return Ok(());

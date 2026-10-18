@@ -1,8 +1,4 @@
 use super::*;
-use agena_domain::{ContentKind, ContentTextPage, SessionRelationKind};
-use agena_storage::store::{
-    NewPart, NewSession, PartDelta, PartRole, PartVisibility, SessionStore,
-};
 
 struct ContentFixture;
 
@@ -17,28 +13,11 @@ impl agena_plugin_host::sdk::Plugin for ContentFixture {
     }
 }
 
-async fn session(store: &dyn SessionStore, title: &str) -> i64 {
-    store
-        .create_session(NewSession {
-            workspace_id: 1,
-            parent_id: None,
-            relation_kind: SessionRelationKind::Root,
-            cutoff_part_id: None,
-            title: title.into(),
-            task_id: None,
-            config_json: None,
-            provider_anchors_json: None,
-        })
-        .await
-        .unwrap()
-        .id
-}
-
 async fn read(
     executor: &ToolExecutor,
     session_id: i64,
     input: serde_json::Value,
-) -> Result<ContentTextPage, ToolError> {
+) -> Result<serde_json::Value, ToolError> {
     let invocation =
         ToolInvocation::new("content.read", StructuredObject::try_from(input).unwrap());
     let prepared = executor
@@ -47,12 +26,13 @@ async fn read(
     let result = executor
         .execute_invocation_detailed(&prepared.invocation, session_id, 100)
         .await?;
-    Ok(serde_json::from_value(result.output.to_json_payload().unwrap()).unwrap())
+    Ok(result.output.to_json_payload().unwrap())
 }
 
 #[tokio::test]
-async fn content_read_executes_through_the_registry_and_enforces_membership_and_typed_references() {
-    let root = std::env::current_dir().unwrap();
+async fn content_read_executes_through_the_registry_and_enforces_membership_and_epochs() {
+    let fixture = crate::kernel_fixture::fixture().await;
+    let root = fixture._root.path().to_path_buf();
     let mut config = PluginsConfig::default();
     config
         .list
@@ -72,7 +52,6 @@ async fn content_read_executes_through_the_registry_and_enforces_membership_and_
     })
     .await
     .unwrap();
-    let store = agena_storage::store::memory_session_store(16);
     let executor = ToolExecutor::new(
         root,
         ExecutionPrincipal::new(
@@ -83,93 +62,48 @@ async fn content_read_executes_through_the_registry_and_enforces_membership_and_
         None,
         None,
     )
-    .with_content_store(store.clone());
-    let owner = session(store.as_ref(), "source").await;
-    let unrelated = session(store.as_ref(), "unrelated").await;
-    let parts = store
-        .submit_user_run(
-            owner,
-            vec![
-                NewPart::pending("text", PartRole::Assistant, serde_json::json!({"text":""})),
-                NewPart {
-                    visibility: PartVisibility::User,
-                    ..NewPart::pending("text", PartRole::Assistant, serde_json::json!({"text":""}))
-                },
-                NewPart::pending("text", PartRole::Assistant, serde_json::json!({"text":""})),
-            ],
-            None,
+    .with_kernel_reader(fixture.runtime.ports.reader.clone());
+    let owner = fixture.session;
+    let unrelated = fixture
+        .runtime
+        .ports
+        .sessions
+        .create(
+            agena_storage::kernel::RequestId::new(),
+            1,
+            "unrelated".into(),
         )
         .await
         .unwrap()
-        .parts;
+        .value
+        .id;
+    let writer = fixture
+        .tool
+        .begin_text(agena_storage::kernel::RequestId::new())
+        .await
+        .unwrap()
+        .value;
     let body = format!("  {}\n\n", "中文🙂 ".repeat(1000));
-    let mut resources = vec![];
-    for (index, part) in parts.iter().skip(1).enumerate() {
-        let writer = store
-            .contents()
-            .open(owner, part.part_id, ContentKind::Text)
-            .await
-            .unwrap();
-        writer.append_text(&body).await.unwrap();
-        let resource = writer.finish().await.unwrap();
-        let mut reference = resource.reference();
-        if index == 2 {
-            reference.kind = ContentKind::Log;
-        }
-        store
-            .update_part(
-                owner,
-                part.part_id,
-                PartDelta {
-                    content: Some(serde_json::json!({"text":"", "resources":[reference]})),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        resources.push(resource);
-    }
-    let mut input = serde_json::json!({"resource_id": resources[0].resource_id, "max_bytes": 257});
+    writer.append(&body).await.unwrap();
+    crate::kernel_fixture::complete(&fixture.tool).await;
+    let id = writer.id();
+    let mut input = serde_json::json!({"resource_id": id, "max_bytes": 257});
     let mut restored = String::new();
     loop {
-        let page = read(&executor, owner, input).await.unwrap();
-        assert!(!page.gap);
-        assert!(page.slices.iter().all(|slice| slice.captured_at_ms > 0));
-        for slice in page.slices {
-            restored.push_str(&slice.text);
-        }
-        if !page.has_more {
+        let page = read(&executor, owner.get(), input).await.unwrap();
+        restored.push_str(page["text"].as_str().unwrap());
+        if page["has_more"] == false {
             break;
         }
-        input = serde_json::json!({"resource_id": resources[0].resource_id, "max_bytes":257,
-            "epoch":page.next_position.after.epoch, "after":page.next_position.after.sequence, "offset":page.next_position.offset});
+        input = serde_json::json!({"resource_id":id,"max_bytes":257,
+            "epoch":page["next_position"]["epoch"],"after":page["next_position"]["after"],"offset":page["next_position"]["offset"]});
     }
     assert_eq!(restored, body);
     assert!(
         read(
             &executor,
-            unrelated,
-            serde_json::json!({"resource_id":resources[0].resource_id})
-        )
-        .await
-        .is_err()
-    );
-    for resource in &resources[1..] {
-        assert!(
-            read(
-                &executor,
-                owner,
-                serde_json::json!({"resource_id":resource.resource_id})
-            )
-            .await
-            .is_err()
-        );
-    }
-    assert!(
-        read(
-            &executor,
-            owner,
-            serde_json::json!({"resource_id":resources[0].resource_id,"offset":1})
+            unrelated.get(),
+            serde_json::json!({"resource_id":id})
         )
         .await
         .is_err()
@@ -177,50 +111,148 @@ async fn content_read_executes_through_the_registry_and_enforces_membership_and_
     assert!(
         read(
             &executor,
-            owner,
-            serde_json::json!({"resource_id":resources[0].resource_id,"max_bytes":4097})
+            owner.get(),
+            serde_json::json!({"resource_id":id,"offset":1})
         )
         .await
         .is_err()
     );
-    let branch = store
-        .fork(owner, parts.last().unwrap().part_id, "fork".into())
+    assert!(
+        read(
+            &executor,
+            owner.get(),
+            serde_json::json!({"resource_id":id,"max_bytes":4097})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read(
+            &executor,
+            owner.get(),
+            serde_json::json!({"resource_id":id,"epoch":agena_domain::ContentEpoch::new()})
+        )
+        .await
+        .is_err()
+    );
+    let entry = fixture
+        .runtime
+        .ports
+        .reader
+        .tool(owner, fixture.tool.id())
+        .await
+        .unwrap()
+        .outputs[0]
+        .entry;
+    let branch = fixture
+        .runtime
+        .ports
+        .sessions
+        .fork(agena_storage::kernel::RequestId::new(), owner, entry)
+        .await
+        .unwrap()
+        .value
+        .id;
+    assert!(
+        read(
+            &executor,
+            branch.get(),
+            serde_json::json!({"resource_id":id})
+        )
+        .await
+        .is_ok()
+    );
+    fixture
+        .runtime
+        .ports
+        .sessions
+        .delete(agena_storage::kernel::RequestId::new(), branch)
         .await
         .unwrap();
     assert!(
         read(
             &executor,
-            branch,
-            serde_json::json!({"resource_id":resources[0].resource_id})
+            branch.get(),
+            serde_json::json!({"resource_id":id})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read(
+            &executor,
+            owner.get(),
+            serde_json::json!({"resource_id":id})
         )
         .await
         .is_ok()
     );
-    store.delete(owner).await.unwrap();
-    // Public session deletion removes descendants, including the fork. A
-    // formerly valid resource must not remain readable through that session.
-    assert!(
-        read(
-            &executor,
-            branch,
-            serde_json::json!({"resource_id":resources[0].resource_id})
-        )
+    fixture.runtime.ports.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn content_read_resumes_large_events_without_losing_channel_or_utf8() {
+    let fixture = crate::kernel_fixture::fixture().await;
+    let writer = fixture
+        .tool
+        .begin_log(agena_storage::kernel::RequestId::new())
         .await
-        .is_err()
-    );
-    assert!(
-        store
-            .load_part_ids(branch, &[parts[1].part_id])
-            .await
-            .is_err()
-    );
-    assert!(
-        read(
-            &executor,
-            branch,
-            serde_json::json!({"resource_id":resources[0].resource_id})
-        )
+        .unwrap()
+        .value;
+    let body = "中文🙂 ".repeat(1000);
+    writer
+        .append(agena_domain::CommandOutputStream::Stderr, &body)
         .await
-        .is_err()
-    );
+        .unwrap();
+    crate::kernel_fixture::complete(&fixture.tool).await;
+    let root = fixture._root.path().to_path_buf();
+    let mut config = PluginsConfig::default();
+    config
+        .list
+        .insert("agena.content".into(), ConfiguredPlugin::static_default());
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "agena.content".parse().unwrap(),
+            ContentFixture,
+        )],
+        config,
+        workspace_root: root.clone(),
+        agena_version: "test".into(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .unwrap();
+    let executor = ToolExecutor::new(
+        root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        None,
+        None,
+    )
+    .with_kernel_reader(fixture.runtime.ports.reader.clone());
+    let id = writer.id();
+    let mut input = serde_json::json!({"resource_id":id,"max_bytes":257});
+    let mut restored = String::new();
+    loop {
+        let page = read(&executor, fixture.session.get(), input).await.unwrap();
+        for fragment in page["fragments"].as_array().unwrap() {
+            assert_eq!(fragment["channel"], "stderr");
+            let text = fragment["text"].as_str().unwrap();
+            assert!(text.len() <= 257);
+            restored.push_str(text);
+        }
+        if page["has_more"] == false {
+            break;
+        }
+        input = serde_json::json!({"resource_id":id,"max_bytes":257,
+            "epoch":page["next_position"]["epoch"],"after":page["next_position"]["after"],"offset":page["next_position"]["offset"]});
+    }
+    assert_eq!(restored, body);
+    fixture.runtime.ports.shutdown().await.unwrap();
 }

@@ -146,6 +146,27 @@ export function modelIdsFromProviderModels(models: ProviderModel[] | null | unde
   return Array.isArray(models) ? models.map((model) => readString(model.id)).filter(Boolean) : []
 }
 
+/**
+ * Whether the loaded catalog still offers exactly this route. Adapter-aware: a
+ * model listed under one adapter is not offered through another, and disabled
+ * adapters never reach the catalog at all. Used to reject cached session model
+ * choices that no longer exist in the running configuration.
+ */
+export function modelSelectionIsConfigured(
+  providers: Provider[],
+  selection: { provider?: string; adapter?: string; model?: string },
+): boolean {
+  const providerId = readString(selection.provider)
+  const modelId = readString(selection.model)
+  if (!providerId || !modelId) return false
+  const adapterId = readString(selection.adapter)
+  const provider = (Array.isArray(providers) ? providers : []).find((item) => item.id === providerId)
+  if (!provider) return false
+  return (provider.models || []).some(
+    (model) => readString(model.id) === modelId && (!adapterId || readString(model.adapter_id) === adapterId),
+  )
+}
+
 export function thinkingModeOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
   const out: ModelModeOption[] = []
   const seen = new Set<string>()

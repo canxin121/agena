@@ -4,6 +4,7 @@ import { i18n } from '@/i18n'
 import {
   defaultModeValue,
   modeOptionDisplayLabel,
+  modelSelectionIsConfigured,
   speedModeOptionsForModel,
   thinkingModeOptionsForModel,
   useModelSelectionCatalog,
@@ -14,9 +15,10 @@ import { encodeModelSelectionKey, parseModelSlug } from './modelSelectionDefault
 import {
   deriveSessionSelectionFromMessages,
   normalizeSessionManualModelStorageEntry,
-  readSessionManualModelPair,
+  readSessionManualModelEntry,
   readSessionRunConfigSelection,
   removeSessionManualModelPair,
+  sessionCachePredatesSession,
   writeSessionManualModelPair,
   type SessionSelection,
 } from './modelSelectionSession'
@@ -37,6 +39,8 @@ type ChatLike = {
   selectedSessionId: string | null
   selectedSessionRunConfig: SessionRunConfig | null
   messages: ChatMessageLike[]
+  /** Server creation time of the open session, when the client already knows it. */
+  selectedSessionCreatedMs?: number | null
 }
 
 export type ModelSlugOption = {
@@ -278,21 +282,63 @@ export function useChatModelSelection(opts: {
     return readSessionRunConfigSelection(chat.selectedSessionRunConfig)
   }
 
+  function selectedSessionCreatedMs(): number | null {
+    const created = Number(chat.selectedSessionCreatedMs)
+    return Number.isFinite(created) && created > 0 ? created : null
+  }
+
+  /**
+   * The loaded catalog is the only source of models this client can actually
+   * run: it lists enabled adapters and the models configured for them. Until
+   * it arrives the cached value is kept so the composer does not flicker, and
+   * the catalog watcher re-resolves as soon as the inventory is available.
+   */
+  function selectionIsOffered(candidate: { provider?: string; adapter?: string; model?: string }): boolean {
+    if (!providers.value.length) return true
+    const provider = providers.value.find((item) => item.id === text(candidate.provider))
+    // A provider whose inventory this client cannot see (model discovery, or a
+    // catalog read that failed for it) is no evidence either way: keep the
+    // cached selection instead of replacing a working model with the default.
+    if (!provider || !provider.models.length) return true
+    return modelSelectionIsConfigured(providers.value, candidate)
+  }
+
+  function adoptSessionSelection(candidate: { provider?: string; adapter?: string; model?: string }): boolean {
+    if (!text(candidate.provider) || !text(candidate.model)) return false
+    if (!selectionIsOffered(candidate)) return false
+    setModelSelection(
+      { provider: text(candidate.provider), adapter: text(candidate.adapter), model: text(candidate.model) },
+      'session',
+    )
+    return true
+  }
+
+  function dropStaleManualSelection(sessionId: string) {
+    if (!sessionId) return
+    if (!Object.prototype.hasOwnProperty.call(sessionManualModelBySession.value, sessionId)) return
+    sessionManualModelBySession.value = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
+    sessionManualModelPersister.persistSoon()
+  }
+
+  /**
+   * A session's own model wins over the runtime default, but only while the
+   * cached evidence can belong to this session and the catalog still offers
+   * the model. Session ids are reused after a server database is recreated,
+   * and editing the provider configuration can retire a model or an adapter.
+   */
   function resolveModelSelection(includeSessionLayers: boolean) {
     const sessionId = includeSessionLayers ? activeSessionId() : ''
-    const candidates = includeSessionLayers
-      ? [
-          () => readSessionManualModelPair(sessionManualModelBySession.value, sessionId),
-          () => sessionRunSelection(),
-          () => deriveSessionSelectionFromMessages(chat.messages),
-        ]
-      : []
-    for (const resolve of candidates) {
-      const candidate = resolve()
-      if (candidate.provider && candidate.model) {
-        setModelSelection(candidate, 'session')
-        return
+    if (includeSessionLayers) {
+      const createdAtMs = selectedSessionCreatedMs()
+      const manual = readSessionManualModelEntry(sessionManualModelBySession.value, sessionId)
+      if (manual) {
+        const current = !sessionCachePredatesSession(manual.at, createdAtMs)
+        if (current && adoptSessionSelection(parseModelSlug(manual.value))) return
+        dropStaleManualSelection(sessionId)
       }
+      const runAt = Number(chat.selectedSessionRunConfig?.at)
+      if (!sessionCachePredatesSession(runAt, createdAtMs) && adoptSessionSelection(sessionRunSelection())) return
+      if (adoptSessionSelection(deriveSessionSelectionFromMessages(chat.messages))) return
     }
 
     const defaults = runtimeDefaultSelection.value
@@ -377,6 +423,7 @@ export function useChatModelSelection(opts: {
   function chooseModelSlug(value: string) {
     const selection = parseModelSlug(value)
     if (!selection.provider || !selection.model) return
+    if (!selectionIsOffered(selection)) return
     setModelSelection(selection, 'manual')
     const sessionId = activeSessionId()
     if (sessionId) {
@@ -386,6 +433,7 @@ export function useChatModelSelection(opts: {
         selection.provider,
         selection.adapter,
         selection.model,
+        Date.now(),
       )
       sessionManualModelPersister.persistSoon()
     }

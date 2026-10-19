@@ -72,6 +72,7 @@ type ChatState = {
   selectedSessionId: string | null
   selectedSessionRunConfig: SessionRunConfig | null
   messages: Array<{ info?: Record<string, unknown> }>
+  selectedSessionCreatedMs: number | null
 }
 
 let useChatModelSelectionCached:
@@ -91,6 +92,8 @@ export async function createTestHarness(
     selectedSessionId?: string | null
     selectedSessionRunConfig?: SessionRunConfig | null
     messages?: Array<{ info?: Record<string, unknown> }>
+    selectedSessionCreatedMs?: number | null
+    storedManualModels?: Record<string, string>
   } = {},
 ) {
   clearLocalStorageKeys([
@@ -98,12 +101,19 @@ export async function createTestHarness(
     localStorageKeys.chat.modelSpeedModeByKey,
     localStorageKeys.chat.sessionManualModelBySession,
   ])
+  if (initial.storedManualModels) {
+    ensureBrowserTestRuntime().setItem(
+      localStorageKeys.chat.sessionManualModelBySession,
+      JSON.stringify(initial.storedManualModels),
+    )
+  }
   const useChatModelSelection = await getUseChatModelSelection()
 
   const chat = reactive<ChatState>({
     selectedSessionId: initial.selectedSessionId ?? 'session-1',
     selectedSessionRunConfig: initial.selectedSessionRunConfig ?? null,
     messages: initial.messages ?? [],
+    selectedSessionCreatedMs: initial.selectedSessionCreatedMs ?? null,
   })
 
   const selection = useChatModelSelection({

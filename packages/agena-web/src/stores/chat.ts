@@ -92,6 +92,13 @@ function loadStoredTranscriptPartPageSize(): number {
   )
 }
 
+/** Server creation instant of a session, in epoch milliseconds, when known. */
+function sessionCreatedMs(session: Session | null | undefined): number | null {
+  const createdAt = typeof session?.created_at === 'string' ? session.created_at.trim() : ''
+  const value = createdAt ? Date.parse(createdAt) : Number.NaN
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
 const useChatStoreDefinition = defineStore('chat', () => {
   const toasts = useToastsStore()
   // A store is created once for the whole app, so this must be the raw store:
@@ -417,6 +424,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return null
     return sessionsById.value[sid] ?? sessions.value.find((s) => s.id === sid) ?? null
   }
+
+  /** Creation time of the open session; session-scoped model caches compare against it. */
+  const selectedSessionCreatedMs = computed(() => sessionCreatedMs(getSessionById(selectedSessionId.value)))
 
   async function refreshSessionsInternal() {
     sessionsLoading.value = true
@@ -2426,6 +2436,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getPendingInteraction,
     hasInteractionSnapshot,
     getSessionRunConfig,
+    selectedSessionCreatedMs,
     getSessionUsage,
     cacheSessions,
     getComposerDraft,
@@ -2483,6 +2494,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       if (property === 'selectedHistory') return target.getSessionHistory(sid)
       if (property === 'selectedAttention') return target.getSessionAttention(sid)
       if (property === 'selectedSessionRunConfig') return target.getSessionRunConfig(sid)
+      if (property === 'selectedSessionCreatedMs') return sessionCreatedMs(target.getSessionById(sid))
       if (property === 'selectedSessionUsage') return target.getSessionUsage(sid)
       if (property === 'selectedSessionExecution') return target.getSessionExecution(sid)
       if (property === 'selectSession') return selectSession

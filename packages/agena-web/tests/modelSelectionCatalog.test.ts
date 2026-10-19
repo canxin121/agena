@@ -5,9 +5,45 @@ import {
   defaultModeValue,
   modeOptionDisplayLabel,
   modelIdsFromProviderModels,
+  modelSelectionIsConfigured,
   speedModeOptionsForModel,
   thinkingModeOptionsForModel,
 } from '../src/pages/chat/modelSelectionCatalog'
+
+test('modelSelectionIsConfigured matches the provider, adapter, and model route', () => {
+  const providers = [
+    {
+      id: 'cpa',
+      name: 'CPA',
+      models: [
+        { provider_id: 'cpa', adapter_id: 'openai_responses', id: 'deepseek-v4.1-flash' },
+        { provider_id: 'cpa', adapter_id: 'openai_responses', id: 'gpt-5.5' },
+      ],
+    },
+  ]
+
+  assert.equal(
+    modelSelectionIsConfigured(providers, {
+      provider: 'cpa',
+      adapter: 'openai_responses',
+      model: 'deepseek-v4.1-flash',
+    }),
+    true,
+  )
+  // A model cached through another (now disabled) adapter is not offered.
+  assert.equal(
+    modelSelectionIsConfigured(providers, { provider: 'cpa', adapter: 'anthropic', model: 'deepseek-v4.1-flash' }),
+    false,
+  )
+  assert.equal(
+    modelSelectionIsConfigured(providers, { provider: 'cpa', adapter: 'anthropic', model: 'glm-5.3-flash' }),
+    false,
+  )
+  assert.equal(modelSelectionIsConfigured(providers, { provider: 'cpa', model: 'gpt-5.5' }), true)
+  assert.equal(modelSelectionIsConfigured(providers, { provider: 'other', model: 'gpt-5.5' }), false)
+  assert.equal(modelSelectionIsConfigured(providers, { provider: 'cpa', model: '' }), false)
+  assert.equal(modelSelectionIsConfigured([], { provider: 'cpa', model: 'gpt-5.5' }), false)
+})
 
 test('modelIdsFromProviderModels reads the configured-model array contract', () => {
   assert.deepEqual(

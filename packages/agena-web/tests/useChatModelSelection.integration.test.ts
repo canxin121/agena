@@ -3,7 +3,28 @@ import assert from 'node:assert/strict'
 
 import { nextTick } from 'vue'
 
+import { localStorageKeys } from '../src/lib/persistence/storageKeys'
 import { createTestHarness } from './testRuntime'
+
+const CPA_PROVIDERS = [
+  {
+    id: 'cpa',
+    name: 'CPA',
+    models: [
+      { provider_id: 'cpa', adapter_id: 'openai_responses', id: 'deepseek-v4.1-flash' },
+      { provider_id: 'cpa', adapter_id: 'openai_responses', id: 'gpt-5.5' },
+    ],
+  },
+]
+
+const CPA_DEFAULT_SELECTION = {
+  provider: 'cpa',
+  adapter: 'openai_responses',
+  model: 'deepseek-v4.1-flash',
+  thinkingMode: 'max',
+  speedMode: '',
+  verbosity: '',
+}
 
 test('useChatModelSelection: uses the runtime-wide default when the session has no model', async () => {
   const { selection } = await createTestHarness({ selectedSessionId: 'session-global-default' })
@@ -212,4 +233,116 @@ test('useChatModelSelection: an explicit session model exposes speed display nam
 
   selection.chooseSpeedMode('fast')
   assert.equal(selection.speedModeChipLabel.value, 'Fast')
+})
+
+test('useChatModelSelection: a session run config cached before the session existed is ignored', async () => {
+  const createdMs = Date.parse('2026-10-19T13:43:26Z')
+  const { selection } = await createTestHarness({
+    selectedSessionId: '9',
+    selectedSessionCreatedMs: createdMs,
+    // Entry written by an older install whose session ids restarted at 1.
+    selectedSessionRunConfig: {
+      providerID: 'cpa',
+      adapterID: 'anthropic',
+      modelID: 'glm-5.3-flash',
+      at: Date.parse('2026-08-30T06:45:00Z'),
+    },
+  })
+  selection.providers.value = CPA_PROVIDERS
+  selection.runtimeDefaultSelection.value = { ...CPA_DEFAULT_SELECTION }
+
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedProviderId.value, 'cpa')
+  assert.equal(selection.selectedAdapterId.value, 'openai_responses')
+  assert.equal(selection.selectedModelId.value, 'deepseek-v4.1-flash')
+  assert.equal(selection.modelSource.value, 'default')
+})
+
+test('useChatModelSelection: a fresh session model the catalog no longer offers falls back to the default', async () => {
+  const createdMs = Date.parse('2026-10-19T13:43:26Z')
+  const { selection } = await createTestHarness({
+    selectedSessionId: 'session-retired-model',
+    selectedSessionCreatedMs: createdMs,
+    selectedSessionRunConfig: {
+      providerID: 'cpa',
+      adapterID: 'anthropic',
+      modelID: 'glm-5.3-flash',
+      at: createdMs + 1_000,
+    },
+  })
+  selection.providers.value = CPA_PROVIDERS
+  selection.runtimeDefaultSelection.value = { ...CPA_DEFAULT_SELECTION }
+
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedAdapterId.value, 'openai_responses')
+  assert.equal(selection.selectedModelId.value, 'deepseek-v4.1-flash')
+  assert.equal(selection.modelSource.value, 'default')
+})
+
+test('useChatModelSelection: a session model cached for another adapter is ignored', async () => {
+  const createdMs = Date.parse('2026-10-19T13:43:26Z')
+  const { selection } = await createTestHarness({
+    selectedSessionId: 'session-adapter-mismatch',
+    selectedSessionCreatedMs: createdMs,
+    // Same model id, but cached through an adapter that is not configured.
+    selectedSessionRunConfig: {
+      providerID: 'cpa',
+      adapterID: 'anthropic',
+      modelID: 'deepseek-v4.1-flash',
+      at: createdMs + 1_000,
+    },
+  })
+  selection.providers.value = CPA_PROVIDERS
+  selection.runtimeDefaultSelection.value = { ...CPA_DEFAULT_SELECTION }
+
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedAdapterId.value, 'openai_responses')
+  assert.equal(selection.selectedModelId.value, 'deepseek-v4.1-flash')
+  assert.equal(selection.modelSource.value, 'default')
+})
+
+test('useChatModelSelection: a fresh session model the catalog offers still wins over the default', async () => {
+  const createdMs = Date.parse('2026-10-19T13:43:26Z')
+  const { selection } = await createTestHarness({
+    selectedSessionId: 'session-fresh-model',
+    selectedSessionCreatedMs: createdMs,
+    selectedSessionRunConfig: {
+      providerID: 'cpa',
+      adapterID: 'openai_responses',
+      modelID: 'gpt-5.5',
+      at: createdMs + 1_000,
+    },
+  })
+  selection.providers.value = CPA_PROVIDERS
+  selection.runtimeDefaultSelection.value = { ...CPA_DEFAULT_SELECTION }
+
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedModelId.value, 'gpt-5.5')
+  assert.equal(selection.modelSource.value, 'session')
+})
+
+test('useChatModelSelection: a manual model cached before the session existed is dropped', async () => {
+  const createdMs = Date.parse('2026-10-19T13:43:26Z')
+  const { selection } = await createTestHarness({
+    selectedSessionId: '9',
+    selectedSessionCreatedMs: createdMs,
+    storedManualModels: {
+      '9': JSON.stringify({ at: Date.parse('2026-08-30T06:45:00Z'), value: 'cpa/anthropic/glm-5.3-flash' }),
+    },
+  })
+  selection.providers.value = CPA_PROVIDERS
+  selection.runtimeDefaultSelection.value = { ...CPA_DEFAULT_SELECTION }
+
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedModelId.value, 'deepseek-v4.1-flash')
+  assert.equal(selection.modelSource.value, 'default')
+
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  const stored = JSON.parse(localStorage.getItem(localStorageKeys.chat.sessionManualModelBySession) || '{}')
+  assert.equal(stored['9'], undefined)
 })

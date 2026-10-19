@@ -23,6 +23,10 @@ pub struct PartResource {
     pub message_boundary: bool,
     pub role: String,
     pub state: String,
+    /// Run-level execution state for a message boundary. Content parts keep
+    /// their own state, so a failed run can still contain completed reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_state: Option<String>,
     pub content: Value,
     /// An omitted section is unloaded. A listed section may have an empty or
     /// null value; its revision identifies the exact facts it was derived from.

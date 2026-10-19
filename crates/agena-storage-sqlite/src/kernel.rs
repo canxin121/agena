@@ -1060,6 +1060,23 @@ impl KernelBackend for Backend {
         )
         .await
     }
+    async fn failed_round(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<Option<ProviderRoundView>>> {
+        let value = reads::failed_round(
+            self.reader.get_sqlite_connection_pool(),
+            session,
+            execution,
+            generation,
+            self.live.diagnostics(),
+        )
+        .await?;
+        let bytes = modeled_read_bytes(&value)?;
+        self.wrap_read(session, value, bytes)
+    }
     fn watch(&self, session: SessionId, after: Option<WatchCursor>) -> Result<KernelWatch> {
         self.cache.ensure_open()?;
         let lease = self.views.subscribe(session)?;

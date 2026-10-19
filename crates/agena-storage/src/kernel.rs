@@ -1076,6 +1076,17 @@ impl KernelReader {
     ) -> Result<ReadView<ProviderRoundView>> {
         self.0.backend.round(session, round).await
     }
+    pub async fn failed_round(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<Option<ProviderRoundView>>> {
+        self.0
+            .backend
+            .failed_round(session, execution, generation)
+            .await
+    }
     /// Subscribe before reading a snapshot. The returned head/replay and live
     /// receiver are installed under one feed lock, closing the read/watch gap.
     pub fn watch(&self, session: SessionId, after: Option<WatchCursor>) -> Result<KernelWatch> {

@@ -205,7 +205,7 @@ fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(marker.part_id),
         role: role_from_string(&marker.role),
-        state: message_status_from_string(&marker.state),
+        state: message_status_from_string(marker.run_state.as_deref().unwrap_or(&marker.state)),
         created_at: timestamp(marker.created_at_ms),
         reply_id: string_field(&marker.content, "reply_id")
             .and_then(|reply_id| reply_id.parse::<AssistantReplyId>().ok()),
@@ -1591,6 +1591,34 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].state, RunStatus::Failed);
         assert!(entries[0].parts.is_empty());
+    }
+
+    #[test]
+    fn run_state_marks_a_failed_run_without_failing_its_content() {
+        let mut marker = run(1, "assistant", "completed");
+        marker.run_state = Some("failed".to_owned());
+        let parts = vec![
+            marker,
+            content_part_for(
+                1,
+                2,
+                "think",
+                "assistant",
+                serde_json::json!({ "summary": ["complete reasoning"] }),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].state, RunStatus::Failed);
+        assert_eq!(entries[0].parts.len(), 1);
+        assert!(matches!(
+            entries[0].parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(_))
+        ));
+        assert_eq!(
+            entries[0].parts[0].status,
+            PartExecutionStatusResource::Completed
+        );
     }
 
     #[test]

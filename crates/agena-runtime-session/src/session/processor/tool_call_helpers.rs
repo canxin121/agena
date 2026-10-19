@@ -63,9 +63,13 @@ pub(crate) fn parse_tool_invocation_lossy(
     available_tools: &[ToolApiDefinition],
 ) -> Result<ToolInvocation, AppError> {
     if tool_api_binding_for_name(name, available_tools).is_none() {
-        return Err(AppError::Provider(format!(
-            "provider returned unknown Tool API function {name:?} in session {session_id}"
-        )));
+        tracing::warn!(
+            target: "agena::session::processor",
+            session_id,
+            tool = %name,
+            "provider returned an unknown Tool API function; executing it as an unknown tool failure"
+        );
+        return Ok(placeholder_tool_invocation(Some(name), available_tools));
     }
 
     match parse_tool_invocation(name, arguments_json, available_tools) {
@@ -316,9 +320,10 @@ mod tests {
             " tools_help",
             "tools_help ",
         ] {
-            let error = parse_tool_invocation_lossy(13, invalid, "{}", &available)
-                .expect_err("aliases and whitespace must not be accepted");
-            assert!(error.to_string().contains("unknown Tool API function"));
+            let invocation = parse_tool_invocation_lossy(13, invalid, "{}", &available)
+                .expect("unknown names degrade to an ordinary tool failure");
+            assert_eq!(invocation.name, invalid);
+            assert_eq!(invocation.tool_api_call, None);
         }
     }
 

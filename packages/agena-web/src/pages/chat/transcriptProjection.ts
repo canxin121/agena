@@ -475,9 +475,13 @@ function lifecyclePart(message: MessageLike, runIds: string[]): TranscriptDispla
 
 function runNeedsLifecycle(stateInput: string, displayParts: TranscriptDisplayPart[]): boolean {
   const state = normalizeRunState(stateInput)
-  // Failure content comes exclusively from durable server Parts. A partial
-  // page may contain only a marker; its header already carries the status.
-  if (!isKnownRunState(state) || isRunFailureState(state)) return false
+  if (!isKnownRunState(state)) return false
+  // A failed execution normally carries a synthesized durable error part.
+  // Manager-level failures may have no round to project, so keep the generic
+  // lifecycle line as the final fallback.
+  if (isRunFailureState(state)) {
+    return !displayParts.some((part) => part.kind === 'error')
+  }
   return displayParts.length === 0 || (isRunCancelled(state) && !displayParts.some((part) => part.kind === 'error'))
 }
 

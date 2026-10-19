@@ -1029,9 +1029,10 @@ impl ProviderRegistry {
     }
 
     /// Emit Tool API fragments in provider order for consumers that retain
-    /// non-executable drafts. Validation still precedes execution. A protocol
-    /// error fails this stream instead of internally reissuing a request after
-    /// the consumer has published draft identities.
+    /// non-executable drafts. Validation still precedes execution, but a
+    /// rejected call is emitted as-is: the consumer owns draft identities and
+    /// can turn the rejection into an ordinary tool-visible failure. This
+    /// variant never reissues the provider request.
     pub async fn complete_stream_with_tool_drafts(
         &self,
         model: &ModelRef,
@@ -1441,8 +1442,16 @@ impl ProviderRegistry {
                                     &declared_tool_api_functions,
                                     &mut tool_api_calls,
                                 ) {
-                                    if tool_drafts { Err(error)?; }
-                                    else { tool_api_error.get_or_insert(error); }
+                                    if tool_drafts {
+                                        tracing::warn!(
+                                            provider_id = provider_id.as_str(),
+                                            model_id = model_id.as_str(),
+                                            error = %error,
+                                            "emitting rejected Tool API stream call with retained drafts"
+                                        );
+                                    } else {
+                                        tool_api_error.get_or_insert(error);
+                                    }
                                 }
                                 if !tool_drafts {
                                     buffered_tool_api_turn.push(event);
@@ -1467,7 +1476,14 @@ impl ProviderRegistry {
                                     tool_api_error.get_or_insert(error);
                                 }
                                 match tool_api_error.take() {
-                                    Some(error) if tool_drafts => { Err(error)?; }
+                                    Some(error) if tool_drafts => {
+                                        tracing::warn!(
+                                            provider_id = provider_id.as_str(),
+                                            model_id = model_id.as_str(),
+                                            error = %error,
+                                            "finishing Tool API stream with a rejected draft call"
+                                        );
+                                    }
                                     Some(error) => {
                                     if protocol_repair_count < MAX_TOOL_API_REPAIRS {
                                         if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
@@ -2823,6 +2839,48 @@ mod tool_api_function_validation_tests {
         assert!(requests[1].previous_response_id.is_none());
         assert_eq!(requests[1].temperature, Some(0.0));
     }
+
+    #[tokio::test]
+    async fn draft_stream_keeps_rejected_calls_without_retrying_the_provider() {
+        for rejected in [
+            RejectedToolApiCall {
+                name: "fs.read".to_owned(),
+                arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
+            },
+            RejectedToolApiCall {
+                name: "tools_call".to_owned(),
+                arguments_json: r#"{"tool":"fs.read","input":{"path":}}"#.to_owned(),
+            },
+        ] {
+            let provider = std::sync::Arc::new(ProtocolRepairProvider {
+                rejected: rejected.clone(),
+                ..ProtocolRepairProvider::new()
+            });
+            let mut registry = crate::provider::ProviderRegistry::new();
+            registry.register_arc(provider.clone());
+
+            let events = registry
+                .complete_stream_with_tool_drafts(
+                    &ModelRef::new("repair-test", "test-model"),
+                    repair_request(),
+                )
+                .await
+                .expect("draft stream startup")
+                .collect::<Vec<_>>()
+                .await;
+            let events = events
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .expect("draft validation must not fail the provider stream");
+            assert!(events.iter().any(|event| matches!(
+                event,
+                CompletionStreamEvent::ToolCallSnapshot { name: Some(name), .. }
+                    if name == &rejected.name
+            )));
+            assert_eq!(provider.requests.lock().expect("requests lock").len(), 1);
+        }
+    }
+
     #[test]
     fn tolerant_parse_accepts_valid_arguments() {
         let json = r#"{"tool":"fs.read"}"#;

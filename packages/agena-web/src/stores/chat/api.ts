@@ -292,7 +292,7 @@ function entriesFromParts(
     if (part.message_boundary === true) {
       const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
       const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
-      const runState = str(part.state)
+      const runState = str(part.run_state) || str(part.state)
       const info: MessageInfo = {
         id: partIdStr,
         sessionID: sessionId,

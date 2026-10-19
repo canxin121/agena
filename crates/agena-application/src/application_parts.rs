@@ -41,6 +41,144 @@ pub(crate) fn encode_part_cursor(
     cursor.map(|cursor| encode_cursor(&cursor)).transpose()
 }
 
+/// Synthesize the user-visible failure part from the failed round that ended an
+/// execution. Failure is a read-time projection: legacy transcripts never
+/// persisted this part, and no schema change is required for them to render.
+pub(crate) async fn append_execution_failures(
+    reader: &KernelReader,
+    parts: &mut Vec<PartResource>,
+) -> Result<(), ApplicationError> {
+    use agena_domain::ExecutionId;
+    use agena_storage::kernel::AttemptGeneration;
+
+    let mut failures = Vec::new();
+    for part in parts.iter() {
+        if !part.message_boundary || part.role != "assistant" {
+            continue;
+        }
+        if part
+            .content
+            .get("execution_phase")
+            .and_then(serde_json::Value::as_str)
+            != Some("failed")
+        {
+            continue;
+        }
+        if parts
+            .iter()
+            .any(|existing| existing.kind == "error" && existing.run_id == Some(part.part_id))
+        {
+            continue;
+        }
+        let Some(execution) = part
+            .content
+            .get("execution_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<ExecutionId>().ok())
+        else {
+            continue;
+        };
+        let Some(generation) = part
+            .content
+            .get("generation")
+            .and_then(serde_json::Value::as_i64)
+            .and_then(|value| AttemptGeneration::try_from(value).ok())
+        else {
+            continue;
+        };
+        // A forked session reads entries owned by its ancestor. The failed
+        // attempt therefore belongs to the entry owner, not the reader.
+        let Ok(owner) = SessionId::try_from(part.origin_session_id) else {
+            continue;
+        };
+        let round = reader
+            .failed_round(owner, execution, generation)
+            .await
+            .map_err(crate::kernel_error)?;
+        let Some(round) = &*round else {
+            continue;
+        };
+        let Some(failure) = round
+            .provider_state
+            .as_ref()
+            .and_then(|state| state.get("failure"))
+        else {
+            continue;
+        };
+        let failure: agena_failure::Failure = match serde_json::from_value(failure.clone()) {
+            Ok(failure) => failure,
+            Err(error) => {
+                tracing::warn!(
+                    round_id = round.id.get(),
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "decode provider round failure for transcript projection",
+                        &error,
+                    ),
+                    "failed provider round could not be projected as a transcript error"
+                );
+                continue;
+            }
+        };
+        let problem = agena_failure::UserProblem::from(&failure);
+        let category = serde_json::to_value(problem.category)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let mut extra = std::collections::BTreeMap::new();
+        extra.insert(
+            "problem".to_owned(),
+            serde_json::to_value(&problem)
+                .map_err(|error| ApplicationError::internal_error(&error))?,
+        );
+        let content = agena_runtime_contracts::part_content::ErrorContent {
+            category,
+            message: problem.user.fallback.clone(),
+            detail: None,
+            retry: None,
+            extra,
+        }
+        .as_value();
+        failures.push((
+            part.part_id,
+            round.id.get(),
+            round.created_at_ms,
+            content,
+            owner,
+        ));
+    }
+
+    let mut used_ids = parts
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<std::collections::HashSet<_>>();
+    for (run_id, round_id, created_at_ms, content, owner) in failures {
+        // Synthetic ids stay out of the durable entry range while remaining
+        // decimal, which the Web message index requires. A pathological
+        // durable-id collision simply advances to the next free value.
+        let mut part_id = 2_000_000_000 + round_id;
+        while !used_ids.insert(part_id) {
+            part_id += 1;
+        }
+        parts.push(PartResource {
+            part_id,
+            kind: "error".into(),
+            role: "assistant".into(),
+            state: "failed".into(),
+            run_state: Some("failed".into()),
+            content,
+            visibility: "both".into(),
+            run_id: Some(run_id),
+            origin_session_id: owner.get(),
+            revision: 1,
+            started_at_ms: created_at_ms,
+            finished_at_ms: Some(created_at_ms),
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+            ..PartResource::default()
+        });
+    }
+    Ok(())
+}
+
 fn requested_sections(sections: &[ToolDetailSection]) -> &[ToolDetailSection] {
     if sections.is_empty() {
         &[ToolDetailSection::Presentation]
@@ -54,7 +192,7 @@ pub(crate) async fn project_kernel_entry(
     session: SessionId,
     entry: &EntryView,
 ) -> Result<PartResource, ApplicationError> {
-    let phase = match entry.execution_phase {
+    let run_state = match entry.execution_phase {
         agena_storage::kernel::ExecutionPhase::Queued => "pending",
         agena_storage::kernel::ExecutionPhase::Running => "running",
         agena_storage::kernel::ExecutionPhase::Succeeded => "completed",
@@ -62,13 +200,20 @@ pub(crate) async fn project_kernel_entry(
         agena_storage::kernel::ExecutionPhase::Cancelled => "cancelled",
         agena_storage::kernel::ExecutionPhase::Interrupted => "failed",
     };
+    let content_state = match entry.execution_phase {
+        agena_storage::kernel::ExecutionPhase::Queued => "pending",
+        agena_storage::kernel::ExecutionPhase::Running => "running",
+        _ => "completed",
+    };
+    let message_boundary = entry.response_entry_id == Some(entry.id);
     let mut part = PartResource {
         part_id: entry.id.get(),
         role: "assistant".into(),
-        state: phase.into(),
+        state: content_state.into(),
+        run_state: message_boundary.then(|| run_state.to_owned()),
         visibility: "both".into(),
         run_id: entry.response_entry_id.map(|id| id.get()),
-        message_boundary: entry.response_entry_id == Some(entry.id),
+        message_boundary,
         origin_session_id: entry.origin_session_id.get(),
         revision: entry.revision.get(),
         created_at_ms: entry.created_at_ms,
@@ -479,6 +624,7 @@ impl Application {
                 );
             }
         }
+        append_execution_failures(reader, &mut parts).await?;
         let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
         Ok(SessionPartsResource {
             session_id: request.session_id,
@@ -520,6 +666,7 @@ impl Application {
                 .await?,
             );
         }
+        append_execution_failures(reader, &mut parts).await?;
         let runs = page
             .messages
             .iter()

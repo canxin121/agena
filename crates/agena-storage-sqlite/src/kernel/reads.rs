@@ -742,6 +742,32 @@ pub(super) fn interaction_row(
     })
 }
 
+pub(super) async fn failed_round(
+    pool: &SqlitePool,
+    session: SessionId,
+    execution: ExecutionId,
+    generation: AttemptGeneration,
+    diagnostics: &KernelDiagnostics,
+) -> Result<Option<ProviderRoundView>> {
+    metrics::add(&diagnostics.0.detail_queries, 1);
+    let round_id: Option<i64> = sqlx::query_scalar(
+        "SELECT r.id FROM agena_rounds r JOIN agena_attempts a ON a.execution_id=r.execution_id AND a.generation=r.generation WHERE r.execution_id=? AND r.generation=? AND a.session_id=? AND r.phase='failed' AND r.provider_state_json IS NOT NULL ORDER BY r.id DESC LIMIT 1",
+    )
+    .bind(execution.to_string())
+    .bind(generation.get())
+    .bind(session.get())
+    .fetch_optional(pool)
+    .await
+    .map_err(sql_error)?;
+    let Some(round_id) = round_id else {
+        return Ok(None);
+    };
+    let round = RoundId::try_from(round_id).map_err(storage)?;
+    super::reads::round(pool, session, round, diagnostics)
+        .await
+        .map(Some)
+}
+
 pub(super) async fn round(
     pool: &SqlitePool,
     session: SessionId,

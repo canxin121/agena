@@ -154,6 +154,7 @@ mod tests {
             kind: "tool_call".to_owned(),
             role: "assistant".to_owned(),
             state: "completed".to_owned(),
+            run_state: None,
             content: raw_content.clone(),
             presentation: Some(PartDocument {
                 title: "Plugin title".to_owned(),

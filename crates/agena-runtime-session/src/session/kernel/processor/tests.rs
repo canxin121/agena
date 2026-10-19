@@ -619,7 +619,12 @@ async fn interrupted_or_cancelled_provider_round_settles_real_hosted_calls_and_u
 }
 
 #[tokio::test]
-async fn an_invalid_published_draft_fails_without_a_provider_protocol_repair_request() {
+async fn invalid_published_drafts_degrade_to_tool_visible_results() {
+    unknown_published_draft_degrades_to_a_normal_tool_failure().await;
+    malformed_tools_call_draft_becomes_a_diagnostic_tool_invocation().await;
+}
+
+async fn unknown_published_draft_degrades_to_a_normal_tool_failure() {
     let mut fixture = fixture(true, None).await;
     let mut unknown = call(
         "idx:0",
@@ -633,10 +638,12 @@ async fn an_invalid_published_draft_fails_without_a_provider_protocol_repair_req
     fixture.events.send(Ok(completed(None, None))).unwrap();
     drop(fixture.events);
     let outcome = fixture.run.drive().await.unwrap().clone();
-    assert!(outcome.failure.is_some());
-    assert!(outcome.tools.is_empty());
+    assert!(outcome.failure.is_none());
+    assert_eq!(outcome.tools.len(), 1);
+    assert_eq!(outcome.tools[0].invocation.name, "shell_exec");
     assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
     let draft = fixture.run.drafts[0].handle.as_ref().unwrap();
+    assert_eq!(outcome.tools[0].tool.id(), draft.id());
     assert_eq!(
         fixture
             .kernel
@@ -646,7 +653,7 @@ async fn an_invalid_published_draft_fails_without_a_provider_protocol_repair_req
             .await
             .unwrap()
             .phase,
-        ToolPhase::Interrupted
+        ToolPhase::Running
     );
     assert_eq!(
         fixture
@@ -657,7 +664,50 @@ async fn an_invalid_published_draft_fails_without_a_provider_protocol_repair_req
             .await
             .unwrap()
             .phase,
-        ProviderRoundPhase::Failed
+        ProviderRoundPhase::Succeeded
+    );
+    fixture.kernel.ports.shutdown().await.unwrap();
+}
+
+async fn malformed_tools_call_draft_becomes_a_diagnostic_tool_invocation() {
+    let mut fixture = fixture(true, None).await;
+    fixture
+        .events
+        .send(Ok(call(
+            "idx:0",
+            Some("invalid-json"),
+            r#"{"tool":"fs.read","input":{"path":}}"#,
+        )))
+        .unwrap();
+    fixture.events.send(Ok(completed(None, None))).unwrap();
+    drop(fixture.events);
+
+    let outcome = fixture.run.drive().await.unwrap().clone();
+    assert!(outcome.failure.is_none());
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    assert_eq!(outcome.tools.len(), 1);
+    let invocation = &outcome.tools[0].invocation;
+    assert_eq!(invocation.name, "tools_call");
+    let diagnostic = invocation
+        .tool_api_call
+        .as_ref()
+        .and_then(|call| {
+            call.arguments
+                .get(agena_domain::TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD)
+        })
+        .and_then(|value| value.as_text())
+        .expect("malformed arguments must carry the executor diagnostic");
+    assert!(diagnostic.contains("did not parse as valid JSON"));
+    assert_eq!(
+        fixture
+            .kernel
+            .ports
+            .reader
+            .round(fixture.session, fixture.round.id())
+            .await
+            .unwrap()
+            .phase,
+        ProviderRoundPhase::Succeeded
     );
     fixture.kernel.ports.shutdown().await.unwrap();
 }

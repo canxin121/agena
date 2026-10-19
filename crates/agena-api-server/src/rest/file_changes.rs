@@ -629,6 +629,7 @@ mod tests {
             message_boundary: true,
             role: "assistant".into(),
             state: "completed".into(),
+            run_state: None,
             content: tool.as_value(),
             sections: Vec::new(),
             presentation: None,

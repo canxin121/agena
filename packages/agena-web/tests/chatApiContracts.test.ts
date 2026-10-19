@@ -5,6 +5,7 @@ import {
   buildCreateSessionRequest,
   buildMessageRequestBody,
   buildRunRequestBody,
+  entriesFromParts,
   interactivePresentationPath,
   normalizeAgenaPart,
 } from '../src/stores/chat/api'
@@ -94,6 +95,31 @@ test('durable errors retain ordinary Part identity, content and ownership', () =
   assert.equal(part?.text, problem.user.fallback)
   assert.deepEqual(part?.agenaContent, content)
   assert.notEqual(part?.synthetic, true)
+})
+
+test('run_state marks the run failed while content parts keep their own state', () => {
+  const entries = entriesFromParts('7', [
+    {
+      part_id: 10,
+      message_boundary: true,
+      role: 'assistant',
+      state: 'completed',
+      run_state: 'failed',
+      content: { execution_phase: 'failed' },
+    },
+    {
+      part_id: 11,
+      run_id: 10,
+      kind: 'think',
+      role: 'assistant',
+      state: 'completed',
+      content: { summary: ['complete reasoning'] },
+    },
+  ])
+
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0]?.info.runState, 'failed')
+  assert.equal(entries[0]?.parts[0]?.partState, 'completed')
 })
 
 test('reasoning parts concatenate Agena streaming fragments without adding lines', () => {

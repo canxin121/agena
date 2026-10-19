@@ -231,7 +231,7 @@ describe('TUI-parity transcript projection', () => {
     expect(projected?.displayParts.map((item) => item.id)).toEqual(['3', '10'])
   })
 
-  test('shows active envelopes but does not fabricate terminal error Parts', () => {
+  test('shows active envelopes and a lifecycle fallback for failed runs without a durable error Part', () => {
     const blocks = projectTranscriptBlocks(
       [
         message('20', 'assistant', [], 'in_progress'),
@@ -245,8 +245,19 @@ describe('TUI-parity transcript projection', () => {
     expect(running.map((item) => [item.kind, item.title, item.status])).toEqual([
       ['lifecycle', 'Response running', 'in_progress'],
     ])
-    expect(failed.map((item) => item.kind)).toEqual(['answer'])
+    expect(failed.map((item) => item.kind)).toEqual(['answer', 'lifecycle'])
+    expect(failed[1]?.title).toBe('Response failed')
     expect(blocks[2]?.message.info.runState).toBe('failed')
+  })
+
+  test('a durable error Part replaces the failed lifecycle fallback', () => {
+    const error = part('61', 'error', { problem: { user: { fallback: 'Provider failed' } } })
+    const blocks = projectTranscriptBlocks(
+      [message('60', 'assistant', [part('62', 'text', { text: 'partial response' }), error], 'failed')],
+      { showReasoning: true },
+    )
+    const failed = blocks[0]?.kind === 'message' ? blocks[0].displayParts : []
+    expect(failed.map((item) => item.kind)).toEqual(['error', 'answer'])
   })
 
   test('uses the latest backend run state when adjacent assistant rounds are folded', () => {

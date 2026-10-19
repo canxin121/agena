@@ -29,7 +29,7 @@ use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::{
     CommandRefContent, CompactionContent, FileRefContent, HookContent, NoticeContent,
     PasteRefContent, SystemNotificationContent, TextContent, ThinkContent, ToolCallContent,
-    operation_from_tool_call,
+    attachment_source_from_file_ref, operation_from_tool_call,
 };
 use serde_json::Value;
 
@@ -525,16 +525,18 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
             let Some(content) = decode_part_content::<FileRefContent>(part) else {
                 return fallback_text_part(part);
             };
+            // The canonical reader understands every source shape the composer
+            // can persist, including a provider-bound upload or one that has
+            // since degraded. Rebuilding the source from `path` alone dropped
+            // those attachments from the transcript entirely.
+            let source = PartAttachmentSource::from(&attachment_source_from_file_ref(&content));
             TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
                 AttachmentPartResource {
                     attachments: vec![PartAttachment {
                         kind: attachment_kind_from_value(&part.content)
                             .unwrap_or(PartAttachmentKind::File),
-                        mime: content.mime.unwrap_or_default(),
-                        source: content
-                            .path
-                            .map(|path| PartAttachmentSource::LocalPath { path })
-                            .unwrap_or_else(|| PartAttachmentSource::Url { url: String::new() }),
+                        mime: content.mime.clone().unwrap_or_default(),
+                        source,
                         filename: content.name,
                         title: string_field(&part.content, "title"),
                         size_bytes: part

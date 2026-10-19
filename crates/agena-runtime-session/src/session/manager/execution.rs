@@ -1009,12 +1009,32 @@ impl SessionManager {
         let mut merged_override = options.request_override.clone();
         merged_override.remove_legacy_parallel_tool_calls_patch();
         let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
-        if options.thinking_mode.is_none() {
-            options.thinking_mode = thinking_modes.iter().find_map(|mode| {
+        let default_thinking_mode = || {
+            thinking_modes.iter().find_map(|mode| {
                 mode.is_default
                     .then(|| mode.selector().map(|selector| selector.into_owned()))
                     .flatten()
-            });
+            })
+        };
+        if options.thinking_mode.is_none() {
+            options.thinking_mode = default_thinking_mode();
+        }
+        // A persisted selection can outlive the catalog entry it named: the
+        // model was switched, or a provider redefined its modes. The stored
+        // mode must not make the session unusable — fall back to the model's
+        // default instead. Explicit requests are validated by the application
+        // layer before they reach this point.
+        if let Some(thinking_mode_name) = options.thinking_mode.as_deref()
+            && !thinking_modes
+                .iter()
+                .any(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
+        {
+            tracing::warn!(
+                model = %options.model,
+                thinking_mode = thinking_mode_name,
+                "selected think mode is no longer available; using the model default"
+            );
+            options.thinking_mode = default_thinking_mode();
         }
         if let Some(thinking_mode_name) = options.thinking_mode.as_deref() {
             let thinking_mode = thinking_modes
@@ -1034,11 +1054,24 @@ impl SessionManager {
             ));
         }
         let speed_modes = provider_registry.model_speed_modes(&options.model)?;
-        if options.speed_mode.is_none() {
-            options.speed_mode = speed_modes
+        let default_speed_mode = || {
+            speed_modes
                 .iter()
                 .find(|(_, mode)| mode.is_default)
-                .map(|(name, _)| name.clone());
+                .map(|(name, _)| name.clone())
+        };
+        if options.speed_mode.is_none() {
+            options.speed_mode = default_speed_mode();
+        }
+        if let Some(speed_mode_name) = options.speed_mode.as_deref()
+            && !speed_modes.contains_key(speed_mode_name)
+        {
+            tracing::warn!(
+                model = %options.model,
+                speed_mode = speed_mode_name,
+                "selected speed mode is no longer available; using the model default"
+            );
+            options.speed_mode = default_speed_mode();
         }
         if let Some(speed_mode_name) = options.speed_mode.as_deref() {
             let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {

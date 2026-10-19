@@ -134,6 +134,21 @@ impl SessionManager {
             .map_err(kernel_error)?;
         self.get_session(id).await
     }
+    /// Persist a new model/option selection without starting a run.
+    ///
+    /// This is the explicit switch path: it refuses a target model whose prompt
+    /// window cannot hold the conversation, so the user is told to compact
+    /// before the selection is committed. A run that carries a smaller model
+    /// instead goes through [`Self::update_session_selection`], which does not
+    /// gate — the run loop compacts automatically there.
+    pub async fn switch_session_selection(
+        &self,
+        id: i64,
+        options: SessionRunOptions,
+    ) -> Result<(), AppError> {
+        self.ensure_model_fits_session(id, &options.model).await?;
+        self.update_session_selection(id, options).await
+    }
     pub async fn update_session_selection(
         &self,
         id: i64,
@@ -161,11 +176,80 @@ impl SessionManager {
         }
         Ok(())
     }
+    /// Refuse a switch the conversation provably cannot fit.
+    ///
+    /// Every other difference between routes degrades gracefully — history
+    /// keeps its text and loses only what the new route cannot deliver. Size is
+    /// the one condition that cannot be repaired silently: a model with a
+    /// smaller prompt window would reject the request itself. Switching is
+    /// therefore blocked with an actionable [`AppError::PromptBudgetExceeded`]
+    /// until the conversation is compacted. Sending a message is *not* gated:
+    /// the run loop still compacts automatically there, so a session that is
+    /// already on the selected model is left alone.
+    async fn ensure_model_fits_session(&self, id: i64, model: &ModelRef) -> Result<(), AppError> {
+        let state = self.state.load_full();
+        let selection = self
+            .kernel()
+            .reader
+            .metadata(session_id(id)?)
+            .await
+            .map_err(kernel_error)?
+            .selection
+            .clone()
+            .unwrap_or_default();
+        let current_model = state
+            .providers
+            .resolve_default_model_selection(&selection)
+            .map_err(|error| AppError::Config(error.to_string()))?;
+        if current_model.as_ref() == Some(model) {
+            return Ok(());
+        }
+        let metadata = state.providers.model_metadata(model).unwrap_or_default();
+        let output = crate::session_output_token_budget(
+            metadata.limits.context_window_tokens,
+            metadata.limits.max_output_tokens,
+            None,
+        );
+        let Some(limit) = crate::prompt_token_budget(
+            metadata.limits.context_window_tokens,
+            metadata.limits.max_input_tokens,
+            Some(output),
+        ) else {
+            return Ok(());
+        };
+        let latest = self
+            .kernel()
+            .reader
+            .latest_round(session_id(id)?)
+            .await
+            .map_err(kernel_error)?;
+        let current = latest
+            .as_ref()
+            .and_then(|round| round.provider_state.as_ref())
+            .and_then(|value| {
+                serde_json::from_value::<super::super::kernel::KernelProviderState>(value.clone())
+                    .ok()
+            })
+            .and_then(|state| state.usage)
+            .map(|usage| usage.input_tokens.saturating_add(usage.output_tokens));
+        let Some(current) = current else {
+            return Ok(());
+        };
+        if current > u64::from(limit) {
+            return Err(AppError::PromptBudgetExceeded {
+                session_id: id,
+                estimated_tokens: current,
+                limit_tokens: u64::from(limit),
+            });
+        }
+        Ok(())
+    }
     pub async fn set_session_model_override(
         &self,
         id: i64,
         model: ModelRef,
     ) -> Result<Session, AppError> {
+        self.ensure_model_fits_session(id, &model).await?;
         self.kernel()
             .sessions
             .update_selection(
@@ -737,7 +821,7 @@ impl SessionExecutionCommandService for SessionManager {
         id: i64,
         r: SessionRunOptions,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-        SessionManager::update_session_selection(self, id, r)
+        SessionManager::switch_session_selection(self, id, r)
             .await
             .map_err(command_error)?;
         Ok(SessionExecutionCommandOutcome::completed(id))

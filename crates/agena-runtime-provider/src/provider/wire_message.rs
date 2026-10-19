@@ -378,6 +378,34 @@ fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
     }
 }
 
+/// The domain view of a projected attachment, for callers that must judge a
+/// history attachment against the selected route's rules.
+pub(super) fn attachment_item_for_validation(
+    attachment: &CompletionInputAttachment,
+) -> AttachmentItem {
+    attachment_item_from_completion_input(attachment.clone())
+}
+
+/// Rewrite one history attachment whose bytes this route cannot deliver into an
+/// explicit unavailable notice. The attachment keeps its kind, MIME and display
+/// metadata; the projection turns it into text instead of media.
+pub(super) fn degrade_completion_input_attachment(
+    attachment: &mut CompletionInputAttachment,
+    reason: &str,
+) {
+    if matches!(
+        attachment.source,
+        CompletionInputAttachmentSource::Unavailable { .. }
+    ) {
+        return;
+    }
+    attachment.source = CompletionInputAttachmentSource::Unavailable {
+        reason: reason.to_owned(),
+    };
+    attachment.sha256 = None;
+    attachment.size_bytes = None;
+}
+
 fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) -> AttachmentItem {
     AttachmentItem {
         kind: match attachment.kind {
@@ -400,6 +428,9 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
             }
             CompletionInputAttachmentSource::LocalPath { path } => {
                 AttachmentSource::LocalPath { path }
+            }
+            CompletionInputAttachmentSource::Unavailable { reason } => {
+                AttachmentSource::Unavailable { reason }
             }
         },
         filename: attachment.filename,
@@ -507,6 +538,9 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
             }
             AttachmentSource::LocalPath { path } => {
                 CompletionInputAttachmentSource::LocalPath { path }
+            }
+            AttachmentSource::Unavailable { reason } => {
+                CompletionInputAttachmentSource::Unavailable { reason }
             }
         },
         filename: item.filename,
@@ -894,6 +928,12 @@ pub fn parts_text_lossy(parts: &[WirePart]) -> String {
 /// can be delivered by fs.read_media or explicit composer delivery.
 /// Do not instruct the model to loop through metadata-only media reads.
 fn local_resource_reference_text(item: &AttachmentItem) -> Option<String> {
+    if let AttachmentSource::Unavailable { reason } = &item.source {
+        return Some(AttachmentSource::unavailable_notice(
+            &item.summary_label(),
+            reason,
+        ));
+    }
     let AttachmentSource::LocalPath { path } = &item.source else {
         return None;
     };
@@ -977,7 +1017,8 @@ pub fn data_url(item: &AttachmentItem) -> Option<String> {
         }
         AttachmentSource::Url { .. }
         | AttachmentSource::FileId { .. }
-        | AttachmentSource::LocalPath { .. } => None,
+        | AttachmentSource::LocalPath { .. }
+        | AttachmentSource::Unavailable { .. } => None,
     }
 }
 
@@ -993,7 +1034,9 @@ pub fn media_url(item: &AttachmentItem) -> Option<String> {
                 Some(format!("data:{};base64,{}", item.mime.trim(), data.trim()))
             }
         }
-        AttachmentSource::FileId { .. } | AttachmentSource::LocalPath { .. } => None,
+        AttachmentSource::FileId { .. }
+        | AttachmentSource::LocalPath { .. }
+        | AttachmentSource::Unavailable { .. } => None,
     }
 }
 
@@ -1023,7 +1066,8 @@ pub fn base64_with_mime(item: &AttachmentItem) -> Option<(String, String)> {
         }
         AttachmentSource::Url { .. }
         | AttachmentSource::FileId { .. }
-        | AttachmentSource::LocalPath { .. } => None,
+        | AttachmentSource::LocalPath { .. }
+        | AttachmentSource::Unavailable { .. } => None,
     }
 }
 
@@ -1084,7 +1128,8 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
         }
         AttachmentSource::Url { .. }
         | AttachmentSource::FileId { .. }
-        | AttachmentSource::LocalPath { .. } => return None,
+        | AttachmentSource::LocalPath { .. }
+        | AttachmentSource::Unavailable { .. } => return None,
     };
 
     match String::from_utf8(bytes) {
@@ -1563,7 +1608,9 @@ fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Va
                 })
             })
         }
-        AttachmentSource::Url { .. } | AttachmentSource::LocalPath { .. } => None,
+        AttachmentSource::Url { .. }
+        | AttachmentSource::LocalPath { .. }
+        | AttachmentSource::Unavailable { .. } => None,
     }
 }
 

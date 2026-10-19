@@ -32,6 +32,7 @@ function isBrowserUrl(value: string): boolean {
 }
 
 const href = computed(() => {
+  if (props.attachment.unavailable) return ''
   const url = props.attachment.url.trim()
   const path = props.attachment.path.trim()
   if (isBrowserUrl(url)) return url
@@ -85,10 +86,18 @@ const facts = computed(() =>
     .filter(Boolean)
     .join(' · '),
 )
+const unavailable = computed(() => props.attachment.unavailable)
+const unavailableNotice = computed(() =>
+  t('chat.attachments.unavailable', {
+    reason: props.attachment.unavailableReason.trim() || t('chat.attachments.unavailableUnknown'),
+  }),
+)
 const attachmentIcon = computed(() =>
   isImage.value ? RiImageLine : isVideo.value ? RiVideoLine : isAudio.value ? RiVolumeUpLine : RiFileTextLine,
 )
-const fullTitle = computed(() => [props.attachment.label, facts.value].filter(Boolean).join(' — '))
+const fullTitle = computed(() =>
+  [props.attachment.label, unavailable.value ? unavailableNotice.value : facts.value].filter(Boolean).join(' — '),
+)
 
 function openAttachment() {
   emit('open', props.attachment.path, href.value || props.attachment.url)
@@ -100,7 +109,7 @@ function openAttachment() {
     <div class="interaction-width">
       <button
         tabindex="0"
-        v-if="attachment.path"
+        v-if="attachment.path && !unavailable"
         type="button"
         class="part-link"
         :title="fullTitle"
@@ -137,7 +146,8 @@ function openAttachment() {
         <component :is="attachmentIcon" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div class="min-w-0">
           <p class="truncate font-mono text-xs font-medium">{{ attachment.label }}</p>
-          <p v-if="facts" class="text-[11px] text-muted-foreground">{{ facts }}</p>
+          <p v-if="unavailable" class="text-[11px] text-muted-foreground">{{ unavailableNotice }}</p>
+          <p v-else-if="facts" class="text-[11px] text-muted-foreground">{{ facts }}</p>
         </div>
       </div>
     </div>

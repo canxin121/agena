@@ -59,6 +59,14 @@ export type AttachmentPresentation = {
   height: number | null
   durationMs: number | null
   pageCount: number | null
+  /**
+   * Set when the attachment's bytes can no longer be delivered here: an upload
+   * bound to a route that is no longer selected, an expired provider file id,
+   * or a blob that left the conversation. The row still renders, without media.
+   */
+  unavailable: boolean
+  /** Why the bytes are gone, when the runtime recorded a reason. */
+  unavailableReason: string
 }
 
 export type CommandPresentation = {
@@ -311,12 +319,17 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   const source = jsonRecord(item.source)
   const sourceKind = firstString(source, ['source'])
   const mime = firstString(item, ['mime'])
+  const unavailable = sourceKind === 'unavailable'
+  const unavailableReason = unavailable ? firstString(source, ['reason']) : ''
   const path = firstString(source, ['path']) || firstString(item, ['path'])
-  const directUrl = firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
+  const directUrl =
+    unavailable ? '' : firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
   const base64 =
-    (sourceKind === 'base64' || sourceKind === 'provider_data'
-      ? firstString(source, ['data'])
-      : firstString(source, ['base64'])) || firstString(item, ['base64'])
+    unavailable
+      ? ''
+      : (sourceKind === 'base64' || sourceKind === 'provider_data'
+          ? firstString(source, ['data'])
+          : firstString(source, ['base64'])) || firstString(item, ['base64'])
   const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
   const label =
@@ -340,6 +353,8 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
     height: numericValue(item.height),
     durationMs: numericValue(item.duration_ms),
     pageCount: numericValue(item.page_count),
+    unavailable,
+    unavailableReason,
   }
 }
 
@@ -546,8 +561,11 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
   if (projected.length) return projected
 
   const mime = stringValue(part.source.mime) || firstString(content, ['mime'])
+  const contentSource = jsonRecord(content.source)
+  const unavailable = firstString(contentSource, ['source']) === 'unavailable'
+  const unavailableReason = unavailable ? firstString(contentSource, ['reason']) : ''
   const path = stringValue(part.source.serverPath) || firstString(content, ['path'])
-  const url = stringValue(part.source.url) || path
+  const url = unavailable ? '' : stringValue(part.source.url) || path
   const label =
     attachmentLabel({
       title: firstString(content, ['title']),
@@ -569,6 +587,8 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
       height: null,
       durationMs: null,
       pageCount: null,
+      unavailable,
+      unavailableReason,
     },
   ]
 }

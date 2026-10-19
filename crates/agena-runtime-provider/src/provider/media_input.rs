@@ -26,7 +26,14 @@ pub fn validate(protocol: MediaProtocol, items: &[AttachmentItem]) -> Result<(),
     let mut inline_total = 0usize;
     for item in items {
         // A local path is a reference, not an attempt to send media bytes.
-        if matches!(item.source, AttachmentSource::LocalPath { .. }) {
+        // An unavailable attachment carries no bytes at all: it is delivered
+        // as an explicit textual notice, so no protocol rule about media
+        // shapes or payload budgets can apply to it. Rejecting one would turn
+        // a conversation that merely lost its bytes into an unusable one.
+        if matches!(
+            item.source,
+            AttachmentSource::LocalPath { .. } | AttachmentSource::Unavailable { .. }
+        ) {
             continue;
         }
         let mime = item.mime.trim().to_ascii_lowercase();
@@ -342,6 +349,47 @@ mod tests {
             data: "A".repeat(25_000_000),
         };
         assert!(validate(MediaProtocol::OpenAiResponses, &[part.clone(), part]).is_err());
+    }
+
+    #[test]
+    fn unavailable_attachments_are_deliverable_as_notices_on_every_protocol() {
+        // A conversation that merely lost its bytes must never become
+        // unusable. The projection sends these as text, so no protocol shape
+        // or payload rule applies to them.
+        let mut image = item("image", "image/heic");
+        image.source = AttachmentSource::Unavailable {
+            reason: "it was attached through a different provider or endpoint".into(),
+        };
+        // Chat audio normally needs inline bytes; an unavailable one does not.
+        let mut audio = item("audio", "audio/mpeg");
+        audio.source = AttachmentSource::Unavailable {
+            reason: "the provider file id expired".into(),
+        };
+        let mut video = item("video", "video/mp4");
+        video.source = AttachmentSource::Unavailable {
+            reason: String::new(),
+        };
+        let mut oversized = item("image", "image/png");
+        oversized.source = AttachmentSource::Unavailable {
+            reason: "the selected model's inline media budget cannot carry it".into(),
+        };
+        for protocol in [
+            MediaProtocol::OpenAiResponses,
+            MediaProtocol::OpenAiChat,
+            MediaProtocol::Anthropic,
+            MediaProtocol::Gemini,
+        ] {
+            validate(
+                protocol,
+                &[
+                    image.clone(),
+                    audio.clone(),
+                    video.clone(),
+                    oversized.clone(),
+                ],
+            )
+            .unwrap();
+        }
     }
 
     #[test]

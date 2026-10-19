@@ -110,6 +110,10 @@ fn prepare_embedded_attachment_image(
             "provider file-id image inputs are not portable across the selected route"
                 .to_owned(),
         ),
+        AttachmentSource::Unavailable { .. } => Err(
+            "this attachment is no longer available; attach the file again before reusing it"
+                .to_owned(),
+        ),
     }
 }
 

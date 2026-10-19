@@ -105,6 +105,16 @@ pub enum AttachmentSource {
     LocalPath {
         path: String,
     },
+    /// The bytes are gone: a provider-hosted id from a route that is no longer
+    /// selected, an expired upload, or a blob that no longer belongs to this
+    /// conversation. History keeps the fact that something was attached, the
+    /// model receives a text placeholder instead, and the session stays
+    /// usable. This variant is what a failed hydration degrades to — it is
+    /// never produced by an explicit user selection.
+    Unavailable {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
+    },
 }
 
 impl AttachmentSource {
@@ -115,8 +125,25 @@ impl AttachmentSource {
             Self::ProviderData { .. } => return Some("provider-bound media"),
             Self::FileId { file_id } => file_id,
             Self::LocalPath { path } => path,
+            Self::Unavailable { .. } => return None,
         };
         (!value.trim().is_empty()).then_some(value.as_str())
+    }
+    pub fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+    }
+    /// The textual substitute a model receives in place of bytes that can no
+    /// longer be delivered. It is deliberately explicit: a model must never
+    /// believe it saw content it did not receive.
+    pub fn unavailable_notice(label: &str, reason: &str) -> String {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            format!(
+                "[{label} is unavailable in this conversation; it was attached through a different provider or model. Attach the file again to use it here.]"
+            )
+        } else {
+            format!("[{label} is unavailable: {reason}. Attach the file again to use it here.]")
+        }
     }
 }
 
@@ -154,6 +181,20 @@ impl AttachmentItem {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| self.kind.to_string())
+    }
+    /// Mark this attachment's bytes as no longer deliverable. Identity and
+    /// display metadata are kept so the conversation still reads correctly;
+    /// the checksum and size describe bytes that are no longer present, so
+    /// they are cleared with them.
+    pub fn degrade(&mut self, reason: impl Into<String>) {
+        if self.source.is_unavailable() {
+            return;
+        }
+        self.source = AttachmentSource::Unavailable {
+            reason: reason.into(),
+        };
+        self.sha256 = None;
+        self.size_bytes = None;
     }
 }
 

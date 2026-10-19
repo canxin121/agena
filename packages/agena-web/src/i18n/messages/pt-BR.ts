@@ -1205,6 +1205,8 @@ export default {
       "whitespaceOnly": "Somente espaços em branco",
       "deliveryNotice": "Ao enviar, o conteúdo será encaminhado a {provider}. Apenas visualizar não envia o conteúdo.",
       "referenceNotice": "Apenas uma referência. O conteúdo dos arquivos não é incluído automaticamente.",
+      "unavailable": "Conteúdo indisponível: {reason}. Anexe o arquivo novamente para usá-lo aqui.",
+      "unavailableUnknown": "ele foi anexado em outro provedor ou modelo",
       "title": "Anexos",
       "rowTitle": "Anexo",
       "attaching": "Anexando…",

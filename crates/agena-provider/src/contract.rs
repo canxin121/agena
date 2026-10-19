@@ -1780,12 +1780,34 @@ pub enum CompletionInputAttachmentKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CompletionInputAttachmentSource {
-    Url { url: String },
-    DataUrl { url: String },
-    Base64 { data: String },
-    ProviderData { route: String, data: String },
-    FileId { id: String },
-    LocalPath { path: String },
+    Url {
+        url: String,
+    },
+    DataUrl {
+        url: String,
+    },
+    Base64 {
+        data: String,
+    },
+    ProviderData {
+        route: String,
+        data: String,
+    },
+    FileId {
+        id: String,
+    },
+    LocalPath {
+        path: String,
+    },
+    /// The bytes are gone and cannot be recovered for the current route: a
+    /// provider-hosted upload from a route that is no longer selected, an
+    /// expired remote file, or a blob that no longer belongs to this
+    /// conversation. It is never delivered as media; the request carries a
+    /// textual placeholder instead so history stays replayable.
+    Unavailable {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
+    },
 }
 
 /// An attachment projected for a provider completion request.
@@ -2028,6 +2050,7 @@ fn attachment_text_hint(attachment: &CompletionInputAttachment) -> String {
             CompletionInputAttachmentSource::ProviderData { .. } => Some("provider-bound media"),
             CompletionInputAttachmentSource::FileId { id } => Some(id.as_str()),
             CompletionInputAttachmentSource::LocalPath { path } => Some(path.as_str()),
+            CompletionInputAttachmentSource::Unavailable { .. } => None,
         })
         .map(str::trim)
         .filter(|value| !value.is_empty())

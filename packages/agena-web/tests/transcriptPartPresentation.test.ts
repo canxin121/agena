@@ -696,3 +696,33 @@ test('provider-bound media resources remain previewable without exposing route i
   expect(projected[0]?.url).toBe('data:image/png;base64,Zml4ZWQ=')
   expect(projected[0]?.url).not.toContain('media-route')
 })
+
+test('an attachment that lost its bytes degrades to a notice instead of a broken preview', () => {
+  const part = operationPart({
+    attachments: [
+      {
+        kind: 'image',
+        mime: 'image/png',
+        filename: 'input.png',
+        sha256: 'a'.repeat(64),
+        size_bytes: 2048,
+        source: {
+          source: 'unavailable',
+          reason: 'it was attached through a different provider or endpoint',
+        },
+      },
+    ],
+  })
+  part.kind = 'resource'
+  part.source.agenaKind = 'file_ref'
+  const projected = attachmentPresentations(part)
+  expect(projected[0]).toMatchObject({
+    label: 'input.png',
+    mime: 'image/png',
+    unavailable: true,
+    unavailableReason: 'it was attached through a different provider or endpoint',
+  })
+  // No media is offered: an unavailable attachment must never render bytes it
+  // does not have, and must never fall back to a path-shaped pseudo-URL.
+  expect(projected[0]?.url).toBe('')
+})

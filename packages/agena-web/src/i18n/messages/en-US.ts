@@ -1667,6 +1667,8 @@ export default {
       whitespaceOnly: 'Whitespace only',
       deliveryNotice: 'On Send, contents go to {provider}. Previewing alone does not send them.',
       referenceNotice: 'Reference only. File contents are not automatically included.',
+      unavailable: 'Contents unavailable: {reason}. Attach the file again to use it here.',
+      unavailableUnknown: 'it was attached through a different provider or model',
       title: 'Attachments',
       rowTitle: 'Attachment',
       attaching: 'Attaching…',

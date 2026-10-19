@@ -1652,6 +1652,8 @@ export default {
       "whitespaceOnly": "Solo espacios en blanco",
       "deliveryNotice": "Al pulsar Enviar, el contenido se enviará a {provider}. La vista previa no lo envía.",
       "referenceNotice": "Solo es una referencia. El contenido de los archivos no se incluye automáticamente.",
+      "unavailable": "Contenido no disponible: {reason}. Vuelve a adjuntar el archivo para usarlo aquí.",
+      "unavailableUnknown": "se adjuntó con otro proveedor o modelo",
       "title": "Archivos adjuntos",
       "rowTitle": "Archivo adjunto",
       "attaching": "Adjuntando…",

@@ -914,7 +914,7 @@ impl ProviderRegistry {
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
-        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        validate_request_capabilities(model, provider.as_ref(), &mut request)?;
         request.model = model.model_id.clone();
         apply_request_backfill(model, provider.as_ref(), &mut request);
         let mut repair_count = 0_usize;
@@ -999,7 +999,7 @@ impl ProviderRegistry {
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
-        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        validate_request_capabilities(model, provider.as_ref(), &mut request)?;
         request.model = model.model_id.clone();
         apply_request_backfill(model, provider.as_ref(), &mut request);
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
@@ -1054,7 +1054,7 @@ impl ProviderRegistry {
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
-        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        validate_request_capabilities(model, provider.as_ref(), &mut request)?;
         request.model = model.model_id.clone();
         apply_request_backfill(model, provider.as_ref(), &mut request);
         let provider_id = model.provider_id.to_string();

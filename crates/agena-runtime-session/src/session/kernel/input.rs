@@ -261,7 +261,7 @@ impl KernelPromptHydrator {
             )
             .map_err(|e| invalid(e.to_string()))?;
             for item in &raw.attachments {
-                if let Some((attachment, lease, modeled)) = super::media::hydrate_attachment(
+                if let Some(hydrated) = super::media::hydrate_attachment(
                     reader,
                     prompt.facts.metadata.id,
                     *entry_id,
@@ -271,13 +271,17 @@ impl KernelPromptHydrator {
                 )
                 .await?
                 {
-                    prompt.media_modeled = prompt.media_modeled.saturating_add(modeled);
-                    prompt._media_leases.push(lease);
-                    attachments.push(attachment);
+                    prompt.media_modeled = prompt.media_modeled.saturating_add(hydrated.modeled);
+                    prompt._media_leases.extend(hydrated.lease);
+                    attachments.push(hydrated.attachment);
                 } else if matches!(
                     item.source,
                     agena_domain::AttachmentSource::Url { .. }
                         | agena_domain::AttachmentSource::FileId { .. }
+                        // A degraded attachment still has to reach the model as
+                        // an explicit notice, otherwise the historical tool
+                        // result silently loses what it once delivered.
+                        | agena_domain::AttachmentSource::Unavailable { .. }
                 ) {
                     attachments.push(super::media::completion_attachment(item));
                 }
@@ -420,7 +424,11 @@ impl KernelPromptHydrator {
                                 }
                                 ActivityPayload::Resource(resource) => {
                                     if resource.delivery == ResourceDelivery::ModelInput {
-                                        let (attachment, lease, modeled) = super::media::hydrate(
+                                        // History keeps its attachments across
+                                        // provider and model switches: bytes
+                                        // that can no longer be delivered
+                                        // degrade to an explicit notice.
+                                        let hydrated = super::media::hydrate(
                                             reader,
                                             facts.metadata.id,
                                             item.entry.id,
@@ -429,9 +437,12 @@ impl KernelPromptHydrator {
                                             &self.budget,
                                         )
                                         .await?;
-                                        media_modeled = media_modeled.saturating_add(modeled);
-                                        media_leases.push(lease);
-                                        parts.push(CompletionInputPart::Attachment { attachment });
+                                        media_modeled =
+                                            media_modeled.saturating_add(hydrated.modeled);
+                                        media_leases.extend(hydrated.lease);
+                                        parts.push(CompletionInputPart::Attachment {
+                                            attachment: hydrated.attachment,
+                                        });
                                         continue;
                                     }
                                     let encoded = encoded_json(resource, &mut remaining)?;
@@ -526,12 +537,14 @@ impl KernelPromptHydrator {
                     Role::System
                 }
                 EntryPayload::Compaction { summary, .. } => {
+                    // A checkpoint with an unreadable or foreign-route native
+                    // compaction state still has its frozen summary text; only
+                    // the native replay is skipped.
                     let state = item
                         .round_id
                         .and_then(|id| replays.get(&id))
                         .and_then(|state| *state)
-                        .map(KernelProviderState::decode)
-                        .transpose()?;
+                        .and_then(KernelProviderState::decode_lossy);
                     if native_compaction
                         && let Some(state) = state
                         && state.model == *model
@@ -590,18 +603,36 @@ impl KernelPromptHydrator {
             let Some(raw) = replays.get(&round).and_then(|state| *state) else {
                 continue;
             };
-            let state = KernelProviderState::decode(raw)?;
+            // Replay belongs to the route that produced it. A round captured by
+            // a different model is replayed as plain history, and a round whose
+            // state cannot be interpreted loses only its replay fidelity.
+            let Some(state) = KernelProviderState::decode_lossy(raw) else {
+                continue;
+            };
             if state.model != *model {
                 continue;
             }
             let empty = BTreeMap::new();
-            let value = restore_replay_text(
+            let value = match restore_replay_text(
                 &state.replay,
                 reasoning.get(&round).unwrap_or(&empty),
                 &mut remaining,
-            )?;
-            run.provider_state = serde_json::from_value(value)
-                .map_err(|error| invalid(format!("malformed provider replay: {error}")))?;
+            ) {
+                Ok(value) => value,
+                // A content epoch reset invalidates the whole replay tree, not
+                // one round; it is a structural condition of the session.
+                Err(KernelError::ContentReset) => return Err(KernelError::ContentReset),
+                Err(error) => {
+                    tracing::warn!(%error, "skipping unreplayable provider state");
+                    continue;
+                }
+            };
+            match serde_json::from_value(value) {
+                Ok(state) => run.provider_state = state,
+                Err(error) => {
+                    tracing::warn!(%error, "skipping malformed provider replay");
+                }
+            }
         }
         turns.retain(|turn| !turn.parts.is_empty() || !turn.provider_state.is_empty());
         if modeled_read_bytes(&turns)?.saturating_add(modeled_read_bytes(&compaction)?)

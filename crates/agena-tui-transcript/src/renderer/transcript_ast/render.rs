@@ -1435,10 +1435,14 @@ pub(super) fn attachment_image_source(item: &PartAttachment) -> Option<Cow<'_, s
         PartAttachmentSource::Url { url }
         | PartAttachmentSource::DataUrl { url }
         | PartAttachmentSource::LocalPath { path: url } => Some(Cow::Borrowed(url.as_str())),
-        PartAttachmentSource::Base64 { data } => bounded_image_data_url(&item.mime, data)
-            .ok()
-            .map(Cow::Owned),
-        PartAttachmentSource::FileId { .. } => None,
+        PartAttachmentSource::Base64 { data } | PartAttachmentSource::ProviderData { data, .. } => {
+            bounded_image_data_url(&item.mime, data)
+                .ok()
+                .map(Cow::Owned)
+        }
+        // Provider-hosted ids and degraded attachments have no bytes to render;
+        // the caller keeps its ordinary text presentation for them.
+        PartAttachmentSource::FileId { .. } | PartAttachmentSource::Unavailable { .. } => None,
     }
 }
 

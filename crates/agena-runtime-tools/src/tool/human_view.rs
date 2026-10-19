@@ -771,6 +771,9 @@ impl BuiltinHumanRenderer {
             }
             AttachmentSource::FileId { file_id } => format!("file-id:{file_id}"),
             AttachmentSource::LocalPath { path } => format!("file://{path}"),
+            // The bytes are gone; keep a stable, non-resolvable uri so the
+            // view still renders the attachment row instead of panicking.
+            AttachmentSource::Unavailable { .. } => format!("unavailable:{}", attachment.kind),
         };
         ArtifactRef {
             uri,

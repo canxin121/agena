@@ -26,7 +26,31 @@ impl SessionManager {
                 "tool result contains more than eight attachments".into(),
             ));
         }
-        let route = providers.media_route_binding(model)?;
+        // A tool result that carries no media must not depend on the selected
+        // route being able to name a media destination; binding the route is
+        // therefore deferred until there are embedded bytes to bind. A route
+        // that cannot name a destination degrades those bytes to an explicit
+        // notice instead of failing the tool result.
+        let needs_route = raw.attachments.iter().any(|attachment| {
+            matches!(
+                attachment.source,
+                AttachmentSource::Base64 { .. }
+                    | AttachmentSource::ProviderData { .. }
+                    | AttachmentSource::DataUrl { .. }
+                    | AttachmentSource::LocalPath { .. }
+            )
+        });
+        let route = if needs_route {
+            match providers.media_route_binding(model) {
+                Ok(route) => Some(route),
+                Err(error) => {
+                    tracing::warn!(%error, "tool media cannot be bound to the selected route");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let _preparation = if raw.attachments.is_empty() {
             None
         } else {
@@ -40,12 +64,21 @@ impl SessionManager {
         for (index, attachment) in raw.attachments.iter_mut().enumerate() {
             let bytes = match &attachment.source {
                 AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
+                    let Some(route) = route.as_deref() else {
+                        degrade_tool_attachment(
+                            attachment,
+                            "it cannot be bound to the selected provider route",
+                        );
+                        continue;
+                    };
                     if let AttachmentSource::ProviderData { route: bound, .. } = &attachment.source
-                        && bound != &route
+                        && bound != route
                     {
-                        return Err(AppError::Config(
-                            "tool media is bound to a different provider route".into(),
-                        ));
+                        degrade_tool_attachment(
+                            attachment,
+                            "it was produced for a different provider route",
+                        );
+                        continue;
                     }
                     if data.len() > 28 * 1024 * 1024 {
                         return Err(AppError::Config(
@@ -59,6 +92,13 @@ impl SessionManager {
                     )
                 }
                 AttachmentSource::DataUrl { url } => {
+                    if route.is_none() {
+                        degrade_tool_attachment(
+                            attachment,
+                            "it cannot be bound to the selected provider route",
+                        );
+                        continue;
+                    }
                     let (header, data) = url.split_once(',').ok_or_else(|| {
                         AppError::Config("tool returned an invalid media data URL".into())
                     })?;
@@ -74,14 +114,30 @@ impl SessionManager {
                     )
                 }
                 AttachmentSource::LocalPath { path } => {
+                    if route.is_none() {
+                        degrade_tool_attachment(
+                            attachment,
+                            "it cannot be bound to the selected provider route",
+                        );
+                        continue;
+                    }
                     let root = executor
                         .workspace_root()
                         .canonicalize()
                         .map_err(|error| AppError::internal_error(&error))?;
-                    let target = root
-                        .join(path)
-                        .canonicalize()
-                        .map_err(|error| AppError::internal_error(&error))?;
+                    let target = match root.join(path).canonicalize() {
+                        Ok(target) => target,
+                        Err(error) => {
+                            // The workspace file behind a historical tool result
+                            // may be gone; keep the result, drop the bytes.
+                            tracing::warn!(%error, "tool attachment file is missing");
+                            degrade_tool_attachment(
+                                attachment,
+                                "its workspace file is no longer readable",
+                            );
+                            continue;
+                        }
+                    };
                     if !target.starts_with(&root)
                         || !matches!(
                             executor.principal().authorize_path_access(
@@ -96,20 +152,27 @@ impl SessionManager {
                     } else {
                         let path = path.clone();
                         let expected = attachment.sha256.clone();
-                        Some(
-                            super::media::MEDIA_WORKERS
-                                .run(move || {
-                                    agena_runtime_tools::media_input::read_local(
-                                        &root,
-                                        &path,
-                                        expected.as_deref(),
-                                    )
-                                })
-                                .await
-                                .map_err(|error| AppError::internal_error(&error))?
-                                .map_err(AppError::Config)?
-                                .bytes,
-                        )
+                        match super::media::MEDIA_WORKERS
+                            .run(move || {
+                                agena_runtime_tools::media_input::read_local(
+                                    &root,
+                                    &path,
+                                    expected.as_deref(),
+                                )
+                            })
+                            .await
+                        {
+                            Ok(Ok(read)) => Some(read.bytes),
+                            Ok(Err(error)) => {
+                                tracing::warn!(%error, "tool attachment file changed");
+                                degrade_tool_attachment(
+                                    attachment,
+                                    "its workspace file changed since it was produced",
+                                );
+                                continue;
+                            }
+                            Err(error) => return Err(AppError::internal_error(&error)),
+                        }
                     }
                 }
                 AttachmentSource::Url { url } => {
@@ -128,6 +191,9 @@ impl SessionManager {
                     }
                     None
                 }
+                // Already-degraded attachments carry no deliverable bytes; the
+                // provider projection replaces them with an explicit notice.
+                AttachmentSource::Unavailable { .. } => None,
             };
             let Some(bytes) = bytes else {
                 continue;
@@ -151,10 +217,18 @@ impl SessionManager {
             };
             metadata.size_bytes = Some(bytes.len() as u64);
             metadata.sha256 = Some(hash.clone());
+            // The route is present whenever `needs_route` admitted bytes.
+            let Some(route) = route.clone() else {
+                degrade_tool_attachment(
+                    attachment,
+                    "it cannot be bound to the selected provider route",
+                );
+                continue;
+            };
             let binding = MediaBinding {
                 version: 1,
                 model: model.clone(),
-                route: route.clone(),
+                route,
                 blob: blob.descriptor().id,
                 attachment: metadata,
             };
@@ -223,6 +297,19 @@ impl SessionManager {
             }
         }
     }
+}
+/// Record a tool attachment that can no longer be delivered. The tool result
+/// keeps its identity and display metadata; the provider projection turns the
+/// entry into an explicit notice, so history stays complete and usable.
+fn degrade_tool_attachment(attachment: &mut agena_domain::AttachmentItem, reason: &str) {
+    if attachment.source.is_unavailable() {
+        return;
+    }
+    attachment.source = AttachmentSource::Unavailable {
+        reason: reason.to_owned(),
+    };
+    attachment.sha256 = None;
+    attachment.size_bytes = None;
 }
 pub(super) async fn append_text_chunks(
     source: &TextOutput,

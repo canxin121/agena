@@ -1659,6 +1659,8 @@ export default {
       whitespaceOnly: '仅包含空白字符',
       deliveryNotice: '点击发送后，内容交给 {provider}；仅预览不会发送。',
       referenceNotice: '仅引用路径，不自动附带文件内容。',
+      unavailable: '内容不可用：{reason}。请重新附加该文件后再使用。',
+      unavailableUnknown: '它是在其他服务商或模型下附加的',
       title: '附件',
       rowTitle: '附件',
       attaching: '正在附加…',

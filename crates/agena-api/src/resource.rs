@@ -1584,11 +1584,58 @@ pub enum PartAttachmentKind {
 #[serde(tag = "source", rename_all = "snake_case")]
 /// Source of a message attachment.
 pub enum PartAttachmentSource {
-    Url { url: String },
-    DataUrl { url: String },
-    Base64 { data: String },
-    FileId { file_id: String },
-    LocalPath { path: String },
+    Url {
+        url: String,
+    },
+    DataUrl {
+        url: String,
+    },
+    /// Bytes bound to the exact provider route they were authorized for.
+    ProviderData {
+        route: String,
+        data: String,
+    },
+    Base64 {
+        data: String,
+    },
+    FileId {
+        file_id: String,
+    },
+    LocalPath {
+        path: String,
+    },
+    /// The bytes are gone: an upload from a route that is no longer selected,
+    /// an expired provider file id, or a blob that no longer belongs to this
+    /// conversation. The attachment keeps its identity and display metadata so
+    /// the transcript still reads correctly; clients render the notice instead
+    /// of media.
+    Unavailable {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reason: String,
+    },
+}
+
+impl From<&agena_domain::AttachmentSource> for PartAttachmentSource {
+    fn from(source: &agena_domain::AttachmentSource) -> Self {
+        match source {
+            agena_domain::AttachmentSource::Url { url } => Self::Url { url: url.clone() },
+            agena_domain::AttachmentSource::DataUrl { url } => Self::DataUrl { url: url.clone() },
+            agena_domain::AttachmentSource::ProviderData { route, data } => Self::ProviderData {
+                route: route.clone(),
+                data: data.clone(),
+            },
+            agena_domain::AttachmentSource::Base64 { data } => Self::Base64 { data: data.clone() },
+            agena_domain::AttachmentSource::FileId { file_id } => Self::FileId {
+                file_id: file_id.clone(),
+            },
+            agena_domain::AttachmentSource::LocalPath { path } => {
+                Self::LocalPath { path: path.clone() }
+            }
+            agena_domain::AttachmentSource::Unavailable { reason } => Self::Unavailable {
+                reason: reason.clone(),
+            },
+        }
+    }
 }
 
 // ─── Permission rules ────────────────────────────────────────────────────

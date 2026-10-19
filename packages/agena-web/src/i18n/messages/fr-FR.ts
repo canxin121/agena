@@ -556,6 +556,8 @@ export default {
       sendContents: 'Envoyer le contenu', pastedText: 'Texte collé', whitespaceOnly: 'Espaces uniquement',
       deliveryNotice: 'Lors de l’envoi, le contenu sera transmis à {provider}. Le simple aperçu ne l’envoie pas.',
       referenceNotice: 'Référence uniquement. Le contenu des fichiers n’est pas inclus automatiquement.',
+      unavailable: 'Contenu indisponible : {reason}. Joignez à nouveau le fichier pour l’utiliser ici.',
+      unavailableUnknown: 'il a été joint avec un autre fournisseur ou modèle',
       title: 'Pièces jointes', rowTitle: 'Pièce jointe', attaching: 'Ajout en cours…',
       countLabelOne: '1 fichier', countLabelMany: '{count} fichiers', repo: 'repo',
       removeAttachmentAria: 'Retirer la pièce jointe',

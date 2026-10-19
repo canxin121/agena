@@ -517,6 +517,135 @@ async fn selection_updates_group_commit_and_preserve_all_run_options() {
 }
 
 #[tokio::test]
+async fn switching_to_a_model_that_cannot_hold_the_conversation_is_refused_before_it_is_committed()
+{
+    let fixture = Fixture::new(1).await;
+    fixture
+        .submit("a conversation that will outgrow a smaller model")
+        .await;
+    fixture.calls(1).await;
+    fixture.events[0]
+        .send(Ok(CompletionStreamEvent::TextDelta {
+            provider_id: ProviderId::new("fixture"),
+            model: ModelId::new("model"),
+            delta: "recorded usage".into(),
+        }))
+        .unwrap();
+    fixture.events[0]
+        .send(Ok(CompletionStreamEvent::Completed {
+            provider_id: ProviderId::new("fixture"),
+            model: ModelId::new("model"),
+            finish_reason: Some(CompletionFinishReason::Stop),
+            usage: Some(agena_provider::CompletionUsage {
+                input_tokens: 900,
+                output_tokens: 200,
+                ..Default::default()
+            }),
+            provider_metadata: None,
+            end_turn: Some(true),
+        }))
+        .unwrap();
+    fixture.idle(fixture.session.id).await;
+    let round = fixture
+        .manager
+        .kernel()
+        .reader
+        .latest_round(session_id(fixture.session.id).unwrap())
+        .await
+        .unwrap()
+        .clone();
+    assert!(
+        round
+            .as_ref()
+            .and_then(|round| round.provider_state.as_ref())
+            .is_some_and(|state| state.to_string().contains("900")),
+        "the completed round must record the usage the switch gate reads"
+    );
+    // The smaller model is selected before the switch; the recorded usage of
+    // 1,100 tokens then proves the conversation cannot fit its 512-token input
+    // budget.
+    fixture.provider.input_limit.store(512, Ordering::SeqCst);
+
+    let mut options = fixture.options();
+    options.model = ModelRef::try_new("fixture", "smaller-model").unwrap();
+    let refusal = fixture
+        .manager
+        .switch_session_selection(fixture.session.id, options.clone())
+        .await;
+    assert!(
+        matches!(
+            refusal,
+            Err(AppError::PromptBudgetExceeded {
+                estimated_tokens: 1_100,
+                limit_tokens: 512,
+                ..
+            })
+        ),
+        "a switch the conversation provably cannot fit must be refused with an actionable error: {refusal:?}"
+    );
+    // Nothing was committed: the session still runs on the model it was using,
+    // so the user can compact and switch again.
+    let metadata = fixture
+        .manager
+        .kernel()
+        .reader
+        .metadata(session_id(fixture.session.id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        metadata.selection.as_ref().unwrap().model_ref().unwrap(),
+        Some(fixture.options().model)
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn switching_to_a_model_that_holds_the_conversation_commits_the_selection() {
+    let fixture = Fixture::new(1).await;
+    fixture
+        .submit("a conversation a smaller model can still hold")
+        .await;
+    fixture.calls(1).await;
+    fixture.events[0]
+        .send(Ok(CompletionStreamEvent::Completed {
+            provider_id: ProviderId::new("fixture"),
+            model: ModelId::new("model"),
+            finish_reason: Some(CompletionFinishReason::Stop),
+            usage: Some(agena_provider::CompletionUsage {
+                input_tokens: 900,
+                output_tokens: 200,
+                ..Default::default()
+            }),
+            provider_metadata: None,
+            end_turn: Some(true),
+        }))
+        .unwrap();
+    fixture.idle(fixture.session.id).await;
+    fixture.provider.input_limit.store(4_096, Ordering::SeqCst);
+
+    let mut options = fixture.options();
+    let target = ModelRef::try_new("fixture", "smaller-model").unwrap();
+    options.model = target.clone();
+    fixture
+        .manager
+        .switch_session_selection(fixture.session.id, options)
+        .await
+        .unwrap();
+    let metadata = fixture
+        .manager
+        .kernel()
+        .reader
+        .metadata(session_id(fixture.session.id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        metadata.selection.as_ref().unwrap().model_ref().unwrap(),
+        Some(target)
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn session_start_context_and_message_deliveries_have_distinct_business_keys_per_session() {
     // No model is selected, so both patch fields must remain reliable
     // deliveries until a caller selects a model rather than starting a run.

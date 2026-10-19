@@ -1378,6 +1378,8 @@ export default {
       sendContents: 'सामग्री भेजें', pastedText: 'चिपकाया गया पाठ', whitespaceOnly: 'केवल रिक्त स्थान',
       deliveryNotice: 'भेजने पर सामग्री {provider} को जाएगी। केवल पूर्वावलोकन करने से सामग्री नहीं भेजी जाती।',
       referenceNotice: 'केवल संदर्भ। फ़ाइल की सामग्री अपने आप शामिल नहीं होती।',
+      unavailable: 'सामग्री उपलब्ध नहीं है: {reason}। यहाँ उपयोग करने के लिए फ़ाइल दोबारा अटैच करें।',
+      unavailableUnknown: 'यह किसी अन्य प्रदाता या मॉडल के साथ अटैच किया गया था',
       title: 'अटैचमेंट', rowTitle: 'अटैचमेंट', attaching: 'अटैच किया जा रहा है…', countLabelOne: '1 फ़ाइल', countLabelMany: '{count} फ़ाइलें', repo: 'repo', removeAttachmentAria: 'अटैचमेंट हटाएँ',
       actions: { addFromComputer: 'कंप्यूटर से जोड़ें', addFromProject: 'प्रोजेक्ट से जोड़ें', clearAll: 'सभी हटाएँ', clear: 'हटाएँ' },
       empty: { title: 'कोई अटैचमेंट नहीं', description: 'फ़ाइलें अटैच करने के लिए ऊपर दिए बटन उपयोग करें।' },

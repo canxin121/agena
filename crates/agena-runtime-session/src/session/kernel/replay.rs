@@ -52,6 +52,19 @@ impl KernelProviderState {
         }
         Ok(state)
     }
+
+    /// History must stay readable even when one round's provider state cannot
+    /// be decoded: a state written by a newer version, or a damaged row, costs
+    /// that round its replay fidelity — never the whole conversation.
+    pub(super) fn decode_lossy(value: &Value) -> Option<Self> {
+        match Self::decode(value) {
+            Ok(state) => Some(state),
+            Err(error) => {
+                tracing::warn!(%error, "skipping a provider round whose replay state is unusable");
+                None
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]

@@ -871,6 +871,8 @@ export default {
       whitespaceOnly: 'مسافات بيضاء فقط',
       deliveryNotice: 'عند الإرسال، سيصل المحتوى إلى {provider}. معاينته وحدها لا ترسله.',
       referenceNotice: 'مرجع فقط؛ لا يُرفق محتوى الملف تلقائيًا.',
+      unavailable: 'المحتوى غير متاح: {reason}. أرفق الملف مرة أخرى لاستخدامه هنا.',
+      unavailableUnknown: 'تم إرفاقه عبر مزوّد أو نموذج آخر',
       title: 'المرفقات',
       rowTitle: 'مرفق',
       attaching: 'جارٍ إرفاق الملف…',

@@ -161,6 +161,10 @@ impl ModelRuntime for OllamaAdapter {
             !matches!(
                 item.source,
                 agena_domain::AttachmentSource::LocalPath { .. }
+                    // Already-degraded history is delivered as a textual
+                    // notice, not as media, so it never reaches this adapter
+                    // as an undeliverable attachment.
+                    | agena_domain::AttachmentSource::Unavailable { .. }
             )
         }) {
             return Err(ProviderError::Config("This Ollama adapter currently sends text messages only and cannot deliver media attachments. Use fs.read for text or a configured multimodal adapter; no media content was sent.".into()));

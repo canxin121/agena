@@ -13,17 +13,17 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use tracing::Instrument;
 
+use super::{CompletionResponse, ModelRuntime, wire_message};
 use crate::ProviderError;
 use agena_domain::{
     AdapterId, Model, ModelId, ModelRef, ModelSpeedMode, ModelThinkingMode, ProviderId,
 };
 use agena_plugin_host::ProviderDescriptor;
-use agena_provider::ProviderErrorKind;
-use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
-
-use super::{CompletionResponse, ModelRuntime, wire_message};
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
+use agena_provider::ProviderErrorKind;
+use agena_provider::{CompletionInputAttachment, CompletionInputPart};
+use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
 
 /// How many times a retryable provider request is retried before the request
 /// fails. 10 mirrors codex's `stream_max_retries` default and is deliberately
@@ -685,67 +685,216 @@ impl ProviderRegistry {
     }
 }
 
-fn validate_request_capabilities(
+/// Where one request attachment lives, so it can be replaced in place.
+struct AttachmentSlot {
+    run: usize,
+    part: usize,
+    /// `None` for a standalone attachment part, `Some(index)` inside a tool
+    /// result's media list.
+    item: Option<usize>,
+}
+
+fn attachment_slots(request: &CompletionRequest) -> Vec<AttachmentSlot> {
+    let mut slots = Vec::new();
+    for (run, turn) in request.turns.iter().enumerate() {
+        for (part, input) in turn.parts.iter().enumerate() {
+            match input {
+                CompletionInputPart::Attachment { .. } => slots.push(AttachmentSlot {
+                    run,
+                    part,
+                    item: None,
+                }),
+                CompletionInputPart::ToolResult { attachments, .. } => {
+                    slots.extend((0..attachments.len()).map(|item| AttachmentSlot {
+                        run,
+                        part,
+                        item: Some(item),
+                    }));
+                }
+                _ => {}
+            }
+        }
+    }
+    slots
+}
+
+fn attachment_at<'a>(
+    request: &'a CompletionRequest,
+    slot: &AttachmentSlot,
+) -> &'a CompletionInputAttachment {
+    let part = &request.turns[slot.run].parts[slot.part];
+    match (part, slot.item) {
+        (CompletionInputPart::Attachment { attachment }, None) => attachment,
+        (CompletionInputPart::ToolResult { attachments, .. }, Some(item)) => &attachments[item],
+        _ => unreachable!("attachment slot references a non-attachment part"),
+    }
+}
+
+fn attachment_at_mut<'a>(
+    request: &'a mut CompletionRequest,
+    slot: &AttachmentSlot,
+) -> &'a mut CompletionInputAttachment {
+    let part = &mut request.turns[slot.run].parts[slot.part];
+    match (part, slot.item) {
+        (CompletionInputPart::Attachment { attachment }, None) => attachment,
+        (CompletionInputPart::ToolResult { attachments, .. }, Some(item)) => &mut attachments[item],
+        _ => unreachable!("attachment slot references a non-attachment part"),
+    }
+}
+
+/// Why this route cannot deliver one attachment as media.
+///
+/// Every condition here is a history condition: the bytes were prepared for a
+/// different destination, the selected model cannot accept their modality, or
+/// the protocol cannot carry their shape. None of them may abort the request —
+/// the model receives an explicit notice instead, so the conversation remains
+/// usable across provider, endpoint, and model switches.
+fn undeliverable_reason(
     model: &ModelRef,
     provider: &dyn ModelRuntime,
-    request: &CompletionRequest,
-) -> Result<(), ProviderError> {
-    let capabilities =
-        provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
-
-    let attachments = request
-        .turns
-        .iter()
-        .flat_map(wire_message::project)
-        .flat_map(|part| match part {
-            wire_message::WirePart::Attachment { item } => vec![item],
-            wire_message::WirePart::ToolResult { attachments, .. } => attachments,
-            _ => Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    provider.validate_media_inputs_for_adapter(
-        model.adapter_id.as_ref(),
-        &model.model_id,
-        &attachments,
-    )?;
-
-    let mut unsupported = Vec::new();
-    for item in attachments {
-        if let agena_domain::AttachmentSource::ProviderData { route, .. } = &item.source
-            && route != &media_route_fingerprint(model, provider)?
-        {
-            return Err(ProviderError::Config(format!(
-                "attachment is bound to a different provider/model/endpoint/account route; use the original route or start a new conversation and explicitly attach it to {model}"
-            )));
+    capabilities: &ModelCapabilities,
+    route: Option<&str>,
+    item: &AttachmentItem,
+) -> Option<String> {
+    if item.source.is_unavailable() {
+        return None;
+    }
+    if let agena_domain::AttachmentSource::ProviderData { route: bound, .. } = &item.source {
+        // The bytes were prepared for one exact destination. A different
+        // endpoint, account, credential scope, or protocol shape would reject
+        // or misroute them, so they must not be sent.
+        if route != Some(bound.as_str()) {
+            return Some("it was attached through a different provider or endpoint".to_owned());
         }
-        if matches!(
-            item.source,
-            agena_domain::AttachmentSource::ProviderData { .. }
-        ) && let Some(modality) = explicit_media_requirement(&item)
+        if let Some(modality) = explicit_media_requirement(item)
             && capabilities.support_for_input_modality(modality)
                 != agena_domain::CapabilitySupport::Supported
         {
-            return Err(ProviderError::Config(format!(
-                "media-bound request cannot be sent to {model}: {modality} support is not confirmed"
-            )));
-        }
-        if let Some(modality) = unsupported_attachment_modality(&capabilities, &item) {
-            unsupported.push((modality, item.summary_label()));
+            return Some(format!(
+                "support for {modality} input is not confirmed for the selected model"
+            ));
         }
     }
-
-    if !unsupported.is_empty() {
-        let details = unsupported
-            .into_iter()
-            .map(|(modality, label)| format!("{modality} (`{label}`)"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(ProviderError::Provider(format!(
-            "provider `{}` model `{}` explicitly does not support requested input modalities: {details}",
-            model.provider_id, model.model_id
-        )));
+    if let Some(modality) = unsupported_attachment_modality(capabilities, item) {
+        return Some(format!(
+            "the selected model does not accept {modality} input"
+        ));
     }
+    if provider
+        .validate_media_inputs_for_adapter(
+            model.adapter_id.as_ref(),
+            &model.model_id,
+            std::slice::from_ref(item),
+        )
+        .is_err()
+    {
+        return Some("the selected provider route cannot deliver this attachment".to_owned());
+    }
+    None
+}
 
+/// Rewrite every history attachment this route cannot deliver into an explicit
+/// notice, and return the request unchanged otherwise.
+///
+/// History outlives the route that captured it. A provider switch, an endpoint
+/// or credential change, or a switch to a model with a smaller inline media
+/// budget must cost the conversation its bytes — never its readability. New
+/// user attachments are validated strictly before they are ever persisted
+/// (`prepare_user_media`), so an explicit send still fails loudly instead of
+/// silently degrading.
+fn sanitize_history_media(
+    model: &ModelRef,
+    provider: &dyn ModelRuntime,
+    request: &mut CompletionRequest,
+) -> Result<(), ProviderError> {
+    // A local path is a reference, not media: the projection already delivers
+    // it as text, so the route's media rules do not apply to it.
+    let candidates = attachment_slots(request)
+        .into_iter()
+        .filter_map(|slot| {
+            let item = wire_message::attachment_item_for_validation(attachment_at(request, &slot));
+            (!matches!(
+                item.source,
+                agena_domain::AttachmentSource::LocalPath { .. }
+            ))
+            .then_some((slot, item))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let capabilities =
+        provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
+    // A route that cannot name a stable media destination is itself a reason to
+    // stop delivering media, not to reject the request.
+    let route = media_route_fingerprint(model, provider).ok();
+    let mut items = candidates
+        .iter()
+        .map(|(_, item)| item.clone())
+        .collect::<Vec<_>>();
+    let mut degraded = items
+        .iter()
+        .map(|item| item.source.is_unavailable())
+        .collect::<Vec<_>>();
+    for index in 0..items.len() {
+        if degraded[index] {
+            continue;
+        }
+        if let Some(reason) = undeliverable_reason(
+            model,
+            provider,
+            &capabilities,
+            route.as_deref(),
+            &items[index],
+        ) {
+            items[index].degrade(reason);
+            degraded[index] = true;
+        }
+    }
+    // Protocol payload budgets are aggregate. History accumulates media over
+    // many turns, so a conversation can outgrow a smaller model's inline
+    // budget through no fault of its own; drop the oldest attachment rather
+    // than losing the conversation.
+    loop {
+        let Err(error) = provider.validate_media_inputs_for_adapter(
+            model.adapter_id.as_ref(),
+            &model.model_id,
+            &items,
+        ) else {
+            break;
+        };
+        let Some(index) = (0..items.len()).find(|index| !degraded[*index]) else {
+            // Nothing left to give up: the request itself is malformed.
+            return Err(error);
+        };
+        items[index].degrade("the selected model's inline media budget cannot carry it");
+        degraded[index] = true;
+    }
+    for (index, (slot, _)) in candidates.iter().enumerate() {
+        if !degraded[index] {
+            continue;
+        }
+        let agena_domain::AttachmentSource::Unavailable { reason } = &items[index].source else {
+            continue;
+        };
+        tracing::warn!(
+            provider_id = model.provider_id.as_ref(),
+            model_id = model.model_id.as_ref(),
+            label = items[index].summary_label(),
+            reason,
+            "history attachment cannot be delivered by the selected route; degrading it to an explicit notice"
+        );
+        wire_message::degrade_completion_input_attachment(attachment_at_mut(request, slot), reason);
+    }
+    Ok(())
+}
+
+fn validate_request_capabilities(
+    model: &ModelRef,
+    provider: &dyn ModelRuntime,
+    request: &mut CompletionRequest,
+) -> Result<(), ProviderError> {
+    sanitize_history_media(model, provider, request)?;
     provider.validate_provider_native_tools_request(model.adapter_id.as_ref(), request)
 }
 
@@ -925,5 +1074,241 @@ mod tests {
         };
         assert_eq!(super::retry_reason(&err), "malformed_response");
         assert!(err.retryable());
+    }
+}
+
+#[cfg(test)]
+mod history_media_tests {
+    use super::*;
+    use agena_domain::{CapabilitySupport, ModelCapabilities, ModelId, ModelRef};
+    use agena_provider::{
+        CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
+        CompletionInputPart, CompletionInputRun, PromptCacheShape,
+    };
+
+    /// A route that can name a stable media destination and accepts whatever it
+    /// is handed, except above an inline aggregate the accumulated history can
+    /// outgrow — the shape of a smaller model's media budget.
+    struct RouteFixture {
+        model: ModelId,
+        shape: Option<PromptCacheShape>,
+        max_deliverable_media: usize,
+    }
+
+    impl RouteFixture {
+        fn new() -> Self {
+            Self {
+                model: ModelId::new("fixture-model"),
+                shape: Some(PromptCacheShape::from_fields(
+                    "route-fixture",
+                    [("endpoint", "primary")],
+                )),
+                max_deliverable_media: usize::MAX,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for RouteFixture {
+        fn id(&self) -> &str {
+            "route-fixture"
+        }
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+        fn prompt_cache_shape(&self, _: &ModelId) -> Option<PromptCacheShape> {
+            self.shape.clone()
+        }
+        fn model_capabilities(&self, _: &ModelId) -> ModelCapabilities {
+            ModelCapabilities {
+                image_input: CapabilitySupport::Supported,
+                ..Default::default()
+            }
+        }
+        fn validate_media_inputs_for_adapter(
+            &self,
+            _: Option<&AdapterId>,
+            _: &ModelId,
+            attachments: &[AttachmentItem],
+        ) -> Result<(), ProviderError> {
+            let deliverable = attachments
+                .iter()
+                .filter(|item| !item.source.is_unavailable())
+                .count();
+            if deliverable > self.max_deliverable_media {
+                return Err(ProviderError::Config(
+                    "fixture route inline media budget exceeded".into(),
+                ));
+            }
+            Ok(())
+        }
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+        async fn complete(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            unreachable!("history media sanitization never calls the provider")
+        }
+    }
+
+    fn attachment(source: CompletionInputAttachmentSource) -> CompletionInputAttachment {
+        CompletionInputAttachment {
+            kind: CompletionInputAttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source,
+            filename: Some("diagram.png".to_owned()),
+            title: None,
+            size_bytes: Some(2_048),
+            sha256: Some("a".repeat(64)),
+            width: Some(640),
+            height: Some(480),
+            duration_ms: None,
+            page_count: None,
+        }
+    }
+
+    fn request_with(attachment: CompletionInputAttachment) -> CompletionRequest {
+        request_with_all(vec![attachment])
+    }
+
+    fn request_with_all(attachments: Vec<CompletionInputAttachment>) -> CompletionRequest {
+        CompletionRequest {
+            model_supports_parallel_tool_calls: None,
+            model: ModelId::new("fixture-model"),
+            system: None,
+            turns: vec![CompletionInputRun {
+                role: agena_domain::Role::User,
+                parts: attachments
+                    .into_iter()
+                    .map(|attachment| CompletionInputPart::Attachment { attachment })
+                    .collect(),
+                provider_state: Default::default(),
+            }],
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
+
+    fn history_attachment(request: &CompletionRequest) -> &CompletionInputAttachment {
+        let CompletionInputPart::Attachment { attachment } = &request.turns[0].parts[0] else {
+            panic!("fixture turn carries one attachment part");
+        };
+        attachment
+    }
+
+    #[test]
+    fn history_media_bound_to_another_route_degrades_instead_of_failing() {
+        let provider = RouteFixture::new();
+        let model = ModelRef::new("route-fixture", "fixture-model");
+        // The bytes were prepared for a different endpoint; the current route
+        // must not send them, but the conversation must stay usable.
+        let mut request = request_with(attachment(CompletionInputAttachmentSource::ProviderData {
+            route: "media-route:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_owned(),
+            data: "Zml4dHVyZQ==".to_owned(),
+        }));
+        super::sanitize_history_media(&model, &provider, &mut request).unwrap();
+        let CompletionInputAttachmentSource::Unavailable { reason } =
+            &history_attachment(&request).source
+        else {
+            panic!("a foreign-route attachment must degrade to an explicit notice");
+        };
+        assert!(reason.contains("different provider"), "{reason}");
+        // Display metadata survives so the transcript still reads correctly.
+        let degraded = history_attachment(&request);
+        assert_eq!(degraded.filename.as_deref(), Some("diagram.png"));
+        assert_eq!(degraded.mime, "image/png");
+        assert_eq!(degraded.sha256, None);
+        assert_eq!(degraded.size_bytes, None);
+    }
+
+    #[test]
+    fn history_media_bound_to_the_selected_route_is_left_alone() {
+        let provider = RouteFixture::new();
+        let model = ModelRef::new("route-fixture", "fixture-model");
+        let route = super::media_route_fingerprint(&model, &provider).unwrap();
+        let mut request = request_with(attachment(CompletionInputAttachmentSource::ProviderData {
+            route,
+            data: "Zml4dHVyZQ==".to_owned(),
+        }));
+        super::sanitize_history_media(&model, &provider, &mut request).unwrap();
+        assert!(matches!(
+            history_attachment(&request).source,
+            CompletionInputAttachmentSource::ProviderData { .. }
+        ));
+    }
+
+    #[test]
+    fn already_unavailable_history_media_keeps_its_recorded_reason() {
+        let provider = RouteFixture::new();
+        let model = ModelRef::new("route-fixture", "fixture-model");
+        let mut request = request_with(attachment(CompletionInputAttachmentSource::Unavailable {
+            reason: "the provider file id expired".to_owned(),
+        }));
+        super::sanitize_history_media(&model, &provider, &mut request).unwrap();
+        let CompletionInputAttachmentSource::Unavailable { reason } =
+            &history_attachment(&request).source
+        else {
+            panic!("an unavailable attachment stays unavailable");
+        };
+        assert_eq!(reason, "the provider file id expired");
+    }
+
+    #[test]
+    fn a_route_that_cannot_carry_the_accumulated_media_gives_up_bytes_not_the_conversation() {
+        // Each attachment fits the route on its own; only the accumulated
+        // history exceeds the inline budget. The conversation must lose the
+        // oldest bytes, not the request.
+        let provider = RouteFixture {
+            max_deliverable_media: 1,
+            ..RouteFixture::new()
+        };
+        let model = ModelRef::new("route-fixture", "fixture-model");
+        let inline = || {
+            attachment(CompletionInputAttachmentSource::Base64 {
+                data: "Zml4dHVyZQ==".to_owned(),
+            })
+        };
+        let mut request = request_with_all(vec![inline(), inline()]);
+        super::sanitize_history_media(&model, &provider, &mut request).unwrap();
+        let sources = request.turns[0]
+            .parts
+            .iter()
+            .map(|part| match part {
+                CompletionInputPart::Attachment { attachment } => attachment.source.clone(),
+                _ => panic!("fixture turn carries only attachments"),
+            })
+            .collect::<Vec<_>>();
+        let degraded = sources
+            .iter()
+            .filter_map(|source| match source {
+                CompletionInputAttachmentSource::Unavailable { reason } => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(degraded.len(), 1, "{sources:?}");
+        assert!(degraded[0].contains("inline media budget"), "{degraded:?}");
+        assert!(matches!(
+            sources[1],
+            CompletionInputAttachmentSource::Base64 { .. }
+        ));
     }
 }

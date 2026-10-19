@@ -291,7 +291,7 @@ impl OpenAiTransport {
                     filename,
                 })
             }
-            AttachmentSource::LocalPath { .. } => None,
+            AttachmentSource::LocalPath { .. } | AttachmentSource::Unavailable { .. } => None,
         }
     }
 

@@ -583,7 +583,7 @@ async fn session_transcript_parts(
     for entry in &page.entries {
         parts.push(crate::application_parts::project_kernel_entry(reader, session, entry).await?);
     }
-    crate::application_parts::append_execution_failures(reader, &mut parts).await?;
+    crate::application_parts::append_execution_failures(reader, &page.entries, &mut parts).await?;
     Ok((
         parts,
         agena_api::pagination::PageInfo {

@@ -47,51 +47,44 @@ pub(crate) fn encode_part_cursor(
 /// persisted this part, and no schema change is required for them to render.
 pub(crate) async fn append_execution_failures(
     reader: &KernelReader,
+    entries: &[EntryView],
     parts: &mut Vec<PartResource>,
 ) -> Result<(), ApplicationError> {
-    use agena_domain::ExecutionId;
-    use agena_storage::kernel::AttemptGeneration;
+    use agena_storage::kernel::ExecutionPhase;
 
-    let mut failures = Vec::new();
-    for part in parts.iter() {
-        if !part.message_boundary || part.role != "assistant" {
+    // A bounded history window often contains only the newest entries of a
+    // long run. The boundary entry is then absent from `parts`, so recover the
+    // failed run identity from every loaded entry of the window.
+    let mut candidates = Vec::new();
+    let mut seen_runs = std::collections::HashSet::new();
+    for entry in entries {
+        if entry.execution_phase != ExecutionPhase::Failed {
             continue;
         }
-        if part
-            .content
-            .get("execution_phase")
-            .and_then(serde_json::Value::as_str)
-            != Some("failed")
-        {
-            continue;
-        }
-        if parts
-            .iter()
-            .any(|existing| existing.kind == "error" && existing.run_id == Some(part.part_id))
-        {
-            continue;
-        }
-        let Some(execution) = part
-            .content
-            .get("execution_id")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| value.parse::<ExecutionId>().ok())
-        else {
+        let Some(run_id) = entry.response_entry_id else {
             continue;
         };
-        let Some(generation) = part
-            .content
-            .get("generation")
-            .and_then(serde_json::Value::as_i64)
-            .and_then(|value| AttemptGeneration::try_from(value).ok())
-        else {
+        if !seen_runs.insert(run_id) {
             continue;
-        };
+        }
         // A forked session reads entries owned by its ancestor. The failed
         // attempt therefore belongs to the entry owner, not the reader.
-        let Ok(owner) = SessionId::try_from(part.origin_session_id) else {
+        candidates.push((
+            run_id.get(),
+            entry.execution_id,
+            entry.generation,
+            entry.origin_session_id,
+            entry.created_at_ms,
+        ));
+    }
+    let mut failures = Vec::new();
+    for (run_id, execution, generation, owner, candidate_created_at_ms) in candidates {
+        if parts
+            .iter()
+            .any(|existing| existing.kind == "error" && existing.run_id == Some(run_id))
+        {
             continue;
-        };
+        }
         let round = reader
             .failed_round(owner, execution, generation)
             .await
@@ -122,14 +115,14 @@ pub(crate) async fn append_execution_failures(
                             ),
                             "failed provider round could not be projected as a transcript error"
                         );
-                        (manager_failure_content(), part.part_id, part.created_at_ms)
+                        (manager_failure_content(), run_id, candidate_created_at_ms)
                     }
                 },
-                None => (manager_failure_content(), part.part_id, part.created_at_ms),
+                None => (manager_failure_content(), run_id, candidate_created_at_ms),
             },
-            None => (manager_failure_content(), part.part_id, part.created_at_ms),
+            None => (manager_failure_content(), run_id, candidate_created_at_ms),
         };
-        failures.push((part.part_id, source_id, created_at_ms, content, owner));
+        failures.push((run_id, source_id, created_at_ms, content, owner));
     }
 
     let mut used_ids = parts
@@ -666,19 +659,19 @@ impl Application {
             ((*metadata).clone(), entries, None, false)
         };
         let mut parts = Vec::with_capacity(entries.len());
-        for entry in entries {
+        for entry in &entries {
             if !matches!(entry.payload, EntryPayload::Interaction { .. }) {
                 parts.push(
                     self.project_entry(
                         request.session_id,
-                        &entry,
+                        entry,
                         requested_sections(&request.sections),
                     )
                     .await?,
                 );
             }
         }
-        append_execution_failures(reader, &mut parts).await?;
+        append_execution_failures(reader, &entries, &mut parts).await?;
         let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
         Ok(SessionPartsResource {
             session_id: request.session_id,
@@ -720,7 +713,7 @@ impl Application {
                 .await?,
             );
         }
-        append_execution_failures(reader, &mut parts).await?;
+        append_execution_failures(reader, &page.entries, &mut parts).await?;
         let runs = page
             .messages
             .iter()
@@ -1055,7 +1048,8 @@ mod tests {
         assert_eq!(boundary_part.state, "completed");
         assert_eq!(boundary_part.run_state.as_deref(), Some("failed"));
         let mut parts = vec![boundary_part, notice_part];
-        append_execution_failures(&kernel.reader, &mut parts)
+        let entries = vec![(*boundary_entry).clone(), (*notice_entry).clone()];
+        append_execution_failures(&kernel.reader, &entries, &mut parts)
             .await
             .unwrap();
         assert_eq!(
@@ -1121,12 +1115,16 @@ mod tests {
             .unwrap();
 
         let boundary_entry = kernel.reader.entry(session, text.entry_id()).await.unwrap();
-        let mut parts = vec![
-            project_kernel_entry(&kernel.reader, session, &boundary_entry)
-                .await
-                .unwrap(),
-        ];
-        append_execution_failures(&kernel.reader, &mut parts)
+        let mut tail_only = project_kernel_entry(&kernel.reader, session, &boundary_entry)
+            .await
+            .unwrap();
+        // A bounded window often omits the boundary entry and starts at a
+        // later reasoning/tool entry of the same failed run.
+        tail_only.message_boundary = false;
+        tail_only.run_state = None;
+        let mut parts = vec![tail_only];
+        let entries = vec![(*boundary_entry).clone()];
+        append_execution_failures(&kernel.reader, &entries, &mut parts)
             .await
             .unwrap();
         let errors = parts
@@ -1136,6 +1134,98 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].run_state.as_deref(), Some("failed"));
         assert_eq!(errors[0].run_id, Some(text.entry_id().get()));
+        let content =
+            agena_runtime_contracts::part_content::ErrorContent::try_from(&errors[0].content)
+                .unwrap();
+        assert!(content.message.contains("ended unexpectedly"));
+    }
+
+    #[tokio::test]
+    async fn tool_only_tail_projects_the_failed_run_error() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "tool-tail".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let tool = round
+            .begin_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "provider-call".into(),
+                    name: "fs.read".into(),
+                    input: serde_json::json!({"path":"file.txt"}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        let view = kernel.reader.tool(session, tool.id()).await.unwrap();
+        tool.complete(
+            RequestId::new(),
+            ToolResult {
+                phase: ToolPhase::Failed,
+                value: serde_json::json!({"error":{"message":"tool failed"}}),
+            },
+        )
+        .await
+        .unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let entry = kernel.reader.entry(session, view.entry_id).await.unwrap();
+        let tool_part = project_kernel_entry(&kernel.reader, session, &entry)
+            .await
+            .unwrap();
+        assert_eq!(tool_part.kind, "tool_call");
+        let mut parts = vec![tool_part];
+        let entries = vec![(*entry).clone()];
+        append_execution_failures(&kernel.reader, &entries, &mut parts)
+            .await
+            .unwrap();
+        let errors = parts
+            .iter()
+            .filter(|part| part.kind == "error")
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].run_id, Some(view.entry_id.get()));
         let content =
             agena_runtime_contracts::part_content::ErrorContent::try_from(&errors[0].content)
                 .unwrap();

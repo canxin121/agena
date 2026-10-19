@@ -847,8 +847,21 @@ async fn selection_changes_merge_fields_and_history_cursors_are_scope_and_genera
             .send(RequestId::new(), session, document("changes membership"))
             .await
             .unwrap();
+        assert!(
+            ports.reader.history(session, Some(cursor), 1).await.is_ok(),
+            "append-only membership changes keep older cursors readable"
+        );
+        let mut future_cursor = cursor;
+        future_cursor.membership = ports
+            .reader
+            .metadata(session)
+            .await
+            .unwrap()
+            .membership_generation
+            .next()
+            .unwrap();
         assert!(matches!(
-            ports.reader.history(session, Some(cursor), 1).await,
+            ports.reader.history(session, Some(future_cursor), 1).await,
             Err(KernelError::Conflict(_))
         ));
         drop(admin);

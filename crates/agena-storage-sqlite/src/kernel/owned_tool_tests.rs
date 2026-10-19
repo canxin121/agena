@@ -177,7 +177,7 @@ async fn owned_tool_pages_skip_large_ordinary_history_and_bound_only_matching_pa
 #[tokio::test]
 async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_facts() {
     for memory in [true, false] {
-        let (ports, _admin, _root, _url) = tests::fixture(memory).await;
+        let (ports, admin, _root, _url) = tests::fixture(memory).await;
         let (session, _) = seed_tools(&ports, 0, 1).await;
         let first = ports
             .reader
@@ -210,6 +210,24 @@ async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_fac
                 .await,
             Err(KernelError::Conflict(_))
         ));
+        // Append-only membership growth keeps the returned tool in place even
+        // though the generation advances.
+        tests::sql(
+            &admin,
+            &format!(
+                "UPDATE agena_sessions SET membership_generation=membership_generation+1 WHERE id={}",
+                session.get()
+            ),
+        )
+        .await;
+        assert!(
+            ports
+                .reader
+                .owned_tool_entries(session, Some(cursor), 1)
+                .await
+                .is_ok(),
+            "an append must not invalidate a tool cursor whose anchor survived"
+        );
         ports
             .sessions
             .update_metadata(
@@ -237,7 +255,7 @@ async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_fac
         assert!(updated.control_version > first.control_version);
         assert_eq!(
             updated.metadata.membership_generation,
-            first.metadata.membership_generation
+            first.metadata.membership_generation.next().unwrap()
         );
         ports.shutdown().await.unwrap();
     }

@@ -245,6 +245,10 @@ pub struct HistoryCursor {
     pub membership: MembershipGeneration,
     pub segment_sequence: i64,
     pub ordinal: u32,
+    /// The durable entry at this position. A later generation is compatible
+    /// when an append copied the same `(sequence, ordinal)` mapping forward.
+    #[serde(default)]
+    pub anchor: Option<EntryId>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -26,13 +26,34 @@ pub(super) async fn read(
             .fetch_one(&mut *tx)
             .await
             .map_err(sql_error)?;
-    if after.is_some_and(|cursor| {
-        cursor.membership != metadata.membership_generation
-            || cursor.control_version != control_version
-    }) {
-        return Err(KernelError::Conflict(
-            "tool history changed; restart pagination".into(),
-        ));
+    if let Some(cursor) = after {
+        if cursor.control_version != control_version {
+            return Err(KernelError::Conflict(
+                "tool history changed; restart pagination".into(),
+            ));
+        }
+        if cursor.membership > metadata.membership_generation {
+            return Err(KernelError::Conflict(
+                "tool history changed; restart pagination".into(),
+            ));
+        }
+        if cursor.membership < metadata.membership_generation {
+            // Appends only add positions. Continue from the previous page as
+            // long as the last returned tool is still in the live membership.
+            let retained: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM agena_entries e WHERE e.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) LIMIT 1",
+            )
+            .bind(cursor.after.get())
+            .bind(session.get())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+            if retained.is_none() {
+                return Err(KernelError::Conflict(
+                    "tool history changed; restart pagination".into(),
+                ));
+            }
+        }
     }
     metrics::add(&diagnostics.0.owned_tool_queries, 1);
     let candidates = sqlx::query(PREFLIGHT_SQL)

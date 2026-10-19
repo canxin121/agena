@@ -567,8 +567,26 @@ async fn valid_warm_views_use_no_sql_and_committed_changes_invalidate_before_rec
             .unwrap();
         let page = ports.reader.history(session, None, 3).await.unwrap();
         assert_eq!(page.entries.last().unwrap().id, fresh.value.message_id);
+        // Append-only membership growth preserves every existing position, so
+        // a cursor handed to the client before the new message stays valid.
+        assert!(
+            ports.reader.history(session, history.next, 3).await.is_ok(),
+            "an append must not invalidate an older history cursor"
+        );
+        let mut moved_anchor = history.next.unwrap();
+        moved_anchor.anchor =
+            Some(EntryId::try_from(page.entries.first().unwrap().id.get()).unwrap());
         assert!(matches!(
-            ports.reader.history(session, history.next, 3).await,
+            ports.reader.history(session, Some(moved_anchor), 3).await,
+            Err(KernelError::Conflict(_))
+        ));
+        let mut future_generation = history.next.unwrap();
+        future_generation.membership = page.metadata.membership_generation.next().unwrap();
+        assert!(matches!(
+            ports
+                .reader
+                .history(session, Some(future_generation), 3)
+                .await,
             Err(KernelError::Conflict(_))
         ));
         ports

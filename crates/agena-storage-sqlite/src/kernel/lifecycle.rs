@@ -1041,6 +1041,10 @@ pub(super) async fn history_after(
                 segment_sequence: seq,
                 ordinal: u32::try_from(row.try_get::<i64, _>("ordinal").map_err(storage)?)
                     .map_err(storage)?,
+                anchor: Some(
+                    EntryId::try_from(row.try_get::<i64, _>("entry_id").map_err(storage)?)
+                        .map_err(storage)?,
+                ),
             });
         }
     }

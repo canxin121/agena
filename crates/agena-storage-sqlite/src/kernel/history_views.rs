@@ -6,10 +6,48 @@ use sea_orm::sqlx::{SqliteConnection, SqlitePool, sqlite::SqliteRow};
 // historical responses keep their identity after retry/continue.
 const ANCHOR: &str = "CASE WHEN e.kind='user' THEN e.id ELSE COALESCE((SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation),e.id) END";
 const MEMBERSHIP: &str = "FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind!='interaction'";
-fn validate(metadata: &SessionMetadata, before: Option<HistoryCursor>) -> Result<()> {
-    if before.is_some_and(|cursor| {
-        cursor.session != metadata.id || cursor.membership != metadata.membership_generation
-    }) {
+pub(super) async fn validate(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    metadata: &SessionMetadata,
+    before: Option<HistoryCursor>,
+) -> Result<()> {
+    let Some(cursor) = before else {
+        return Ok(());
+    };
+    if cursor.session != session {
+        return Err(KernelError::Conflict(
+            "history membership changed; restart pagination".into(),
+        ));
+    }
+    if cursor.membership == metadata.membership_generation {
+        return Ok(());
+    }
+    // Appending history copies the current tail into a new segment while
+    // preserving every existing (sequence, ordinal) position. A cursor from a
+    // previous generation is therefore still usable until its anchor entry was
+    // actually removed or moved by a rewind/withdraw/fork.
+    if cursor.membership > metadata.membership_generation {
+        return Err(KernelError::Conflict(
+            "history membership changed; restart pagination".into(),
+        ));
+    }
+    let Some(anchor) = cursor.anchor else {
+        return Err(KernelError::Conflict(
+            "history membership changed; restart pagination".into(),
+        ));
+    };
+    let retained: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal WHERE s.session_id=? AND s.sequence=? AND m.ordinal=? AND m.entry_id=? LIMIT 1",
+    )
+    .bind(session.get())
+    .bind(cursor.segment_sequence)
+    .bind(i64::from(cursor.ordinal))
+    .bind(anchor.get())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    if retained.is_none() {
         return Err(KernelError::Conflict(
             "history membership changed; restart pagination".into(),
         ));
@@ -27,6 +65,9 @@ fn cursor(
         segment_sequence: row.try_get("sequence").map_err(storage)?,
         ordinal: u32::try_from(row.try_get::<i64, _>("ordinal").map_err(storage)?)
             .map_err(storage)?,
+        anchor: Some(
+            EntryId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?,
+        ),
     })
 }
 async fn bodies(
@@ -80,7 +121,7 @@ pub(super) async fn history_window(
     let limit = limit.clamp(1, 256);
     let mut tx = pool.begin().await.map_err(storage)?;
     let metadata = reads::metadata(&mut tx, session).await?;
-    validate(&metadata, before)?;
+    validate(&mut tx, session, &metadata, before).await?;
     let selection = if message_ids.is_empty() {
         String::new()
     } else {
@@ -142,7 +183,7 @@ pub(super) async fn message_history(
     let entry_limit = entry_limit.clamp(1, 128);
     let mut tx = pool.begin().await.map_err(storage)?;
     let metadata = reads::metadata(&mut tx, session).await?;
-    validate(&metadata, before)?;
+    validate(&mut tx, session, &metadata, before).await?;
     // A boundary index lives in the entry/attempt identities; no content body
     // participates in message selection, counting or sorting.
     let sql = format!(

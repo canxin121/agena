@@ -322,13 +322,7 @@ pub(super) async fn history(
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.history_queries, 1);
     let metadata = metadata(&mut transaction, session).await?;
-    if before.as_ref().is_some_and(|cursor| {
-        cursor.session != session || cursor.membership != metadata.membership_generation
-    }) {
-        return Err(KernelError::Conflict(
-            "history membership changed; restart pagination".into(),
-        ));
-    }
+    history_views::validate(&mut transaction, session, &metadata, before).await?;
     let boundary = before
         .as_ref()
         .map_or(i64::MAX, |cursor| cursor.segment_sequence);
@@ -382,6 +376,10 @@ pub(super) async fn history(
                 membership: metadata.membership_generation,
                 segment_sequence: sequence,
                 ordinal: row.try_get::<i64, _>("ordinal").map_err(storage)? as u32,
+                anchor: Some(
+                    EntryId::try_from(row.try_get::<i64, _>("entry_id").map_err(storage)?)
+                        .map_err(storage)?,
+                ),
             });
             selected.push(row.try_get::<i64, _>("entry_id").map_err(storage)?);
         }

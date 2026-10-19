@@ -9,7 +9,8 @@ use agena_api::{
     queries::{ReadPartsParams, ReadRunsParams},
 };
 use agena_storage::kernel::{
-    EntryPayload, EntryView, HistoryCursor, KernelReader, OwnedToolCursor, SessionId, ToolPhase,
+    CaptureState, EntryPayload, EntryView, HistoryCursor, KernelReader, OwnedToolCursor, SessionId,
+    ToolPhase,
 };
 
 /// One bounded, ascending page of owned tool facts. Its opaque continuation
@@ -224,9 +225,16 @@ pub(crate) async fn project_kernel_entry(
         agena_storage::kernel::ExecutionPhase::Cancelled => "cancelled",
         agena_storage::kernel::ExecutionPhase::Interrupted => "failed",
     };
+    // A running attempt usually has several finished reasoning/text streams.
+    // Only an open capture is still producing tokens; treating every part of a
+    // running attempt as running leaves completed thoughts spinning forever.
     let content_state = match entry.execution_phase {
         agena_storage::kernel::ExecutionPhase::Queued => "pending",
-        agena_storage::kernel::ExecutionPhase::Running => "running",
+        agena_storage::kernel::ExecutionPhase::Running
+            if entry.content_state == Some(CaptureState::Open) =>
+        {
+            "running"
+        }
         _ => "completed",
     };
     let message_boundary = entry.response_entry_id == Some(entry.id);
@@ -1132,5 +1140,85 @@ mod tests {
             agena_runtime_contracts::part_content::ErrorContent::try_from(&errors[0].content)
                 .unwrap();
         assert!(content.message.contains("ended unexpectedly"));
+    }
+
+    #[tokio::test]
+    async fn completed_streams_in_a_running_attempt_are_not_marked_running() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "streams".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let finished = round
+            .begin_text(RequestId::new(), true)
+            .await
+            .unwrap()
+            .value;
+        finished.append("thought").await.unwrap();
+        finished.finish(RequestId::new()).await.unwrap();
+        let streaming = round
+            .begin_text(RequestId::new(), true)
+            .await
+            .unwrap()
+            .value;
+        streaming.append("still writing").await.unwrap();
+
+        let finished_entry = kernel
+            .reader
+            .entry(session, finished.entry_id())
+            .await
+            .unwrap();
+        assert_eq!(finished_entry.content_state, Some(CaptureState::Complete));
+        let finished_part = project_kernel_entry(&kernel.reader, session, &finished_entry)
+            .await
+            .unwrap();
+        assert_eq!(finished_part.state, "completed");
+        assert_eq!(finished_part.run_state.as_deref(), Some("running"));
+
+        let streaming_entry = kernel
+            .reader
+            .entry(session, streaming.entry_id())
+            .await
+            .unwrap();
+        assert_eq!(streaming_entry.content_state, Some(CaptureState::Open));
+        let streaming_part = project_kernel_entry(&kernel.reader, session, &streaming_entry)
+            .await
+            .unwrap();
+        assert_eq!(streaming_part.state, "running");
     }
 }

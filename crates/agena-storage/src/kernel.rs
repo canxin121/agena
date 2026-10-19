@@ -231,6 +231,11 @@ pub struct EntryView {
     pub created_at_ms: i64,
     pub response_entry_id: Option<EntryId>,
     pub execution_phase: ExecutionPhase,
+    /// Capture state of the entry's own content stream. `Open` is the only
+    /// state that proves the model is still writing this text/reasoning part;
+    /// a running attempt alone does not.
+    #[serde(default)]
+    pub content_state: Option<CaptureState>,
     pub payload: EntryPayload,
 }
 

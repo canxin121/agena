@@ -40,7 +40,7 @@ async fn bodies(
     }
     metrics::add(&diagnostics.0.history_queries, 1);
     let sql = format!(
-        "SELECT e.*,({ANCHOR}) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase {MEMBERSHIP} AND e.id IN (SELECT value FROM json_each(?)) ORDER BY s.sequence,m.ordinal"
+        "SELECT e.*,({ANCHOR}) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state {MEMBERSHIP} AND e.id IN (SELECT value FROM json_each(?)) ORDER BY s.sequence,m.ordinal"
     );
     let rows = sqlx::query(&sql)
         .bind(session.get())

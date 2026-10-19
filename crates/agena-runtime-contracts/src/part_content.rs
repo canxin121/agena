@@ -512,6 +512,27 @@ impl ErrorContent {
     }
 }
 
+/// Marker prefix for a synthetic notice that carries an execution-level
+/// failure which has no failed provider round (for example a manager-level
+/// configuration stop). Notices are plain strings in the kernel, so the
+/// structured failure rides inside the text and is projected back into a
+/// canonical `error` part at read time.
+pub const FAILURE_NOTICE_PREFIX: &str = "\u{1f}agena.failure:";
+
+pub fn failure_notice_text(failure: &agena_failure::Failure) -> serde_json::Result<String> {
+    Ok(format!(
+        "{FAILURE_NOTICE_PREFIX}{}",
+        serde_json::to_string(failure)?
+    ))
+}
+
+/// Decode a marker notice body. `None` means this is an ordinary notice that
+/// must keep rendering as user-visible text.
+pub fn decode_failure_notice(text: &str) -> Option<serde_json::Result<agena_failure::Failure>> {
+    let payload = text.strip_prefix(FAILURE_NOTICE_PREFIX)?;
+    Some(serde_json::from_str(payload))
+}
+
 impl TryFrom<&Value> for ErrorContent {
     type Error = String;
 
@@ -898,6 +919,26 @@ pub fn notice_part_from_notice_content(part: &NoticeContent) -> NoticePart {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn failure_notice_round_trips_and_leaves_ordinary_notices_alone() {
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("configuration.invalid"),
+            agena_failure::FailureCategory::InvalidInput,
+            agena_failure::FailureResponsibility::Caller,
+            agena_failure::RetryDirective::CorrectInput,
+            agena_failure::RecoveryDirective::OpenSettings,
+            agena_failure::FailureImpact::RequestRejected,
+            agena_failure::UserPresentation::new(
+                "configuration.invalid",
+                "the model repeated the same tool call without progress",
+            ),
+        );
+        let text = failure_notice_text(&failure).unwrap();
+        assert!(text.starts_with(FAILURE_NOTICE_PREFIX));
+        assert_eq!(decode_failure_notice(&text).unwrap().unwrap(), failure);
+        assert!(decode_failure_notice("a delivery arrived").is_none());
+    }
 
     #[test]
     fn text_round_trips_and_preserves_unknown_keys() {

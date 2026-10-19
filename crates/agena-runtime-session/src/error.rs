@@ -517,6 +517,14 @@ impl AppError {
             Self::Internal(diagnostic) => {
                 UserPresentation::validated_with_context(code, diagnostic)
             }
+            // Manager-level configuration stops carry the actionable reason
+            // (repeat guard, continuation limit, turn cap). Keep the generic
+            // static prose for settings-validation errors only.
+            Self::Config(detail) => UserPresentation::validated_with_context(code, detail),
+            Self::ConfigErr(error) => UserPresentation::validated_with_context(
+                code,
+                agena_failure::diagnostic::format_error_chain(error.as_ref()),
+            ),
             // ClassifyFailure is a display-only value with no Error/source
             // implementation, so Display is the full available diagnostic.
             Self::AutoApproveClassifyFailed(failure) => {

@@ -148,9 +148,39 @@ fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
              as \\|), no truncation. Received: {raw}",
             raw = bounded_text_preview(arguments_json)
         )),
-        // A parseable object falls through to the executor's generic
-        // missing-`tool` rejection.
-        Ok(_) => None,
+        // A parseable object with an object-shaped `input` falls through to the
+        // executor's generic missing-`tool` rejection. When `input` itself has
+        // the wrong JSON shape, surface that instead: a stringified `input` is
+        // the common model mistake, and the generic missing-`tool` message
+        // would hide it.
+        Ok(value) => {
+            let object = value.as_object().expect("non-object handled above");
+            let input = object.get("input")?;
+            if input.is_object() {
+                return None;
+            }
+            let type_name = json_value_type_name(input);
+            let raw = bounded_json_preview(input);
+            let tool = object
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or("<unknown>");
+            Some(if input.is_string() {
+                format!(
+                    "tools_call `input` for tool `{tool}` must be a JSON object, not a \
+                     JSON-encoded string. Pass the tool parameters directly as an object inside \
+                     `{{\"tool\": \"{tool}\", \"input\": {{...}}}}`; never stringify the inner \
+                     arguments. Received: {raw}"
+                )
+            } else {
+                format!(
+                    "tools_call `input` for tool `{tool}` must be a JSON object with the tool \
+                     parameters; received a JSON {type_name} instead. Received: {raw}"
+                )
+            })
+        }
     }
 }
 

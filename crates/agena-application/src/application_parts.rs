@@ -95,55 +95,40 @@ pub(crate) async fn append_execution_failures(
             .failed_round(owner, execution, generation)
             .await
             .map_err(crate::kernel_error)?;
-        let Some(round) = &*round else {
-            continue;
-        };
-        let Some(failure) = round
-            .provider_state
-            .as_ref()
-            .and_then(|state| state.get("failure"))
-        else {
-            continue;
-        };
-        let failure: agena_failure::Failure = match serde_json::from_value(failure.clone()) {
-            Ok(failure) => failure,
-            Err(error) => {
-                tracing::warn!(
-                    round_id = round.id.get(),
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "decode provider round failure for transcript projection",
-                        &error,
+        // A failed attempt does not always leave a failed provider round:
+        // manager-level stops (repeat guard, continuation limit, prompt
+        // budget) finish after a succeeded round. Keep the run's error part
+        // visible even when only the attempt phase records the failure.
+        let (content, source_id, created_at_ms) = match &*round {
+            Some(round) => match round
+                .provider_state
+                .as_ref()
+                .and_then(|state| state.get("failure"))
+                .cloned()
+            {
+                Some(value) => match serde_json::from_value::<agena_failure::Failure>(value) {
+                    Ok(failure) => (
+                        failure_content(&failure)?,
+                        round.id.get(),
+                        round.created_at_ms,
                     ),
-                    "failed provider round could not be projected as a transcript error"
-                );
-                continue;
-            }
+                    Err(error) => {
+                        tracing::warn!(
+                            round_id = round.id.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode provider round failure for transcript projection",
+                                &error,
+                            ),
+                            "failed provider round could not be projected as a transcript error"
+                        );
+                        (manager_failure_content(), part.part_id, part.created_at_ms)
+                    }
+                },
+                None => (manager_failure_content(), part.part_id, part.created_at_ms),
+            },
+            None => (manager_failure_content(), part.part_id, part.created_at_ms),
         };
-        let problem = agena_failure::UserProblem::from(&failure);
-        let category = serde_json::to_value(problem.category)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned));
-        let mut extra = std::collections::BTreeMap::new();
-        extra.insert(
-            "problem".to_owned(),
-            serde_json::to_value(&problem)
-                .map_err(|error| ApplicationError::internal_error(&error))?,
-        );
-        let content = agena_runtime_contracts::part_content::ErrorContent {
-            category,
-            message: problem.user.fallback.clone(),
-            detail: None,
-            retry: None,
-            extra,
-        }
-        .as_value();
-        failures.push((
-            part.part_id,
-            round.id.get(),
-            round.created_at_ms,
-            content,
-            owner,
-        ));
+        failures.push((part.part_id, source_id, created_at_ms, content, owner));
     }
 
     let mut used_ids = parts
@@ -177,6 +162,45 @@ pub(crate) async fn append_execution_failures(
         });
     }
     Ok(())
+}
+
+fn failure_content(
+    failure: &agena_failure::Failure,
+) -> Result<serde_json::Value, ApplicationError> {
+    let problem = agena_failure::UserProblem::from(failure);
+    let category = serde_json::to_value(problem.category)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert(
+        "problem".to_owned(),
+        serde_json::to_value(&problem).map_err(|error| ApplicationError::internal_error(&error))?,
+    );
+    Ok(agena_runtime_contracts::part_content::ErrorContent {
+        category,
+        message: problem.user.fallback.clone(),
+        detail: None,
+        retry: None,
+        extra,
+    }
+    .as_value())
+}
+
+/// Older manager-level failures predate the durable failure notice, so their
+/// exact reason is gone. The attempt phase still proves the run failed; show a
+/// visible error instead of only the generic "Response failed" lifecycle row.
+fn manager_failure_content() -> serde_json::Value {
+    agena_runtime_contracts::part_content::ErrorContent {
+        category: Some("internal".into()),
+        message: "The response ended unexpectedly before a final answer was produced. \
+                  This run was stopped outside the provider stream, so its exact failure \
+                  reason was not recorded. Send a new message to continue."
+            .into(),
+        detail: None,
+        retry: None,
+        extra: Default::default(),
+    }
+    .as_value()
 }
 
 fn requested_sections(sections: &[ToolDetailSection]) -> &[ToolDetailSection] {
@@ -248,8 +272,30 @@ pub(crate) async fn project_kernel_entry(
                 resource_id:*summary, kind:agena_domain::ContentKind::Text }],"compaction_through":through});
         }
         EntryPayload::Notice { text } => {
-            part.kind = "text".into();
-            part.content = serde_json::json!({"text":text,"synthetic":true});
+            match agena_runtime_contracts::part_content::decode_failure_notice(text) {
+                Some(Ok(failure)) => {
+                    part.kind = "error".into();
+                    part.state = "failed".into();
+                    part.run_state = Some("failed".into());
+                    part.content = failure_content(&failure)?;
+                }
+                Some(Err(error)) => {
+                    tracing::warn!(
+                        entry_id = entry.id.get(),
+                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                            "decode execution failure notice for transcript projection",
+                            &error,
+                        ),
+                        "execution failure notice could not be decoded; keeping it as a notice"
+                    );
+                    part.kind = "text".into();
+                    part.content = serde_json::json!({"text":text,"synthetic":true});
+                }
+                None => {
+                    part.kind = "text".into();
+                    part.content = serde_json::json!({"text":text,"synthetic":true});
+                }
+            }
         }
         EntryPayload::Tool { tool_id } => {
             let tool = reader
@@ -388,7 +434,7 @@ pub(crate) async fn project_kernel_entry(
                 .map_err(|error| ApplicationError::internal_error(&error))?;
         }
     }
-    if part.kind != "tool_call" {
+    if part.kind != "tool_call" && part.kind != "error" {
         part.content["execution_id"] = serde_json::to_value(entry.execution_id)
             .map_err(|error| ApplicationError::internal_error(&error))?;
         part.content["execution_phase"] = serde_json::to_value(entry.execution_phase)
@@ -900,5 +946,191 @@ mod tests {
         assert_eq!(response.loaded_count, 2);
         assert_eq!(response.entry_count, 3);
         assert!(response.next.is_some());
+    }
+
+    #[tokio::test]
+    async fn failure_notice_projects_as_an_error_part_without_a_duplicate() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "failures".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let text = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        text.append("answer").await.unwrap();
+        text.finish(RequestId::new()).await.unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        let boundary = text.entry_id();
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("configuration.invalid"),
+            agena_failure::FailureCategory::InvalidInput,
+            agena_failure::FailureResponsibility::Caller,
+            agena_failure::RetryDirective::CorrectInput,
+            agena_failure::RecoveryDirective::OpenSettings,
+            agena_failure::FailureImpact::RequestRejected,
+            agena_failure::UserPresentation::new(
+                "configuration.invalid",
+                "the model repeated the same tool call without progress",
+            ),
+        );
+        let notice = attempt
+            .notice(
+                RequestId::new(),
+                agena_runtime_contracts::part_content::failure_notice_text(&failure).unwrap(),
+            )
+            .await
+            .unwrap()
+            .value;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let notice_entry = kernel.reader.entry(session, notice).await.unwrap();
+        let notice_part = project_kernel_entry(&kernel.reader, session, &notice_entry)
+            .await
+            .unwrap();
+        assert_eq!(notice_part.kind, "error");
+        assert_eq!(notice_part.state, "failed");
+        assert_eq!(notice_part.run_state.as_deref(), Some("failed"));
+        assert_eq!(notice_part.run_id, Some(boundary.get()));
+        let content =
+            agena_runtime_contracts::part_content::ErrorContent::try_from(&notice_part.content)
+                .unwrap();
+        assert_eq!(
+            content.message,
+            "the model repeated the same tool call without progress"
+        );
+
+        let boundary_entry = kernel.reader.entry(session, boundary).await.unwrap();
+        let boundary_part = project_kernel_entry(&kernel.reader, session, &boundary_entry)
+            .await
+            .unwrap();
+        assert_eq!(boundary_part.state, "completed");
+        assert_eq!(boundary_part.run_state.as_deref(), Some("failed"));
+        let mut parts = vec![boundary_part, notice_part];
+        append_execution_failures(&kernel.reader, &mut parts)
+            .await
+            .unwrap();
+        assert_eq!(
+            parts.iter().filter(|part| part.kind == "error").count(),
+            1,
+            "the durable failure notice must not be duplicated by the read-time projection"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_execution_without_a_failed_round_still_projects_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "manager-failure".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let text = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        text.append("answer").await.unwrap();
+        text.finish(RequestId::new()).await.unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let boundary_entry = kernel.reader.entry(session, text.entry_id()).await.unwrap();
+        let mut parts = vec![
+            project_kernel_entry(&kernel.reader, session, &boundary_entry)
+                .await
+                .unwrap(),
+        ];
+        append_execution_failures(&kernel.reader, &mut parts)
+            .await
+            .unwrap();
+        let errors = parts
+            .iter()
+            .filter(|part| part.kind == "error")
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].run_state.as_deref(), Some("failed"));
+        assert_eq!(errors[0].run_id, Some(text.entry_id().get()));
+        let content =
+            agena_runtime_contracts::part_content::ErrorContent::try_from(&errors[0].content)
+                .unwrap();
+        assert!(content.message.contains("ended unexpectedly"));
     }
 }

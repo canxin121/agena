@@ -512,6 +512,20 @@ async fn terminal_commit_rejection_retries_the_same_completion_without_provider_
     fixture.kernel.ports.shutdown().await.unwrap();
 }
 
+#[test]
+fn tool_call_signatures_distinguish_distinct_malformed_arguments() {
+    let first = tool_call_dedupe_signature("tools_call", r#"{"input":"{\"command\":\"one\"}"}"#);
+    let second = tool_call_dedupe_signature("tools_call", r#"{"input":"{\"command\":\"two\"}"}"#);
+    assert_ne!(first, second);
+}
+
+#[test]
+fn tool_call_signatures_normalize_equivalent_json() {
+    let compact = tool_call_dedupe_signature("fs.read", r#"{"path":"a"}"#);
+    let spaced = tool_call_dedupe_signature("fs.read", r#"{ "path" : "a" }"#);
+    assert_eq!(compact, spaced);
+}
+
 #[tokio::test]
 async fn dropping_a_drive_future_after_append_acceptance_keeps_the_in_flight_receipt() {
     let mut fixture = fixture(true, None).await;

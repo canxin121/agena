@@ -302,6 +302,10 @@ impl SessionManager {
         .map_err(kernel_error)?;
         let message = execution.message_id;
         let mut completed = false;
+        // Provider failures already carry a structured failure on their round.
+        // Other stops must persist their own notice below, because the round
+        // they follow succeeded.
+        let mut structured_round_failure = false;
         let result=async {
             if compact {self.perform_compaction(&attempt,&control,&options,&state,None).await?;return Ok(());}
             let mut usage=agena_provider::CompletionUsage::default();
@@ -365,6 +369,7 @@ impl SessionManager {
                 if outcome.cancelled || control.cancel.is_cancelled(){return Err(AppError::Cancelled);}
                 if let Some(failure)=outcome.failure {
                     if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,Some(failure.user.fallback.clone())).await?{continue;}
+                    structured_round_failure=true;
                     return Err(AppError::Internal(failure.user.fallback));
                 }
                 if let Some(observed)=&outcome.usage {usage.add_assign(observed);}
@@ -375,10 +380,8 @@ impl SessionManager {
                 }
                 if !outcome.tools.is_empty(){
                     for tool in &outcome.tools{
-                        use sha2::Digest as _;
-                        let signature=hex::encode(sha2::Sha256::digest(serde_json::to_vec(&tool.invocation)?));
-                        if recent_tools.iter().filter(|seen|*seen==&signature).count()>=4{return Err(AppError::Config("the model repeated the same tool call without progress".into()));}
-                        recent_tools.push_back(signature);if recent_tools.len()>32{recent_tools.pop_front();}
+                        if tool_call_repeats(&recent_tools,&tool.signature){return Err(AppError::Config("the model repeated the same tool call without progress".into()));}
+                        recent_tools.push_back(tool.signature.clone());if recent_tools.len()>32{recent_tools.pop_front();}
                     }
                     follow_ups=0;
                     control.phase(agena_domain::ExecutionPhase::ExecutingTools);
@@ -423,6 +426,34 @@ impl SessionManager {
         } else {
             ExecutionPhase::Failed
         };
+        // Keep manager-level failure reasons durable and user-visible. The
+        // notice is written while the attempt is still running, then projected
+        // as an `error` part on read. Provider-round failures already have a
+        // structured failure and are projected from that round instead.
+        if phase == ExecutionPhase::Failed && !structured_round_failure {
+            if let Err(error) = &result {
+                match agena_runtime_contracts::part_content::failure_notice_text(&error.failure()) {
+                    Ok(text) => {
+                        if let Err(error) =
+                            persist(|| attempt.notice(RequestId::new(), text.clone())).await
+                        {
+                            tracing::warn!(
+                                session_id = control.session.get(),
+                                execution_id = %control.execution,
+                                %error,
+                                "could not persist the execution failure notice"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        session_id = control.session.get(),
+                        execution_id = %control.execution,
+                        %error,
+                        "could not encode the execution failure notice"
+                    ),
+                }
+            }
+        }
         let finish = RequestId::new();
         match persist(|| attempt.finish(finish, phase)).await {
             Ok(_) => {}
@@ -1547,4 +1578,37 @@ fn native_portable_summary(
         }
     }
     Ok((!text.trim().is_empty()).then_some(text))
+}
+
+fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &str) -> bool {
+    recent
+        .iter()
+        .filter(|seen| seen.as_str() == signature)
+        .count()
+        >= 4
+}
+
+#[cfg(test)]
+mod tool_repeat_tests {
+    use super::tool_call_repeats;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn distinct_provider_signatures_do_not_share_the_repeat_budget() {
+        let mut recent = VecDeque::new();
+        for signature in ["first", "second", "third", "fourth"] {
+            assert!(!tool_call_repeats(&recent, signature));
+            recent.push_back(signature.to_owned());
+        }
+    }
+
+    #[test]
+    fn identical_provider_signatures_still_trip_the_guard() {
+        let mut recent = VecDeque::new();
+        for _ in 0..4 {
+            assert!(!tool_call_repeats(&recent, "same"));
+            recent.push_back("same".to_owned());
+        }
+        assert!(tool_call_repeats(&recent, "same"));
+    }
 }

@@ -79,6 +79,10 @@ impl KernelRoundRequest {
 pub struct KernelToolInvocation {
     pub tool: ToolHandle,
     pub invocation: ToolInvocation,
+    /// Digest of the provider's exact tool name and arguments. Unlike the
+    /// lossy executable invocation, this still distinguishes malformed calls
+    /// that were degraded to the same placeholder.
+    pub signature: String,
 }
 
 /// A completed provider round, not the surrounding execution's outcome. Local
@@ -94,6 +98,24 @@ pub struct KernelRoundOutcome {
     pub tools: Vec<KernelToolInvocation>,
 }
 
+/// Stable identity of a provider tool call for the no-progress guard. It is
+/// computed from the raw provider arguments before lossy parsing, so two
+/// distinct malformed `tools_call` payloads never share one placeholder
+/// signature.
+fn tool_call_dedupe_signature(name: &str, arguments_json: &str) -> String {
+    use sha2::Digest as _;
+
+    let normalized = serde_json::from_str::<Value>(arguments_json)
+        .ok()
+        .and_then(|value| serde_json::to_string(&value).ok())
+        .unwrap_or_else(|| arguments_json.to_owned());
+    let mut digest = sha2::Sha256::new();
+    digest.update(name.as_bytes());
+    digest.update([0]);
+    digest.update(normalized.as_bytes());
+    hex::encode(digest.finalize())
+}
+
 struct TextStream {
     reasoning: bool,
     output: Option<TextOutput>,
@@ -103,6 +125,7 @@ struct Draft {
     handle: Option<ToolDraftHandle>,
     ready: Option<ToolHandle>,
     invocation: Option<ToolInvocation>,
+    signature: Option<String>,
 }
 struct Hosted {
     handle: Option<ToolHandle>,
@@ -608,6 +631,7 @@ impl KernelRoundRun {
                 handle: None,
                 ready: None,
                 invocation: None,
+                signature: None,
             });
             call.call_id = Some(slot as i64);
             self.steps.push_back(Step::new(Action::OpenDraft {
@@ -758,6 +782,8 @@ impl KernelRoundRun {
                 &call.arguments_json,
                 &self.definitions,
             )?);
+            self.drafts[slot as usize].signature =
+                Some(tool_call_dedupe_signature(name, &call.arguments_json));
         }
         Ok(())
     }
@@ -868,6 +894,7 @@ impl KernelRoundRun {
                             Some(KernelToolInvocation {
                                 tool: draft.ready.clone()?,
                                 invocation: draft.invocation.clone()?,
+                                signature: draft.signature.clone()?,
                             })
                         })
                         .collect()

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::usage as context_usage;
 use crate::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
@@ -220,7 +221,7 @@ impl SessionManager {
         let latest = self
             .kernel()
             .reader
-            .latest_round(session_id(id)?)
+            .latest_usage_round(session_id(id)?)
             .await
             .map_err(kernel_error)?;
         let current = latest
@@ -231,7 +232,7 @@ impl SessionManager {
                     .ok()
             })
             .and_then(|state| state.usage)
-            .map(|usage| usage.input_tokens.saturating_add(usage.output_tokens));
+            .map(|usage| context_usage::context_tokens(&usage));
         let Some(current) = current else {
             return Ok(());
         };

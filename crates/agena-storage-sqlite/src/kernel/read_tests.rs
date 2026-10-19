@@ -149,6 +149,72 @@ async fn saturated_content_read_admission_keeps_cold_control_queries_available()
 }
 
 #[tokio::test]
+async fn latest_usage_round_skips_a_failure_without_a_measurement() {
+    let (ports, _admin, _root, _url) = tests::fixture(true).await;
+    let session = ports
+        .sessions
+        .create(RequestId::new(), 1, "usage".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let sent = ports
+        .sessions
+        .send(RequestId::new(), session, document("measure me"))
+        .await
+        .unwrap()
+        .value;
+    let attempt = ports
+        .executor
+        .claim(RequestId::new(), session, sent.id)
+        .await
+        .unwrap()
+        .value;
+    let measured_round = attempt
+        .begin_round(RequestId::new(), vec![sent.message_id])
+        .await
+        .unwrap()
+        .value;
+    measured_round
+        .finish(
+            RequestId::new(),
+            Some(serde_json::json!({
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_tokens": 900,
+                    "output_tokens": 50
+                }
+            })),
+            true,
+        )
+        .await
+        .unwrap();
+    let failed = attempt
+        .begin_round(RequestId::new(), vec![sent.message_id])
+        .await
+        .unwrap()
+        .value;
+    failed
+        .finish(
+            RequestId::new(),
+            Some(serde_json::json!({"failure": {"user": {"fallback": "stopped"}}})),
+            false,
+        )
+        .await
+        .unwrap();
+
+    let latest = ports.reader.latest_round(session).await.unwrap();
+    assert_eq!(latest.as_ref().map(|round| round.id), Some(failed.id()));
+
+    let latest_measured = ports.reader.latest_usage_round(session).await.unwrap();
+    assert_eq!(
+        latest_measured.as_ref().map(|round| round.id),
+        Some(measured_round.id())
+    );
+    ports.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn active_pages_and_entry_details_are_owned_bounded_cached_and_invalidated() {
     for memory in [true, false] {
         let diagnostics = KernelDiagnostics::default();

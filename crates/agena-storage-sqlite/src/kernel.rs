@@ -446,6 +446,46 @@ impl KernelBackend for Backend {
         let bytes = modeled_read_bytes(&value)?;
         self.wrap_read(session, value, bytes)
     }
+    async fn latest_usage_round(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<ProviderRoundView>>> {
+        self.cache.ensure_open()?;
+        let _read = self
+            .control_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM agena_rounds WHERE session_id=? AND phase!='running' AND json_extract(provider_state_json,'$.usage') IS NOT NULL ORDER BY id DESC LIMIT 1",
+        )
+        .bind(session.get())
+        .fetch_optional(self.reader.get_sqlite_connection_pool())
+        .await
+        .map_err(sql_error)?;
+        let value = if let Some(id) = id {
+            Some(
+                reads::round(
+                    self.reader.get_sqlite_connection_pool(),
+                    session,
+                    RoundId::try_from(id).map_err(storage)?,
+                    self.live.diagnostics(),
+                )
+                .await?,
+            )
+        } else {
+            let mut conn = self
+                .reader
+                .get_sqlite_connection_pool()
+                .acquire()
+                .await
+                .map_err(storage)?;
+            reads::metadata(&mut conn, session).await?;
+            None
+        };
+        let bytes = modeled_read_bytes(&value)?;
+        self.wrap_read(session, value, bytes)
+    }
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>> {
         self.cached_read(
             &self.control_reads,

@@ -443,6 +443,13 @@ pub trait KernelBackend: Send + Sync {
     ) -> Result<CommitReceipt<SessionMetadata>>;
     async fn latest_round(&self, session: SessionId)
     -> Result<ReadView<Option<ProviderRoundView>>>;
+    /// Most recent completed round that retained provider usage. A later
+    /// failed round can finish without a measurement; it must not hide the
+    /// context size measured by the previous provider request.
+    async fn latest_usage_round(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<ProviderRoundView>>>;
     /// Most recent failed round that retained a provider-state failure for an
     /// execution generation. Used to reconstruct a user-visible error for a
     /// transcript after the failure has become durable.

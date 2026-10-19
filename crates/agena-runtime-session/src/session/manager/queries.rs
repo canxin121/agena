@@ -1,6 +1,7 @@
 use super::super::kernel::KernelProviderState;
 use super::super::model::SessionExecutionContext as ToolContext;
 use super::*;
+use crate::session::usage as context_usage;
 use crate::{SessionExecutionContext, SessionPresentation, SessionQueryError, SessionQueryService};
 use agena_domain::{
     PendingInteractiveRequestContext, PermissionAction, PermissionRequest, SessionListRequest,
@@ -243,7 +244,7 @@ impl SessionManager {
         let latest = self
             .kernel()
             .reader
-            .latest_round(session_id(session.id)?)
+            .latest_usage_round(session_id(session.id)?)
             .await
             .map_err(kernel_error)?;
         let usage = latest
@@ -251,10 +252,8 @@ impl SessionManager {
             .and_then(|r| r.provider_state.as_ref())
             .and_then(|v| serde_json::from_value::<KernelProviderState>(v.clone()).ok())
             .and_then(|s| s.usage);
-        let measured = usage.as_ref().map(|u| u.input_tokens);
-        let current = usage
-            .as_ref()
-            .map_or(0, |u| u.input_tokens.saturating_add(u.output_tokens));
+        let measured = usage.as_ref().map(context_usage::prompt_tokens);
+        let current = usage.as_ref().map_or(0, context_usage::context_tokens);
         let output = crate::session_output_token_budget(
             metadata.limits.context_window_tokens,
             metadata.limits.max_output_tokens,

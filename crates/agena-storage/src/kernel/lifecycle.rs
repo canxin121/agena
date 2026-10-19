@@ -351,6 +351,12 @@ impl KernelReader {
     ) -> Result<ReadView<Option<ProviderRoundView>>> {
         self.0.backend.latest_round(session).await
     }
+    pub async fn latest_usage_round(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<ProviderRoundView>>> {
+        self.0.backend.latest_usage_round(session).await
+    }
     pub async fn configuration(
         &self,
         session: SessionId,

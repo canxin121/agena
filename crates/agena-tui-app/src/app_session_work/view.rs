@@ -1,51 +1,76 @@
 use super::*;
+use agena_tui_components::{FramedSurfaceSpec, SurfaceMode, render_framed_surface};
 
 impl App {
-    pub(crate) fn session_work_height(&self, available: u16) -> u16 {
-        if !self.session_work_visible() || available == 0 {
-            return 0;
+    /// Number of workspace files this session recorded edits for, when the
+    /// summary has loaded and is non-empty.
+    pub(crate) fn session_work_file_count(&self) -> Option<usize> {
+        if !self.session_work_has_files() {
+            return None;
         }
-        if let Some(state) = self
-            .transcript
-            .session_id
-            .and_then(|id| self.session_work.get(&id))
-            .filter(|s| s.expanded && available >= 4)
-        {
-            let rows = if state.detail.is_some() {
-                state.rendered.len().max(state.diff.lines().count()).max(3)
-            } else if state.tab == Tab::Tasks {
-                self.transcript
-                    .execution
-                    .as_ref()
-                    .map_or(0, |e| e.background_activities.len())
-            } else {
-                state.files.as_ref().map_or(0, |p| p.files.len())
-            };
-            available.min((rows.max(1) + 3).min(14) as u16)
-        } else {
-            1
-        }
+        let id = self.transcript.session_id?;
+        let files = self.session_work.get(&id)?.files.as_ref()?;
+        Some(files.total_files)
     }
 
-    pub(crate) fn render_session_work(&mut self, frame: &mut Frame, area: Rect) {
-        self.work_area = area;
-        let Some(id) = self.transcript.session_id else {
+    /// Background activities attached to the current session execution.
+    pub(crate) fn session_work_task_count(&self) -> usize {
+        self.transcript
+            .execution
+            .as_ref()
+            .map_or(0, |execution| execution.background_activities.len())
+    }
+
+    /// Open the full-screen session work surface on `tab`.
+    pub(crate) fn open_session_work_panel(&mut self, tab: Tab) {
+        let Some(id) = self.current_or_selected_session_id() else {
+            self.flash_warning(self.i18n.text("flash-session-work-requires-session"));
             return;
         };
+        if self.transcript.session_id != Some(id) {
+            let title = self.current_or_selected_session_title().unwrap_or_default();
+            self.open_session(id, title);
+        }
+        let state = self.session_work.entry(id).or_default();
+        state.tab = tab;
+        state.selected = 0;
+        state.select_detail(None);
+        state.detail_at = None;
+        state.file_at = None;
+        self.route_stack.clear();
+        self.current_route = Route::SessionWork(id);
+        self.focus = Focus::Transcript;
+        self.heal_session_work();
+    }
+
+    pub(crate) fn close_session_work_panel(&mut self) {
+        if let Some(id) = self.transcript.session_id
+            && let Some(state) = self.session_work.get_mut(&id)
+        {
+            state.cancel_detail();
+        }
+        self.current_route = Route::Main;
+        self.focus = Focus::Composer;
+    }
+
+    pub(crate) fn render_session_work_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let surface = render_framed_surface(
+            frame,
+            area,
+            SurfaceMode::Route,
+            &FramedSurfaceSpec {
+                title: self.i18n.text("session-work-title").into(),
+                target_width: area.width,
+                target_height: area.height,
+            },
+        );
+        let area = surface.inner;
         if area.is_empty() {
             return;
         }
-        if !self.session_work_visible() {
+        let Some(id) = self.transcript.session_id else {
             return;
-        }
-        let has_files = self.session_work_has_files();
-        // Use the same visible vertical edges as the composer. A background
-        // painted to the edges of the terminal cells appears wider than its border.
-        let border = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::LEFT | ratatui::widgets::Borders::RIGHT);
-        let inner = border.inner(area);
-        frame.render_widget(border, area);
-        let area = inner;
+        };
         let activities = self
             .transcript
             .execution
@@ -57,13 +82,13 @@ impl App {
             .execution
             .as_ref()
             .and_then(|e| e.execution.provider_retry.clone());
+        let has_files = self.session_work_has_files();
         let state = self.session_work.entry(id).or_default();
         if let Some(Detail::Task(task)) = &state.detail
             && let Some(activity) = activities.iter().find(|a| &a.id == task)
         {
             state.detail_activity = Some(activity.clone());
         }
-        let expanded = state.expanded && area.height >= 4;
         let tasks_label = format!(
             "{} {}",
             self.i18n.text("session-work-tasks"),
@@ -85,30 +110,20 @@ impl App {
                 ((retry.next_at_ms - chrono::Utc::now().timestamp_millis()).max(0) + 999) / 1000
             )
         });
-        let toggle_label = format!(
-            "{} {}",
-            if expanded { "▾" } else { "▸" },
-            self.i18n.text("session-work-title")
-        );
+        let back = self.i18n.text("session-work-back");
         let header = Rect { height: 1, ..area };
-        // Paint the complete row, aligned with the composer, even when only
-        // a few action labels are present. Click empty space to toggle too.
         frame.render_widget(Paragraph::new("").style(theme::status_chip_style()), header);
-        pointer::register(header, Some(PointerAction::Named("work-toggle")), None);
-        let mut buttons = vec![(toggle_label.as_str(), PointerAction::Named("work-toggle"))];
-        if let Some(label) = &status_label {
-            buttons.push((label, PointerAction::Named("work-status")));
-        }
+        let mut header_buttons = vec![(back.as_str(), PointerAction::Named("work-leave"))];
         if !activities.is_empty() {
-            buttons.push((&tasks_label, PointerAction::Named("work-tasks")));
+            header_buttons.push((&tasks_label, PointerAction::Named("work-tasks")));
         }
         if has_files {
-            buttons.push((&files_label, PointerAction::Named("work-files")));
+            header_buttons.push((&files_label, PointerAction::Named("work-files")));
         }
-        pointer::render_buttons(frame, Rect { height: 1, ..area }, &buttons);
-        if !expanded {
-            return;
+        if let Some(label) = &status_label {
+            header_buttons.push((label, PointerAction::Named("work-status")));
         }
+        pointer::render_buttons(frame, header, &header_buttons);
         let mut title = self.i18n.text(match state.tab {
             Tab::Tasks => "session-work-tasks",
             Tab::Files => "session-work-workspace",
@@ -119,7 +134,6 @@ impl App {
             title.push_str(&self.i18n.text("session-work-recording-incomplete"));
         }
         let refresh = self.i18n.text("plan-viewer-refresh");
-        let back = self.i18n.text("session-work-back");
         let switch = self.i18n.text("session-work-switch");
         let mut actions: Vec<(&str, PointerAction)> = Vec::new();
         if state.detail.is_some() {
@@ -348,7 +362,7 @@ impl App {
                 );
             }
         }
-        let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        let footer = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
         if state.diff_truncated
             && state.diff_limit < 2 * 1024 * 1024
             && matches!(state.detail, Some(Detail::File(..)))
@@ -381,17 +395,17 @@ impl App {
                     ),
                 ],
             );
-        } else {
-            frame.render_widget(
-                Paragraph::new(format!(
-                    "{title} · {}",
-                    self.i18n.text("session-work-footer")
-                ))
-                .style(theme::muted_style()),
-                footer,
-            );
-            pointer::register(footer, Some(PointerAction::Named("work-leave")), None);
+            return;
         }
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{title} · {}",
+                self.i18n.text("session-work-footer")
+            ))
+            .style(theme::muted_style()),
+            footer,
+        );
+        pointer::register(footer, Some(PointerAction::Named("work-leave")), None);
     }
 }
 

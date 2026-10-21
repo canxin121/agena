@@ -92,7 +92,7 @@ impl App {
                 self.open_hub();
                 self.should_quit = true;
             }
-            ClientCommandAction::Plan => self.open_plan_viewer(),
+            ClientCommandAction::Plan => self.open_plan_viewer_fullscreen(),
             ClientCommandAction::Side => self.handle_side_command(args),
             ClientCommandAction::Btw => self.open_btw(args),
         }

@@ -9,9 +9,13 @@ enum ExecutionTranscript {
 
 impl App {
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
-        self.btw_focus = None;
-        self.plan_focus = None;
-        self.work_focus = None;
+        // Full-screen surfaces are bound to the session that opened them.
+        if matches!(
+            self.current_route,
+            crate::Route::Btw(_) | crate::Route::SessionWork(_)
+        ) {
+            self.current_route = crate::Route::Main;
+        }
         // Opening any other session while a side conversation is active
         // discards the ephemeral side (codex's
         // `side_thread_to_discard_after_switch` rule). Switching into the side
@@ -341,14 +345,10 @@ impl App {
     pub(crate) fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
         if live.session_deleted {
             self.btw_sessions.remove(&session_id);
-            self.inline_plans.remove(&session_id);
             self.session_work.remove(&session_id);
-            if self.plan_focus == Some(session_id) {
-                self.plan_focus = None;
-                self.work_focus = None;
-            }
-            if self.btw_focus == Some(session_id) {
-                self.btw_focus = None;
+            if matches!(&self.current_route, crate::Route::Btw(id) | crate::Route::SessionWork(id) if *id == session_id)
+            {
+                self.current_route = crate::Route::Main;
             }
         }
         if live.session_deleted && self.transcript.session_id == Some(session_id) {
@@ -376,7 +376,8 @@ impl App {
             return;
         }
         if live.plan_changed {
-            self.mark_inline_plan_changed(session_id);
+            // The planning plugin republishes its status-line contribution on
+            // every plan mutation; the composer chip reads that directly.
             return;
         }
         if let Some((origin, part)) = live.part_update {
@@ -425,7 +426,6 @@ impl App {
         }
         if live.force_refresh {
             self.mark_session_files_changed(session_id);
-            self.mark_inline_plan_changed(session_id);
             self.transcript.reconcile_loaded_parts = true;
         }
         if live.force_refresh || changed {

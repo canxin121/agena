@@ -36,7 +36,7 @@ impl App {
     }
 
     fn build_context_help(&mut self) -> HelpOverlay {
-        if self.work_focus.is_some() && self.work_focus == self.transcript.session_id {
+        if matches!(self.current_route, crate::Route::SessionWork(_)) {
             return self.help_for(
                 HelpPreset::SessionWork,
                 self.i18n.text("session-work-title"),
@@ -114,6 +114,11 @@ impl App {
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-plan-viewer"),
             ),
+            Route::SessionWork(_) => self.help_for(
+                HelpPreset::SessionWork,
+                ui_text::t(&self.i18n, "context-help-summary-session-work"),
+            ),
+            Route::Btw(_) => self.help_for_editor(self.i18n.text("btw-title"), true),
             Route::SettingsStudio(dialog) => {
                 self.help_for(HelpPreset::Settings, dialog.title.clone())
             }

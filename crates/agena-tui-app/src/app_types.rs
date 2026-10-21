@@ -438,14 +438,7 @@ pub struct App {
     pub(super) focus: Focus,
     pub(super) current_route: Route,
     pub(super) btw_sessions: BTreeMap<i64, crate::app_btw::BtwState>,
-    pub(super) btw_focus: Option<i64>,
-    pub(super) btw_area: ratatui::layout::Rect,
     pub(super) session_work: BTreeMap<i64, crate::app_session_work::SessionWorkState>,
-    pub(super) work_focus: Option<i64>,
-    pub(super) work_area: ratatui::layout::Rect,
-    pub(super) inline_plans: BTreeMap<i64, crate::app_plan_inline::InlinePlanState>,
-    pub(super) plan_focus: Option<i64>,
-    pub(super) plan_area: ratatui::layout::Rect,
     pub(super) route_stack: Vec<Route>,
     pub(super) overlay: Option<Overlay>,
     pub(super) overlay_stack: Vec<Overlay>,
@@ -638,11 +631,6 @@ pub(super) enum AppMessage {
         request_id: u64,
         channel: u8,
         result: UiResult<crate::app_session_work::WorkResult>,
-    },
-    InlinePlanLoaded {
-        session_id: i64,
-        request_id: u64,
-        result: UiResult<crate::app_plan_inline::InlinePlanData>,
     },
     UsageStatsLoaded {
         request_id: u64,
@@ -1026,6 +1014,10 @@ pub(super) enum Route {
     Usage(UsageDashboardState),
     Activities(ActivitiesState),
     PlanViewer(PlanViewerState),
+    /// Full-screen session work surface (tasks / files / status).
+    SessionWork(i64),
+    /// Full-screen BTW question surface for one parent session.
+    Btw(i64),
     SettingsStudio(SettingsStudioOverlay),
     ClientVersionsStudio(SettingsStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),

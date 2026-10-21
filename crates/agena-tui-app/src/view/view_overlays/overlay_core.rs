@@ -88,12 +88,13 @@ impl App {
         }
     }
 
-    pub(crate) fn render_route(&self, frame: &mut Frame, area: Rect) {
-        self.render_route_content(frame, area, &self.current_route);
+    pub(crate) fn render_route(&mut self, frame: &mut Frame, area: Rect) {
+        let route = self.current_route.clone();
+        self.render_route_content(frame, area, &route);
         self.render_overlay(frame, area);
     }
 
-    pub(crate) fn render_route_content(&self, frame: &mut Frame, area: Rect, route: &Route) {
+    pub(crate) fn render_route_content(&mut self, frame: &mut Frame, area: Rect, route: &Route) {
         match route {
             Route::Main => {}
             Route::Usage(dialog) => {
@@ -101,6 +102,8 @@ impl App {
             }
             Route::Activities(dialog) => self.render_activities_panel(frame, area, dialog),
             Route::PlanViewer(dialog) => self.render_plan_viewer(frame, area, dialog),
+            Route::SessionWork(_) => self.render_session_work_panel(frame, area),
+            Route::Btw(_) => self.render_btw_panel(frame, area),
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }

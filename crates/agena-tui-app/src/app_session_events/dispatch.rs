@@ -45,11 +45,6 @@ impl App {
                 channel,
                 result,
             } => self.handle_session_work_loaded(session_id, request_id, channel, result),
-            AppMessage::InlinePlanLoaded {
-                session_id,
-                request_id,
-                result,
-            } => self.handle_inline_plan_loaded(session_id, request_id, result),
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }

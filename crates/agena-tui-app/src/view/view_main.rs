@@ -174,63 +174,16 @@ impl App {
 
     fn render_main_content(&mut self, frame: &mut Frame, area: Rect) {
         let composer_height = self.composer_height(area.width, area.height);
-        let section_space = area
-            .height
-            .saturating_sub(composer_height)
-            .saturating_sub(6);
-        let headers =
-            self.inline_plan_height(1) + self.btw_inline_height(1) + self.session_work_height(1);
-        let section_space = section_space.max(
-            headers.min(
-                area.height
-                    .saturating_sub(composer_height)
-                    .saturating_sub(3),
-            ),
-        );
-        // Accessories reserve one header; expanding any section collapses
-        // the others, so the editor and transcript always keep their budget.
-        let work_height = self.session_work_height(
-            section_space.saturating_sub(self.inline_plan_height(1) + self.btw_inline_height(1)),
-        );
-        let section_space = section_space.saturating_sub(work_height);
-        // Keep a collapsed BTW header reachable while a plan is expanded.
-        let plan_height =
-            self.inline_plan_height(section_space.saturating_sub(self.btw_inline_height(1)));
-        let btw_height = self.btw_inline_height(section_space.saturating_sub(plan_height));
         let vertical = split_vertical_sections(
             area,
             &[
                 VerticalSectionSize::Flexible(0),
-                VerticalSectionSize::Fixed(plan_height),
-                VerticalSectionSize::Fixed(btw_height),
-                VerticalSectionSize::Fixed(work_height),
                 VerticalSectionSize::Fixed(composer_height),
             ],
         );
 
         let transcript_host_area = vertical[0];
-        let plan_area = vertical[1];
-        let btw_area = vertical[2];
-        let work_area = vertical[3];
-        let composer = vertical[4];
-        if work_area.height < 4 && self.work_focus.is_some() {
-            self.work_focus = None;
-            self.focus = Focus::Composer;
-        }
-        if plan_area.height < 5
-            && self.plan_focus.is_some()
-            && self.plan_focus == self.transcript.session_id
-        {
-            self.plan_focus = None;
-            self.focus = Focus::Composer;
-        }
-        if btw_area.height < 7
-            && self.btw_focus.is_some()
-            && self.btw_focus == self.transcript.session_id
-        {
-            self.btw_focus = None;
-            self.focus = Focus::Composer;
-        }
+        let composer = vertical[1];
         let transcript_footer_height =
             self.transcript_footer_height(transcript_host_area.width, transcript_host_area.height);
 
@@ -256,16 +209,6 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
-        self.render_session_work(
-            frame,
-            Rect {
-                x: self.surface_layout.composer_outer.x,
-                width: self.surface_layout.composer_outer.width,
-                ..work_area
-            },
-        );
-        self.render_inline_plan(frame, plan_area);
-        self.render_btw_inline(frame, btw_area);
     }
 
     pub(crate) fn route_footer_height(&self, width: u16, total_height: u16) -> u16 {
@@ -278,6 +221,8 @@ impl App {
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
                 | Route::PlanViewer(_)
+                | Route::SessionWork(_)
+                | Route::Btw(_)
                 | Route::Hub(_)
         ) {
             return 0;
@@ -528,7 +473,8 @@ impl App {
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {
         // Status chips live on the border rows: the main status sits at the
         // top border's left corner, the top-right corner holds
-        // history/approval, the bottom-left corner holds background activity,
+        // history/approval, the bottom-left corner holds the session surface
+        // chips (file edits, background tasks, BTW),
         // and the bottom-right corner holds plan progress. The layout gets no
         // dedicated row.
         let layout = layout_composer_surface(area);
@@ -573,11 +519,6 @@ impl App {
                 },
             ),
             (
-                placements.bottom_left.as_ref(),
-                layout.outer.bottom().saturating_sub(1),
-                "activities",
-            ),
-            (
                 placements.bottom_right.as_ref(),
                 layout.outer.bottom().saturating_sub(1),
                 "plan",
@@ -589,6 +530,31 @@ impl App {
                     Some(PointerAction::Named(action)),
                     None,
                 );
+            }
+        }
+        // The bottom-left chip carries one clickable segment per surface
+        // (changes / tasks / BTW); each segment opens its own full-screen
+        // view instead of expanding a docked row above the input.
+        if let Some(placement) = placements.bottom_left.as_ref() {
+            let row = layout.outer.bottom().saturating_sub(1);
+            let start = placement.text_column;
+            let end = start.saturating_add(
+                u16::try_from(UnicodeWidthStr::width(placement.text.as_str())).unwrap_or(u16::MAX),
+            );
+            let mut x = start;
+            for (label, action) in self.composer_bottom_left_segments() {
+                let width =
+                    u16::try_from(UnicodeWidthStr::width(label.as_str())).unwrap_or(u16::MAX);
+                let visible_start = x.max(start);
+                let visible_end = x.saturating_add(width).min(end);
+                if visible_end > visible_start {
+                    pointer::register(
+                        Rect::new(visible_start, row, visible_end - visible_start, 1),
+                        Some(PointerAction::Named(action)),
+                        None,
+                    );
+                }
+                x = x.saturating_add(width).saturating_add(3);
             }
         }
 
@@ -900,12 +866,6 @@ impl App {
         parts
     }
 
-    /// Text for the composer's bottom-left chip: background-activity count.
-    fn composer_background_activity_part(&self) -> Option<String> {
-        let activities = &self.transcript.execution.as_ref()?.background_activities;
-        background_activity_summary(activities.iter().map(|activity| activity.kind.as_str()))
-    }
-
     /// Text for the composer's top-right chip while history search is active.
     fn composer_history_search_part(&self) -> Option<String> {
         let search = self.prompt_history_search.as_ref()?;
@@ -946,14 +906,6 @@ impl App {
     /// Text for the composer's bottom-right chip: plan progress contributed
     /// by the planning plugin as a declarative display contribution.
     pub(crate) fn composer_plan_progress_part(&self) -> Option<String> {
-        if let Some(data) = self
-            .transcript
-            .session_id
-            .and_then(|id| self.inline_plans.get(&id))
-            .and_then(|state| state.data.as_ref())
-        {
-            return (!data.summary.is_empty()).then(|| data.summary.clone());
-        }
         let session_id = self.transcript.session_id?;
         let expected_id = format!("plan:{session_id}");
         crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
@@ -981,8 +933,9 @@ impl App {
 
     /// The four status-chip texts for the current frame. The top-left border
     /// chip keeps the remaining session status parts; the corner chips carry
-    /// background activity (bottom-left), history search or pending approval
-    /// (top-right), and plan progress (bottom-right).
+    /// the session surfaces (bottom-left: file edits, background tasks, BTW),
+    /// history search or pending approval (top-right), and plan progress
+    /// (bottom-right).
     fn composer_chip_texts(&self) -> ComposerChipTexts {
         ComposerChipTexts {
             status: sanitize_display_text(
@@ -997,13 +950,55 @@ impl App {
                 .composer_history_search_part()
                 .or_else(|| self.composer_pending_approval_part())
                 .map(|text| sanitize_display_text(text.as_str())),
-            bottom_left: self
-                .composer_background_activity_part()
-                .map(|text| sanitize_display_text(text.as_str())),
+            bottom_left: self.composer_bottom_left_text(),
             bottom_right: self
                 .composer_plan_progress_part()
                 .map(|text| sanitize_display_text(text.as_str())),
         }
+    }
+
+    /// Joined label of the composer's bottom-left chip.
+    fn composer_bottom_left_text(&self) -> Option<String> {
+        let segments = self.composer_bottom_left_segments();
+        if segments.is_empty() {
+            return None;
+        }
+        let joined = segments
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        Some(sanitize_display_text(joined.as_str()))
+    }
+
+    /// Clickable segments of the composer's bottom-left chip. The web composer
+    /// carries Changes / SessionWork / BTW chips on its bottom border; the TUI
+    /// mirrors them here instead of reserving rows above the input.
+    pub(crate) fn composer_bottom_left_segments(&self) -> Vec<(String, &'static str)> {
+        let mut segments = Vec::new();
+        if let Some(count) = self.session_work_file_count() {
+            segments.push((
+                self.i18n.text_args(
+                    "composer-status-files",
+                    &agena_tui::fl_args!("count" => count as i64),
+                ),
+                "work-files",
+            ));
+        }
+        let tasks = self.session_work_task_count();
+        if tasks > 0 {
+            segments.push((
+                self.i18n.text_args(
+                    "composer-status-tasks",
+                    &agena_tui::fl_args!("count" => tasks as i64),
+                ),
+                "work-tasks",
+            ));
+        }
+        if let Some(label) = self.btw_chip_label() {
+            segments.push((label, "btw"));
+        }
+        segments
     }
 
     /// Project the currently displayed text of a selectable chat surface into
@@ -1185,8 +1180,9 @@ impl App {
 
 /// The four status-chip texts for the current composer frame. The centered
 /// top-border chip keeps the session-status parts; the corner chips carry
-/// background activity (bottom-left), history search or pending approval
-/// (top-right), and plan progress (bottom-right).
+/// the session surfaces (bottom-left: file edits, background tasks, BTW),
+/// history search or pending approval (top-right), and plan progress
+/// (bottom-right).
 #[derive(Debug, Clone, Default)]
 struct ComposerChipTexts {
     status: String,
@@ -1222,14 +1218,20 @@ fn composer_chip_placements(outer: Rect, texts: &ComposerChipTexts) -> ComposerC
             .map(|placement| placement.chip_width)
             .unwrap_or(0),
     );
-    let bottom_left = texts
-        .bottom_left
-        .as_deref()
-        .and_then(|text| composer_corner_placement_left(outer, text));
     let bottom_right = texts
         .bottom_right
         .as_deref()
         .and_then(|text| composer_corner_placement_right(outer, text));
+    let bottom_left = texts.bottom_left.as_deref().and_then(|text| {
+        agena_tui_components::composer_corner_placement_left_reserving(
+            outer,
+            text,
+            bottom_right
+                .as_ref()
+                .map(|placement| placement.chip_width)
+                .unwrap_or(0),
+        )
+    });
     ComposerChipPlacements {
         status,
         top_right,
@@ -1298,25 +1300,12 @@ fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) ->
     activity.into_iter().chain(std::iter::once(mode)).collect()
 }
 
-fn background_activity_summary<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let kinds = kinds.into_iter().collect::<Vec<_>>();
-    let mut parts = Vec::new();
-    for kind in ["monitor", "cron", "shell", "task", "runtime", "browser"] {
-        let count = kinds.iter().filter(|candidate| **candidate == kind).count();
-        if count > 0 {
-            parts.push(format!("{kind} {count}"));
-        }
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        background_activity_summary, highlight_search_line, highlight_search_line_with_rich,
-        line_plain_text, transcript_line_is_in_block, transcript_surface_top_right_parts,
-        transcript_visible_range,
+        highlight_search_line, highlight_search_line_with_rich, line_plain_text,
+        transcript_line_is_in_block, transcript_surface_top_right_parts, transcript_visible_range,
     };
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};
@@ -1399,15 +1388,6 @@ mod tests {
     }
 
     #[test]
-    fn background_summary_uses_stable_per_kind_counts() {
-        assert_eq!(
-            background_activity_summary(["shell", "cron", "monitor", "shell", "task"]),
-            Some("monitor 1 · cron 1 · shell 2 · task 1".to_owned())
-        );
-        assert_eq!(background_activity_summary([]), None);
-    }
-
-    #[test]
     fn transcript_rendering_materializes_only_the_visible_viewport() {
         assert_eq!(
             transcript_visible_range(100_000, 50_000, 40),
@@ -1421,11 +1401,11 @@ use super::{
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
     Style, Text, VerticalSectionSize, WrappedTextSpec, apply_block_highlight,
     apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
-    composer_corner_placement_left, composer_corner_placement_right,
-    composer_status_placement_left, find_search_ranges, inset_rect, layout_composer_surface,
-    layout_header_body_footer_surface, min, pending_interactive_counts_for_execution,
-    render_composer_editor_surface, render_header_body_footer_text_surface, render_wrapped_text,
-    sanitize_display_text, split_vertical_sections,
+    composer_corner_placement_right, composer_status_placement_left, find_search_ranges,
+    inset_rect, layout_composer_surface, layout_header_body_footer_surface, min,
+    pending_interactive_counts_for_execution, render_composer_editor_surface,
+    render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
+    split_vertical_sections,
 };
 use crate::NoticeSeverity;
 use crate::ui_text;

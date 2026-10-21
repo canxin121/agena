@@ -5,21 +5,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 impl App {
     pub(crate) fn handle_surface_pointer(&mut self, mouse: MouseEvent) -> bool {
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && !self.btw_area.contains((mouse.column, mouse.row).into())
-        {
-            self.btw_focus = None;
-        }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && !self.plan_area.contains((mouse.column, mouse.row).into())
-        {
-            self.plan_focus = None;
-        }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && !self.work_area.contains((mouse.column, mouse.row).into())
-        {
-            self.work_focus = None;
-        }
         if let Some(action) = self.pointer_targets.action(mouse) {
             self.cancel_active_pointer_gesture();
             self.cancel_surface_selection();
@@ -92,8 +77,7 @@ impl App {
                 }
                 "session-token-usage" => self.open_usage_dashboard(),
                 name if name.starts_with("work-") => self.handle_session_work_action(name),
-                "plan" => self.open_plan_viewer(),
-                name if name.starts_with("plan-") => self.handle_inline_plan_action(name),
+                "plan" => self.open_plan_viewer_fullscreen(),
                 "btw" => self.open_btw(""),
                 name if name.starts_with("btw-") => self.handle_btw_action(name),
                 "side" => self.handle_side_command(""),

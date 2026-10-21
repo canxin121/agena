@@ -251,6 +251,55 @@ pub fn composer_corner_placement_left(outer: Rect, text: &str) -> Option<Compose
     })
 }
 
+/// Computes where a status chip sits against the left corner of a border
+/// while reserving `reserve_right` cells for a right-corner chip (its full
+/// width plus one separating dash). Used by the composer's bottom border,
+/// which carries a left chip (session surfaces) and a right chip (plan
+/// progress); without the reservation a long left chip would push the right
+/// chip off the row.
+pub fn composer_corner_placement_left_reserving(
+    outer: Rect,
+    text: &str,
+    reserve_right: u16,
+) -> Option<ComposerStatusPlacement> {
+    if outer.width < 4 || text.trim().is_empty() {
+        return None;
+    }
+    let reserved = if reserve_right > 0 {
+        reserve_right.saturating_add(1)
+    } else {
+        0
+    };
+    let max_text_width = usize::from(outer.width.saturating_sub(3).saturating_sub(reserved));
+    if max_text_width == 0 {
+        return None;
+    }
+    let text = if UnicodeWidthStr::width(text) > max_text_width {
+        truncate_display_text_with_suffix(text, max_text_width, "…")
+    } else {
+        text.to_string()
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let text_width = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(u16::MAX);
+    let chip_width = text_width.saturating_add(2);
+    let column = outer.x.saturating_add(1);
+    Some(ComposerStatusPlacement {
+        text,
+        chip_width,
+        column,
+        text_column: column.saturating_add(1),
+        left_dashes: 0,
+        right_dashes: outer
+            .width
+            .saturating_sub(2)
+            .saturating_sub(reserved)
+            .saturating_sub(chip_width),
+    })
+}
+
 /// Computes where a status chip sits against the right corner of a border
 /// (used for the composer's top-right and bottom-right corners). The chip
 /// ends one cell before the corner and extends leftward; text is truncated
@@ -435,11 +484,18 @@ pub fn render_composer_editor_surface(
                 .unwrap_or(0),
         )
     });
-    let bottom_left_placement = bottom_left.and_then(|line| {
-        composer_corner_placement_left(layout.outer, line_plain_text(line).as_str())
-    });
     let bottom_right_placement = bottom_right.and_then(|line| {
         composer_corner_placement_right(layout.outer, line_plain_text(line).as_str())
+    });
+    let bottom_left_placement = bottom_left.and_then(|line| {
+        composer_corner_placement_left_reserving(
+            layout.outer,
+            line_plain_text(line).as_str(),
+            bottom_right_placement
+                .as_ref()
+                .map(|placement| placement.chip_width)
+                .unwrap_or(0),
+        )
     });
 
     // The horizontal border rows are drawn by hand so the left-aligned status

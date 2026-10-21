@@ -12,7 +12,7 @@ impl App {
         state.file_at = Some(Instant::now());
         state.file_dirty = false;
         let page = state.page;
-        let summary = !state.expanded || state.tab != Tab::Files;
+        let summary = state.tab != Tab::Files;
         let application = self.application.clone();
         let tx = self.tx.clone();
         state.file_task = Some(ReadTask(tokio::spawn(async move {
@@ -41,7 +41,7 @@ impl App {
         let Some(state) = self.session_work.get_mut(&id) else {
             return;
         };
-        if state.detail_task.is_some() || !state.expanded {
+        if state.detail_task.is_some() {
             return;
         }
         let Some(detail) = state.detail.clone() else {
@@ -184,11 +184,7 @@ impl App {
         }
         match result {
             Ok(WorkResult::Files(files)) => {
-                if state.page > 0
-                    && files.files.is_empty()
-                    && state.expanded
-                    && state.tab == Tab::Files
-                {
+                if state.page > 0 && files.files.is_empty() && state.tab == Tab::Files {
                     state.page = 0;
                     state.file_at = None;
                 }

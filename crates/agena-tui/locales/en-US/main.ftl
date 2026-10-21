@@ -102,6 +102,9 @@ composer-status-history = history {$current}/{$total}
 composer-status-history-query = history {$current}/{$total} query={$query}
 composer-status-mention = mention {$query}
 composer-status-slash = slash {$query}
+composer-status-files = ±{$count} files
+composer-status-tasks = ●{$count} tasks
+composer-status-btw = BTW {$count}
 surface-mode-insert = INSERT
 surface-mode-navigate = NAV
 surface-mode-select = SELECT
@@ -349,7 +352,6 @@ overlay-plan-steps = steps={$steps}
 overlay-plan-preview-heading = Preview
 plan-viewer-refresh = Refresh
 plan-viewer-title = Plan
-plan-inline-footer = Tab/Esc input · j/k scroll · r refresh · f expand
 plan-viewer-empty = No plan yet.
 plan-viewer-loading = Loading plan
 plan-viewer-footer = ↑/↓/PgUp/PgDn scroll · r refresh · a autorun · q close
@@ -2213,7 +2215,6 @@ btw-send = Ask
 btw-stop = Stop
 btw-loading = Answering…
 side-return = Side · return to parent
-btw-footer = Enter ask · PgUp/PgDn scroll · Ctrl+C stop · Tab/Esc return to chat
 btw-input = BTW question · Enter send · Shift+Enter newline
 btw-clear = Clear
 btw-copy = Copy

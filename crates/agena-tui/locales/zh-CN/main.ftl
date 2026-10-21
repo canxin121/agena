@@ -102,6 +102,9 @@ composer-status-history = 历史 {$current}/{$total}
 composer-status-history-query = 历史 {$current}/{$total} query={$query}
 composer-status-mention = 引用 {$query}
 composer-status-slash = 命令 {$query}
+composer-status-files = ±{$count} 文件
+composer-status-tasks = ●{$count} 任务
+composer-status-btw = BTW {$count}
 surface-mode-insert = 插入
 surface-mode-navigate = 导航
 surface-mode-select = 选文
@@ -349,7 +352,6 @@ overlay-plan-steps = 步骤={$steps}
 overlay-plan-preview-heading = 预览
 plan-viewer-refresh = 刷新
 plan-viewer-title = 计划
-plan-inline-footer = Tab/Esc 返回输入 · j/k 滚动 · r 刷新 · f 全屏
 plan-viewer-empty = 暂无计划。
 plan-viewer-loading = 正在加载计划
 plan-viewer-footer = ↑/↓/PgUp/PgDn 滚动 · r 刷新 · a 自动运行 · q 关闭
@@ -2213,7 +2215,6 @@ btw-send = 提问
 btw-stop = 停止
 btw-loading = 正在回答…
 side-return = Side · 返回原会话
-btw-footer = Enter 提问 · PgUp/PgDn 滚动 · Ctrl+C 停止 · Tab/Esc 返回会话
 btw-input = BTW 问题 · Enter 发送 · Shift+Enter 换行
 btw-clear = 清除
 btw-copy = 复制

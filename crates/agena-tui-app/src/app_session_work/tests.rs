@@ -11,12 +11,32 @@ fn app() -> App {
     app.transcript.session_id = Some(7);
     app
 }
+
 fn files() -> FilePage {
     serde_json::from_value(serde_json::json!({"files":[{"path":"src/main.rs","operation_count":1,"operation_history":false,"operations":[]}],"total_files":1,"has_more":false,"offset":0,"recording_incomplete":false})).unwrap()
 }
 
+fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+    terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect()
+}
+
+fn retry_status() -> agena_domain::ProviderRetryStatus {
+    agena_domain::ProviderRetryStatus {
+        attempt: 2,
+        max_retries: 5,
+        next_at_ms: chrono::Utc::now().timestamp_millis() + 10_000,
+        message: "Provider unavailable; retrying shortly".into(),
+    }
+}
+
 #[tokio::test]
-async fn tool_execution_stays_out_of_accessories_and_resolved_retry_collapses() {
+async fn provider_retry_status_is_reachable_from_the_full_screen_panel() {
     let mut app = app();
     app.transcript.execution = Some(
         serde_json::from_value(serde_json::json!({
@@ -32,93 +52,30 @@ async fn tool_execution_stays_out_of_accessories_and_resolved_retry_collapses() 
         }))
         .unwrap(),
     );
+    app.transcript
+        .execution
+        .as_mut()
+        .unwrap()
+        .execution
+        .provider_retry = Some(retry_status());
+    app.open_session_work_panel(Tab::Status);
+    assert!(matches!(app.current_route, Route::SessionWork(7)));
     let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
-    let render = |app: &mut App, terminal: &mut Terminal<TestBackend>| {
-        terminal
-            .draw(|frame| app.render_session_work(frame, frame.area()))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    };
-    let normal = render(&mut app, &mut terminal);
-    assert!(!normal.contains(&app.i18n.text("session-work-waiting")));
-    assert!(!normal.contains(&app.i18n.text("session-work-stop")));
-
-    if let agena_api::resource::SessionState::Running { requests, .. } =
-        &mut app.transcript.execution.as_mut().unwrap().session.state
-    {
-        requests.push(agena_api::resource::PendingInteractiveRequestResource {
-            session_id: 7,
-            parent_session_id: None,
-            task_id: None,
-            request: agena_api::resource::PendingInteractiveRequest::Permission {
-                request: agena_api::resource::PermissionRequest {
-                    request_id: "permission-7".into(),
-                    session_id: Some(7),
-                    action: agena_api::resource::PermissionActionResource::Tool {
-                        tool_name: "fs.write".into(),
-                        qualifier: None,
-                    },
-                    related_actions: Vec::new(),
-                    requested_actions: Vec::new(),
-                    reason: "write the requested file".into(),
-                    explanation: String::new(),
-                    source: None,
-                    scope: None,
-                    operator: None,
-                    trace: Vec::new(),
-                    created_at: chrono::Utc::now(),
-                },
-            },
-        });
-    }
-    assert!(!render(&mut app, &mut terminal).contains(&app.i18n.text("session-work-requests")));
-
-    app.transcript
-        .execution
-        .as_mut()
-        .unwrap()
-        .execution
-        .provider_retry = Some(agena_domain::ProviderRetryStatus {
-        attempt: 2,
-        max_retries: 5,
-        next_at_ms: chrono::Utc::now().timestamp_millis() + 10_000,
-        message: "Provider unavailable; retrying shortly".into(),
-    });
-    assert!(render(&mut app, &mut terminal).contains("↻ 2"));
-    app.handle_session_work_action("work-status");
-    assert!(render(&mut app, &mut terminal).contains("Provider unavailable; retrying shortly"));
-
-    app.transcript
-        .execution
-        .as_mut()
-        .unwrap()
-        .execution
-        .provider_retry = None;
-    app.heal_session_work();
-    assert_eq!(app.session_work_height(30), 0);
-    assert_eq!(app.work_focus, None);
-    let resumed = render(&mut app, &mut terminal);
-    assert!(!resumed.contains("retrying shortly"));
-    assert!(!resumed.contains(&app.i18n.text("session-work-waiting")));
-    app.handle_session_work_action("work-toggle");
-    assert_eq!(app.session_work[&7].tab, Tab::Files);
-    assert!(!app.session_work[&7].expanded);
+    terminal
+        .draw(|frame| app.render_session_work_panel(frame, frame.area()))
+        .unwrap();
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Provider unavailable; retrying shortly"));
+    assert!(text.contains("↻ 2"));
 }
 
 #[tokio::test]
-async fn accessories_align_with_composer_and_leave_room_for_chat() {
+async fn the_chat_surface_keeps_no_docked_rows_above_the_composer() {
     let mut app = app();
     app.composer.insert_str("MAIN DRAFT");
     app.session_work.insert(
         7,
         SessionWorkState {
-            expanded: true,
             files: Some(files()),
             ..Default::default()
         },
@@ -126,25 +83,33 @@ async fn accessories_align_with_composer_and_leave_room_for_chat() {
     for (width, height) in [(100, 35), (70, 24), (40, 20), (28, 12)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert_eq!(app.work_area.width, app.surface_layout.composer_outer.width);
-        assert_eq!(app.work_area.x, app.surface_layout.composer_outer.x);
-        assert_eq!(app.work_area.bottom(), app.surface_layout.composer_outer.y);
-        assert_eq!(app.work_area.height, if height >= 20 { 4 } else { 1 });
+        assert_eq!(
+            app.layout.transcript_body.bottom(),
+            app.surface_layout.composer_outer.y,
+            "{width}x{height}: transcript ends where the composer starts"
+        );
+        assert_eq!(app.surface_layout.composer_outer.bottom(), height);
         assert!(app.layout.transcript_body.height > 0);
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(text.contains("MAIN DRAFT"));
+        assert!(buffer_text(&terminal).contains("MAIN DRAFT"));
     }
-    app.work_focus = Some(7);
-    assert!(app.handle_session_work_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+}
+
+#[tokio::test]
+async fn opening_and_leaving_the_panel_preserves_the_composer_draft() {
+    let mut app = app();
+    app.composer.insert_str("draft to preserve");
+    app.session_work.entry(7).or_default().files = Some(files());
+    app.open_session_work_panel(Tab::Files);
+    assert!(matches!(app.current_route, Route::SessionWork(7)));
+    assert_eq!(app.focus, Focus::Transcript);
+    let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = buffer_text(&terminal);
+    assert!(text.contains(&app.i18n.text("session-work-title")));
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(matches!(app.current_route, Route::Main));
     assert_eq!(app.focus, Focus::Composer);
-    app.open_btw("");
-    assert!(!app.session_work[&7].expanded);
+    assert_eq!(app.composer.text(), "draft to preserve");
 }
 
 #[test]
@@ -170,17 +135,6 @@ fn switched_sessions_and_changed_selections_reject_old_reads() {
         .select_detail(Some(Detail::File("new.rs".into())));
     app.handle_session_work_loaded(7, 12, 1, Ok(WorkResult::Diff("old content".into(), false)));
     assert!(app.session_work[&7].diff.is_empty());
-    app.transcript.session_id = Some(7);
-    let state = app.session_work.get_mut(&7).unwrap();
-    state.tab = Tab::Status;
-    state.expanded = true;
-    app.work_focus = Some(7);
-    app.heal_session_work();
-    assert!(
-        !app.session_work[&7].expanded,
-        "resolved status must stop occupying the transcript"
-    );
-    assert_eq!(app.work_focus, None);
 }
 
 #[test]
@@ -228,18 +182,18 @@ fn log_tails_deduplicate_and_bound_retained_output() {
 }
 
 #[tokio::test]
-async fn visible_file_rows_are_clickable_without_leaving_the_conversation() {
+async fn visible_file_rows_are_clickable_inside_the_panel() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut app = app();
     app.composer.insert_str("unsent draft");
     app.session_work.insert(
         7,
         SessionWorkState {
-            expanded: true,
             files: Some(files()),
             ..Default::default()
         },
     );
+    app.open_session_work_panel(Tab::Files);
     let mut terminal = Terminal::new(TestBackend::new(70, 26)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let mut target = None;
@@ -261,158 +215,94 @@ async fn visible_file_rows_are_clickable_without_leaving_the_conversation() {
         app.session_work[&7].detail,
         Some(Detail::File("src/main.rs".into()))
     );
-    assert!(matches!(app.current_route, Route::Main));
+    assert!(matches!(app.current_route, Route::SessionWork(7)));
     assert_eq!(app.composer.text(), "unsent draft");
-    assert_eq!(app.work_focus, Some(7));
 }
 
 #[tokio::test]
-async fn panel_header_uses_full_width_and_keyboard_entry_needs_no_function_key() {
+async fn composer_chip_counts_files_tasks_and_btw_and_opens_the_matching_surface() {
     let mut app = app();
-    app.composer.insert_str("draft to preserve");
     app.session_work.entry(7).or_default().files = Some(files());
-    for width in [28, 40, 80] {
-        let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        terminal
-            .draw(|frame| app.render_session_work(frame, frame.area()))
-            .unwrap();
-        let cells = terminal.backend().buffer().content();
-        let text: String = cells.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Session") && text.contains("Files"));
-        assert!(!text.contains("F6") && !text.contains('…') && !text.contains("Ctrl"));
-        assert_eq!(cells[0].bg, cells[usize::from(width) - 1].bg);
-        assert_eq!(cells[0].symbol(), "│");
-        assert_eq!(cells[usize::from(width) - 1].symbol(), "│");
-    }
-    assert!(!app.handle_session_work_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)));
-    let toggle = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
-    assert!(app.handle_session_work_key(toggle));
-    assert!(app.session_work[&7].expanded);
-    assert_eq!(app.work_focus, Some(7));
-    assert!(app.handle_session_work_key(toggle));
-    assert!(!app.session_work[&7].expanded);
-    assert_eq!(app.composer.text(), "draft to preserve");
-    app.interaction_editing = Some("ask".into());
-    assert!(!app.handle_session_work_key(toggle));
-    assert!(
-        app.composer_status_parts()
-            .iter()
-            .all(|p| !matches!(p.kind, "btw" | "side" | "side-parent"))
+    app.transcript.execution = Some(
+        serde_json::from_value::<crate::SessionExecutionResource>(serde_json::json!({
+            "session": {
+                "id": 7, "depth": 0, "root_id": 7, "workspace_id": 1,
+                "title": "Tasks", "version": 1,
+                "relation_kind": "root", "lifecycle_state": "ready",
+                "state": {"kind": "running", "data": {"workflow": "tool_pending"}},
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+                "message_count": 0, "child_session_count": 0
+            },
+            "parts": [], "execution": {"agent_id": "default"}, "usage": {"current_tokens": 0},
+            "background_activities": [{"id": "act_1", "kind": "shell", "title": "Build", "description": "Build the workspace", "status": "running", "created_at_ms": 0, "started_at_ms": 0, "last_seq": 0, "has_more": false, "dropped_lines": 0, "cancellable": true, "dismissible": true}]
+        }))
+        .unwrap(),
     );
+    let segments = app.composer_bottom_left_segments();
+    assert_eq!(segments.len(), 2, "files + tasks");
+    assert_eq!(segments[0].1, "work-files");
+    assert_eq!(segments[1].1, "work-tasks");
+    app.handle_session_work_action("work-tasks");
+    assert!(matches!(app.current_route, Route::SessionWork(7)));
+    assert_eq!(app.session_work[&7].tab, Tab::Tasks);
+    app.handle_session_work_action("work-leave");
+    assert!(matches!(app.current_route, Route::Main));
 }
 
 #[tokio::test]
-async fn empty_loading_and_unknown_workspace_changes_do_not_take_composer_space() {
+async fn composer_bottom_border_chip_lists_files_and_tasks_and_opens_the_panel() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut app = app();
-    app.composer.insert_str("preserved draft");
-    let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
-    for state in [
-        SessionWorkState::default(),
-        SessionWorkState {
-            expanded: true,
-            files: Some(FilePage::default()),
-            ..Default::default()
-        },
-        SessionWorkState {
-            file_task: Some(ReadTask(tokio::spawn(std::future::pending()))),
-            ..Default::default()
-        },
-        SessionWorkState {
-            file_error: Some("Failed to read status".into()),
-            ..Default::default()
-        },
-    ] {
-        app.session_work.insert(7, state);
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert_eq!(app.work_area.height, 0);
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(!text.contains(&app.i18n.text("session-work-title")));
-        assert!(!text.contains("Failed to read status"));
-        assert!(text.contains("preserved draft"));
-        app.handle_session_work_action("work-toggle");
-        assert_eq!(app.work_focus, None);
-    }
-}
-
-#[tokio::test]
-async fn cleared_changes_close_the_preview_and_return_focus_to_the_composer() {
-    let mut app = app();
-    app.session_work.insert(
-        7,
-        SessionWorkState {
-            expanded: true,
-            files: Some(files()),
-            file_request: 1,
-            detail: Some(Detail::File("src/main.rs".into())),
-            diff: "old diff".into(),
-            ..Default::default()
-        },
+    app.session_work.entry(7).or_default().files = Some(files());
+    app.transcript.execution = Some(
+        serde_json::from_value::<crate::SessionExecutionResource>(serde_json::json!({
+            "session": {
+                "id": 7, "depth": 0, "root_id": 7, "workspace_id": 1,
+                "title": "Tasks", "version": 1,
+                "relation_kind": "root", "lifecycle_state": "ready",
+                "state": {"kind": "running", "data": {"workflow": "tool_pending"}},
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z",
+                "message_count": 0, "child_session_count": 0
+            },
+            "parts": [], "execution": {"agent_id": "default"}, "usage": {"current_tokens": 0},
+            "background_activities": [{"id": "act_1", "kind": "shell", "title": "Build", "description": "Build the workspace", "status": "running", "created_at_ms": 0, "started_at_ms": 0, "last_seq": 0, "has_more": false, "dropped_lines": 0, "cancellable": true, "dismissible": true}]
+        }))
+        .unwrap(),
     );
-    app.work_focus = Some(7);
-    app.focus = Focus::Transcript;
-    app.handle_session_work_loaded(7, 1, 0, Ok(WorkResult::Files(FilePage::default())));
-    assert!(!app.session_work_visible());
-    assert!(!app.session_work[&7].expanded);
-    assert!(app.session_work[&7].detail.is_none());
-    assert!(app.session_work[&7].diff.is_empty());
-    assert_eq!(app.work_focus, None);
-    assert_eq!(app.focus, Focus::Composer);
-}
-
-#[tokio::test]
-async fn work_panel_stays_above_the_composer_when_chat_scrolls_and_other_sections_exist() {
-    let mut app = app();
-    let now = chrono::Utc::now();
-    app.transcript.messages = (1..=60)
-        .map(|id| agena_tui_transcript::display_types::TranscriptRun {
-            id,
-            session_id: 7,
-            role: agena_api::resource::RunRole::Assistant,
-            state: agena_api::resource::RunStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 1,
-            parts: Some(vec![crate::TranscriptFixture::text_part(
-                id * 10,
-                id,
-                now,
-                agena_domain::ExecutionStatus::Completed,
-                format!("Message {id}\nA readable transcript line"),
-            )]),
-        })
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let row = app.surface_layout.composer_outer.bottom().saturating_sub(1);
+    let text = buffer_text(&terminal);
+    let line: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .skip(usize::from(row) * 80)
+        .take(80)
+        .map(|cell| cell.symbol())
         .collect();
-    app.open_btw("");
-    app.collapse_btw(7);
-    app.session_work.entry(7).or_default().files = Some(files());
-    app.session_work.get_mut(&7).unwrap().expanded = true;
-    for i18n in [I18n::english(), I18n::resolve(Some("zh-CN"), None)] {
-        app.i18n = i18n;
-        app.transcript.viewport.follow_tail();
-        let mut terminal = Terminal::new(TestBackend::new(70, 26)).unwrap();
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        let work = app.work_area;
-        assert_eq!(work.bottom(), app.surface_layout.composer_outer.y);
-        assert!(app.btw_area.bottom() <= work.y);
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(work.x, work.y)].symbol(), "│");
-        assert_eq!(buffer[(work.right() - 1, work.y)].symbol(), "│");
-        assert!(app.transcript.viewport.top > 0);
-        app.transcript.scroll_to_top(
-            app.layout.transcript_body.width,
-            app.layout.transcript_body.height,
-        );
-        terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert_eq!(app.transcript.viewport.top, 0);
-        assert_eq!(app.work_area, work);
+    assert!(
+        text.contains("±1 files"),
+        "bottom border carries the file count"
+    );
+    assert!(line.contains("±1 files") && line.contains("●1 tasks"));
+
+    let mut target = None;
+    for column in 0..80 {
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        if app.pointer_targets.action(event) == Some(PointerAction::Named("work-files")) {
+            target = Some(event);
+        }
     }
+    app.handle_mouse_event(target.expect("file chip segment must be clickable"));
+    assert!(matches!(app.current_route, Route::SessionWork(7)));
+    assert_eq!(app.session_work[&7].tab, Tab::Files);
 }
 
 #[tokio::test]
@@ -425,28 +315,22 @@ async fn incomplete_recording_is_visible_without_a_git_workspace_and_has_no_stag
                 recording_incomplete: true,
                 ..Default::default()
             }),
-            expanded: true,
             ..Default::default()
         },
     );
-    assert!(app.session_work_visible());
-    assert!(!app.handle_session_work_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)));
+    assert_eq!(app.session_work_file_count(), Some(0));
+    app.open_session_work_panel(Tab::Files);
     let mut terminal = Terminal::new(TestBackend::new(120, 8)).unwrap();
     terminal
-        .draw(|frame| app.render_session_work(frame, frame.area()))
+        .draw(|frame| app.render_session_work_panel(frame, frame.area()))
         .unwrap();
-    let text: String = terminal
-        .backend()
-        .buffer()
-        .content()
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
+    let text = buffer_text(&terminal);
     assert!(text.contains("Session recorded edits"));
     assert!(text.contains("Recording may be incomplete"));
     app.transcript.session_id = Some(8);
-    assert!(
-        !app.session_work_visible(),
+    assert_eq!(
+        app.session_work_file_count(),
+        None,
         "a different session cannot inherit cached edit rows"
     );
 }

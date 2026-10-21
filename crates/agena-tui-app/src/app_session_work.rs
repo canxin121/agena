@@ -1,5 +1,7 @@
-//! Compact session accessories. One expanded body, bounded reads, and the
-//! canonical execution snapshot for task/request/retry state.
+//! Session work surface: tasks, recorded file edits and provider retry
+//! status for the current session, rendered as a full-screen route. Bounded
+//! reads and the canonical execution snapshot keep it consistent with the
+//! chat surface; the composer only carries the chip counts.
 use crate::{App, AppMessage, Route};
 use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
 use agena_tui::main_focus::Focus;
@@ -30,7 +32,7 @@ impl Drop for ReadTask {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum Tab {
+pub(crate) enum Tab {
     Tasks,
     #[default]
     Files,
@@ -55,7 +57,6 @@ pub(crate) enum WorkResult {
 
 #[derive(Debug, Default)]
 pub(crate) struct SessionWorkState {
-    expanded: bool,
     tab: Tab,
     files: Option<FilePage>,
     page: usize,
@@ -123,13 +124,6 @@ impl App {
             .is_some_and(|e| !e.background_activities.is_empty())
     }
 
-    pub(crate) fn session_work_visible(&self) -> bool {
-        self.transcript.session_id.is_some()
-            && (self.session_work_has_files()
-                || self.session_work_has_tasks()
-                || self.session_work_has_status())
-    }
-
     fn heal_session_work_selection(&mut self, id: i64) {
         if self.transcript.session_id != Some(id) {
             return;
@@ -155,12 +149,7 @@ impl App {
             } else {
                 Tab::Files
             };
-            state.expanded = false;
             state.select_detail(None);
-            if self.work_focus == Some(id) {
-                self.work_focus = None;
-                self.focus = Focus::Composer;
-            }
         }
     }
 
@@ -171,18 +160,17 @@ impl App {
             .is_some_and(|e| e.execution.provider_retry.is_some())
     }
 
-    pub(crate) fn collapse_session_work(&mut self, id: i64) {
-        if let Some(state) = self.session_work.get_mut(&id) {
-            state.expanded = false;
-            state.cancel_detail();
-        }
-        self.work_focus = None;
-    }
-
     pub(crate) fn heal_session_work(&mut self) {
         let selected = self.transcript.session_id;
+        // The panel only runs as a full-screen route; the main surface still
+        // refreshes the file summary because its counts feed the composer chip.
+        let route_session = match &self.current_route {
+            Route::Main => selected,
+            Route::SessionWork(id) => Some(*id),
+            _ => None,
+        };
         for (id, state) in &mut self.session_work {
-            if Some(*id) != selected || !matches!(self.current_route, Route::Main) {
+            if Some(*id) != route_session {
                 if state.file_task.take().is_some() {
                     state.file_request = 0;
                     state.file_at = None;
@@ -190,12 +178,10 @@ impl App {
                 state.cancel_detail();
             }
         }
-        if !matches!(self.current_route, Route::Main) {
-            return;
-        }
-        let Some(id) = selected else {
+        let Some(id) = route_session else {
             return;
         };
+        let panel_open = matches!(self.current_route, Route::SessionWork(_));
         if !self.session_work.contains_key(&id) && self.session_work.len() >= 16 {
             let oldest = self
                 .session_work
@@ -221,7 +207,7 @@ impl App {
                         Duration::from_secs(interval)
                     }
             });
-        let detail_due = state.expanded
+        let detail_due = panel_open
             && state.detail.is_some()
             && state.detail_task.is_none()
             && state.detail_at.is_none_or(|at| {
@@ -352,7 +338,6 @@ impl App {
         } else {
             None
         };
-        self.work_focus = Some(id);
         self.request_work_detail(id);
     }
 
@@ -360,7 +345,17 @@ impl App {
         let Some(id) = self.transcript.session_id else {
             return;
         };
-        if !self.session_work_visible() {
+        if matches!(action, "work-toggle" | "work-leave") {
+            self.close_session_work_panel();
+            return;
+        }
+        if let Some(tab) = match action {
+            "work-tasks" => Some(Tab::Tasks),
+            "work-files" => Some(Tab::Files),
+            "work-status" => Some(Tab::Status),
+            _ => None,
+        } {
+            self.open_session_work_panel(tab);
             return;
         }
         if action == "work-control-primary" {
@@ -396,33 +391,12 @@ impl App {
         .filter_map(|(tab, available)| available.then_some(tab))
         .collect();
         let state = self.session_work.entry(id).or_default();
-        if matches!(
-            action,
-            "work-toggle"
-                | "work-tasks"
-                | "work-files"
-                | "work-status"
-                | "work-next-tab"
-                | "work-prev"
-                | "work-next"
-        ) {
+        if matches!(action, "work-next-tab" | "work-prev" | "work-next") {
             state.file_task = None;
             state.file_request = 0;
             state.file_at = None;
         }
         match action {
-            "work-toggle" => state.expanded = !state.expanded,
-            "work-tasks" | "work-files" | "work-status" => {
-                state.tab = match action {
-                    "work-tasks" => Tab::Tasks,
-                    "work-status" => Tab::Status,
-                    _ => Tab::Files,
-                };
-                state.expanded = true;
-                state.selected = 0;
-                state.select_detail(None);
-                state.file_at = None;
-            }
             "work-next-tab" => {
                 let next = tabs
                     .iter()
@@ -433,13 +407,7 @@ impl App {
                 state.selected = 0;
                 state.file_at = None;
             }
-            "work-leave" => {
-                self.work_focus = None;
-                self.focus = Focus::Composer;
-                return;
-            }
             "work-focus" => {
-                self.work_focus = Some(id);
                 self.focus = Focus::Transcript;
                 return;
             }
@@ -486,42 +454,24 @@ impl App {
             }
             _ => {}
         }
-        if state.expanded {
-            self.collapse_inline_plan(id);
-            self.collapse_btw(id);
-            self.work_focus = Some(id);
-            self.focus = Focus::Transcript;
-        } else {
-            self.collapse_session_work(id);
-            self.focus = Focus::Composer;
-        }
+        self.focus = Focus::Transcript;
         self.heal_session_work();
     }
 
-    pub(crate) fn handle_session_work_key(&mut self, key: KeyEvent) -> bool {
-        if !matches!(self.current_route, Route::Main) {
-            return false;
-        }
-        if agena_tui::keymap::resolve(agena_tui::keymap::KeyContext::Main, key)
-            == Some(agena_tui::keymap::KeyAction::ToggleSessionWork)
-            && self.interaction_editing.is_none()
-            && self.prompt_history_search.is_none()
-            && !self.btw_has_focus()
-        {
-            self.handle_session_work_action("work-toggle");
-            return true;
-        }
-        if self.work_focus.is_none()
-            || self.work_focus != self.transcript.session_id
-            || key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+    /// Keys owned by the full-screen session work route. Returns `true` when
+    /// the route must close so the caller can pop back to the main surface.
+    pub(crate) fn handle_session_work_route_key(&mut self, key: KeyEvent, id: i64) -> bool {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
         {
             return false;
         }
         let action = match key.code {
-            KeyCode::Esc | KeyCode::Tab => "work-leave",
-            KeyCode::Char('q') => "work-toggle",
+            KeyCode::Esc | KeyCode::Tab | KeyCode::Char('q') => {
+                self.close_session_work_panel();
+                return true;
+            }
             KeyCode::Char('r') => "work-refresh",
             KeyCode::Left | KeyCode::Right => "work-next-tab",
             KeyCode::Up | KeyCode::Char('k') => "work-up",
@@ -532,17 +482,14 @@ impl App {
             KeyCode::Char('p') => "work-prev",
             KeyCode::Char('x') => "work-control-primary",
             KeyCode::Enter => {
-                let index = self
-                    .work_focus
-                    .and_then(|id| self.session_work.get(&id))
-                    .map_or(0, |s| s.selected);
+                let index = self.session_work.get(&id).map_or(0, |state| state.selected);
                 self.handle_work_row(index);
-                return true;
+                return false;
             }
             _ => return false,
         };
         self.handle_session_work_action(action);
-        true
+        false
     }
 }
 

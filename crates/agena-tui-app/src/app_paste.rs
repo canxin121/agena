@@ -14,10 +14,12 @@ impl App {
             return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
         }
         match &self.current_route {
-            Route::Main => self.focus == Focus::Composer || self.btw_has_focus(),
+            Route::Main => self.focus == Focus::Composer,
+            Route::Btw(_) => true,
             Route::Usage(_)
             | Route::Activities(_)
             | Route::PlanViewer(_)
+            | Route::SessionWork(_)
             | Route::SettingsStudio(_)
             | Route::ClientVersionsStudio(_)
             | Route::Hub(_) => false,
@@ -40,7 +42,9 @@ impl App {
             return;
         }
         if self.btw_has_focus() {
-            if let Some(state) = self.btw_focus.and_then(|id| self.btw_sessions.get_mut(&id)) {
+            if let Some(id) = self.transcript.session_id
+                && let Some(state) = self.btw_sessions.get_mut(&id)
+            {
                 state.input.insert_str(&text);
             }
             return;
@@ -70,6 +74,9 @@ impl App {
             match &mut self.current_route {
                 Route::Main => {}
                 Route::Usage(_) | Route::Activities(_) | Route::PlanViewer(_) | Route::Hub(_) => {
+                    handled_route = true;
+                }
+                Route::SessionWork(_) | Route::Btw(_) => {
                     handled_route = true;
                 }
                 Route::SettingsStudio(dialog) | Route::ClientVersionsStudio(dialog) => {

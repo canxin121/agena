@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use agena_api::resource::{BtwAnswer, BtwRequest};
 use agena_tui::main_focus::Focus;
-use agena_tui_components::{Editor, EditorPanelSpec, pointer, render_editor_panel};
+use agena_tui_components::{
+    Editor, EditorPanelSpec, FramedSurfaceSpec, SurfaceMode, pointer, render_editor_panel,
+    render_framed_surface,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -37,7 +40,6 @@ struct BtwExchange {
 #[derive(Debug)]
 pub(crate) struct BtwState {
     pub input: Editor,
-    expanded: bool,
     exchanges: Vec<BtwExchange>,
     selected: usize,
     request: Option<BtwTask>,
@@ -55,7 +57,6 @@ impl Default for BtwState {
     fn default() -> Self {
         Self {
             input: Editor::default(),
-            expanded: true,
             exchanges: Vec::new(),
             selected: 0,
             request: None,
@@ -87,6 +88,8 @@ impl BtwState {
 }
 
 impl App {
+    /// Open the full-screen BTW surface for the current session. A non-empty
+    /// `question` submits immediately; the empty form only opens the surface.
     pub(crate) fn open_btw(&mut self, question: &str) {
         let Some(session_id) = self.current_or_selected_session_id() else {
             self.flash_warning(self.i18n.text("flash-side-requires-session"));
@@ -110,7 +113,6 @@ impl App {
             }
         }
         let mut state = self.btw_sessions.remove(&session_id).unwrap_or_default();
-        state.expanded = true;
         state.last_used = Instant::now();
         if !question.trim().is_empty() {
             state.input = Editor::default();
@@ -118,11 +120,30 @@ impl App {
             self.submit_btw(session_id, &mut state);
         }
         self.btw_sessions.insert(session_id, state);
-        self.collapse_inline_plan(session_id);
-        self.collapse_session_work(session_id);
-        self.current_route = Route::Main;
+        self.route_stack.clear();
+        self.current_route = Route::Btw(session_id);
         self.focus = Focus::Transcript;
-        self.btw_focus = Some(session_id);
+    }
+
+    /// Leave the BTW surface and hand the keyboard back to the chat composer.
+    pub(crate) fn close_btw(&mut self) {
+        if matches!(self.current_route, Route::Btw(_)) {
+            self.current_route = Route::Main;
+        }
+        self.focus = Focus::Composer;
+    }
+
+    /// Compact label for the composer's bottom-left BTW segment.
+    pub(crate) fn btw_chip_label(&self) -> Option<String> {
+        let session_id = self.transcript.session_id?;
+        let state = self.btw_sessions.get(&session_id)?;
+        if state.exchanges.is_empty() {
+            return None;
+        }
+        Some(self.i18n.text_args(
+            "composer-status-btw",
+            &agena_tui::fl_args!("count" => state.exchanges.len() as i64),
+        ))
     }
 
     fn submit_btw(&mut self, session_id: i64, state: &mut BtwState) {
@@ -258,36 +279,25 @@ impl App {
         }
     }
 
+    /// Whether the BTW surface currently owns the keyboard.
     pub(crate) fn btw_has_focus(&self) -> bool {
-        self.current_route_is_main()
-            && self.overlay.is_none()
-            && self.context_help.is_none()
-            && self.btw_focus.is_some()
-            && self.btw_focus == self.transcript.session_id
-            && self
-                .btw_focus
-                .and_then(|id| self.btw_sessions.get(&id))
-                .is_some_and(|state| state.expanded)
+        matches!(&self.current_route, Route::Btw(id) if Some(*id) == self.transcript.session_id)
     }
 
     pub(crate) fn handle_btw_input(&mut self, key: KeyEvent) -> bool {
         if !self.btw_has_focus() {
             return false;
         }
+        let Some(id) = self.transcript.session_id else {
+            return false;
+        };
         match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => {
-                self.btw_focus = None;
-                self.focus = if key.code == KeyCode::Esc {
-                    Focus::Transcript
-                } else {
-                    Focus::Composer
-                };
-            }
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.close_btw(),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.handle_btw_action("btw-stop")
             }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if let Some(state) = self.btw_focus.and_then(|id| self.btw_sessions.get_mut(&id)) {
+                if let Some(state) = self.btw_sessions.get_mut(&id) {
                     state.input.insert_explicit_newline();
                 }
             }
@@ -295,7 +305,7 @@ impl App {
             KeyCode::PageUp => self.handle_btw_action("btw-scroll-up"),
             KeyCode::PageDown => self.handle_btw_action("btw-scroll-down"),
             _ => {
-                if let Some(state) = self.btw_focus.and_then(|id| self.btw_sessions.get_mut(&id)) {
+                if let Some(state) = self.btw_sessions.get_mut(&id) {
                     state.input.handle_multiline_input_key(key);
                 }
             }
@@ -303,35 +313,57 @@ impl App {
         true
     }
 
+    /// Keys owned by the full-screen BTW route. Returns `true` when the route
+    /// must close so the caller can pop back to the chat surface.
+    pub(crate) fn handle_btw_route_key(&mut self, key: KeyEvent) -> bool {
+        let Some(id) = self.transcript.session_id else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => {
+                self.close_btw();
+                return true;
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_btw_action("btw-stop");
+            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                if let Some(state) = self.btw_sessions.get_mut(&id) {
+                    state.input.insert_explicit_newline();
+                }
+            }
+            KeyCode::Enter => self.handle_btw_action("btw-send"),
+            KeyCode::PageUp => self.handle_btw_action("btw-scroll-up"),
+            KeyCode::PageDown => self.handle_btw_action("btw-scroll-down"),
+            _ => {
+                if let Some(state) = self.btw_sessions.get_mut(&id) {
+                    state.input.handle_multiline_input_key(key);
+                }
+            }
+        }
+        false
+    }
+
     pub(crate) fn handle_btw_action(&mut self, action: &str) {
         let Some(id) = self.transcript.session_id else {
             return;
         };
+        if matches!(action, "btw-clear") {
+            // Clearing drops the whole surface (and any in-flight question).
+            self.btw_sessions.remove(&id);
+            self.close_btw();
+            return;
+        }
+        if matches!(action, "btw-toggle" | "btw-leave") {
+            self.close_btw();
+            return;
+        }
         let Some(mut state) = self.btw_sessions.remove(&id) else {
             return;
         };
         match action {
-            "btw-clear" => {
-                self.btw_focus = None;
-                return;
-            }
-            "btw-toggle" => {
-                state.expanded = !state.expanded;
-                if state.expanded {
-                    self.collapse_inline_plan(id);
-                    self.collapse_session_work(id);
-                }
-                if !state.expanded {
-                    self.btw_focus = None;
-                }
-            }
             "btw-focus" => {
-                self.btw_focus = Some(id);
                 self.focus = Focus::Transcript;
-            }
-            "btw-leave" => {
-                self.btw_focus = None;
-                self.focus = Focus::Composer;
             }
             "btw-send" => self.submit_btw(id, &mut state),
             "btw-stop" => {
@@ -367,29 +399,18 @@ impl App {
         self.btw_sessions.insert(id, state);
     }
 
-    pub(crate) fn btw_inline_height(&self, available: u16) -> u16 {
-        let Some(state) = self
-            .transcript
-            .session_id
-            .and_then(|id| self.btw_sessions.get(&id))
-        else {
-            return 0;
-        };
-        if state.expanded && available >= 7 {
-            available.min(13)
-        } else {
-            available.min(1)
-        }
-    }
-
-    pub(crate) fn collapse_btw(&mut self, session_id: i64) {
-        if let Some(state) = self.btw_sessions.get_mut(&session_id) {
-            state.expanded = false;
-        }
-    }
-
-    pub(crate) fn render_btw_inline(&mut self, frame: &mut Frame, area: Rect) {
-        self.btw_area = area;
+    pub(crate) fn render_btw_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let surface = render_framed_surface(
+            frame,
+            area,
+            SurfaceMode::Route,
+            &FramedSurfaceSpec {
+                title: self.i18n.text("btw-title").into(),
+                target_width: area.width,
+                target_height: area.height,
+            },
+        );
+        let area = surface.inner;
         if area.is_empty() {
             return;
         }
@@ -401,32 +422,21 @@ impl App {
         else {
             return;
         };
-        let toggle = format!(
-            "{} BTW {}/{}",
-            if state.expanded { "▾" } else { "▸" },
-            if state.exchanges.is_empty() {
-                0
-            } else {
-                state.selected + 1
-            },
-            state.exchanges.len()
-        );
         let clear = self.i18n.text("btw-clear");
         let header = Rect::new(area.x, area.y, area.width, 1);
         pointer::render_buttons(
             frame,
             header,
             &[
-                (&toggle, pointer::PointerAction::Named("btw-toggle")),
                 ("←", pointer::PointerAction::Named("btw-older")),
                 ("→", pointer::PointerAction::Named("btw-newer")),
                 (&clear, pointer::PointerAction::Named("btw-clear")),
             ],
         );
-        if !state.expanded || area.height < 7 {
+        if area.height < 6 {
             return;
         }
-        let input_area = Rect::new(area.x, area.bottom() - 4, area.width, 3);
+        let input_area = Rect::new(area.x, area.bottom().saturating_sub(4), area.width, 3);
         let body = Rect::new(
             area.x + 1,
             area.y + 1,
@@ -538,7 +548,7 @@ impl App {
         let leave = self.i18n.text("btw-leave");
         pointer::render_buttons(
             frame,
-            Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
             &[
                 (
                     &action_label,
@@ -616,11 +626,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inline_question_does_not_replace_chat_or_own_the_main_draft() {
+    async fn btw_surface_owns_its_input_without_touching_the_main_draft() {
         let mut app = app();
         app.composer.insert_str("main draft");
         app.open_btw("");
-        assert!(matches!(app.current_route, Route::Main));
+        assert!(matches!(app.current_route, Route::Btw(7)));
         app.handle_paste("side draft".into());
         assert_eq!(app.btw_sessions[&7].input.text(), "side draft");
         assert_eq!(app.composer.text(), "main draft");
@@ -634,6 +644,7 @@ mod tests {
         assert_eq!(app.btw_sessions[&7].exchanges[0].answer, "partial");
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert!(!app.btw_has_focus());
+        assert!(matches!(app.current_route, Route::Main));
         assert_eq!(app.focus, Focus::Composer);
         app.handle_paste(" continued".into());
         assert_eq!(app.composer.text(), "main draft continued");
@@ -663,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inline_layout_and_pointer_controls_preserve_chat_at_different_sizes() {
+    async fn btw_surface_renders_markdown_and_returns_to_the_chat_surface() {
         let mut app = app();
         app.composer.insert_str("MAIN DRAFT IS VISIBLE");
         app.open_btw("");
@@ -673,9 +684,6 @@ mod tests {
         for (width, height) in [(100, 30), (70, 24), (40, 20)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| app.draw(frame)).unwrap();
-            assert!(app.layout.transcript_body.height > 0);
-            assert!(app.layout.transcript_body.bottom() <= app.btw_area.y);
-            assert!(app.btw_area.bottom() < height);
             let text: String = terminal
                 .backend()
                 .buffer()
@@ -683,11 +691,7 @@ mod tests {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect();
-            assert!(
-                text.contains("MAIN DRAFT IS VISIBLE"),
-                "{width}x{height}: main editor is visible"
-            );
-            assert!(text.contains("BTW"));
+            assert!(text.contains("BTW"), "{width}x{height}: BTW surface");
             let state = &app.btw_sessions[&7];
             let rich_text = state
                 .rendered
@@ -715,15 +719,23 @@ mod tests {
                     .flat_map(|line| &line.spans)
                     .any(|span| span.content.contains("let") && span.style.fg.is_some())
             );
-            click_action(&mut app, &mut terminal, "btw-toggle");
-            assert!(!app.btw_sessions[&7].expanded);
-            assert!(matches!(app.current_route, Route::Main));
-            click_action(&mut app, &mut terminal, "btw-toggle");
         }
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        click_action(&mut app, &mut terminal, "btw-leave");
+        assert!(matches!(app.current_route, Route::Main));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("MAIN DRAFT IS VISIBLE"));
     }
 
     #[tokio::test]
-    async fn collapse_and_reopen_keep_the_request_and_scroll_belongs_to_btw() {
+    async fn closing_and_reopening_keep_the_request_and_scroll_belongs_to_btw() {
         let mut app = app();
         app.open_btw("");
         let task = running(&mut app, 7, 1);
@@ -741,7 +753,7 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         app.handle_key_event(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         assert!(app.btw_sessions[&7].scroll > 0);
-        click_action(&mut app, &mut terminal, "btw-toggle");
+        click_action(&mut app, &mut terminal, "btw-leave");
         assert!(!task.is_finished());
         app.open_btw("");
         assert_eq!(app.btw_sessions[&7].request_id, 1);

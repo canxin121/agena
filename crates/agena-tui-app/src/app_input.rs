@@ -95,10 +95,12 @@ impl App {
             return;
         }
 
-        if self.handle_session_work_key(key)
-            || self.handle_btw_input(key)
-            || self.handle_inline_plan_key(key)
+        if self.current_route_is_main()
+            && resolve_tui_key(KeyContext::Main, key) == Some(KeyAction::ToggleSessionWork)
+            && self.interaction_editing.is_none()
+            && self.prompt_history_search.is_none()
         {
+            self.open_session_work_panel(crate::app_session_work::Tab::Files);
             return;
         }
 
@@ -151,7 +153,7 @@ impl App {
                     return;
                 }
                 KeyAction::OpenPlan if self.focus != Focus::Composer => {
-                    self.open_plan_viewer();
+                    self.open_plan_viewer_fullscreen();
                     return;
                 }
                 _ => {}
@@ -290,6 +292,8 @@ impl App {
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::Activities(dialog) => self.handle_activities_key(key, dialog),
             Route::PlanViewer(dialog) => self.handle_plan_viewer_key(key, dialog),
+            Route::SessionWork(id) => self.handle_session_work_route_key(key, *id),
+            Route::Btw(_) => self.handle_btw_route_key(key),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::ClientVersionsStudio(dialog) => {
                 self.handle_client_versions_studio_overlay_key(key, dialog)

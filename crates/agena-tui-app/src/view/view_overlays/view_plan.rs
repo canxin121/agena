@@ -19,7 +19,7 @@ impl App {
             state.loading,
             state.error.as_deref(),
             &self.i18n,
-            crate::app_plan_inline::render_plan_document,
+            crate::app_plan_document::render_plan_document,
         );
     }
 }

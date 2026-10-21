@@ -18,9 +18,11 @@ automatically sent into the parent's prompt. A side shares the workspace,
 so explicitly requested edits there still affect files the parent may use.
 
 In the BTW window, Enter sends, Stop cancels the question while preserving
-the partial answer, and Close/Escape closes it. TUI also supports Ctrl+C to
-stop the question and arrows, Page Up/Down or the wheel to scroll the answer.
-The main composer stays independent. Each new BTW send creates a fresh
+the partial answer, and Close/Escape closes it. In the TUI, `/btw` and the
+composer's bottom-border BTW chip open the question surface full screen;
+Ctrl+C stops the question and Page Up/Down (or the wheel) scrolls the answer.
+Esc or Tab returns to the chat with the main draft untouched. The main
+composer stays independent. Each new BTW send creates a fresh
 question against the parent's history, rather than extending a durable chat.
 Use a side for ongoing discussion.
 

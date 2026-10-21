@@ -91,14 +91,7 @@ impl App {
             focus: Focus::Transcript,
             current_route: Route::Main,
             btw_sessions: BTreeMap::new(),
-            btw_focus: None,
-            btw_area: Default::default(),
             session_work: BTreeMap::new(),
-            work_focus: None,
-            work_area: Default::default(),
-            inline_plans: BTreeMap::new(),
-            plan_focus: None,
-            plan_area: Default::default(),
             route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
@@ -377,7 +370,6 @@ impl App {
         self.poll_provider_studio_auth_if_due(now);
         self.refresh_activities_panel_if_due(now);
         self.refresh_hub_if_due();
-        self.heal_plan_display_refresh();
         self.heal_session_work();
         self.heal_tool_detail_reads();
         self.heal_content_reads();

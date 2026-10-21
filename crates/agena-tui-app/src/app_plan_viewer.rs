@@ -23,6 +23,24 @@ impl App {
         self.refresh_plan_viewer();
     }
 
+    /// Ask the planning plugin to republish its status-line contribution for
+    /// `session_id`. Reads never mutate the plan, but every read re-syncs the
+    /// contribution, so the composer's bottom-right chip survives a restart or
+    /// runtime reload without any docked plan surface.
+    pub(crate) fn request_plan_display_refresh(&mut self, session_id: i64) {
+        let application = self.application.clone();
+        tokio::spawn(async move {
+            let _ = application
+                .invoke_plugin_tool(
+                    "agena.plan",
+                    "get",
+                    serde_json::json!({ "view": "summary" }),
+                    Some(session_id),
+                )
+                .await;
+        });
+    }
+
     /// Reload the full plan markdown and the compact display summary,
     /// tracking the request id on the active plan-viewer state. Returns the
     /// request id so callers that hold a detached route state (during route
@@ -53,7 +71,7 @@ impl App {
                 )
                 .await
                 .map(|response| PlanViewerData {
-                    markdown: crate::app_plan_inline::plan_document(&response.output_text),
+                    markdown: crate::app_plan_document::plan_document(&response.output_text),
                     autorun: response
                         .payload
                         .as_ref()
@@ -202,7 +220,7 @@ impl App {
                 )
                 .await
                 .map(|response| PlanViewerData {
-                    markdown: crate::app_plan_inline::plan_document(&response.output_text),
+                    markdown: crate::app_plan_document::plan_document(&response.output_text),
                     autorun: response
                         .payload
                         .as_ref()

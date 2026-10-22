@@ -375,7 +375,7 @@ async fn bundle(
         .map_err(storage)?;
     let read_transaction = backend.live.diagnostics().read_transaction();
     let id = authorized(&mut tx, lease, position).await?;
-    let row = sqlx::query("SELECT e.*,a.phase AS execution_phase,a.response_entry_id FROM agena_entries e JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=e.generation WHERE e.id=?")
+    let row = sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,a.generation AS execution_generation,a.phase AS execution_phase,a.response_entry_id FROM agena_entries e JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=e.generation WHERE e.id=?")
         .bind(id)
         .fetch_one(&mut *tx)
         .await

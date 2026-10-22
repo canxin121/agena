@@ -81,7 +81,7 @@ async fn bodies(
     }
     metrics::add(&diagnostics.0.history_queries, 1);
     let sql = format!(
-        "SELECT e.*,({ANCHOR}) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state {MEMBERSHIP} AND e.id IN (SELECT value FROM json_each(?)) ORDER BY s.sequence,m.ordinal"
+        "SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,({ANCHOR}) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state {MEMBERSHIP} AND e.id IN (SELECT value FROM json_each(?)) ORDER BY s.sequence,m.ordinal"
     );
     let rows = sqlx::query(&sql)
         .bind(session.get())
@@ -186,13 +186,36 @@ pub(super) async fn message_history(
     validate(&mut tx, session, &metadata, before).await?;
     // A boundary index lives in the entry/attempt identities; no content body
     // participates in message selection, counting or sorting.
+    // Conversation order follows the owning input, not append time: users can
+    // enqueue their next inputs before the current reply's first entry exists.
+    // Keep the physical membership cursor so validation and part expansion
+    // retain their existing semantics, but recover its logical position here.
+    let before_key = if let Some(cursor) = before {
+        let sql = format!(
+            "SELECT COALESCE(e.message_id,e.id) AS owner,e.id {MEMBERSHIP} AND s.sequence=? AND m.ordinal=?"
+        );
+        let row = sqlx::query(&sql)
+            .bind(session.get())
+            .bind(cursor.segment_sequence)
+            .bind(i64::from(cursor.ordinal))
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(sql_error)?;
+        metrics::add(&diagnostics.0.history_queries, 1);
+        (
+            row.try_get::<i64, _>("owner").map_err(storage)?,
+            row.try_get::<i64, _>("id").map_err(storage)?,
+        )
+    } else {
+        (i64::MAX, i64::MAX)
+    };
     let sql = format!(
-        "SELECT e.id,s.sequence,m.ordinal {MEMBERSHIP} AND e.id=({ANCHOR}) AND e.kind!='interaction' AND (s.sequence,m.ordinal)<(?,?) ORDER BY s.sequence DESC,m.ordinal DESC LIMIT ?"
+        "SELECT e.id,s.sequence,m.ordinal {MEMBERSHIP} AND e.id=({ANCHOR}) AND (e.kind!='user' OR EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL)) AND (COALESCE(e.message_id,e.id),e.id)<(?,?) ORDER BY COALESCE(e.message_id,e.id) DESC,e.id DESC LIMIT ?"
     );
     let mut boundaries = sqlx::query(&sql)
         .bind(session.get())
-        .bind(before.map_or(i64::MAX, |cursor| cursor.segment_sequence))
-        .bind(before.map_or(i64::MAX, |cursor| i64::from(cursor.ordinal)))
+        .bind(before_key.0)
+        .bind(before_key.1)
         .bind((message_limit + 1) as i64)
         .fetch_all(&mut *tx)
         .await
@@ -280,10 +303,20 @@ pub(super) async fn message_history(
         });
     }
     let entries = bodies(&mut tx, session, &selected, diagnostics).await?;
+    let count_sql = format!(
+        "SELECT COUNT(*) {MEMBERSHIP} AND e.kind='user' AND EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL)"
+    );
+    let user_message_count: i64 = sqlx::query_scalar(&count_sql)
+        .bind(session.get())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(sql_error)?;
+    metrics::add(&diagnostics.0.history_queries, 1);
     Ok(MessageHistoryPage {
         metadata,
         entries,
         messages,
+        user_message_count: user_message_count as u64,
         next,
         has_more,
     })

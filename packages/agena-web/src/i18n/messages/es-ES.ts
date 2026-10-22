@@ -1486,6 +1486,12 @@ export default {
       "usage": {
         "tokensSuffix": "{value} tokens"
       },
+      "queue": {
+        "title": "{count} mensajes en cola",
+        "hint": "Se enviarán en orden tras la respuesta actual",
+        "order": "Orden de envío",
+        "loading": "Cargando mensaje…"
+      },
       "primary": {
         "send": "Enviar",
         "sendMessage": "Enviar mensaje",

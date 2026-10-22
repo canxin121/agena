@@ -40,6 +40,10 @@ pub struct PartResource {
     pub parent_part_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
+    /// User input owning this entry, independent of physical append order.
+    /// A later queued input can be persisted before an earlier reply starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<i64>,
     pub origin_session_id: i64,
     pub revision: i64,
     pub started_at_ms: i64,

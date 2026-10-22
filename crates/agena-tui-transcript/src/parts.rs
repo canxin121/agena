@@ -108,29 +108,44 @@ pub fn parts_entries_with_folds(
         }
     }
 
-    // Build entries in marker order and attach content only by its durable
-    // owner. This is the same projection contract used by Web.
+    // Pending input belongs to the queue preview. A queued retry of an input
+    // used by an earlier attempt remains in the conversation (queue_only=false).
+    let mut markers = parts
+        .iter()
+        .filter(|part| part.is_message_boundary())
+        .filter(|part| {
+            !(part.role == "user"
+                && (part.content.get("queue_only").and_then(Value::as_bool) == Some(true)
+                    || part.run_state.as_deref().unwrap_or(&part.state) == "pending"))
+        })
+        .collect::<Vec<_>>();
+    if markers.iter().any(|part| part.message_id.is_some()) {
+        markers.sort_by_key(|part| (part.message_id.unwrap_or(part.part_id), part.part_id));
+    }
+    // Attach content only by its durable owner, after ordering the boundaries.
+    // This is the same projection contract used by Web.
     let mut projected = Vec::new();
-    for part in parts {
-        if part.is_message_boundary() {
-            let mut entry = run_marker_entry(part);
-            if let Some(content) = content_by_run.remove(&part.part_id) {
-                entry
-                    .parts
-                    .extend(content.into_iter().flat_map(entry_parts));
-            }
-            // Maintenance runs have their own content lifecycle, separate
-            // from the assistant reply that they are displayed beneath.
-            let is_reply = string_field(&part.content, "run_kind").as_deref() != Some("compaction");
-            projected.push((entry, is_reply));
+    for part in markers {
+        let mut entry = run_marker_entry(part);
+        if let Some(content) = content_by_run.remove(&part.part_id) {
+            entry
+                .parts
+                .extend(content.into_iter().flat_map(entry_parts));
         }
+        // Maintenance runs have their own content lifecycle, separate
+        // from the assistant reply that they are displayed beneath.
+        let is_reply = string_field(&part.content, "run_kind").as_deref() != Some("compaction");
+        projected.push((entry, is_reply, part.message_id));
     }
 
-    let mut entries: Vec<(TranscriptEntry<'static>, bool)> = Vec::new();
-    for (entry, is_reply) in projected {
-        if let Some((previous, previous_is_reply)) = entries.last_mut()
+    let mut entries: Vec<(TranscriptEntry<'static>, bool, Option<i64>)> = Vec::new();
+    for (entry, is_reply, message_id) in projected {
+        if let Some((previous, previous_is_reply, previous_message_id)) = entries.last_mut()
             && previous.role == Some(RunRole::Assistant)
             && entry.role == Some(RunRole::Assistant)
+            && (message_id.is_none()
+                || previous_message_id.is_none()
+                || *previous_message_id == message_id)
         {
             // Fold adjacent assistant rounds only after exact ownership has
             // been resolved. Runtime/System ingress remains a hard boundary.
@@ -144,14 +159,14 @@ pub fn parts_entries_with_folds(
             previous.parts.extend(entry.parts);
             continue;
         }
-        entries.push((entry, is_reply));
+        entries.push((entry, is_reply, message_id));
     }
     let positions = parts
         .iter()
         .enumerate()
         .map(|(index, part)| (part.part_id, index))
         .collect::<std::collections::BTreeMap<_, _>>();
-    for (entry, _) in &mut entries {
+    for (entry, _, _) in &mut entries {
         // A run can resume after another assistant activity has started.
         // Once adjacent runs are folded, retain the durable content order.
         entry.parts.sort_by_key(|part| match part.id {
@@ -163,9 +178,9 @@ pub fn parts_entries_with_folds(
     }
     for fold in folds {
         let anchor = TranscriptContentId::StoredPart(fold.anchor_part_id);
-        let Some((entry, _)) = entries
+        let Some((entry, _, _)) = entries
             .iter_mut()
-            .find(|(entry, _)| entry.parts.iter().any(|part| part.id == anchor))
+            .find(|(entry, _, _)| entry.parts.iter().any(|part| part.id == anchor))
         else {
             continue;
         };
@@ -188,7 +203,7 @@ pub fn parts_entries_with_folds(
     }
     entries
         .into_iter()
-        .map(|(entry, is_reply)| finalize_run_entry(entry, is_reply))
+        .map(|(entry, is_reply, _)| finalize_run_entry(entry, is_reply))
         .collect()
 }
 
@@ -1000,6 +1015,50 @@ mod tests {
             run_id: Some(run_id),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn queued_inputs_stay_outside_the_conversation_until_promoted() {
+        let mut user = run(1, "user", "completed");
+        user.message_id = Some(1);
+        let mut queued = run(2, "user", "pending");
+        queued.message_id = Some(2);
+        queued.run_state = Some("pending".into());
+        queued.content = serde_json::json!({"queue_only":true});
+        let mut reply = run(3, "assistant", "completed");
+        reply.message_id = Some(1);
+        let before = parts_entries(&[user.clone(), queued.clone(), reply.clone()]);
+        assert_eq!(
+            before.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![
+                TranscriptEntryId::StoredMessage(1),
+                TranscriptEntryId::StoredMessage(3)
+            ]
+        );
+        queued.run_state = Some("completed".into());
+        queued.state = "completed".into();
+        queued.content = serde_json::json!({"queue_only":false});
+        let after = parts_entries(&[user.clone(), queued.clone(), reply.clone()]);
+        assert_eq!(
+            after.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            vec![
+                TranscriptEntryId::StoredMessage(1),
+                TranscriptEntryId::StoredMessage(3),
+                TranscriptEntryId::StoredMessage(2)
+            ]
+        );
+        queued.run_state = Some("cancelled".into());
+        queued.content = serde_json::json!({"queue_only":true});
+        assert_eq!(parts_entries(&[user, queued, reply]).len(), 2);
+    }
+
+    #[test]
+    fn assistant_replies_with_different_input_owners_do_not_fold_without_a_user_marker() {
+        let mut first = run(5, "assistant", "completed");
+        first.message_id = Some(1);
+        let mut next = run(6, "assistant", "running");
+        next.message_id = Some(2);
+        assert_eq!(parts_entries(&[first, next]).len(), 2);
     }
 
     #[test]

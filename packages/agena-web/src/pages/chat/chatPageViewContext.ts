@@ -9,6 +9,7 @@ import type { Command } from './useChatCommands'
 import type { ComposerExpose } from './composerInput'
 import type { JsonObject } from '@/types/json'
 import type { usePlanViewer } from './usePlanViewer'
+import type { QueuedMessagePreview } from './queuedMessages'
 
 type DynamicRecord = JsonObject
 
@@ -210,6 +211,7 @@ export type ChatPageViewContext = {
   composerStatusExtra: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>
+  queuedMessages: MaybeRef<QueuedMessagePreview[]>
   showComposerStopAction: MaybeRef<boolean>
   composerStopDisabled: MaybeRef<boolean>
   composerPrimaryDisabled: MaybeRef<boolean>

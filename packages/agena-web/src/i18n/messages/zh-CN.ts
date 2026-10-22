@@ -1602,6 +1602,12 @@ export default {
       usage: {
         tokensSuffix: '{value} tokens',
       },
+      queue: {
+        title: '待发消息 · {count}',
+        hint: '当前回复结束后按顺序发送',
+        order: '发送顺序',
+        loading: '正在加载消息…',
+      },
       primary: {
         send: '发送',
         sendMessage: '发送消息',

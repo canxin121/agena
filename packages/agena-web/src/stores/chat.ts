@@ -27,7 +27,7 @@ import {
   invalidateResources,
   subscribeResource,
 } from '../lib/resourceSync'
-import { isRunTerminal } from '../lib/chatRunState'
+import { isRunInFlight, isRunTerminal } from '../lib/chatRunState'
 import {
   interactiveRequests,
   pendingPartInteractions,
@@ -57,6 +57,7 @@ import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE, normalizeTranscriptPartPageSize } from '@/pages/chat/transcriptPartPaging'
 import { reconcileTranscriptFolds, transcriptFoldKey } from './chat/transcriptFolds'
+import { isQueueOnlyMessage } from '@/pages/chat/conversationMessages'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -861,6 +862,23 @@ const useChatStoreDefinition = defineStore('chat', () => {
               currentMessages,
             )
       setSessionMessages(sid, nextMessages)
+      // A queued input can start before polling sees the preceding reply end.
+      // That reply has then left the recent window, but its cached spinner and
+      // open content still need the backend's final facts.
+      const windowIds = new Set(ordered.map((entry) => entry.info.id))
+      const retiredReplyIds = (shouldReplace ? [] : currentMessages)
+        .filter(
+          (entry) =>
+            entry.info.role === 'assistant' &&
+            isRunInFlight(entry.info.runState || entry.info.finish) &&
+            !windowIds.has(entry.info.id),
+        )
+        .flatMap((entry) => [
+          entry.info.id,
+          ...entry.parts.filter((part) => isRunInFlight(part.partState)).map((part) => part.id),
+        ])
+      await reconcileLoadedParts(sid, retiredReplyIds)
+      if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       markMessagesHydrated(sid)
       if (page.observation && page.observation.scope === captureResourceObservation(`session:${sid}:parts`).scope)
         transcriptObservations.set(sid, page.observation)
@@ -988,7 +1006,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
       historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
       // This page may have started before the current interaction snapshot.
-      void reconcileInteractionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
+      void reconcileExecutionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
       return normalized.length > 0
     } catch (error) {
       if (generation === transcriptCacheGeneration) {
@@ -1068,7 +1086,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         activeFold = nextFold
         if (!cursor || nextFold.hiddenCount <= 0 || (!all && fetchedContent > 0)) break
       } while (cursor)
-      void reconcileInteractionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
+      void reconcileExecutionParts(sid).catch(() => scheduleSessionStatusRefresh(sid))
       return loadedAny
     } catch (error) {
       if (generation === transcriptCacheGeneration) {
@@ -1188,7 +1206,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (observed?.scope === captureResourceObservation(key).scope && observed.token) {
       await checkResourceVersions([key])
       if (canReuseResource(key, observed.token) && hasInteractionSnapshot(sid)) {
-        await reconcileInteractionParts(sid)
+        await reconcileExecutionParts(sid)
         return
       }
     }
@@ -1214,7 +1232,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     if (st.observation) executionObservations.set(sid, st.observation)
     applyExecutionStatus(st, activityGeneration)
-    await reconcileInteractionParts(sid)
+    await reconcileExecutionParts(sid)
   }
 
   function getPendingInteraction(sessionId: string, requestId: string, kind: InteractiveRequestKind) {
@@ -1229,12 +1247,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return Boolean(interactiveBySession.value[sessionId])
   }
 
-  /** A state shell can retire an ask outside the recent run window. Re-read
-   * its loaded owner, without inventing a reply or walking unloaded history. */
-  async function reconcileInteractionParts(sid: string) {
+  /** Reconcile queue inputs and retired asks outside the recent run window.
+   * Fetch only backend-owned identities; never enumerate unloaded history. */
+  async function reconcileExecutionParts(sid: string) {
     const snapshot = interactiveBySession.value[sid]
     if (!snapshot) return
-    const ids = ensureSessionMessages(sid).flatMap((entry) =>
+    const messages = ensureSessionMessages(sid)
+    const queue = sessionExecutionBySession.value[sid]?.queued_messages ?? []
+    const queueIds = new Set(queue.map((item) => String(item.message_id)))
+    const loadedById = new Map(messages.map((entry) => [entry.info.id, entry]))
+    const ids = messages.flatMap((entry) =>
       entry.parts
         .filter((part) =>
           pendingPartInteractions(part).some(
@@ -1246,6 +1268,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
         )
         .map((part) => part.id),
     )
+    for (const id of queueIds) {
+      const loaded = loadedById.get(id)
+      const content = asRecord(loaded?.info.runContent ?? null)
+      if (!loaded || content.execution_phase !== 'queued') ids.push(id)
+    }
+    for (const entry of messages) {
+      if (entry.info.role === 'user' && entry.info.runState === 'pending' && !queueIds.has(entry.info.id)) {
+        ids.push(entry.info.id)
+      }
+    }
+    await reconcileLoadedParts(sid, ids)
+  }
+
+  async function reconcileLoadedParts(sid: string, ids: readonly string[]) {
     if (!ids.length) return
     const generation = transcriptCacheGeneration
     const parts = await chatApi.getLoadedParts(sid, [...new Set(ids)])
@@ -1911,6 +1947,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     if (String(removed?.info?.role || '') !== 'user') return
+    if (removed && isQueueOnlyMessage(removed)) return
     const ordinal = removed?.info?.userMessageOrdinal
     const current = historyUserMessageCountBySession.value[sid]
     const nextCount =
@@ -1993,7 +2030,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       applyExecutionStatus(state, activityGeneration)
     // Reply eligibility comes from this state read. Repairing an old owner's
     // history is independent and must not undo a known lifecycle transition.
-    await reconcileInteractionParts(sid).catch(() => messageRevalidator(sid).invalidate(0))
+    await reconcileExecutionParts(sid).catch(() => messageRevalidator(sid).invalidate(0))
     return true
   }
 
@@ -2039,7 +2076,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (owner !== sid) reconcileExecutionAfterWrite(sid)
     // The reply is committed. A failed history refresh must not report that
     // approval failed or invite the user to send it again.
-    await reconcileInteractionParts(owner).catch(() => messageRevalidator(owner).invalidate(0))
+    await reconcileExecutionParts(owner).catch(() => messageRevalidator(owner).invalidate(0))
     if (owner !== sid) await refreshInteractiveState(sid, generation).catch(() => scheduleSessionStatusRefresh(sid, 0))
     return true
   }
@@ -2208,14 +2245,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
             if (part.message_boundary === true) {
               // New message (turn marker).
-              const messageAlreadyKnown = binarySearchById(list, String(partId), (m) => m.info.id).found
-              const runState = readString(part.state as JsonValue)
+              const previousPosition = binarySearchById(list, String(partId), (m) => m.info.id)
+              const previousMessage = previousPosition.found ? list[previousPosition.index] : undefined
+              const wasInConversation = previousMessage && !isQueueOnlyMessage(previousMessage)
+              const runState = readString(part.run_state as JsonValue) || readString(part.state as JsonValue)
               const content = asRecord(part.content)
               const info: MessageInfo = {
                 id: String(partId),
                 sessionID: sid,
                 role: readString(part.role as JsonValue) || 'assistant',
                 runId: partId,
+                ...(typeof part.message_id === 'number' ? { messageId: part.message_id } : {}),
                 revision: readNumber(part.revision) ?? 0,
                 updatedAt: readNumber(part.updated_at_ms) ?? 0,
                 ...(runState ? { runState } : {}),
@@ -2238,7 +2278,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               const boundaryEntry=upsertMessageEntryIn(list, info)
               const boundaryPart=normalizeAgenaPart(String(partId),sid,key,part as JsonValue)
               if (boundaryPart) upsertPart(boundaryEntry,boundaryPart,'')
-              if (info.role === 'user') {
+              if (info.role === 'user' && !isQueueOnlyMessage(boundaryEntry)) {
                 const currentCount = historyUserMessageCountBySession.value[sid]
                 if (typeof info.userMessageOrdinal === 'number') {
                   // The newest user message's ordinal IS the session total, so a
@@ -2248,7 +2288,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
                     ...historyUserMessageCountBySession.value,
                     [sid]: Math.max(typeof currentCount === 'number' ? currentCount : 0, info.userMessageOrdinal),
                   }
-                } else if (!messageAlreadyKnown && typeof currentCount === 'number') {
+                } else if (!wasInConversation && typeof currentCount === 'number') {
                   historyUserMessageCountBySession.value = {
                     ...historyUserMessageCountBySession.value,
                     [sid]: currentCount + 1,

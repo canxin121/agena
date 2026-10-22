@@ -293,6 +293,12 @@ export default {
       transcriptSearch: { open: 'Rechercher dans la transcription', previous: 'Correspondance précédente', next: 'Correspondance suivante' },
       attachments: 'Pièces jointes', attachmentsWithCount: 'Pièces jointes ({count})', tools: 'Outils',
       usage: { tokensSuffix: '{value} jetons' },
+      queue: {
+        title: '{count} messages en attente',
+        hint: 'Envoi dans l’ordre après la réponse en cours',
+        order: 'Ordre d’envoi',
+        loading: 'Chargement du message…',
+      },
       primary: { send: 'Envoyer', sendMessage: 'Envoyer le message', stop: 'Arrêter', queuedMessages: '{count} en attente', stopRun: 'Arrêter l’exécution' },
     },
     btw: {

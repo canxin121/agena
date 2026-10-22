@@ -692,6 +692,7 @@ mod tests {
             ..Default::default()
         };
         Part {
+            message_id: None,
             part_id: id,
             kind: "tool_call".into(),
             message_boundary: true,

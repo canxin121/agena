@@ -43,6 +43,172 @@ fn ids(prompt: &PromptView) -> Vec<EntryId> {
 }
 
 #[tokio::test]
+async fn conversation_pages_exclude_unclaimed_inputs_and_follow_input_ownership() {
+    for memory in [true, false] {
+        let (ports, _maintenance, _admin, _diagnostics, _root) = fixture(memory).await;
+        let session = ports
+            .sessions
+            .create(RequestId::new(), 1, "conversation queue".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let mut inputs = Vec::new();
+        for text in ["first", "second", "withdrawn"] {
+            inputs.push(
+                ports
+                    .sessions
+                    .send(RequestId::new(), session, document(text))
+                    .await
+                    .unwrap()
+                    .value,
+            );
+        }
+        assert!(
+            ports
+                .reader
+                .message_history(session, None, 2, 16)
+                .await
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+        let first = ports
+            .executor
+            .claim(RequestId::new(), session, inputs[0].id)
+            .await
+            .unwrap()
+            .value;
+        let round = first
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let output = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        output.append("first answer").await.unwrap();
+        let first_response = output.entry_id();
+        assert!(first_response > inputs[2].message_id);
+        let page = ports
+            .reader
+            .message_history(session, None, 2, 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![inputs[0].message_id, first_response]
+        );
+        assert!(!page.has_more);
+        assert_eq!(page.user_message_count, 1);
+        ports
+            .sessions
+            .cancel_queued(RequestId::new(), session, inputs[2].id)
+            .await
+            .unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        first
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let second = ports
+            .executor
+            .claim(RequestId::new(), session, inputs[1].id)
+            .await
+            .unwrap()
+            .value;
+        let promoted = ports
+            .reader
+            .message_history(session, None, 2, 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            promoted
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![first_response, inputs[1].message_id]
+        );
+        let round = second
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let output = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        output.append("second answer").await.unwrap();
+        let recent = ports
+            .reader
+            .message_history(session, None, 2, 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            recent
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![inputs[1].message_id, output.entry_id()]
+        );
+        let older = ports
+            .reader
+            .message_history(session, recent.next, 2, 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            older
+                .messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![inputs[0].message_id, first_response]
+        );
+        assert!(!older.has_more);
+        assert_eq!(older.user_message_count, 2);
+        let withdrawn = ports
+            .reader
+            .entry(session, inputs[2].message_id)
+            .await
+            .unwrap();
+        assert!(!withdrawn.execution_started);
+        assert_eq!(withdrawn.execution_phase, ExecutionPhase::Cancelled);
+        // A queued retry must retain the original, already used user input.
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        second
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+        ports
+            .sessions
+            .retry(RequestId::new(), session, inputs[1].id)
+            .await
+            .unwrap();
+        let retry_input = ports
+            .reader
+            .entry(session, inputs[1].message_id)
+            .await
+            .unwrap();
+        assert!(retry_input.execution_started);
+        assert_eq!(retry_input.execution_generation.get(), 2);
+        let retried = ports
+            .reader
+            .message_history(session, None, 2, 16)
+            .await
+            .unwrap();
+        assert_eq!(retried.messages[0].id, inputs[1].message_id);
+    }
+}
+
+#[tokio::test]
 async fn automatic_rounds_keep_successful_output_when_a_later_round_and_attempt_fail() {
     for memory in [true, false] {
         let (ports, _maintenance, _admin, _diagnostics, _root) = fixture(memory).await;

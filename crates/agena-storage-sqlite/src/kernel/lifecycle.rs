@@ -1051,7 +1051,7 @@ pub(super) async fn history_after(
     }
     let mut entries = Vec::with_capacity(selected.len());
     if !selected.is_empty() {
-        let rows=sqlx::query("SELECT e.*,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
+        let rows=sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
             .bind(encode(&selected)?).fetch_all(&mut *tx).await.map_err(sql_error)?;
         metrics::add(&backend.live.diagnostics().0.history_queries, 1);
         metrics::add(&backend.live.diagnostics().0.history_entry_rows, rows.len());

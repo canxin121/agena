@@ -1250,6 +1250,12 @@ export default {
       usage: {
         tokensSuffix: '{value} टोकन',
       },
+      queue: {
+        title: 'कतार में {count} संदेश',
+        hint: 'मौजूदा जवाब के बाद क्रम से भेजे जाएँगे',
+        order: 'भेजने का क्रम',
+        loading: 'संदेश लोड हो रहा है…',
+      },
       primary: {
         send: 'भेजें',
         sendMessage: 'संदेश भेजें',

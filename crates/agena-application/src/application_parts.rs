@@ -75,10 +75,11 @@ pub(crate) async fn append_execution_failures(
             entry.generation,
             entry.origin_session_id,
             entry.created_at_ms,
+            entry.message_id.get(),
         ));
     }
     let mut failures = Vec::new();
-    for (run_id, execution, generation, owner, candidate_created_at_ms) in candidates {
+    for (run_id, execution, generation, owner, candidate_created_at_ms, message_id) in candidates {
         if parts
             .iter()
             .any(|existing| existing.kind == "error" && existing.run_id == Some(run_id))
@@ -124,14 +125,14 @@ pub(crate) async fn append_execution_failures(
             },
             None => (manager_failure_content(), run_id, candidate_created_at_ms),
         };
-        failures.push((run_id, source_id, created_at_ms, content, owner));
+        failures.push((run_id, source_id, created_at_ms, content, owner, message_id));
     }
 
     let mut used_ids = parts
         .iter()
         .map(|part| part.part_id)
         .collect::<std::collections::HashSet<_>>();
-    for (run_id, round_id, created_at_ms, content, owner) in failures {
+    for (run_id, round_id, created_at_ms, content, owner, message_id) in failures {
         // Synthetic ids stay out of the durable entry range while remaining
         // decimal, which the Web message index requires. A pathological
         // durable-id collision simply advances to the next free value.
@@ -148,6 +149,7 @@ pub(crate) async fn append_execution_failures(
             content,
             visibility: "both".into(),
             run_id: Some(run_id),
+            message_id: Some(message_id),
             origin_session_id: owner.get(),
             revision: 1,
             started_at_ms: created_at_ms,
@@ -243,6 +245,7 @@ pub(crate) async fn project_kernel_entry(
         run_state: message_boundary.then(|| run_state.to_owned()),
         visibility: "both".into(),
         run_id: entry.response_entry_id.map(|id| id.get()),
+        message_id: Some(entry.message_id.get()),
         message_boundary,
         origin_session_id: entry.origin_session_id.get(),
         revision: entry.revision.get(),
@@ -263,14 +266,21 @@ pub(crate) async fn project_kernel_entry(
             part.message_boundary = true;
             part.run_state = Some(
                 match entry.execution_phase {
-                    agena_storage::kernel::ExecutionPhase::Queued => "pending",
-                    agena_storage::kernel::ExecutionPhase::Cancelled => "cancelled",
+                    agena_storage::kernel::ExecutionPhase::Queued if !entry.execution_started => {
+                        "pending"
+                    }
+                    agena_storage::kernel::ExecutionPhase::Cancelled
+                        if !entry.execution_started =>
+                    {
+                        "cancelled"
+                    }
                     _ => "completed",
                 }
                 .into(),
             );
             part.content = serde_json::json!({"text":document.text(),"document":document,
-                "execution_id":entry.execution_id,"run_kind":"user_send"});
+                "execution_id":entry.execution_id,"run_kind":"user_send",
+                "queue_only":!entry.execution_started});
         }
         EntryPayload::Text { content_id } | EntryPayload::Reasoning { content_id } => {
             let reasoning = matches!(&entry.payload, EntryPayload::Reasoning { .. });
@@ -459,6 +469,25 @@ pub(crate) async fn project_kernel_entry(
             part.content["abort_reason"] = serde_json::json!("process_restart");
         }
     }
+    // A boundary's execution state can advance without editing its content
+    // entry. Give those snapshots increasing revisions too, so a refresh or
+    // delayed live event cannot leave a claimed input pending in client caches.
+    // Phase ranks are monotonic within one attempt; eight slots leave every
+    // retry newer than its predecessor's terminal state.
+    let phase_revision = match entry.execution_phase {
+        agena_storage::kernel::ExecutionPhase::Queued => 0,
+        agena_storage::kernel::ExecutionPhase::Running => 1,
+        agena_storage::kernel::ExecutionPhase::Succeeded => 2,
+        agena_storage::kernel::ExecutionPhase::Failed => 3,
+        agena_storage::kernel::ExecutionPhase::Cancelled => 4,
+        agena_storage::kernel::ExecutionPhase::Interrupted => 5,
+    };
+    part.revision = part.revision.saturating_add(
+        (entry.execution_generation.get() - 1)
+            .saturating_mul(8)
+            .saturating_add(phase_revision),
+    );
+    part.updated_at_ms = part.created_at_ms.saturating_add(part.revision);
     Ok(part)
 }
 
@@ -731,13 +760,12 @@ impl Application {
                 })
             })
             .collect::<Result<Vec<_>, ApplicationError>>()?;
-        let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
         Ok(SessionPartsResource {
             session_id: request.session_id,
             version: page.metadata.metadata_version.get(),
             parts,
             runs,
-            user_message_count: Some(summary.user_message_count),
+            user_message_count: Some(page.user_message_count),
             page: agena_api::pagination::PageInfo {
                 returned: page.messages.len() as u64,
                 has_more: page.has_more,
@@ -754,6 +782,129 @@ mod tests {
         ComposerDocument, ComposerNode, PermissionAction, PermissionMode, PermissionScope,
     };
     use agena_storage::kernel::*;
+
+    #[tokio::test]
+    async fn input_projection_versions_queue_promotion_and_keeps_used_input_through_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "queue presentation".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let document = ComposerDocument(vec![ComposerNode::Text {
+            text: "queued text".into(),
+        }]);
+        let input = kernel
+            .sessions
+            .send(RequestId::new(), session, document.clone())
+            .await
+            .unwrap()
+            .value;
+        let pending = kernel
+            .reader
+            .entry(session, input.message_id)
+            .await
+            .unwrap();
+        let pending = project_kernel_entry(&kernel.reader, session, &pending)
+            .await
+            .unwrap();
+        assert_eq!(pending.message_id, Some(input.message_id.get()));
+        assert_eq!(pending.run_state.as_deref(), Some("pending"));
+        assert_eq!(pending.content["queue_only"], true);
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, input.id)
+            .await
+            .unwrap()
+            .value;
+        let started = kernel
+            .reader
+            .entry(session, input.message_id)
+            .await
+            .unwrap();
+        let started = project_kernel_entry(&kernel.reader, session, &started)
+            .await
+            .unwrap();
+        assert_eq!(started.run_state.as_deref(), Some("completed"));
+        assert_eq!(started.content["queue_only"], false);
+        assert!(started.revision > pending.revision);
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+        let failed = kernel
+            .reader
+            .entry(session, input.message_id)
+            .await
+            .unwrap();
+        let failed = project_kernel_entry(&kernel.reader, session, &failed)
+            .await
+            .unwrap();
+        assert!(failed.revision > started.revision);
+        kernel
+            .sessions
+            .retry(RequestId::new(), session, input.id)
+            .await
+            .unwrap();
+        let retry = kernel
+            .reader
+            .entry(session, input.message_id)
+            .await
+            .unwrap();
+        let retry = project_kernel_entry(&kernel.reader, session, &retry)
+            .await
+            .unwrap();
+        assert_eq!(retry.run_state.as_deref(), Some("completed"));
+        assert_eq!(retry.content["queue_only"], false);
+        assert!(retry.revision > failed.revision);
+        kernel
+            .sessions
+            .cancel_queued(RequestId::new(), session, input.id)
+            .await
+            .unwrap();
+        let used = kernel
+            .reader
+            .entry(session, input.message_id)
+            .await
+            .unwrap();
+        let used = project_kernel_entry(&kernel.reader, session, &used)
+            .await
+            .unwrap();
+        assert_eq!(used.content["queue_only"], false);
+        assert_eq!(used.run_state.as_deref(), Some("completed"));
+        let withdrawn = kernel
+            .sessions
+            .send(RequestId::new(), session, document)
+            .await
+            .unwrap()
+            .value;
+        kernel
+            .sessions
+            .cancel_queued(RequestId::new(), session, withdrawn.id)
+            .await
+            .unwrap();
+        let withdrawn = kernel
+            .reader
+            .entry(session, withdrawn.message_id)
+            .await
+            .unwrap();
+        let withdrawn = project_kernel_entry(&kernel.reader, session, &withdrawn)
+            .await
+            .unwrap();
+        assert_eq!(withdrawn.content["queue_only"], true);
+        assert_eq!(withdrawn.run_state.as_deref(), Some("cancelled"));
+    }
 
     #[tokio::test]
     async fn native_tool_projection_preserves_provider_output_and_permission_history() {

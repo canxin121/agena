@@ -67,6 +67,7 @@ export type AgenaPart = {
   finished_at_ms?: number | null
   parent_part_id?: number | null
   run_id?: number | null
+  message_id?: number | null
   user_message_ordinal?: number
   [k: string]: JsonValue
 }
@@ -303,6 +304,7 @@ function entriesFromParts(
         sessionID: sessionId,
         role,
         runId: partId,
+        ...(typeof part.message_id === 'number' ? { messageId: part.message_id } : {}),
         revision: typeof part.revision === 'number' ? part.revision : 0,
         updatedAt: typeof part.updated_at_ms === 'number' ? part.updated_at_ms : 0,
         ...(runState ? { runState } : {}),

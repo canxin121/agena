@@ -33,6 +33,8 @@ pub struct MessageHistoryPage {
     pub metadata: SessionMetadata,
     pub entries: Vec<EntryView>,
     pub messages: Vec<MessageHistorySummary>,
+    /// Inputs actually admitted to an execution, excluding queue-only records.
+    pub user_message_count: u64,
     pub next: Option<HistoryCursor>,
     pub has_more: bool,
 }

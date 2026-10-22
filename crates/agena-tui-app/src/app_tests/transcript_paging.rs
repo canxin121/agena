@@ -277,6 +277,99 @@ fn wire_page(
 }
 
 #[tokio::test]
+async fn refresh_completes_a_reply_that_queued_execution_moved_out_of_the_window() {
+    let mut previous = parts_fixtures::run(3, "assistant", "completed");
+    previous.run_state = Some("running".into());
+    previous.message_id = Some(1);
+    let mut streaming = parts_fixtures::text(3, 4, "assistant", "partial");
+    streaming.state = "running".into();
+    let mut completed = previous.clone();
+    completed.run_state = Some("completed".into());
+    completed.revision = 2;
+    let mut final_text = streaming.clone();
+    final_text.state = "completed".into();
+    final_text.content = json!({"text": "final answer"});
+    final_text.revision = 2;
+    let mut current = parts_fixtures::run(8, "assistant", "completed");
+    current.run_state = Some("running".into());
+    current.message_id = Some(7);
+    let mut shell = execution(Vec::new(), 2);
+    shell.session.state =
+        serde_json::from_value(json!({"kind": "running", "data": {"workflow": "quiescent"}}))
+            .unwrap();
+    let page = wire_page(&[current], &[], true, Some("previous-reply"));
+    let repaired = json!({
+        "session_id": SESSION_ID, "version": 2, "parts": [completed, final_text],
+        "runs": [], "page": {"has_more": false, "returned": 2}
+    });
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let backend = TuiBackend::remote_mock_at(&format!("http://{}", listener.local_addr().unwrap()));
+    let server = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let request = String::from_utf8(request).unwrap();
+            let path = request.split_whitespace().nth(1).unwrap();
+            let body = if path.ends_with("/state") {
+                serde_json::to_string(&shell).unwrap()
+            } else if path.contains("/runs?") {
+                page.to_string()
+            } else {
+                assert_eq!(path, "/api/v1/sessions/7/parts?ids=3%2C4");
+                repaired.to_string()
+            };
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            ).as_bytes()).await.unwrap();
+        }
+    });
+    let mut app = app(backend);
+    app.transcript.merge_parts(vec![previous, streaming]);
+    app.transcript.last_event_seq = Some(1);
+    app.request_refresh(SESSION_ID, true);
+    let message = tokio::time::timeout(std::time::Duration::from_secs(3), app.rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let crate::AppMessage::SessionRefreshed { result, .. } = &message else {
+        panic!("expected a session refresh");
+    };
+    let refresh = result.as_ref().as_ref().expect("successful refresh");
+    assert_eq!(refresh.reconciliation_error, None);
+    app.handle_message(message);
+    let parts = &app.transcript.parts;
+    assert_eq!(
+        parts
+            .iter()
+            .find(|part| part.part_id == 3)
+            .unwrap()
+            .run_state
+            .as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        parts.iter().find(|part| part.part_id == 4).unwrap().content["text"],
+        "final answer"
+    );
+    assert_eq!(
+        parts
+            .iter()
+            .find(|part| part.part_id == 8)
+            .unwrap()
+            .run_state
+            .as_deref(),
+        Some("running")
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn refresh_preserves_the_remote_part_loading_control_through_http() {
     let load = snapshot(64, 69, 2);
     let mut shell = load.execution.clone();

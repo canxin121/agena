@@ -1609,6 +1609,12 @@ export default {
       usage: {
         tokensSuffix: '{value} tokens',
       },
+      queue: {
+        title: '{count} queued',
+        hint: 'Sent in order after the current response',
+        order: 'Sending order',
+        loading: 'Loading message…',
+      },
       primary: {
         send: 'Send',
         sendMessage: 'Send message',

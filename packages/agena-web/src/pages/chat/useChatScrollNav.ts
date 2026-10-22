@@ -4,6 +4,8 @@ import { usePinnedScroll } from '@/composables/chat/usePinnedScroll'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 import { timelineCurrentOrdinal, timelineTotal, type NavigableMessage } from './timelineOrdinal'
+import { isQueueOnlyMessage } from './conversationMessages'
+import type { MessageLike } from '@/components/chat/messageList.types'
 
 type UiLike = { isCompactLayout: boolean; isCompactTouch: boolean }
 type ChatPartValue = unknown
@@ -57,7 +59,7 @@ export function useChatScrollNav(opts: {
     for (const m of chat.messages) {
       const role = String(m?.info?.role || '')
       // Only navigate between user messages.
-      if (role !== 'user') continue
+      if (role !== 'user' || isQueueOnlyMessage(m as MessageLike)) continue
       const id = typeof m?.info?.id === 'string' ? m.info.id.trim() : ''
       if (!id) continue
       const hasText = Array.isArray(m?.parts) ? m.parts.some((p: ChatPartValue) => hasUserTextPart(p)) : false

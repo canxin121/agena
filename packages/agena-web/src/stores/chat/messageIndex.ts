@@ -1,4 +1,5 @@
 import type { MessageEntry, MessageInfo, MessagePart } from '@/types/chat'
+import { conversationMessages, sameAssistantReply } from '@/pages/chat/conversationMessages'
 
 export function isOlderPart(
   incoming: { revision?: number; updatedAt?: number },
@@ -45,15 +46,15 @@ export function compareChatIds(left: string, right: string): number {
  */
 export function foldedMessageCount(list: readonly MessageEntry[]): number {
   let count = 0
-  let previousRole = ''
-  for (const message of list) {
+  let previous: MessageEntry | undefined
+  for (const message of conversationMessages(list)) {
     const role = String(message?.info?.role || '')
       .trim()
       .toLowerCase()
     if (!role) continue
-    if (role === 'assistant' && previousRole === 'assistant') continue
+    if (previous && sameAssistantReply(previous, message)) continue
     count += 1
-    previousRole = role
+    previous = message
   }
   return count
 }

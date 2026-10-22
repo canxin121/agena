@@ -52,6 +52,7 @@ import { buildPlanToolInvocationRequest } from './chat/planViewerRequest'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
+import { queuedMessagePreviews } from './chat/queuedMessages'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
@@ -1153,7 +1154,9 @@ const runUi = useChatRunUi({
   compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
 })
 
-const queuedMessageCount = computed(() => chat.selectedSessionExecution?.queued_messages?.length ?? 0)
+const queuedMessages = computed(() =>
+  queuedMessagePreviews(chat.messages, chat.selectedSessionExecution?.queued_messages ?? []),
+)
 
 const {
   currentPhase,
@@ -2369,7 +2372,7 @@ const viewCtx = {
   planVisible,
 
   // Send/stop.
-  queuedMessageCount,
+  queuedMessages,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,

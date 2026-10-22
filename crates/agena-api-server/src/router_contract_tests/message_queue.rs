@@ -71,6 +71,27 @@ async fn server_queues_messages_across_clients_and_dequeue_cannot_cancel_a_start
             .iter()
             .all(|part| part.run_state.as_deref() == Some("pending"))
     );
+    assert!(
+        pending_parts
+            .parts
+            .iter()
+            .all(|part| part.content["queue_only"] == true)
+    );
+    let active_conversation = observer
+        .session_run_window(session, 2, 16, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        active_conversation.runs.len(),
+        1,
+        "queued input must not displace the current conversation on refresh"
+    );
+    assert!(active_conversation.parts.iter().all(|part| {
+        !state
+            .queued_messages
+            .iter()
+            .any(|queued| queued.message_id == part.part_id)
+    }));
     let removed = observer
         .take_queued_message(session, agena_domain::ExecutionId(queued[0]))
         .await
@@ -115,5 +136,42 @@ async fn server_queues_messages_across_clients_and_dequeue_cannot_cancel_a_start
     })
     .await;
     assert!(finished.queued_messages.is_empty());
+    let latest = observer
+        .session_run_window(session, 2, 16, None)
+        .await
+        .unwrap();
+    assert_eq!(latest.runs.len(), 2);
+    assert_eq!(latest.runs[0].run_id, state.queued_messages[1].message_id);
+    assert!(
+        latest
+            .parts
+            .iter()
+            .all(|part| part.message_id == Some(state.queued_messages[1].message_id))
+    );
+    let consumed = latest
+        .parts
+        .iter()
+        .find(|part| part.role == "user")
+        .unwrap();
+    assert_eq!(consumed.run_state.as_deref(), Some("completed"));
+    assert_eq!(consumed.content["queue_only"], false);
+    let originally_pending = pending_parts
+        .parts
+        .iter()
+        .find(|part| part.part_id == consumed.part_id)
+        .unwrap();
+    assert!(consumed.revision > originally_pending.revision);
+    let previous = observer
+        .session_run_window(session, 2, 16, latest.page.next_cursor.as_deref())
+        .await
+        .unwrap();
+    assert_eq!(previous.runs.len(), 2);
+    assert!(
+        previous
+            .parts
+            .iter()
+            .all(|part| part.message_id != Some(state.queued_messages[0].message_id)),
+        "withdrawn input must not become a conversation turn"
+    );
     provider.await.unwrap();
 }

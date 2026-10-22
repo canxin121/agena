@@ -148,6 +148,7 @@ mod tests {
             "output": {"text": "durable raw result"}
         });
         let resource = PartResource {
+            message_id: Some(41),
             message_boundary: false,
             sections: Vec::new(),
             part_id: 1,
@@ -182,6 +183,7 @@ mod tests {
             serde_json::to_value(resource.clone()).expect("serialize response projection");
 
         assert_eq!(encoded["content"], raw_content);
+        assert_eq!(encoded["message_id"], 41);
         assert_eq!(encoded["presentation"]["title"], "Plugin title");
         assert_eq!(
             encoded["presentation"]["blocks"][0]["text"],

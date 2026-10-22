@@ -231,6 +231,12 @@ pub struct EntryView {
     pub created_at_ms: i64,
     pub response_entry_id: Option<EntryId>,
     pub execution_phase: ExecutionPhase,
+    /// Whether any attempt of this input has been claimed. A queued retry
+    /// must not turn an already submitted user message back into pending input.
+    #[serde(default)]
+    pub execution_started: bool,
+    /// Current attempt for user input; owning attempt for response content.
+    pub execution_generation: AttemptGeneration,
     /// Capture state of the entry's own content stream. `Open` is the only
     /// state that proves the model is still writing this text/reasoning part;
     /// a running attempt alone does not.

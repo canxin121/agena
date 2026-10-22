@@ -1936,6 +1936,20 @@ impl TuiBackend {
                 break (execution, page, true);
             }
         };
+        // Queued input is outside the conversational run window. Read the
+        // backend queue head explicitly for the footer, without paging past
+        // the active reply or loading the whole queue's documents.
+        if let Some(head) = execution.queued_messages.first()
+            && !retained_parts.contains_key(&head.message_id)
+        {
+            let queued = self
+                .client()
+                .session_parts_by_ids(session_id, &[head.message_id])
+                .await?;
+            for part in queued.parts {
+                retained_parts.insert(part.part_id, part);
+            }
+        }
         let folds = agena_tui_transcript::folds_from_run_window(&page_resource);
         let mut page = SessionTranscriptPage {
             parts: page_resource.parts,

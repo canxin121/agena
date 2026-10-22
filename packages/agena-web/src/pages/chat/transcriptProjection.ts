@@ -17,6 +17,7 @@ import {
 import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
 import type { JsonValue } from '@/types/json'
 import { pendingPartInteractions } from '../../lib/interactiveRequests'
+import { conversationMessages, sameAssistantReply } from './conversationMessages'
 
 type JsonRecord = Record<string, JsonValue>
 
@@ -509,12 +510,12 @@ function cloneMessage(message: MessageLike): MessageLike {
 
 export function foldAssistantMessages(messages: MessageLike[]): Array<{ message: MessageLike; runIds: string[] }> {
   const folded: Array<{ message: MessageLike; runIds: string[] }> = []
-  for (const source of messages) {
+  for (const source of conversationMessages(messages)) {
     const message = cloneMessage(source)
     const id = String(message.info.id || '')
     const role = text(message.info.role)
     const previous = folded.at(-1)
-    if (role === 'assistant' && previous && text(previous.message.info.role) === 'assistant') {
+    if (role === 'assistant' && previous && sameAssistantReply(previous.message, message)) {
       previous.message.parts.push(...message.parts)
       if (message.folds?.length) {
         previous.message.folds = [...(previous.message.folds || []), ...message.folds]
@@ -660,9 +661,9 @@ export function createTranscriptProjector(options: () => TranscriptProjectionOpt
   }
   return (messages: MessageLike[]): RenderBlock[] => {
     const groups: MessageLike[][] = []
-    for (const message of messages) {
+    for (const message of conversationMessages(messages)) {
       const previous = groups.at(-1)
-      if (message.info.role === 'assistant' && previous?.[0]?.info.role === 'assistant') previous.push(message)
+      if (previous?.[0] && sameAssistantReply(previous[0], message)) previous.push(message)
       else groups.push([message])
     }
     const retained = new Set<MessageLike>()

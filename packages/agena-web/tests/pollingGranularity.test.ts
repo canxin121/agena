@@ -5,6 +5,8 @@ import { createRenderer, defineComponent, nextTick, ref, ssrContextKey } from 'v
 import { createPinia, disposePinia, setActivePinia } from 'pinia'
 import { ensureBrowserTestRuntime } from './testRuntime'
 import type { SessionActivity } from '../src/types/activity'
+import { queuedMessagePreviews } from '../src/pages/chat/queuedMessages'
+import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
@@ -36,6 +38,101 @@ const { conditionalJson, conditionalJsonObserved } = (await vite.ssrLoadModule(
 
 let runtimeClock = 100_000
 
+test('polling completes a cached reply after queued execution moves it outside the recent window', () =>
+  withRuntime(async ({ tokens, calls, reply, setFetch, advance }) => {
+    const sid = '99782'
+    const key = `session:${sid}:parts`
+    let version = 1
+    const user = (id: number) => ({
+      part_id: id,
+      message_id: id,
+      run_id: id,
+      message_boundary: true,
+      role: 'user',
+      kind: 'text',
+      state: 'completed',
+      run_state: 'completed',
+      revision: 1,
+      content: { text: `input ${id}` },
+    })
+    const answer = (id: number, messageId: number, running: boolean) => ({
+      part_id: id,
+      message_id: messageId,
+      run_id: id,
+      message_boundary: true,
+      role: 'assistant',
+      kind: 'reasoning',
+      state: 'completed',
+      run_state: running ? 'running' : 'completed',
+      revision: running ? 1 : 2,
+      content: { summary: ['thinking'] },
+    })
+    const text = (running: boolean) => ({
+      part_id: 21,
+      message_id: 10,
+      run_id: 20,
+      role: 'assistant',
+      kind: 'text',
+      state: running ? 'running' : 'completed',
+      revision: running ? 1 : 2,
+      content: { text: running ? 'partial' : 'final answer' },
+    })
+    tokens.set(key, 'queued-window:1')
+    setFetch((url, init) => {
+      expect(init?.method || 'GET').toBe('GET')
+      if (url.pathname.endsWith('/runs'))
+        return reply(key, {
+          session_id: Number(sid),
+          version,
+          parts: version === 1 ? [user(10), answer(20, 10, true), text(true)] : [user(30), answer(40, 30, true)],
+          runs: [],
+          user_message_count: version,
+          page: { has_more: version > 1 },
+        })
+      if (url.pathname.endsWith('/parts')) {
+        expect(url.searchParams.get('ids')?.split(',')).toEqual(['20', '21'])
+        return reply(key, { session_id: Number(sid), version, parts: [answer(20, 10, false), text(false)] })
+      }
+      if (url.pathname.endsWith('/state'))
+        return reply(`session:${sid}:state`, {
+          session: {
+            id: Number(sid),
+            version,
+            workspace_id: 1,
+            title: 'Queued replies',
+            state: { kind: 'running', data: {} },
+          },
+          parts: [],
+          queued_messages: [],
+        })
+      throw new Error(`Unexpected queued execution request ${url}`)
+    })
+    const chat = useChatStore()
+    await chat.refreshMessages(sid)
+    await advance(0)
+    expect(chat.getMessagesForSession(sid).find((entry) => entry.info.id === '20')?.info.runState).toBe('running')
+    version = 2
+    tokens.set(key, 'queued-window:2')
+    sync.noteResourceVersion(key, 'queued-window:2')
+    const refreshed = chat.refreshMessages(sid)
+    await advance(1000)
+    await refreshed
+    const messages = chat.getMessagesForSession(sid)
+    const previous = messages.find((entry) => entry.info.id === '20')!
+    expect(previous.info.runState).toBe('completed')
+    expect(previous.parts.find((part) => part.id === '21')?.text).toBe('final answer')
+    expect(messages.find((entry) => entry.info.id === '40')?.info.runState).toBe('running')
+    expect(projectTranscriptBlocks(messages).map((block) => block.message.info.id)).toEqual(['10', '20', '30', '40'])
+    expect(calls.filter((url) => url.pathname.endsWith('/parts'))).toHaveLength(1)
+    // Once repaired, another bounded refresh does not reread the old reply.
+    tokens.set(key, 'queued-window:3')
+    sync.noteResourceVersion(key, 'queued-window:3')
+    const repeated = chat.refreshMessages(sid)
+    await advance(1000)
+    await repeated
+    expect(calls.filter((url) => url.pathname.endsWith('/parts'))).toHaveLength(1)
+  }))
+
 test('queue display follows server state across refreshes without dispatching messages locally', () =>
   withRuntime(async ({ tokens, calls, reply, setFetch, advance }) => {
     const sid = '99781'
@@ -48,6 +145,29 @@ test('queue display follows server state across refreshes without dispatching me
     let version = 1
     setFetch((url, init) => {
       expect(init?.method || 'GET').toBe('GET')
+      if (url.pathname === `/api/v1/sessions/${sid}/parts`) {
+        const ids = (url.searchParams.get('ids') || '').split(',').map(Number)
+        return reply(key, {
+          session_id: Number(sid),
+          version,
+          runs: [],
+          parts: ids.map((id) => {
+            const pending = queued.some((item) => item.message_id === id)
+            return {
+              part_id: id,
+              message_id: id,
+              run_id: id,
+              message_boundary: true,
+              role: 'user',
+              kind: 'text',
+              revision: pending ? 1 : 2,
+              state: pending ? 'pending' : 'completed',
+              run_state: pending ? 'pending' : 'completed',
+              content: { text: `queued ${id}`, queue_only: pending, execution_phase: pending ? 'queued' : 'running' },
+            }
+          }),
+        })
+      }
       if (url.pathname !== `/api/v1/sessions/${sid}/state`) throw new Error(`Unexpected queue request ${url}`)
       return reply(key, {
         session: {
@@ -65,6 +185,33 @@ test('queue display follows server state across refreshes without dispatching me
     const chat = useChatStore()
     await chat.refreshExecutionStatus(sid)
     expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
+    expect(queuedMessagePreviews(chat.getMessagesForSession(sid), queue).map((item) => item.preview)).toEqual([
+      'queued 20',
+      'queued 30',
+    ])
+    expect(projectTranscriptBlocks(chat.getMessagesForSession(sid))).toHaveLength(0)
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: {
+        kind: 'part_updated',
+        session_id: Number(sid),
+        resource_revisions: {},
+        part: {
+          part_id: 20,
+          message_id: 20,
+          run_id: 20,
+          message_boundary: true,
+          role: 'user',
+          kind: 'text',
+          revision: 1,
+          state: 'completed',
+          run_state: 'pending',
+          content: { text: 'queued 20', queue_only: true, execution_phase: 'queued' },
+        },
+      },
+    })
+    expect(chat.getMessagesForSession(sid)[0]?.info.runState).toBe('pending')
+    expect(queuedMessagePreviews(chat.getMessagesForSession(sid), queue)).toHaveLength(2)
     await advance(60_000)
     expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
     for (const remaining of [queue.slice(1), []]) {
@@ -73,6 +220,8 @@ test('queue display follows server state across refreshes without dispatching me
       sync.noteResourceVersion(key, tokens.get(key)!)
       await chat.refreshExecutionStatus(sid)
       expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(remaining)
+      expect(queuedMessagePreviews(chat.getMessagesForSession(sid), remaining)).toHaveLength(remaining.length)
+      expect(projectTranscriptBlocks(chat.getMessagesForSession(sid))).toHaveLength(queue.length - remaining.length)
     }
     expect(calls.filter((url) => url.pathname.endsWith('/messages'))).toHaveLength(0)
   }))

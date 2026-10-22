@@ -21,6 +21,7 @@ import {
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
+import QueuedMessages from '@/components/chat/QueuedMessages.vue'
 import TranscriptKeyboardToolbar from '@/components/chat/TranscriptKeyboardToolbar.vue'
 import { getComposerInput } from './composerInput'
 import Composer from '@/components/chat/Composer.vue'
@@ -204,7 +205,7 @@ const {
   composerStatusExtra,
 
   // Usage + primary action.
-  queuedMessageCount,
+  queuedMessages,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,
@@ -441,137 +442,140 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
             </div>
           </header>
 
-          <div
-            ref="scrollEl"
-            class="min-h-0 chat-scroll flex-1 overflow-y-auto [overflow-anchor:none]"
-            data-scrollbar="chat"
-            @scroll="handleScroll"
-            @wheel="handleWheel"
-          >
-            <div ref="contentEl" class="min-w-0 py-1">
-              <div class="chat-message-column">
-                <div v-if="chat.messages.length" class="min-h-6 px-2 pb-1" data-transcript-chrome="true">
-                  <button
-                    v-if="!chat.selectedHistory.exhausted || loadingOlder"
-                    type="button"
-                    class="flex min-h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-wait"
-                    :disabled="loadingOlder"
-                    @click="ctx.loadOlderHistory"
-                  >
-                    <RiLoader4Line v-if="loadingOlder" class="h-3.5 w-3.5 animate-spin" />
-                    <RiArrowUpLine v-else class="h-3.5 w-3.5" />
-                    {{ t(loadingOlder ? 'chat.messages.loadingOlder' : 'chat.messages.loadOlder') }}
-                  </button>
-                  <span v-else class="px-2 text-[11px] text-muted-foreground">{{
-                    t('chat.messages.historyStart')
-                  }}</span>
-                  <p
-                    v-if="chat.historyErrorBySession[chat.selectedSessionId || '']"
-                    role="alert"
-                    class="px-2 text-xs text-destructive"
-                  >
-                    {{ chat.historyErrorBySession[chat.selectedSessionId || ''] }}
-                  </p>
-                </div>
-                <MessageList
-                  :is-compact-layout="ui.isCompactLayout"
-                  :is-compact-touch="ui.isCompactTouch"
-                  :selected-session-id="chat.selectedSessionId"
-                  :messages-loading="chat.messagesLoading"
-                  :messages-error="chat.messagesError"
-                  :render-blocks="renderBlocks"
-                  :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
-                  :loading-older="loadingOlder"
-                  :activity-page-size="chat.transcriptPartPageSize"
-                  :fold-loading-by-key="chat.foldLoadingByKey"
-                  :fold-error-by-key="chat.foldErrorByKey"
-                  :show-timestamps="showTimestamps"
-                  :format-time="formatTime"
-                  :copied-message-id="copiedMessageId"
-                  :revert-busy-message-id="revertBusyMessageId"
-                  :is-streaming-assistant-message="isStreamingAssistantMessage"
-                  :show-run-loading="showRunLoading"
-                  :session-ended="sessionEnded"
-                  :current-phase="currentPhase"
-                  :activity-collapse-signal="activityCollapseSignal"
-                  :is-part-expanded="transcriptPartExpanded"
-                  :is-node-selected="isTranscriptNodeSelected"
-                  :is-node-search-match="isTranscriptNodeSearchMatch"
-                  :pending-attention="chat.selectedAttention"
-                  :open-mobile-sidebar="openMobileSidebar"
-                  @fork="handleForkFromMessage"
-                  @revert="handleRevertFromMessage"
-                  @copy="handleCopyMessage"
-                  @part-toggle="setTranscriptPartExpanded"
-                  @fold-expand="loadFoldedActivity"
-                  @reveal-parts="ctx.preparePartReveal"
-                  @node-select="selectTranscriptNode"
-                  @set-activity-page-size="ctx.setTranscriptPartPageSize"
-                />
-              </div>
-              <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
-            </div>
-          </div>
-
-          <!-- Floating message navigation (user messages only) -->
-          <div
-            v-if="
-              !composerFullscreenActive &&
-              !(ui.isCompactLayout && ui.isSessionSwitcherOpen) &&
-              (navigableMessageIds.length > 1 ||
-                (!isAtBottom && chat.messages.length) ||
-                (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
-            "
-            class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
-            :style="{ bottom: '12px' }"
-          >
-            <IconButton
-              v-if="
-                navigableMessageIds.length > 1 || (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted)
-              "
-              variant="outline"
-              class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-              :tooltip="t('chat.page.nav.previousUserMessage')"
-              :is-touch-pointer="ui.isTouchPointer"
-              :aria-label="t('chat.page.nav.previousUserMessage')"
-              @click="navPrev"
-              :disabled="(navIndex <= 0 && chat.selectedHistory.exhausted) || loadingOlder"
-            >
-              <RiArrowUpLine class="h-4 w-4" />
-            </IconButton>
-            <IconButton
-              v-if="navigableMessageIds.length > 1"
-              variant="outline"
-              class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-              :tooltip="t('chat.page.nav.nextUserMessage')"
-              :is-touch-pointer="ui.isTouchPointer"
-              :aria-label="t('chat.page.nav.nextUserMessage')"
-              @click="navNext"
-              :disabled="navIndex >= navigableMessageIds.length - 1"
-            >
-              <RiArrowDownLine class="h-4 w-4" />
-            </IconButton>
-
+          <div class="relative min-h-0 flex-1">
             <div
-              v-if="navigableMessageIds.length > 0"
-              class="pointer-events-none text-[10px] text-muted-foreground/80 bg-background/80 backdrop-blur rounded-full px-2 py-0.5 border border-border/60 select-none"
+              ref="scrollEl"
+              class="h-full min-h-0 chat-scroll overflow-y-auto [overflow-anchor:none]"
+              data-scrollbar="chat"
+              @scroll="handleScroll"
+              @wheel="handleWheel"
             >
-              {{ navCurrentOrdinal }} / {{ navTotalLabel }}
+              <div ref="contentEl" class="min-w-0 py-1">
+                <div class="chat-message-column">
+                  <div v-if="chat.messages.length" class="min-h-6 px-2 pb-1" data-transcript-chrome="true">
+                    <button
+                      v-if="!chat.selectedHistory.exhausted || loadingOlder"
+                      type="button"
+                      class="flex min-h-7 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-wait"
+                      :disabled="loadingOlder"
+                      @click="ctx.loadOlderHistory"
+                    >
+                      <RiLoader4Line v-if="loadingOlder" class="h-3.5 w-3.5 animate-spin" />
+                      <RiArrowUpLine v-else class="h-3.5 w-3.5" />
+                      {{ t(loadingOlder ? 'chat.messages.loadingOlder' : 'chat.messages.loadOlder') }}
+                    </button>
+                    <span v-else class="px-2 text-[11px] text-muted-foreground">{{
+                      t('chat.messages.historyStart')
+                    }}</span>
+                    <p
+                      v-if="chat.historyErrorBySession[chat.selectedSessionId || '']"
+                      role="alert"
+                      class="px-2 text-xs text-destructive"
+                    >
+                      {{ chat.historyErrorBySession[chat.selectedSessionId || ''] }}
+                    </p>
+                  </div>
+                  <MessageList
+                    :is-compact-layout="ui.isCompactLayout"
+                    :is-compact-touch="ui.isCompactTouch"
+                    :selected-session-id="chat.selectedSessionId"
+                    :messages-loading="chat.messagesLoading"
+                    :messages-error="chat.messagesError"
+                    :render-blocks="renderBlocks"
+                    :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
+                    :loading-older="loadingOlder"
+                    :activity-page-size="chat.transcriptPartPageSize"
+                    :fold-loading-by-key="chat.foldLoadingByKey"
+                    :fold-error-by-key="chat.foldErrorByKey"
+                    :show-timestamps="showTimestamps"
+                    :format-time="formatTime"
+                    :copied-message-id="copiedMessageId"
+                    :revert-busy-message-id="revertBusyMessageId"
+                    :is-streaming-assistant-message="isStreamingAssistantMessage"
+                    :show-run-loading="showRunLoading"
+                    :session-ended="sessionEnded"
+                    :current-phase="currentPhase"
+                    :activity-collapse-signal="activityCollapseSignal"
+                    :is-part-expanded="transcriptPartExpanded"
+                    :is-node-selected="isTranscriptNodeSelected"
+                    :is-node-search-match="isTranscriptNodeSearchMatch"
+                    :pending-attention="chat.selectedAttention"
+                    :open-mobile-sidebar="openMobileSidebar"
+                    @fork="handleForkFromMessage"
+                    @revert="handleRevertFromMessage"
+                    @copy="handleCopyMessage"
+                    @part-toggle="setTranscriptPartExpanded"
+                    @fold-expand="loadFoldedActivity"
+                    @reveal-parts="ctx.preparePartReveal"
+                    @node-select="selectTranscriptNode"
+                    @set-activity-page-size="ctx.setTranscriptPartPageSize"
+                  />
+                </div>
+                <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
+              </div>
             </div>
 
-            <!-- Keep this slot fixed so other controls don't move -->
-            <IconButton
-              variant="outline"
-              class="h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-              :tooltip="t('chat.page.nav.bottom')"
-              :is-touch-pointer="ui.isTouchPointer"
-              :aria-label="t('chat.page.nav.bottom')"
-              :class="!isAtBottom && chat.messages.length ? 'pointer-events-auto' : 'invisible pointer-events-none'"
-              @click="scrollToBottom('smooth')"
+            <!-- Floating message navigation (user messages only) -->
+            <div
+              v-if="
+                !composerFullscreenActive &&
+                !(ui.isCompactLayout && ui.isSessionSwitcherOpen) &&
+                (navigableMessageIds.length > 1 ||
+                  (!isAtBottom && chat.messages.length) ||
+                  (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
+              "
+              class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
+              :style="{ bottom: '12px' }"
             >
-              <RiArrowDownDoubleLine class="h-4 w-4" />
-            </IconButton>
+              <IconButton
+                v-if="
+                  navigableMessageIds.length > 1 || (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted)
+                "
+                variant="outline"
+                class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+                :tooltip="t('chat.page.nav.previousUserMessage')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :aria-label="t('chat.page.nav.previousUserMessage')"
+                @click="navPrev"
+                :disabled="(navIndex <= 0 && chat.selectedHistory.exhausted) || loadingOlder"
+              >
+                <RiArrowUpLine class="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                v-if="navigableMessageIds.length > 1"
+                variant="outline"
+                class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+                :tooltip="t('chat.page.nav.nextUserMessage')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :aria-label="t('chat.page.nav.nextUserMessage')"
+                @click="navNext"
+                :disabled="navIndex >= navigableMessageIds.length - 1"
+              >
+                <RiArrowDownLine class="h-4 w-4" />
+              </IconButton>
+
+              <div
+                v-if="navigableMessageIds.length > 0"
+                class="pointer-events-none text-[10px] text-muted-foreground/80 bg-background/80 backdrop-blur rounded-full px-2 py-0.5 border border-border/60 select-none"
+              >
+                {{ navCurrentOrdinal }} / {{ navTotalLabel }}
+              </div>
+
+              <!-- Keep this slot fixed so other controls don't move -->
+              <IconButton
+                variant="outline"
+                class="h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+                :tooltip="t('chat.page.nav.bottom')"
+                :is-touch-pointer="ui.isTouchPointer"
+                :aria-label="t('chat.page.nav.bottom')"
+                :class="!isAtBottom && chat.messages.length ? 'pointer-events-auto' : 'invisible pointer-events-none'"
+                @click="scrollToBottom('smooth')"
+              >
+                <RiArrowDownDoubleLine class="h-4 w-4" />
+              </IconButton>
+            </div>
           </div>
+          <QueuedMessages :messages="queuedMessages" />
         </div>
       </template>
 
@@ -843,11 +847,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 
                       <!-- Region 3: Stop & Send Actions -->
                       <div class="flex-none flex items-center gap-1.5">
-                        <span
-                          v-if="queuedMessageCount > 0"
-                          class="text-xs text-muted-foreground tabular-nums"
-                          role="status"
-                        >{{ t('chat.page.primary.queuedMessages', { count: queuedMessageCount }) }}</span>
                         <IconButton
                           v-if="showComposerStopAction"
                           variant="outline"

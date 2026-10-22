@@ -40,6 +40,7 @@ export type MessageLike = {
     providerID?: string
     adapterID?: string
     runId?: number
+    messageId?: number
     runState?: string
     runContent?: JsonValue
     [k: string]: JsonValue

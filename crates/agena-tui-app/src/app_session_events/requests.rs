@@ -507,6 +507,19 @@ impl App {
         } else {
             Vec::new()
         };
+        let in_flight_ids = self
+            .transcript
+            .parts
+            .iter()
+            .filter(|part| {
+                part.role == "assistant"
+                    && matches!(
+                        part.run_state.as_deref().unwrap_or(&part.state),
+                        "pending" | "running" | "in_progress"
+                    )
+            })
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
             let result = async {
                 let mut refresh = crate::app_backend::session_refresh::refresh_session(
@@ -516,6 +529,25 @@ impl App {
                     force,
                 )
                 .await?;
+                let mut known_ids = known_ids;
+                if let Some(snapshot) = &refresh.snapshot {
+                    // Consecutive queued executions can move an unfinished
+                    // cached reply out of the recent window between polls.
+                    // Read its final facts instead of leaving a stale spinner.
+                    let window_ids = snapshot
+                        .page
+                        .parts
+                        .iter()
+                        .map(|part| part.part_id)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    known_ids.extend(
+                        in_flight_ids
+                            .into_iter()
+                            .filter(|id| !window_ids.contains(id)),
+                    );
+                    known_ids.sort_unstable();
+                    known_ids.dedup();
+                }
                 if !known_ids.is_empty() {
                     let mut parts = Vec::new();
                     let mut reconciled_ids = Vec::new();

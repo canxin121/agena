@@ -31,7 +31,17 @@
 }
 ```
 
-Web 和 TUI 都直接调用发送接口，然后展示这个投影以及 user part 的 `pending` 状态。Web composer 同时保留停止和发送按钮，并显示待发数量；TUI footer 显示数量与首条预览。TUI 的 Enter 和 Ctrl+Enter 都立即提交到后端，HTTP 接收确认之后可继续提交下一条。
+Web 和 TUI 都直接调用发送接口，然后展示这个投影。TUI 的 Enter 和 Ctrl+Enter 都立即提交到后端，HTTP 接收确认之后可继续提交下一条。
+
+## 待发输入与正式对话的展示
+
+待发输入尚未进入 AI 的当前上下文，因此不能作为普通 user 回合插在当前 assistant 回复前面。Web 在输入框上方固定显示独立的待发区域，按 FIFO 编号展示数量及正文预览，明确说明当前回复结束后依次发送。列表高度有上限，较长队列可以滚动；附件输入展示文件名，多行正文保留原文档、仅在预览中压缩空白。待发区域不提供普通回合的 fork / revert 操作。TUI 在对话之外的 footer 显示数量及队首预览。
+
+后端 `/runs` 的会话分页只选择已经开始执行的用户输入及其 assistant 回复。待发与从未执行就被取出的输入不占用首屏或历史分页的消息额度，也不计入会话导航的用户消息总数；原始 entry 仍保留，可通过明确的 parts 身份读取。客户端根据 `queued_messages` 引用补读队列正文，不扫描历史，不调度队列。
+
+每个公开 part 的 `message_id` 指明所属用户输入。会话分页按 `(message_id, boundary_entry_id)` 排列；Web 和 TUI 的展示也使用这个归属顺序。parts 读取及内容展开继续使用原有的物理成员游标。即使后续 user entry 先落盘、上一轮的首个思考或最终回答后落盘，也始终显示为上一条 user、它的完整 assistant 回复、下一条 user。缺少中间用户边界时，不同输入所属的 assistant 回复也不能折成同一块。
+
+用户 part 的 `content.queue_only` 表示该输入从未被任何 attempt 认领。认领前 `run_state=pending`；认领后转为 `completed` 并进入正式对话。取出后仍保留 `queue_only=true`、`run_state=cancelled` 的审计记录，展示端不把它补回正式对话。重试已经使用过的输入不会重新隐藏原来的 user 回合。公开 part 的 revision 同时覆盖内容修订、attempt generation 和执行阶段的推进，避免正文未修改时，刷新或迟到事件让缓存永远保留 pending。
 
 ## 编辑与取消待发消息
 
@@ -57,3 +67,5 @@ POST /api/v1/sessions/{session_id}/queue/{execution_id}/take
 - 真实进程：发送端断开后杀死正在工作的 server，再启动新 server；后台自动恢复两条待发输入，按顺序各执行一次，旧的 running attempt 只标记 interrupted。
 - TUI：AI running 或等待权限时，两种发送键都立即发起后端提交。
 - Web：服务端队列投影从两条变一条再变为空时正确更新；客户端不自行派发下一条。待发 user part 保持后端 pending 状态。
+- 展示回归：三个 user 先落盘、旧回复后落盘时，首屏仍展示当前对话，队列单独预览；认领后移到完整上一轮回复之后；历史翻页保持相同顺序。撤回不产生空 user 回合，queued retry 保留已执行的原始输入，状态更新具有递增版本。
+- 连续执行且漏收实时事件时：Web 和 TUI 补读已加载但已退出最近窗口的运行中回复，恢复最终状态与正文；修复后不再重复读取已结束的旧回复。

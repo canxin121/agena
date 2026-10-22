@@ -825,6 +825,12 @@ export default {
       "usage": {
         "tokensSuffix": "{value} tokens"
       },
+      "queue": {
+        "title": "{count} mensagens na fila",
+        "hint": "Enviadas em ordem após a resposta atual",
+        "order": "Ordem de envio",
+        "loading": "Carregando mensagem…"
+      },
       "primary": {
         "send": "Enviar",
         "sendMessage": "Enviar mensagem",

@@ -370,7 +370,7 @@ pub(super) async fn page(
         metrics::add(&diagnostics.0.snapshot_queries, 1);
         let ids = selected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         let rows =
-            sqlx::query("SELECT e.*,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
+            sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
                 .bind(encode(&ids)?)
                 .fetch_all(&mut *transaction)
                 .await

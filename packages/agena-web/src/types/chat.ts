@@ -213,6 +213,7 @@ export type MessageInfo = {
   replyId?: string
   // Durable numeric ids that back this message (agena run marker).
   runId?: number
+  messageId?: number
   // 1-based ordinal of this message among the session's user-send messages,
   // ordered by the server's durable `(created_at_ms, part_id)` order. Present
   // only on user messages. Server-derived, so it is the message's true

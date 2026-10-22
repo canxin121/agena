@@ -726,7 +726,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut connection, _) = listener.accept().await.unwrap();
             let mut request = [0; 4096];
-            connection.read(&mut request).await.unwrap();
+            assert!(connection.read(&mut request).await.unwrap() > 0);
             connection
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{")
                 .await
@@ -735,7 +735,9 @@ mod tests {
         });
         let response = reqwest::Client::builder()
             .no_proxy()
-            .read_timeout(std::time::Duration::from_millis(100))
+            // Leave enough time for headers under concurrent test load; the
+            // deliberately stalled body is the timeout being classified.
+            .read_timeout(std::time::Duration::from_secs(1))
             .build()
             .unwrap()
             .get(format!("http://{address}"))

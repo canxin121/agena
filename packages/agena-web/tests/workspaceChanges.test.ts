@@ -10,12 +10,14 @@ import type { apiJson } from '../src/lib/api'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
+  optimizeDeps: { noDiscovery: true, entries: [] },
   server: { middlewareMode: true, watch: null, hmr: false },
 })
 afterAll(() => vite.close())
 const { useWorkspaceChanges } = (await vite.ssrLoadModule(
   '/src/pages/chat/useWorkspaceChanges.ts',
 )) as typeof import('../src/pages/chat/useWorkspaceChanges')
+const { ApiError } = (await vite.ssrLoadModule('/src/lib/api.ts')) as typeof import('../src/lib/api')
 
 test('workspace and task labels resolve in the chat namespace with interpolated values', () => {
   for (const [locale, messages, title, count, retry] of [
@@ -310,4 +312,57 @@ test('refresh failures retain loaded rows and diffs while shrinking pages recove
     await settle()
     expect(state.files.value.map((f) => f.path)).toEqual(['last.ts'])
     expect(state.status.error.value).toBe('')
+  }))
+
+test('file history read conflicts recover automatically without showing a refresh/retry error', async () =>
+  withPanel(async ({ state, calls, advance, settle }) => {
+    calls[0]!.resolve(snapshot([], 1))
+    await settle()
+    state.expanded.value = true
+    await advance(750)
+    calls.at(-1)!.resolve(snapshot([file('a.ts')]))
+    await settle()
+    state.select(file('a.ts'))
+    calls.at(-1)!.reject(new ApiError('The session changed. Refresh and retry.', 409))
+    await settle()
+    expect(state.diff.error.value).toBe('')
+    expect(state.selected.value?.path).toBe('a.ts')
+    const beforeRetry = calls.length
+    await advance(249)
+    expect(calls.length).toBe(beforeRetry)
+    await advance(1)
+    expect(calls.length).toBe(beforeRetry + 1)
+    const latest = snapshot([{ ...file('a.ts'), revision: 'a2' }])
+    calls.at(-1)!.resolve(latest)
+    await settle()
+    expect(state.visibleDiff.value).toBe(latest)
+    expect(state.diff.error.value).toBe('')
+    const recovered = calls.length
+    await advance(30_000)
+    expect(calls.length).toBe(recovered)
+  }))
+
+test('a newer diff response updates its row and is reused under its actual file revision', async () =>
+  withPanel(async ({ state, calls, advance, settle }) => {
+    calls[0]!.resolve(snapshot([], 1))
+    await settle()
+    state.expanded.value = true
+    await advance(750)
+    calls.at(-1)!.resolve(snapshot([{ ...file('a.ts'), revision: 'a1' }]))
+    await settle()
+    state.select(state.files.value[0]!)
+    const latest = snapshot([{ ...file('a.ts'), revision: 'a2' }])
+    calls.at(-1)!.resolve(latest)
+    await settle()
+    expect(state.visibleDiff.value).toBe(latest)
+    await advance(250)
+    expect(calls.at(-1)!.query.path).toBeUndefined()
+    calls.at(-1)!.resolve(latest)
+    await settle()
+    expect(state.selected.value?.revision).toBe('a2')
+    state.select(state.files.value[0]!)
+    state.select(state.files.value[0]!)
+    await advance(750)
+    expect(calls.filter((call) => call.query.path === 'a.ts')).toHaveLength(1)
+    expect(state.visibleDiff.value).toBe(latest)
   }))

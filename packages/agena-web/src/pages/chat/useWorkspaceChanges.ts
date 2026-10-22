@@ -138,9 +138,13 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
         observe,
       )
       signal.throwIfAborted()
+      const actualRevision = value.files.find((file) => file.path === path)?.revision
       // One selected diff is retained, bounded by the existing 2 MiB limit.
-      if (revision && scope === captureResourceObservation(`session:${id}:files`).scope)
-        retainedDiff = { key, scope, value }
+      // The file may have advanced after its row was loaded. Cache under the
+      // revision actually returned, then let the list catch up automatically.
+      if (actualRevision && scope === captureResourceObservation(`session:${id}:files`).scope)
+        retainedDiff = { key: JSON.stringify([id, path, maxBytes, actualRevision]), scope, value }
+      if (revision && actualRevision && revision !== actualRevision) void status.refresh()
       return value
     },
   })

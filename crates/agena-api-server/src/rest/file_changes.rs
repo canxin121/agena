@@ -8,8 +8,8 @@ use agena_domain::ToolResultState;
 use agena_runtime_contracts::part_content::ToolCallContent;
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
-    response::Response,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use lru::LruCache;
 use serde::Deserialize;
@@ -38,31 +38,51 @@ pub async fn get_session_file_changes(
     headers: HeaderMap,
 ) -> Result<Response, ServerError> {
     let resource = format!("session:{id}:files");
-    let read = crate::revisions::ConditionalRead::new(&state, &resource).await?;
-    if let Some(response) = read.not_modified(&headers) {
-        return Ok(response);
-    }
-    if let Some(facts) = state.file_changes_cache().get(id, read.token()) {
+    // Summary, page and diff requests share one bounded history build. Capture
+    // its resource version after waiting, never relabel an older body current.
+    let gate = state.file_changes_cache().gate(id);
+    let guard = gate.lock().await;
+    for attempt in 0..3 {
+        let read = crate::revisions::ConditionalRead::new(&state, &resource).await?;
+        let facts = if let Some(facts) = state.file_changes_cache().get(id, read.token()) {
+            facts
+        } else {
+            let facts = match read_file_facts(&state, id).await {
+                Ok(facts) => Arc::new(facts),
+                Err(error) if attempt < 2 && error.status() == StatusCode::CONFLICT => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let revisions = state.revisions()?;
+            revisions.refresh_durable(&state).await?;
+            if revisions.token(&resource) == read.token() {
+                state
+                    .file_changes_cache()
+                    .insert(id, read.token(), facts.clone());
+            }
+            facts
+        };
+        drop(guard);
         let projection = FILE_PROJECTIONS
             .run(move || project_facts(&facts, &query))
             .await
             .map_err(|error| ServerError::internal_error(&error))?;
-        return read.json(projection).await;
+        let revisions = state.revisions()?;
+        revisions.refresh_durable(&state).await?;
+        return file_changes_response(read, projection, &headers, revisions.token(&resource)).await;
     }
+    unreachable!("the final history attempt returns its result")
+}
+
+async fn read_file_facts(state: &AppState, id: i64) -> Result<RecordedFileFacts, ServerError> {
     let mut cursor: Option<String> = None;
     let mut facts = RecordedFileFacts::default();
-    let mut version = None;
     loop {
         let page = state
             .application()
             .read_owned_tool_parts(id, cursor.as_deref(), 128)
             .await?;
-        if version.is_some_and(|value| value != page.control_version) {
-            return Err(ServerError::conflict(
-                "The session changed while loading its file history. Refresh and retry.",
-            ));
-        }
-        version = Some(page.control_version);
         for part in &page.parts {
             let contribution = recorded_file_facts(part);
             facts.incomplete |= contribution.incomplete;
@@ -95,18 +115,54 @@ pub async fn get_session_file_changes(
             && ops.first().and_then(|o| o.before_sha256.as_ref())
                 == ops.last().and_then(|o| o.after_sha256.as_ref()))
     });
-    let facts = Arc::new(facts);
-    let revisions = state.revisions()?;
-    if revisions.token(&resource) == read.token() {
-        state
-            .file_changes_cache()
-            .insert(id, read.token(), facts.clone());
-    }
-    let projection = FILE_PROJECTIONS
-        .run(move || project_facts(&facts, &query))
+    Ok(facts)
+}
+
+/// The resource clock wakes readers; the representation validator determines
+/// whether this particular summary/page/file actually needs any body bytes.
+async fn file_changes_response(
+    read: crate::revisions::ConditionalRead,
+    projection: SessionFileChangesResource,
+    headers: &HeaderMap,
+    current_revision: String,
+) -> Result<Response, ServerError> {
+    let authority = read
+        .token()
+        .rsplit_once(':')
+        .map_or(read.token(), |(epoch, _)| epoch)
+        .to_owned();
+    let (bytes, etag) = FILE_PROJECTIONS
+        .run(move || {
+            let bytes = serde_json::to_vec(&projection)?;
+            let etag = format!("W/\"{authority}:{}\"", blake3::hash(&bytes).to_hex());
+            Ok::<_, serde_json::Error>((bytes, etag))
+        })
         .await
-        .map_err(|e| ServerError::internal_error(&e))?;
-    read.json(projection).await
+        .map_err(|error| ServerError::internal_error(&error))?
+        .map_err(|error| ServerError::internal_error(&error))?;
+    let unchanged = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|tag| tag.trim().trim_start_matches("W/") == etag.trim_start_matches("W/"))
+        });
+    let response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, "application/json")], bytes).into_response()
+    };
+    let mut response = read.headers(response);
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("file representation ETag"),
+    );
+    response.headers_mut().insert(
+        "x-resource-current-revision",
+        HeaderValue::from_str(&current_revision).expect("current file resource revision"),
+    );
+    Ok(response)
 }
 
 static FILE_PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -115,6 +171,7 @@ const MAX_FILE_FACT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 pub(crate) struct FileChangesProjectionCache {
     entries: Mutex<FileChangesCacheEntries>,
+    gates: Mutex<LruCache<i64, Arc<tokio::sync::Mutex<()>>>>,
     max_bytes: usize,
 }
 
@@ -130,12 +187,23 @@ impl Default for FileChangesProjectionCache {
                 facts: LruCache::new(NonZeroUsize::new(32).unwrap()),
                 bytes: 0,
             }),
+            gates: Mutex::new(LruCache::new(NonZeroUsize::new(32).unwrap())),
             max_bytes: MAX_FILE_FACT_CACHE_BYTES,
         }
     }
 }
 
 impl FileChangesProjectionCache {
+    fn gate(&self, id: i64) -> Arc<tokio::sync::Mutex<()>> {
+        let mut gates = self.gates.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(gate) = gates.get(&id) {
+            return gate.clone();
+        }
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        gates.put(id, gate.clone());
+        gate
+    }
+
     fn get(&self, id: i64, token: &str) -> Option<Arc<RecordedFileFacts>> {
         let mut cache = self
             .entries

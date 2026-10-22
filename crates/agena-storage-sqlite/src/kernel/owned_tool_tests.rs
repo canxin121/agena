@@ -175,7 +175,7 @@ async fn owned_tool_pages_skip_large_ordinary_history_and_bound_only_matching_pa
 }
 
 #[tokio::test]
-async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_facts() {
+async fn owned_tool_cursors_survive_unrelated_updates_and_reject_foreign_or_lost_membership() {
     for memory in [true, false] {
         let (ports, admin, _root, _url) = tests::fixture(memory).await;
         let (session, _) = seed_tools(&ports, 0, 1).await;
@@ -240,13 +240,14 @@ async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_fac
             )
             .await
             .unwrap();
-        assert!(matches!(
+        assert!(
             ports
                 .reader
                 .owned_tool_entries(session, Some(cursor), 1)
-                .await,
-            Err(KernelError::Conflict(_))
-        ));
+                .await
+                .is_ok(),
+            "title updates do not change the file history"
+        );
         let updated = ports
             .reader
             .owned_tool_entries(session, None, 1)
@@ -262,6 +263,129 @@ async fn owned_tool_cursors_reject_foreign_or_changed_membership_and_control_fac
 }
 
 #[tokio::test]
+async fn owned_tool_pages_finish_their_original_prefix_while_new_tools_are_appended() {
+    for memory in [true, false] {
+        let (ports, _admin, _root, _url) = tests::fixture(memory).await;
+        let (session, original) = seed_tools(&ports, 0, 1).await;
+        let first = ports
+            .reader
+            .owned_tool_entries(session, None, 1)
+            .await
+            .unwrap();
+        let cursor = first.next.unwrap();
+        assert_eq!(cursor.through, original.last().copied());
+        let sent = ports
+            .sessions
+            .send(RequestId::new(), session, document("more work"))
+            .await
+            .unwrap()
+            .value;
+        let attempt = ports
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let tool = round
+            .begin_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "new-edit".into(),
+                    name: "fs.write".into(),
+                    input: json!({"path":"new.txt"}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        tool.complete(
+            RequestId::new(),
+            ToolResult {
+                phase: ToolPhase::Succeeded,
+                value: json!({"path":"new.txt"}),
+            },
+        )
+        .await
+        .unwrap();
+        let remaining = ports
+            .reader
+            .owned_tool_entries(session, Some(cursor), 128)
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining
+                .entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            original[1..]
+        );
+        assert!(
+            !remaining.has_more,
+            "continuous appends cannot extend an in-flight read indefinitely"
+        );
+        assert_eq!(
+            ports
+                .reader
+                .owned_tool_entries(session, None, 128)
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            4
+        );
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        ports
+            .sessions
+            .withdraw(RequestId::new(), session, sent.message_id)
+            .await
+            .unwrap();
+        assert!(
+            ports
+                .reader
+                .owned_tool_entries(session, Some(cursor), 128)
+                .await
+                .is_ok(),
+            "removing a later message retains this page's original membership anchor"
+        );
+        let first_message = ports
+            .reader
+            .entry(session, original[0])
+            .await
+            .unwrap()
+            .execution_id;
+        let message = ports
+            .reader
+            .execution(session, first_message)
+            .await
+            .unwrap()
+            .message_id;
+        ports
+            .sessions
+            .withdraw(RequestId::new(), session, message)
+            .await
+            .unwrap();
+        assert!(matches!(
+            ports
+                .reader
+                .owned_tool_entries(session, Some(cursor), 128)
+                .await,
+            Err(KernelError::Conflict(_))
+        ));
+        ports.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn owned_tool_preflight_uses_partial_covering_indexes_without_cold_json_columns() {
     for memory in [true, false] {
         let (ports, admin, _root, _url) = tests::fixture(memory).await;
@@ -271,6 +395,7 @@ async fn owned_tool_preflight_uses_partial_covering_indexes_without_cold_json_co
         ))
         .bind(1i64)
         .bind(0i64)
+        .bind(i64::MAX)
         .bind(129i64)
         .fetch_all(admin.get_sqlite_connection_pool())
         .await
@@ -297,6 +422,7 @@ async fn owned_tool_preflight_uses_partial_covering_indexes_without_cold_json_co
         let vm = sqlx::query(&format!("EXPLAIN {}", owned_tools::PREFLIGHT_SQL))
             .bind(1i64)
             .bind(0i64)
+            .bind(i64::MAX)
             .bind(129i64)
             .fetch_all(admin.get_sqlite_connection_pool())
             .await

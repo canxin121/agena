@@ -223,6 +223,7 @@ impl ResourceRevisions {
         let revision = clock.revision;
         let id = change.session.get();
         let session_prefix = format!("session:{id}:");
+        let files_key = format!("session:{id}:files");
         let affected = change
             .affected_entries
             .iter()
@@ -232,7 +233,7 @@ impl ResourceRevisions {
             .local
             .iter()
             .filter(|(key, _)| {
-                key.starts_with(&session_prefix)
+                (key.starts_with(&session_prefix) && key.as_str() != files_key)
                     || affected
                         .iter()
                         .any(|prefix| key == &prefix || key.starts_with(&format!("{prefix}:")))
@@ -242,9 +243,20 @@ impl ResourceRevisions {
         keys.extend([
             format!("session:{id}:state"),
             format!("session:{id}:parts"),
-            format!("session:{id}:files"),
             format!("session:{id}:plan"),
         ]);
+        // File evidence does not expire when a title, provider round, text
+        // capture or activity changes. Tool/membership/control mutations can
+        // change that evidence; the endpoint also validates each file body.
+        if matches!(
+            change.kind,
+            agena_storage::kernel::ChangeKind::Tool
+                | agena_storage::kernel::ChangeKind::Membership
+                | agena_storage::kernel::ChangeKind::Execution
+                | agena_storage::kernel::ChangeKind::Interaction
+        ) {
+            keys.push(files_key);
+        }
         keys.extend(list_change_keys(list_change));
         for key in keys {
             clock.set(key, revision);
@@ -324,6 +336,7 @@ impl ResourceRevisions {
 /// forces another read instead of attaching a newer token to an older body.
 pub(crate) struct ConditionalRead {
     token: String,
+    resource_revision: Option<String>,
 }
 
 impl ConditionalRead {
@@ -335,7 +348,12 @@ impl ConditionalRead {
             serde_json::to_vec(value).map_err(|error| ServerError::internal_error(&error))?;
         Ok(Self {
             token: format!("{}:{}", state.server().id, blake3::hash(&bytes).to_hex()),
+            resource_revision: None,
         })
+    }
+    pub(crate) fn with_resource_revision(mut self, observed: &Self) -> Self {
+        self.resource_revision = Some(observed.token.clone());
+        self
     }
     pub(crate) fn token(&self) -> &str {
         &self.token
@@ -347,6 +365,7 @@ impl ConditionalRead {
         state.revisions()?.refresh_durable(state).await?;
         Ok(Self {
             token: state.revisions()?.token(key),
+            resource_revision: None,
         })
     }
     pub(crate) fn not_modified(&self, headers: &HeaderMap) -> Option<Response> {
@@ -367,7 +386,8 @@ impl ConditionalRead {
         Ok(self.headers(crate::json_codec::response(data).await?))
     }
     pub(crate) fn headers(&self, mut response: Response) -> Response {
-        if let Some((_, updated_at)) = self.token.rsplit_once(':')
+        let resource_revision = self.resource_revision.as_deref().unwrap_or(&self.token);
+        if let Some((_, updated_at)) = resource_revision.rsplit_once(':')
             && updated_at.parse::<i64>().is_ok()
         {
             response.headers_mut().insert(
@@ -378,6 +398,10 @@ impl ConditionalRead {
         response.headers_mut().insert(
             header::ETAG,
             HeaderValue::from_str(&format!("W/\"{}\"", self.token)).expect("UUID revision tag"),
+        );
+        response.headers_mut().insert(
+            "x-resource-revision",
+            HeaderValue::from_str(resource_revision).expect("resource revision"),
         );
         response.headers_mut().insert(
             header::CACHE_CONTROL,

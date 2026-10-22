@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n'
 import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
 import { isDocumentVisible } from '../../lib/backgroundReads'
+import { ApiError } from '../../lib/api'
 import { useWorkspacePaneContext } from '../../app/workspace/workspacePaneContext'
 import {
   canReuseResource,
@@ -79,7 +80,9 @@ export function useVisibleResource<T>(options: {
     const request = new AbortController()
     controller = request
     pendingRefresh = false
-    force = pendingForce
+    // A paused/reopened view must still validate a failed read, even when
+    // cancellation cleared its queued refresh. A 304 can retain the body.
+    force = pendingForce || failures > 0
     pendingForce = false
     const timeout = setTimeout(() => request.abort(new Error(i18n.global.t('errors.resource.requestTimedOut'))), 15_000)
     loading.value = true
@@ -100,6 +103,7 @@ export function useVisibleResource<T>(options: {
         data.value !== null &&
         options.interval() === null &&
         !error.value &&
+        failures === 0 &&
         canReuseResource(resource, observed.token)
       )
         return
@@ -118,9 +122,13 @@ export function useVisibleResource<T>(options: {
       }
     } catch (cause) {
       if (version === generation && !disposed) {
-        error.value = cause instanceof Error ? cause.message : String(cause)
+        // Read conflicts are synchronization, not a user action. Keep useful
+        // content on screen and reconcile automatically without asking users
+        // to refresh/retry. Mutations do not use this read-only helper.
+        const conflict = cause instanceof ApiError && (cause.status === 409 || cause.status === 412)
+        error.value = conflict ? '' : cause instanceof Error ? cause.message : String(cause)
         failures = Math.min(failures + 1, 6)
-        allowedAt = Date.now() + Math.min(60_000, 5000 * 2 ** (failures - 1))
+        allowedAt = Date.now() + Math.min(conflict ? 5000 : 60_000, (conflict ? 250 : 5000) * 2 ** (failures - 1))
       }
     } finally {
       clearTimeout(timeout)
@@ -130,7 +138,7 @@ export function useVisibleResource<T>(options: {
         // An event received during a read must get a trailing read. Otherwise
         // a terminal update can be lost until the slow idle heartbeat.
         const interval = options.interval()
-        if (error.value) schedule(Math.max(allowedAt - Date.now(), interval ?? 0))
+        if (failures) schedule(allowedAt - Date.now())
         else if (pendingRefresh) schedule(0)
         else if (interval !== null) schedule(interval)
       }

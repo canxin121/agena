@@ -559,27 +559,16 @@ impl Application {
             .owned_tool_entries(session, cursor, limit.clamp(1, 128))
             .await
             .map_err(crate::kernel_error)?;
-        let parts = async {
-            let mut parts = Vec::with_capacity(page.entries.len());
-            for entry in &page.entries {
-                parts.push(project_kernel_entry(reader, session, entry).await?);
-            }
-            Ok::<_, ApplicationError>(parts)
+        let mut parts = Vec::with_capacity(page.entries.len());
+        for entry in &page.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await?);
         }
-        .await;
-        // Tool detail projection performs separate bounded reads. Do not mix
-        // versions or cache a partial old/new projection if a writer raced it.
-        let version = *reader
-            .control_version(session)
-            .await
-            .map_err(crate::kernel_error)?;
-        if version != page.control_version {
-            return Err(ApplicationError::conflict(
-                "The session changed while loading its file history. Refresh and retry.",
-            ));
-        }
+        // Each tool detail is an authoritative read. Session control changes
+        // (titles, rounds, text, etc.) do not invalidate durable tool evidence.
+        // Transports retain the resource token captured before this read, so
+        // concurrent edits get a trailing validation rather than a false 409.
         Ok(OwnedToolPartsPage {
-            parts: parts?,
+            parts,
             control_version: page.control_version,
             next_cursor: page.next.map(|cursor| encode_cursor(&cursor)).transpose()?,
             has_more: page.has_more,

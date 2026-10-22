@@ -4,7 +4,7 @@ use sea_orm::sqlx::SqlitePool;
 use super::*;
 
 const MAX_PAGE_BYTES: usize = 1024 * 1024;
-pub(super) const PREFLIGHT_SQL: &str = "SELECT e.id,e.body_bytes,t.input_bytes,t.result_bytes FROM agena_entries e INDEXED BY idx_agena_owned_tool_entries JOIN agena_tool_calls t INDEXED BY idx_agena_tool_bytes ON t.id=e.tool_id WHERE e.origin_session_id=? AND e.kind='tool' AND e.id>? AND EXISTS(SELECT 1 FROM agena_segment_entries m INDEXED BY idx_agena_segment_entry_reverse JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=e.origin_session_id AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY e.id LIMIT ?";
+pub(super) const PREFLIGHT_SQL: &str = "SELECT e.id,e.body_bytes,t.input_bytes,t.result_bytes FROM agena_entries e INDEXED BY idx_agena_owned_tool_entries JOIN agena_tool_calls t INDEXED BY idx_agena_tool_bytes ON t.id=e.tool_id WHERE e.origin_session_id=? AND e.kind='tool' AND e.id>? AND e.id<=? AND EXISTS(SELECT 1 FROM agena_segment_entries m INDEXED BY idx_agena_segment_entry_reverse JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=e.origin_session_id AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY e.id LIMIT ?";
 
 pub(super) async fn read(
     pool: &SqlitePool,
@@ -27,11 +27,6 @@ pub(super) async fn read(
             .await
             .map_err(sql_error)?;
     if let Some(cursor) = after {
-        if cursor.control_version != control_version {
-            return Err(KernelError::Conflict(
-                "tool history changed; restart pagination".into(),
-            ));
-        }
         if cursor.membership > metadata.membership_generation {
             return Err(KernelError::Conflict(
                 "tool history changed; restart pagination".into(),
@@ -55,10 +50,29 @@ pub(super) async fn read(
             }
         }
     }
+    // Pin the first page's upper identity. A busy session can keep appending
+    // tools while this bounded read completes; its next read includes them.
+    let through = match after.and_then(|cursor| cursor.through) {
+        Some(through) => Some(through),
+        None => {
+            metrics::add(&diagnostics.0.owned_tool_queries, 1);
+            sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM agena_entries INDEXED BY idx_agena_owned_tool_entries WHERE origin_session_id=? AND kind='tool' ORDER BY id DESC LIMIT 1",
+        )
+        .bind(session.get())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(sql_error)?
+        .map(EntryId::try_from)
+        .transpose()
+        .map_err(storage)?
+        }
+    };
     metrics::add(&diagnostics.0.owned_tool_queries, 1);
     let candidates = sqlx::query(PREFLIGHT_SQL)
         .bind(session.get())
         .bind(after.map_or(0, |cursor| cursor.after.get()))
+        .bind(through.map_or(0, EntryId::get))
         .bind((limit + 1) as i64)
         .fetch_all(&mut *tx)
         .await
@@ -110,6 +124,7 @@ pub(super) async fn read(
             membership: metadata.membership_generation,
             control_version,
             after: entries.last().expect("nonempty limited tool page").id,
+            through,
         })
     } else {
         None

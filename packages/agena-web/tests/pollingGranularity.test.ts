@@ -8,6 +8,7 @@ import type { SessionActivity } from '../src/types/activity'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
+  optimizeDeps: { noDiscovery: true, entries: [] },
   server: { middlewareMode: true, watch: null, hmr: false },
 })
 afterAll(() => vite.close())
@@ -894,6 +895,109 @@ test('a selected file keeps its diff through other-file changes, eviction, hide/
     expect(state.visibleDiff.value?.files[0]?.operations[0]?.diff).toBe('+a2')
   }))
 
+test('an unchanged representation is reused at the newer resource revision after a 304', () =>
+  withRuntime(async ({ tokens, calls, setFetch }) => {
+    const resource = 'session:9952:files'
+    const endpoint = '/api/v1/sessions/9952/file-changes?path=a.ts'
+    tokens.set(resource, 'granularity-http:15')
+    setFetch((_url, init) => {
+      const etag = 'W/"unchanged-file-body"'
+      if (new Headers(init?.headers).get('if-none-match') === etag)
+        return new Response(null, {
+          status: 304,
+          headers: { etag, 'x-resource-revision': tokens.get(resource)! },
+        })
+      return Response.json({ files: [{ path: 'a.ts', revision: 'a1' }] }, {
+        headers: { etag, 'x-resource-revision': tokens.get(resource)! },
+      })
+    })
+    const first = await conditionalJson(resource, endpoint)
+    tokens.set(resource, 'granularity-http:16')
+    sync.noteResourceVersion(resource, tokens.get(resource)!)
+    const second = await conditionalJsonObserved(resource, endpoint)
+    expect(second.value).toBe(first)
+    expect(second.observation.token).toBe('granularity-http:16')
+    const count = calls.length
+    expect(await conditionalJson(resource, endpoint)).toBe(first)
+    expect(calls.length).toBe(count)
+  }))
+
+test('a newer server revision observed during a file read schedules one catch-up read without SSE', () =>
+  withRuntime(async ({ mount, advance, tokens, calls, setFetch }) => {
+    const resource = 'session:9953:files'
+    tokens.set(resource, 'granularity-http:71')
+    let first = true
+    setFetch(() => {
+      const old = first
+      first = false
+      return Response.json({ files: [], total_files: old ? 1 : 2, offset: 0, has_more: false, recording_incomplete: false }, {
+        headers: {
+          etag: old ? 'W/"old-summary"' : 'W/"new-summary"',
+          'x-resource-revision': old ? 'granularity-http:70' : 'granularity-http:71',
+          'x-resource-current-revision': 'granularity-http:71',
+        },
+      })
+    })
+    let state!: ReturnType<typeof useWorkspaceChanges>
+    mount(() => { state = useWorkspaceChanges({ sessionId: ref('9953'), busy: ref(true) }) })
+    await advance(1000)
+    expect(state.total.value).toBe(2)
+    expect(state.status.error.value).toBe('')
+    expect(calls.filter((url) => url.pathname.endsWith('/file-changes'))).toHaveLength(2)
+    await advance(10_000)
+    expect(calls.filter((url) => url.pathname.endsWith('/file-changes'))).toHaveLength(2)
+  }))
+
+test('conflict recovery validates retained file content without needing a newer stream token', () =>
+  withRuntime(async ({ mount, advance, doc, tokens, calls, setFetch }) => {
+    const resource = 'session:9954:files'
+    tokens.set(resource, 'granularity-http:80')
+    let requests = 0
+    setFetch((_url, init) => {
+      requests++
+      if (requests === 2 || requests === 3)
+        return Response.json({ error: 'The session changed. Refresh and retry.' }, { status: requests === 2 ? 409 : 412 })
+      if (requests > 1) expect(new Headers(init?.headers).get('if-none-match')).toBe('W/"retained-summary"')
+      if (requests === 4)
+        return new Response(null, {
+          status: 304,
+          headers: { etag: 'W/"retained-summary"', 'x-resource-revision': tokens.get(resource)! },
+        })
+      return Response.json(
+        { files: [], total_files: 1, offset: 0, has_more: false, recording_incomplete: false },
+        { headers: { etag: 'W/"retained-summary"', 'x-resource-revision': tokens.get(resource)! } },
+      )
+    })
+    let state!: ReturnType<typeof useWorkspaceChanges>
+    mount(() => { state = useWorkspaceChanges({ sessionId: ref('9954'), busy: ref(true) }) })
+    await advance(1000)
+    const retained = state.current.value
+    await state.status.refresh()
+    expect(requests).toBe(2)
+    expect(state.status.error.value).toBe('')
+    expect(state.current.value).toBe(retained)
+    doc.hidden = true
+    doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(249)
+    expect(requests).toBe(2)
+    doc.hidden = false
+    doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(1)
+    expect(requests).toBe(3)
+    expect(state.status.error.value).toBe('')
+    doc.hidden = true
+    doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(500)
+    expect(requests).toBe(3)
+    doc.hidden = false
+    doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(0)
+    expect(requests).toBe(4)
+    expect(state.current.value).toBe(retained)
+    await advance(10_000)
+    expect(calls.filter((url) => url.pathname.endsWith('/file-changes'))).toHaveLength(4)
+  }))
+
 test('activity descriptors never read log bodies; same-cursor log updates replace only that line', () =>
   withRuntime(async ({ mount, advance, tokens, calls, reply, evict, setFetch }) => {
     const id = 'task_granularity',
@@ -1265,9 +1369,11 @@ test('saving a default model updates mounted pickers with one shared runtime rea
     ).toHaveLength(0)
   }))
 
-test('catalog refresh follows completion with small status probes and stops reading when the job finishes', () =>
-  withRuntime(async ({ mount, advance, calls, setFetch }) => {
-    const { default: component } = await vite.ssrLoadModule('/src/components/settings/ModelCatalogPanel.vue')
+test('catalog refresh follows completion with small status probes and stops reading when the job finishes', async () => {
+  // Vite uses real timers while loading modules. Finish that work before the
+  // fixture replaces timers with its manually advanced clock.
+  const { default: component } = await vite.ssrLoadModule('/src/components/settings/ModelCatalogPanel.vue')
+  return withRuntime(async ({ mount, advance, calls, setFetch }) => {
     let running = false,
       finished = false
     setFetch((url, init) => {
@@ -1335,7 +1441,8 @@ test('catalog refresh follows completion with small status probes and stops read
     )
     await advance(0)
     expect(state.items.value[0]!.model_id).toBe('new-filter')
-  }))
+  })
+})
 
 test('temporary local read contention retries promptly without consuming the network failure backoff', () =>
   withRuntime(async ({ advance }) => {

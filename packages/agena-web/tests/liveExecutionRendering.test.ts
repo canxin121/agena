@@ -9,6 +9,7 @@ import { useVisibleResource } from '../src/pages/chat/useVisibleResource'
 
 const vite = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
+  optimizeDeps: { noDiscovery: true, entries: [] },
   server: { middlewareMode: true, watch: null, hmr: false },
   plugins: [
     {
@@ -21,6 +22,9 @@ const vite = await createServer({
 })
 after(() => vite.close())
 const { default: operationComponent } = await vite.ssrLoadModule('/src/components/chat/AgenaOperationPart.vue')
+const { noteResourceVersion } = (await vite.ssrLoadModule(
+  '/src/lib/resourceSync.ts',
+)) as typeof import('../src/lib/resourceSync')
 
 const renderer = createRenderer<object, object>({
   patchProp() {},
@@ -160,13 +164,10 @@ test('running details retain useful snapshots, catch up under continuous revisio
       })) as typeof fetch
     const reply = (index: number, revision: number, value: string) =>
       requests[index]!.resolve(
-        Response.json({
-          part_id: 4,
-          section: 'output',
-          revision,
-          updated_at_ms: revision,
-          value,
-        }),
+        Response.json(
+          { part_id: 4, section: 'output', revision, updated_at_ms: revision, value },
+          { headers: { etag: `W/\"live-rendering-http:${revision}\"` } },
+        ),
       )
     try {
       app.mount({})
@@ -197,12 +198,80 @@ test('running details retain useful snapshots, catch up under continuous revisio
       assert.equal(requests.length, 3, 'completion cancels stale output while retaining the read budget')
       await advance(1000)
       assert.equal(requests.length, 4)
-      reply(3, 11, 'final result')
+      reply(3, 10, 'response that still predates completion')
+      await settle()
+      assert.equal(state.sectionValues.value.output, 'intermediate', 'a stale final read keeps the useful snapshot')
+      assert.equal(state.sectionErrors.value.output, '', 'completion races recover without a manual retry error')
+      await advance(1000)
+      assert.equal(requests.length, 5, 'the final result is retried automatically')
+      reply(4, 11, 'final result')
       await settle()
       reply(2, 10, 'late running output')
       await settle()
       assert.equal(state.sectionValues.value.output, 'final result')
       assert.equal(state.sectionErrors.value.output, '')
+    } finally {
+      app.unmount()
+      disposePinia(pinia)
+      globalThis.fetch = originalFetch
+    }
+  }))
+
+test('unchanged input ignores newer whole-part envelopes and accepts a 304 without a retry loop', async () =>
+  withClock(async ({ advance, settle }) => {
+    const props = reactive({
+      part: { id: '44004', status: 'in_progress', source: { revision: 10, updatedAt: 10 } },
+      expanded: true,
+      collapseSignal: 0,
+      sessionId: '7',
+    })
+    let state!: DetailState
+    const subject = {
+      ...operationComponent,
+      setup(props: object, context: object) {
+        state = operationComponent.setup(props, context)
+        return () => null
+      },
+    }
+    const app = renderer.createApp({ setup: () => () => h(subject, props) })
+    app.provide(ssrContextKey, {})
+    const pinia = createPinia()
+    app.use(pinia)
+    app.use(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': {} } }))
+    const originalFetch = globalThis.fetch
+    let requests = 0
+    globalThis.fetch = (async (_url, init) => {
+      requests++
+      const headers = { etag: 'W/"stable-input"', 'x-resource-revision': `live-rendering-http:${requests}` }
+      if (requests > 1) {
+        assert.equal(new Headers(init?.headers).get('if-none-match'), 'W/"stable-input"')
+        return new Response(null, { status: 304, headers })
+      }
+      return Response.json(
+        { part_id: 44004, section: 'input', revision: 1, updated_at_ms: 1, value: { command: 'echo hello' } },
+        { headers },
+      )
+    }) as typeof fetch
+    try {
+      app.mount({})
+      state.toggleDetails()
+      await settle()
+      await state.toggleSection('input')
+      const retained = state.sectionValues.value.input
+      await advance(10_000)
+      assert.equal(requests, 1, 'a newer whole-part revision does not expire stable input')
+      props.part.source = { revision: 11, updatedAt: 11 }
+      await settle()
+      await state.toggleSection('input')
+      await state.toggleSection('input')
+      assert.equal(requests, 1, 'reopening reuses the validated input')
+      noteResourceVersion('part:44004:input', 'live-rendering-http:2')
+      await advance(1000)
+      assert.equal(requests, 2, 'a section revision prompts one conditional check')
+      assert.equal(state.sectionValues.value.input, retained)
+      assert.equal(state.sectionErrors.value.input, '')
+      await advance(10_000)
+      assert.equal(requests, 2, 'the 304 observation settles without repeated reads')
     } finally {
       app.unmount()
       disposePinia(pinia)

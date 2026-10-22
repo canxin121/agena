@@ -73,6 +73,7 @@ export async function conditionalJsonObserved<T>(
   const previous = cache.get(key)
   if (
     previous &&
+    !forceFresh &&
     (!force || previous.generation >= requiredGeneration!) &&
     canReuseResource(resource, previous.token)
   ) {
@@ -118,9 +119,16 @@ export async function conditionalJsonObserved<T>(
         throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       if (response.status === 304) {
         if (!cached) throw new Error(i18n.global.t('errors.content.notModifiedWithoutCache'))
-        if (noteResourceVersion(resource, cached.token, observation))
-          remember(key, { ...cached, generation: current.generation })
-        return { value: cached.value, observation: { ...observation, token: cached.token } }
+        // A resource may advance while this particular representation stays
+        // identical (another file changed). A 304 validates the retained body
+        // at the response's resource revision, not just its old cache token.
+        const token = response.headers.get('x-resource-revision') || cached.token
+        const etag = response.headers.get('etag') || cached.etag
+        if (noteResourceVersion(resource, token, observation))
+          remember(key, { ...cached, token, etag, generation: current.generation })
+        const currentToken = response.headers.get('x-resource-current-revision')
+        if (currentToken && currentToken !== token) noteResourceVersion(resource, currentToken, observation)
+        return { value: cached.value, observation: { ...observation, token } }
       }
       const text = await response.text()
       signal.throwIfAborted()
@@ -128,12 +136,14 @@ export async function conditionalJsonObserved<T>(
         throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       const value = JSON.parse(text) as T
       const etag = response.headers.get('etag') ?? ''
-      const token = /^(?:W\/)?"(.+)"$/.exec(etag)?.[1] ?? ''
+      const token = response.headers.get('x-resource-revision') || /^(?:W\/)?"(.+)"$/.exec(etag)?.[1] || ''
       const accepted = token ? noteResourceVersion(resource, token, observation) : false
       const bytes = text.length * 2
       if (accepted && bytes <= 2 * 1024 * 1024)
         remember(key, { token, etag, value, bytes, generation: current.generation })
       else if (accepted || !token) forget(key)
+      const currentToken = response.headers.get('x-resource-current-revision')
+      if (currentToken && currentToken !== token) noteResourceVersion(resource, currentToken, observation)
       // A concurrent event leaves one throttled trailing read with the
       // subscriber. Keep this useful snapshot without caching an old token.
       return { value, observation: { ...observation, token: token || undefined } }

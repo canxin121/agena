@@ -431,6 +431,18 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         .error_for_status()
         .unwrap();
     let input_etag = input.headers()["etag"].to_str().unwrap().to_owned();
+    let input_revision = input.headers()["x-resource-revision"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        input_revision
+            .rsplit_once(':')
+            .unwrap()
+            .1
+            .parse::<i64>()
+            .is_ok()
+    );
     let output = http
         .get(endpoint("output"))
         .send()
@@ -451,6 +463,7 @@ async fn tool_section_versions_isolate_output_and_invalidate_deleted_memberships
         reqwest::StatusCode::NOT_MODIFIED,
         "new output must not reload unchanged input"
     );
+    assert_ne!(unchanged.headers()["x-resource-revision"], input_revision);
     let changed = http
         .get(endpoint("output"))
         .header("if-none-match", &output_etag)

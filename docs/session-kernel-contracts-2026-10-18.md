@@ -185,7 +185,7 @@ workspace summaries 依 (updated_at_ms,id) 降序 keyset 分页，最多 200 row
 
 entry detail 按 membership 授权；active executions 的 cursor 绑定 session，≤200+1 rows，重试只列 current generation。pending interactions 先用 stored request_bytes 覆盖索引选择约 1 MiB/200 项，再取限定 JSON；reply/cancel/recovery 后不再出现在 pending 索引。
 
-`owned_tool_entries` 为文件变更等 origin-owned 工具投影提供专用页。`(origin_session_id,id,body_bytes,tool_id) WHERE kind='tool'` 的 partial covering index 只枚举工具身份；membership reverse index 验证这些身份仍属当前会话。工具 input/result 的 generated size 由独立 covering index 读取，普通文本与 opaque round state 不进入 SQL 载荷。预选限制 128+1 candidates，以每项固定开销和 body/input/result 字节数限定 1 MiB，再获取选中 EntryView。cursor 绑定 session、membership、control version 和 EntryId；Application 在工具详情投影后再核对 control version，跨页变化返回冲突。超大单条不能静默截断。
+`owned_tool_entries` 为文件变更等 origin-owned 工具投影提供专用页。`(origin_session_id,id,body_bytes,tool_id) WHERE kind='tool'` 的 partial covering index 只枚举工具身份；membership reverse index 验证这些身份仍属当前会话。工具 input/result 的 generated size 由独立 covering index 读取，普通文本与 opaque round state 不进入 SQL 载荷。预选限制 128+1 candidates，以每项固定开销和 body/input/result 字节数限定 1 MiB，再获取选中 EntryView。cursor 绑定 session、membership、EntryId 和首次读取的工具 ID 上界；control version 仅作为观察信息，不因标题、round、文本等无关更新拒绝文件历史。追加工具由下一次资源同步读取，不能无限延长当前分页；真实 membership 移除导致锚点丢失时才重启分页。每个工具详情来自后端的有界权威读取，HTTP 响应保留读取开始前的资源版本，读取期间发生的编辑不能把旧快照标记为最新。超大单条不能静默截断。
 
 **Pinned roots and streaming JSONL archives（当前契约）**
 

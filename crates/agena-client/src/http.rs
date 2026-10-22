@@ -755,14 +755,30 @@ impl AgenaClient {
             .send_request_with_headers(reqwest::Method::GET, url, None, None, headers)
             .await?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-            let cached = cached.ok_or_else(|| {
+            let mut cached = cached.ok_or_else(|| {
                 ClientError::Protocol("304 without a cached representation".into())
             })?;
+            if let Some(token) = response
+                .headers()
+                .get("x-resource-revision")
+                .and_then(|value| value.to_str().ok())
+            {
+                cached.token = token.to_owned();
+            }
+            if let Some(etag) = response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|value| value.to_str().ok())
+            {
+                cached.etag = etag.to_owned();
+            }
             let mut reads = self.reads.lock().await;
             if reads.observe(resource, &cached.token, observation.as_deref())
                 && let Some(body) = reads.bodies.get_mut(&path)
             {
                 body.generation = generation;
+                body.token = cached.token.clone();
+                body.etag = cached.etag.clone();
             }
             reads.touch(&path);
             return Ok(serde_json::from_value(cached.value)?);
@@ -773,7 +789,12 @@ impl AgenaClient {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_owned();
-        let token = etag.trim_start_matches("W/").trim_matches('"').to_owned();
+        let token = response
+            .headers()
+            .get("x-resource-revision")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| etag.trim_start_matches("W/").trim_matches('"').to_owned());
         let value: serde_json::Value = self.parse_json(response).await?;
         if !token.is_empty() {
             let mut reads = self.reads.lock().await;

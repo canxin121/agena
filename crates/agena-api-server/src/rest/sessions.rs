@@ -243,6 +243,12 @@ pub async fn get_session_tool_detail(
         .map_err(|error| {
             ServerError::bad_request_with_diagnostic("Unknown tool detail section.", error)
         })?;
+    let key = if section == agena_api::live::ToolDetailSection::Presentation {
+        format!("part:{part_id}")
+    } else {
+        format!("part:{part_id}:{section_name}")
+    };
+    let observation = crate::revisions::ConditionalRead::new(&state, &key).await?;
     let resource = state
         .application()
         .read_parts(agena_api::queries::ReadPartsParams {
@@ -263,7 +269,8 @@ pub async fn get_session_tool_detail(
     let read = crate::revisions::ConditionalRead::for_value(
         &state,
         &(&detail.section, &detail.part_state, &detail.value),
-    )?;
+    )?
+    .with_resource_revision(&observation);
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }

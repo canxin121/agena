@@ -1,13 +1,16 @@
 //! Bounded message windows over immutable transcript membership.
 use super::*;
 
-/// Ascending owned-tool position, invalidated by any session control change.
+/// Ascending owned-tool position in a bounded prefix. Unrelated session
+/// updates and appends do not invalidate a retained membership anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OwnedToolCursor {
     pub session: SessionId,
     pub membership: MembershipGeneration,
     pub control_version: i64,
     pub after: EntryId,
+    #[serde(default)]
+    pub through: Option<EntryId>,
 }
 
 #[derive(Debug, Clone, Serialize)]

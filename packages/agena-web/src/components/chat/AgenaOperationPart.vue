@@ -25,6 +25,7 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
 import { isDocumentVisible } from '@/lib/backgroundReads'
+import { ApiError } from '@/lib/api'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import {
   canReuseResource,
@@ -191,23 +192,30 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
   try {
     const key = `part:${partId}:${section}`
     const sourceState = props.part.source.partState ?? props.part.status
-    // A terminal transcript can arrive before its section's revision hint.
-    // Validate output directly until its actual body reflects that terminal
-    // state, without refreshing the independent input/metadata sections.
-    const needsTerminalOutput =
-      section === 'output' && status.value.terminal && sectionLoaded(section) && loadedOutputState !== sourceState
+    // Transcript output can advance before its section's revision hint.
+    // Validate directly until the body catches up, including a terminal state.
+    const needsCurrentOutput =
+      section === 'output' &&
+      (!sectionLoaded(section) || (status.value.terminal && loadedOutputState !== sourceState))
     const observed = sectionObservations.get(section)
     if (
-      !needsTerminalOutput &&
+      !needsCurrentOutput &&
       sectionLoaded(section) &&
       observed?.token &&
       observed.scope === captureResourceObservation(key).scope &&
+      !sectionFailures.has(section) &&
       !hadSectionError
     ) {
       await checkResourceVersions([key], controller.signal)
       if (canReuseResource(key, observed.token)) return
     }
-    const resource = await getToolPartDetail(sessionId, partId, section, controller.signal, needsTerminalOutput)
+    const resource = await getToolPartDetail(
+      sessionId,
+      partId,
+      section,
+      controller.signal,
+      needsCurrentOutput || sectionFailures.has(section) || hadSectionError,
+    )
     if (
       partGeneration !== requestGeneration ||
       controller.signal.aborted ||
@@ -222,7 +230,8 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     const updatedAt = props.part.source.updatedAt ?? 0
     const olderEnvelope =
       resource.revision < revision || (resource.revision === revision && resource.updated_at_ms < updatedAt)
-    if (olderEnvelope && section !== 'output') scheduleLiveSectionRefresh([section])
+    // Input and metadata have independent resource clocks. An older whole-part
+    // envelope alone does not expire their unchanged, validated content.
     const staleOutput = resource.part_state
       ? resource.part_state !== props.part.source.partState && (status.value.terminal || olderEnvelope)
       : olderEnvelope
@@ -230,11 +239,11 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
       // The tool moved on while this section was loading. While it is still
       // streaming, retry quietly and keep the rendered snapshot instead of
       // flashing an error into the part the reader has expanded.
-      if (status.value.terminal) throw new Error(t('chat.errors.toolDetailChangedRetry'))
+      scheduleLiveSectionRefresh([section])
+      if (status.value.terminal) return
       // Live snapshots are best effort. Keep this useful intermediate value
       // on screen and schedule catch-up, rather than starving a section while
       // its source advances faster than HTTP can round-trip.
-      scheduleLiveSectionRefresh([section])
     }
     if (!sectionLoaded(section) || sectionValues.value[section] !== resource.value)
       sectionValues.value = { ...sectionValues.value, [section]: resource.value }
@@ -247,13 +256,18 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     liveRefreshAllowedAt = Math.max(liveRefreshAllowedAt, Date.now() + 750)
   } catch (error) {
     if (partGeneration !== requestGeneration || sectionControllers.get(section) !== controller) return
+    const conflict = error instanceof ApiError && (error.status === 409 || error.status === 412)
     sectionErrors.value = {
       ...sectionErrors.value,
-      [section]: error instanceof Error ? error.message : 'Unable to load this section',
+      [section]: conflict ? '' : error instanceof Error ? error.message : 'Unable to load this section',
     }
     const failures = Math.min((sectionFailures.get(section) ?? 0) + 1, 6)
     sectionFailures.set(section, failures)
-    sectionAllowedAt.set(section, Date.now() + Math.min(60_000, 5000 * 2 ** (failures - 1)))
+    sectionAllowedAt.set(
+      section,
+      Date.now() + Math.min(conflict ? 5000 : 60_000, (conflict ? 750 : 5000) * 2 ** (failures - 1)),
+    )
+    if (conflict) queuedSections.add(section)
   } finally {
     clearTimeout(timeout)
     const ownsRequest = sectionControllers.get(section) === controller

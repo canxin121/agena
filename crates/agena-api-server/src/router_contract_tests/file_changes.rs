@@ -5,6 +5,177 @@ use agena_storage::kernel::{
 };
 
 #[tokio::test]
+async fn file_validators_preserve_unchanged_diffs_and_advance_only_the_resource_observation() {
+    let server = start_test_server("http://127.0.0.1:9").await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let session = client
+        .create_session(server.workspace_id, "file validators", None)
+        .await
+        .unwrap();
+    let application = application_for_test(&server.runtime);
+    let (attempt, round, tool, _) = kernel_fixture::tool(
+        &application,
+        session.id,
+        "fs.write",
+        serde_json::json!({"path":"a.txt", "content":"a"}),
+    )
+    .await;
+    tool.complete(RequestId::new(), ToolResult {
+        phase: ToolPhase::Succeeded,
+        value: serde_json::json!({"raw_output":RawOutput {
+            payload:Some(serde_json::json!({"path":"a.txt","kind":"created","sha256":"a1","diff":"+a"})),
+            ..Default::default()
+        }}),
+    }).await.unwrap();
+    let initial_b = round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "initial-b".into(),
+                name: "fs.write".into(),
+                input: serde_json::json!({"path":"b.txt"}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    initial_b.complete(RequestId::new(), ToolResult {
+        phase:ToolPhase::Succeeded,
+        value:serde_json::json!({"raw_output":RawOutput {
+            payload:Some(serde_json::json!({"path":"b.txt","kind":"created","sha256":"b1","diff":"+b"})),
+            ..Default::default()
+        }}),
+    }).await.unwrap();
+    let http = reqwest::Client::new();
+    let endpoint = format!(
+        "{}/api/v1/sessions/{}/file-changes?path=a.txt",
+        server.url, session.id
+    );
+    let first = http
+        .get(&endpoint)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let etag = first.headers()["etag"].clone();
+    let revision = first.headers()["x-resource-revision"].clone();
+    let first_body: serde_json::Value = first.json().await.unwrap();
+    // The Rust client's retained body uses a separate resource token too.
+    let client_body = client
+        .session_file_changes(session.id, 0, false, Some("a.txt"), 256 * 1024)
+        .await
+        .unwrap();
+    application
+        .session_kernel()
+        .unwrap()
+        .sessions
+        .update_metadata(
+            RequestId::new(),
+            session.id.try_into().unwrap(),
+            MetadataChange {
+                title: Some("unrelated title".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let unchanged = http
+        .get(&endpoint)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        unchanged.headers()["x-resource-revision"],
+        revision,
+        "metadata does not expire file history"
+    );
+    assert!(unchanged.bytes().await.unwrap().is_empty());
+    let second = round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "other-file".into(),
+                name: "fs.replace".into(),
+                input: serde_json::json!({"path":"b.txt"}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    second.complete(RequestId::new(), ToolResult {
+        phase:ToolPhase::Succeeded,
+        value:serde_json::json!({"raw_output":RawOutput {
+            payload:Some(serde_json::json!({"path":"b.txt","before_sha256":"b1","after_sha256":"b2","diff":"-b\n+other"})),
+            ..Default::default()
+        }}),
+    }).await.unwrap();
+    let other_file = http
+        .get(&endpoint)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other_file.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(other_file.headers()["etag"], etag);
+    assert_ne!(other_file.headers()["x-resource-revision"], revision);
+    assert!(other_file.bytes().await.unwrap().is_empty());
+    let retained = client
+        .session_file_changes(session.id, 0, false, Some("a.txt"), 256 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&retained.files[0]).unwrap(),
+        serde_json::to_value(&client_body.files[0]).unwrap()
+    );
+    let edit = round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "same-file".into(),
+                name: "fs.replace".into(),
+                input: serde_json::json!({"path":"a.txt"}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    edit.complete(RequestId::new(), ToolResult {
+        phase:ToolPhase::Succeeded,
+        value:serde_json::json!({"raw_output":RawOutput {
+            payload:Some(serde_json::json!({"path":"a.txt","before_sha256":"a1","after_sha256":"a2","diff":"-a\n+new"})),
+            ..Default::default()
+        }}),
+    }).await.unwrap();
+    let changed = http
+        .get(&endpoint)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), reqwest::StatusCode::OK);
+    assert_ne!(changed.headers()["etag"], etag);
+    let changed_body: serde_json::Value = changed.json().await.unwrap();
+    assert_ne!(
+        changed_body["files"][0]["revision"],
+        first_body["files"][0]["revision"]
+    );
+    assert_eq!(changed_body["files"][0]["operation_count"], 2);
+    let latest = client
+        .session_file_changes(session.id, 0, false, Some("a.txt"), 256 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(latest.files[0].operation_count, 2);
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn session_file_changes_reads_full_durable_membership_through_http_client() {
     let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
     let server = start_test_server(&provider_url).await;
@@ -146,14 +317,12 @@ async fn session_file_changes_reads_full_durable_membership_through_http_client(
         )
         .await
         .unwrap();
-    let stale = application
+    let continued = application
         .read_owned_tool_parts(source.id, Some(&cursor), 1)
         .await
-        .unwrap_err();
-    assert_eq!(
-        stale.failure.category,
-        agena_failure::FailureCategory::Conflict
-    );
+        .unwrap();
+    assert_eq!(continued.parts[0].part_id, second_entry.get());
+    assert!(!continued.has_more);
     let CommandResult::Execution(fork) = client
         .command(Command::ForkSession(ForkSessionParams {
             conversation_mode: None,

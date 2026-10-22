@@ -147,6 +147,10 @@ pub enum Command {
         session: SessionId,
         execution: ExecutionId,
     },
+    CancelQueued {
+        session: SessionId,
+        execution: ExecutionId,
+    },
     Retry {
         session: SessionId,
         execution: ExecutionId,

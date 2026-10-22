@@ -204,6 +204,7 @@ const {
   composerStatusExtra,
 
   // Usage + primary action.
+  queuedMessageCount,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,
@@ -842,6 +843,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 
                       <!-- Region 3: Stop & Send Actions -->
                       <div class="flex-none flex items-center gap-1.5">
+                        <span
+                          v-if="queuedMessageCount > 0"
+                          class="text-xs text-muted-foreground tabular-nums"
+                          role="status"
+                        >{{ t('chat.page.primary.queuedMessages', { count: queuedMessageCount }) }}</span>
                         <IconButton
                           v-if="showComposerStopAction"
                           variant="outline"

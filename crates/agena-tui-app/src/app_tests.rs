@@ -817,6 +817,7 @@ mod interaction_part_routing_tests {
             }
         };
         SessionExecutionResource {
+            queued_messages: Vec::new(),
             receipt: None,
             part_page: None,
             session: SessionResource {
@@ -2724,6 +2725,7 @@ mod session_activity_state_machine_tests {
 
     fn execution_with(state: SessionState, parts: Vec<PartResource>) -> SessionExecutionResource {
         SessionExecutionResource {
+            queued_messages: Vec::new(),
             receipt: None,
             part_page: None,
             session: SessionResource {
@@ -2862,6 +2864,50 @@ mod session_activity_state_machine_tests {
             SessionActivity::AwaitingInteraction,
             "AwaitingInteraction without a visible request is still an awaiting state"
         );
+    }
+
+    #[tokio::test]
+    async fn both_send_keys_submit_to_the_server_while_running_or_awaiting_permission() {
+        for state in [
+            SessionState::Running {
+                execution: None,
+                workflow: agena_api::resource::WorkflowState::Quiescent,
+                requests: Vec::new(),
+            },
+            SessionState::AwaitingInteraction {
+                run_id: None,
+                execution: None,
+                requests: vec![permission_request()],
+            },
+        ] {
+            for submit_key in [false, true] {
+                let mut app = app_with_execution(state.clone());
+                let activity = app.session_activity(SESSION_ID);
+                app.composer.insert_str("next message");
+                if submit_key {
+                    app.submit_or_steer();
+                } else {
+                    app.queue_or_submit();
+                }
+                assert!(
+                    app.run_activity.has_operation(
+                        crate::RunActivityTarget::Session(SESSION_ID),
+                        crate::RunOperation::SubmitMessage,
+                    ),
+                    "the draft must be sent without waiting for the AI to become idle"
+                );
+                assert_eq!(app.session_activity(SESSION_ID), activity);
+                assert_eq!(app.composer.text(), "");
+                assert_eq!(
+                    app.session_composer
+                        .pending_restore_draft
+                        .as_ref()
+                        .unwrap()
+                        .text(),
+                    "next message"
+                );
+            }
+        }
     }
 
     #[test]

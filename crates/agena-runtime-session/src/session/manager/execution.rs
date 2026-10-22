@@ -1,6 +1,5 @@
 use super::super::kernel::{
-    KernelPromptHydrator, KernelRoundOutcome, KernelRoundRequest, KernelRoundRun,
-    KernelToolInvocation,
+    KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, KernelToolInvocation,
 };
 use super::*;
 use agena_domain::{PermissionAction, PermissionDecision, Role, ToolInvocation};
@@ -50,37 +49,53 @@ impl SessionManager {
             settled: std::sync::atomic::AtomicBool::new(false),
         });
         active.insert(execution.id, run.clone());
+        let dispatch = self.session_dispatch(run.session);
+        let predecessor = {
+            let mut tail = dispatch.tail.lock().unwrap_or_else(|p| p.into_inner());
+            let predecessor = tail.upgrade();
+            *tail = Arc::downgrade(&run);
+            predecessor
+        };
         drop(active);
         let manager = self.clone();
         let state = self.state.load_full();
         let result = run.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let lock = manager.session_lock(run.session);
-            let _session = lock.lock().await;
-            let result = match std::panic::AssertUnwindSafe(manager.drive_execution(
-                run.clone(),
-                options,
-                compact,
-                state,
-            ))
-            .catch_unwind()
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => {
-                    run.cancel.cancel();
-                    let command = RequestId::new();
-                    let _ = persist(|| {
-                        manager
-                            .kernel()
-                            .sessions
-                            .cancel(command, run.session, run.execution)
-                    })
-                    .await;
-                    Err(AppError::Internal(
-                        "execution supervisor caught a panic; the attempt has been fenced".into(),
-                    ))
+            // Register the predecessor synchronously, before spawning. Tokio
+            // task polling order must not decide which queued message starts.
+            if let Some(predecessor) = predecessor {
+                predecessor.wait_settled().await;
+            }
+            let _session = dispatch.execution.lock().await;
+            let result = if run.cancel.is_cancelled() {
+                Err(AppError::Cancelled)
+            } else {
+                match std::panic::AssertUnwindSafe(manager.drive_execution(
+                    run.clone(),
+                    options,
+                    compact,
+                    state,
+                ))
+                .catch_unwind()
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        run.cancel.cancel();
+                        let command = RequestId::new();
+                        let _ = persist(|| {
+                            manager
+                                .kernel()
+                                .sessions
+                                .cancel(command, run.session, run.execution)
+                        })
+                        .await;
+                        Err(AppError::Internal(
+                            "execution supervisor caught a panic; the attempt has been fenced"
+                                .into(),
+                        ))
+                    }
                 }
             };
             if let Err(error) = &result {
@@ -108,6 +123,11 @@ impl SessionManager {
         tokio::spawn(async move {
             let result = async {
                 let session = session_id(request.run.session_id)?;
+                let dispatch = manager.session_dispatch(session);
+                // Preparation, commit and supervisor registration form one
+                // admission sequence, independently of the running provider.
+                let _submission = dispatch.submission.lock().await;
+                manager.restore_queued_executions(session).await?;
                 let mut options = request.run.options;
                 manager.prepare_options(session, &mut options).await?;
                 let send_id = request
@@ -246,6 +266,9 @@ impl SessionManager {
         tokio::spawn(async move {
             let result = async {
                 let session = session_id(request.session_id)?;
+                let dispatch = manager.session_dispatch(session);
+                let _submission = dispatch.submission.lock().await;
+                manager.restore_queued_executions(session).await?;
                 let mut options = request.options;
                 manager.prepare_options(session, &mut options).await?;
                 let message = manager
@@ -335,7 +358,7 @@ impl SessionManager {
                 let context=self.execution_context_with_state(control.session,&state).await?;
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
                 let native=state.providers.native_compaction_enabled(&options.model)?;
-                let prompt=KernelPromptHydrator::default().hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
+                let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{executor.available_tool_api_bindings_async().await};
                 let system=Some(self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref()));
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
@@ -430,28 +453,29 @@ impl SessionManager {
         // notice is written while the attempt is still running, then projected
         // as an `error` part on read. Provider-round failures already have a
         // structured failure and are projected from that round instead.
-        if phase == ExecutionPhase::Failed && !structured_round_failure {
-            if let Err(error) = &result {
-                match agena_runtime_contracts::part_content::failure_notice_text(&error.failure()) {
-                    Ok(text) => {
-                        if let Err(error) =
-                            persist(|| attempt.notice(RequestId::new(), text.clone())).await
-                        {
-                            tracing::warn!(
-                                session_id = control.session.get(),
-                                execution_id = %control.execution,
-                                %error,
-                                "could not persist the execution failure notice"
-                            );
-                        }
+        if phase == ExecutionPhase::Failed
+            && !structured_round_failure
+            && let Err(error) = &result
+        {
+            match agena_runtime_contracts::part_content::failure_notice_text(&error.failure()) {
+                Ok(text) => {
+                    if let Err(error) =
+                        persist(|| attempt.notice(RequestId::new(), text.clone())).await
+                    {
+                        tracing::warn!(
+                            session_id = control.session.get(),
+                            execution_id = %control.execution,
+                            %error,
+                            "could not persist the execution failure notice"
+                        );
                     }
-                    Err(error) => tracing::warn!(
-                        session_id = control.session.get(),
-                        execution_id = %control.execution,
-                        %error,
-                        "could not encode the execution failure notice"
-                    ),
                 }
+                Err(error) => tracing::warn!(
+                    session_id = control.session.get(),
+                    execution_id = %control.execution,
+                    %error,
+                    "could not encode the execution failure notice"
+                ),
             }
         }
         let finish = RequestId::new();
@@ -1234,7 +1258,8 @@ impl SessionManager {
                 .find(|entry| !matches!(entry.entry.payload, EntryPayload::Compaction { .. }))
                 .map(|entry| entry.entry.id)
                 .ok_or_else(|| AppError::Config("there is no history to compact".into()))?;
-            let prompt = KernelPromptHydrator::default()
+            let prompt = self
+                .prompt_hydrator
                 .hydrate_with_executor(
                     &self.kernel().reader,
                     facts,

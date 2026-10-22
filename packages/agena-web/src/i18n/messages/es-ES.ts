@@ -1490,6 +1490,7 @@ export default {
         "send": "Enviar",
         "sendMessage": "Enviar mensaje",
         "stop": "Detener",
+        "queuedMessages": "{count} en cola",
         "stopRun": "Detener ejecución"
       }
     },

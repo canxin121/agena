@@ -142,7 +142,7 @@ async fn changed_compaction_seals_summary_and_keeps_the_entire_concurrently_appe
             .append("  durable \u{754c}\n\0 summary")
             .await
             .unwrap();
-        let late = ports
+        let late_execution = ports
             .sessions
             .send(
                 RequestId::new(),
@@ -151,8 +151,8 @@ async fn changed_compaction_seals_summary_and_keeps_the_entire_concurrently_appe
             )
             .await
             .unwrap()
-            .value
-            .message_id;
+            .value;
+        let late = late_execution.message_id;
         let request = RequestId::new();
         let opaque = json!({"native_compaction":{"exact":[null,"\u{754c}",true]}});
         let committed = compact
@@ -184,7 +184,6 @@ async fn changed_compaction_seals_summary_and_keeps_the_entire_concurrently_appe
         let input = round.prompt().await.unwrap();
         let mut expected = vec![committed.value];
         expected.extend_from_slice(&users[2..]);
-        expected.push(late);
         assert_eq!(ids(&input), expected);
         assert_eq!(input.sources.len(), 1);
         assert_eq!(input.sources[0].id, output.id());
@@ -206,6 +205,24 @@ async fn changed_compaction_seals_summary_and_keeps_the_entire_concurrently_appe
             Err(KernelError::Conflict(_))
         ));
         assert_eq!(ids(&compact.prompt().await.unwrap()), users[..2]);
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let next = ports
+            .executor
+            .claim(RequestId::new(), session, late_execution.id)
+            .await
+            .unwrap()
+            .value;
+        let next_round = next
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        expected.push(late);
+        assert_eq!(ids(&next_round.prompt().await.unwrap()), expected);
         ports.shutdown().await.unwrap();
     }
 }
@@ -755,6 +772,147 @@ async fn source_capture_searches_both_owners_and_checkpoint_references_without_r
                 "source capture decoded an entry body"
             );
         }
+        ports.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn queued_input_stays_out_of_followups_and_compaction_never_skips_its_boundary() {
+    for memory in [true, false] {
+        let (ports, _maintenance, _admin, _diagnostics, _root) = fixture(memory).await;
+        let (session, users, attempt) = seed(&ports, 2).await;
+        let queued = ports
+            .sessions
+            .send(RequestId::new(), session, document("queued input"))
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(ids(&round.prompt().await.unwrap()), users);
+        let text = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        text.append("answer appended after queued input")
+            .await
+            .unwrap();
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        let follow_up = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let mut expected = users.clone();
+        expected.push(text.entry_id());
+        assert_eq!(ids(&follow_up.prompt().await.unwrap()), expected);
+        follow_up
+            .finish(RequestId::new(), None, true)
+            .await
+            .unwrap();
+        let compact = attempt
+            .begin_compaction(RequestId::new(), 128)
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(ids(&compact.prompt().await.unwrap()), users);
+        let summary = compact
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        summary.append("summary before queued input").await.unwrap();
+        let checkpoint = compact
+            .commit_compaction(RequestId::new(), summary.id(), *users.last().unwrap(), None)
+            .await
+            .unwrap()
+            .value;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let next = ports
+            .executor
+            .claim(RequestId::new(), session, queued.id)
+            .await
+            .unwrap()
+            .value;
+        let next_round = next
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let next_ids = ids(&next_round.prompt().await.unwrap());
+        assert!(next_ids.contains(&checkpoint));
+        assert!(
+            next_ids.contains(&queued.message_id),
+            "compaction must not consume queued input"
+        );
+        assert!(next_ids.contains(&text.entry_id()));
+        assert!(matches!(
+            ports
+                .sessions
+                .cancel_queued(RequestId::new(), session, queued.id)
+                .await,
+            Err(KernelError::Conflict(_))
+        ));
+        assert_eq!(
+            ports
+                .reader
+                .execution(session, queued.id)
+                .await
+                .unwrap()
+                .phase,
+            ExecutionPhase::Running
+        );
+        ports.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelling_an_unclaimed_retry_retains_user_input_used_by_an_earlier_attempt() {
+    for memory in [true, false] {
+        let (ports, _maintenance, _admin, _diagnostics, _root) = fixture(memory).await;
+        let (session, users, attempt) = seed(&ports, 1).await;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+        ports
+            .sessions
+            .retry(RequestId::new(), session, attempt.execution_id())
+            .await
+            .unwrap();
+        ports
+            .sessions
+            .cancel_queued(RequestId::new(), session, attempt.execution_id())
+            .await
+            .unwrap();
+        let next = ports
+            .sessions
+            .send(RequestId::new(), session, document("after cancelled retry"))
+            .await
+            .unwrap()
+            .value;
+        let next_attempt = ports
+            .executor
+            .claim(RequestId::new(), session, next.id)
+            .await
+            .unwrap()
+            .value;
+        let round = next_attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(
+            ids(&round.prompt().await.unwrap()),
+            [users[0], next.message_id]
+        );
         ports.shutdown().await.unwrap();
     }
 }

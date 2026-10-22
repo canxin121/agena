@@ -24,7 +24,6 @@ use crate::app_backend::{
     LiveEvent, SessionPermissionStudioState, SessionRefresh, SessionStateWithTranscriptPage,
     SessionTranscriptPage,
 };
-use crate::composer_queue::ComposerQueue;
 use crate::notifications::NotificationStore;
 use agena_application::dto::ModelCatalogListResponse;
 use agena_tui::composer::ComposerItemSelection;
@@ -527,10 +526,6 @@ pub struct App {
     /// session changes so we don't accumulate stale subscriptions.
     pub(super) subscription_generation: u64,
     pub(super) active_subscription: Option<tokio::task::JoinHandle<()>>,
-    /// Pending messages typed by the user while the AI was working. Drained
-    /// Single pending message delivered once the active run finishes. See
-    /// `composer_queue.rs`.
-    pub(super) queue: ComposerQueue,
     pub(super) status_line: Option<StatusLinePresentation>,
     pub(super) plugin_theme: Option<agena_plugin_host::HostThemePalette>,
     pub(super) keybindings: ComposerKeyBindings,
@@ -690,6 +685,11 @@ pub(super) enum AppMessage {
         session_id: i64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
+    },
+    QueuedMessageTaken {
+        session_id: i64,
+        restore: bool,
+        result: UiResult<agena_domain::ComposerDocument>,
     },
     SessionContinued {
         session_id: i64,

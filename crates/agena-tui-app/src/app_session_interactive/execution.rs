@@ -91,19 +91,13 @@ impl App {
             .any(|entry| plugin_command_matches_name(entry, name))
     }
 
-    /// Submit the composer's document as ONE request. Both composer submit
-    /// keys (bare Enter and Ctrl+Enter by default) use this path.
-    ///
-    /// Everything the composer holds belongs to that single request: the body
-    /// text and every attachment part, each at its inline position. A run that
-    /// is actively generating is interrupted so the message is delivered as the
-    /// next turn. Nothing is ever parked for a later turn, because one send
-    /// already carries the whole multi-part document.
+    /// Submit the entire document immediately. The server persists and queues
+    /// it behind existing work without interrupting the active execution.
     pub(crate) fn submit_or_steer(&mut self) {
         self.dispatch_composer_send();
     }
 
-    /// Bare Enter is the same immediate send as Ctrl+Enter.
+    /// Both composer submit keys use server-owned admission.
     pub(crate) fn queue_or_submit(&mut self) {
         self.dispatch_composer_send();
     }
@@ -118,9 +112,6 @@ impl App {
         }
         let draft = self.take_composer_draft();
         if draft.is_empty() {
-            // Nothing typed: retry an interrupt-and-send that is still waiting
-            // for the interrupted turn to release the session.
-            self.try_send_pending();
             return;
         }
         self.reset_prompt_history_recall();
@@ -134,47 +125,23 @@ impl App {
         self.send_captured_draft(draft);
     }
 
-    /// Deliver an already captured document in one request. A send only waits
-    /// for attachment preparation or for an interrupted run to release the
-    /// session first.
     fn send_captured_draft(&mut self, draft: ComposerDraft) {
         let Some(session_id) = self
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id())
         else {
-            // No session yet - creating one submits the same document.
             self.create_session(Some(draft));
             return;
         };
-        // Only an actively generating run is interrupted. A run waiting for the
-        // user's own answer (permission / user input) must not be cancelled,
-        // because that would discard the pending request.
-        // An interrupt-and-send already on its way for this session must never
-        // be overtaken: the queued document is delivered once the cancelled run
-        // releases the session, so sending now would swap the message order.
-        if !self.queue.is_empty(DraftSlot::Session(session_id)) {
+        // Only an outstanding HTTP submission owns the draft restoration slot.
+        // Once acknowledged, another message can be admitted while AI is busy.
+        if self.run_activity.has_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::SubmitMessage,
+        ) {
             self.restore_composer_draft(draft);
             self.flash_warning(ui_text::t(&self.i18n, "flash-send-in-flight"));
-            return;
-        }
-        let has_active_execution = self
-            .transcript
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.session.state.active_execution())
-            .is_some();
-        if self.session_activity(session_id).is_running() && has_active_execution {
-            self.request_cancel_run(session_id);
-            self.queue.set(DraftSlot::Session(session_id), draft);
-            self.flash_info(ui_text::t(&self.i18n, "flash-message-interrupting"));
-            return;
-        }
-        if self.current_session_activity().is_busy() {
-            // The run is waiting for the user's answer: keep the document in
-            // front of the user instead of parking it for later.
-            self.restore_composer_draft(draft);
-            self.flash_warning(ui_text::t(&self.i18n, "flash-answer-pending-request"));
             return;
         }
         self.submit_user_draft(draft);
@@ -227,9 +194,8 @@ impl App {
     }
 
     /// Submit an already captured message without taking the current editor.
-    /// An in-flight send can finish while the user is writing the next draft;
-    /// routing it through `submit_composer` would send that newer draft and
-    /// silently discard the queued one.
+    /// An HTTP acknowledgment can arrive while the user writes the next draft;
+    /// routing through `submit_composer` would read that newer editor state.
     pub(crate) fn submit_user_draft(&mut self, draft: ComposerDraft) {
         let draft = if draft.text().starts_with("//") {
             composer_draft_with_text_prefix_stripped(draft, 1)
@@ -318,7 +284,7 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, Instant, PendingComposerSubmit, PermissionReplyKind,
+    App, AppMessage, ComposerDraft, Instant, PendingComposerSubmit, PermissionReplyKind,
     PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
     plugin_command_matches_name, run_status_line_command, ui_text,

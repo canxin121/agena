@@ -389,7 +389,18 @@ impl KernelPromptHydrator {
         let mut active_round = None;
         let mut compaction = None;
         let mut boundary = conversation.map(agena_domain::SessionConversation::boundary_notice);
-        for item in &facts.entries {
+        // Admission can append the next user message before the current reply
+        // finishes. Provider turns follow message ownership, with each reply
+        // before the next user input, regardless of physical append order.
+        let mut entries = facts.entries.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|item| {
+            (
+                !matches!(item.entry.payload, EntryPayload::Compaction { .. }),
+                item.entry.message_id,
+                item.entry.id,
+            )
+        });
+        for item in entries {
             if item.entry.origin_session_id == facts.metadata.id
                 && matches!(item.entry.payload, EntryPayload::User { .. })
                 && let Some(text) = boundary.take()

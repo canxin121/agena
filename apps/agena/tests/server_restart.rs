@@ -730,6 +730,145 @@ fn unused_loopback_port() -> u16 {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn killed_server_restores_queued_messages_in_order_without_a_connected_sender() {
+    let fixture = tempfile::tempdir().unwrap();
+    let workspace = fixture.path().join("workspace");
+    let server_data = fixture.path().join("server-data");
+    let database_path = fixture.path().join("sessions.db");
+    let record_path = fixture.path().join("server.json");
+    let log_path = fixture.path().join("server.log");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&server_data).unwrap();
+    let (provider_url, mut requests, provider) = spawn_process_provider(
+        vec![
+            ProcessProviderReply {
+                events: Vec::new(),
+                wait_for_disconnect: true,
+            },
+            ProcessProviderReply {
+                events: process_text_events("first queued answer", "queue-one"),
+                wait_for_disconnect: false,
+            },
+            ProcessProviderReply {
+                events: process_text_events("second queued answer", "queue-two"),
+                wait_for_disconnect: false,
+            },
+        ],
+        None,
+    )
+    .await;
+    write_isolated_project_config(&workspace, &provider_url);
+    let mut first_server = spawn_server(
+        &workspace,
+        &database_path,
+        &record_path,
+        &server_data,
+        &log_path,
+        0,
+        &[],
+    );
+    let (sender, _) = wait_for_server(&first_server, &record_path).await;
+    let CommandResult::Workspace(resolved) = sender
+        .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
+            path: workspace.to_string_lossy().into_owned(),
+            create_if_missing: true,
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("expected workspace")
+    };
+    let session = sender
+        .create_session(resolved.id, "durable message queue", None)
+        .await
+        .unwrap();
+    for (index, text) in [
+        "active before crash",
+        "first queued prompt",
+        "second queued prompt",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            sender.submit_message(SubmitRunParams {
+                session_id: session.id,
+                options: RunOptions::default(),
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: text.into(),
+                }]),
+            }),
+        )
+        .await
+        .expect("admission cannot wait for the provider")
+        .unwrap();
+        if index == 0 {
+            tokio::time::timeout(Duration::from_secs(10), requests.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        sender
+            .get_session_state(session.id)
+            .await
+            .unwrap()
+            .queued_messages
+            .len(),
+        2
+    );
+    drop(sender);
+    first_server.crash();
+    let mut second_server = spawn_server(
+        &workspace,
+        &database_path,
+        &record_path,
+        &server_data,
+        &log_path,
+        0,
+        &[],
+    );
+    let (observer, _) = wait_for_server(&second_server, &record_path).await;
+    let first = tokio::time::timeout(Duration::from_secs(15), requests.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .to_string();
+    assert!(first.contains("first queued prompt"));
+    assert!(!first.contains("second queued prompt"));
+    let second = tokio::time::timeout(Duration::from_secs(15), requests.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .to_string();
+    assert!(
+        second.find("first queued answer").unwrap() < second.find("second queued prompt").unwrap()
+    );
+    let completed = wait_for_execution(&observer, session.id, |state| {
+        state.session.state.active_execution().is_none()
+    })
+    .await;
+    assert!(completed.queued_messages.is_empty());
+    assert!(
+        execution_text(&observer, &completed)
+            .await
+            .contains("second queued answer")
+    );
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", database_path.display()))
+        .await
+        .unwrap();
+    let phases = sqlx::query_scalar::<_, String>("SELECT a.phase FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.session_id=? ORDER BY e.message_id")
+        .bind(session.id).fetch_all(&pool).await.unwrap();
+    assert_eq!(phases, ["interrupted", "succeeded", "succeeded"]);
+    pool.close().await;
+    provider.await.unwrap();
+    assert!(requests.try_recv().is_err());
+    second_server.crash();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() {
     let fixture = tempfile::tempdir().expect("create server restart fixture");
     let workspace = fixture.path().join("workspace");
@@ -863,7 +1002,10 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     assert!(reconciled.parts.iter().any(|part| {
         part.is_message_boundary()
             && part.role == "user"
-            && part.state == "failed"
+            // The submitted document is complete; the interrupted execution
+            // is reported separately from its immutable input content.
+            && part.state == "completed"
+            && part.content["execution_phase"] == "interrupted"
             && part
                 .content
                 .get("abort_reason")
@@ -1294,15 +1436,19 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
     );
     let cancelled = wait_for_execution(&other, child_id, |execution| {
         execution.session.state.active_execution().is_none()
-            && execution
-                .parts
-                .iter()
-                .any(|part| part.part_id == partial_entry.part_id && part.state == "cancelled")
+            && execution.parts.iter().any(|part| {
+                part.part_id == partial_entry.part_id
+                    && part.state == "completed"
+                    && part.run_state.as_deref() == Some("cancelled")
+            })
     })
     .await;
     wait_for_session_change(&mut child_connection.subscription, |change| {
-        changed_part(change)
-            .is_some_and(|part| part.part_id == partial_entry.part_id && part.state == "cancelled")
+        changed_part(change).is_some_and(|part| {
+            part.part_id == partial_entry.part_id
+                && part.state == "completed"
+                && part.run_state.as_deref() == Some("cancelled")
+        })
     })
     .await;
     assert_eq!(

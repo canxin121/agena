@@ -1292,7 +1292,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       backgroundActivitiesBySession.value[sid] = st.backgroundActivities
     }
 
-    const execution = st.execution
+    const execution = { ...st.execution, queued_messages: st.queuedMessages || [] }
     if (execution && typeof execution === 'object') {
       sessionExecutionBySession.value = {
         ...sessionExecutionBySession.value,
@@ -1341,6 +1341,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         execution: state.execution,
         usage: state.usage,
         backgroundActivities: activities,
+        queuedMessages: state.queued_messages || [],
         backgroundActivityKinds: activities.map((activity) => activity.kind.toLowerCase()),
       },
       activityGeneration,

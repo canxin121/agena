@@ -1153,6 +1153,8 @@ const runUi = useChatRunUi({
   compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
 })
 
+const queuedMessageCount = computed(() => chat.selectedSessionExecution?.queued_messages?.length ?? 0)
+
 const {
   currentPhase,
   sessionUsage,
@@ -2367,6 +2369,7 @@ const viewCtx = {
   planVisible,
 
   // Send/stop.
+  queuedMessageCount,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,

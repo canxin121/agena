@@ -128,6 +128,38 @@ impl App {
                 draft,
                 result,
             } => self.handle_session_turn_submitted(session_id, draft, result),
+            AppMessage::QueuedMessageTaken {
+                session_id,
+                restore,
+                result,
+            } => match result {
+                Ok(document) => {
+                    if restore {
+                        let draft = ComposerDraft { document };
+                        if self.transcript.session_id == Some(session_id) {
+                            self.restore_queued_message_into_editor(draft);
+                        } else {
+                            let slot = DraftSlot::Session(session_id);
+                            let mut saved = self.draft_store.get(slot).cloned().unwrap_or_default();
+                            if !saved.is_empty() && !draft.is_empty() {
+                                saved.document.0.push(agena_domain::ComposerNode::Text {
+                                    text: "\n\n".into(),
+                                });
+                            }
+                            saved.document.0.extend(draft.document.0);
+                            self.set_draft_for_slot(slot, saved);
+                            self.persist_draft_store_with_feedback(true);
+                        }
+                    } else {
+                        self.flash_success(ui_text::t(&self.i18n, "flash-pending-cancelled"));
+                    }
+                    self.request_refresh(session_id, true);
+                }
+                Err(error) => {
+                    self.flash_error(error);
+                    self.request_refresh(session_id, true);
+                }
+            },
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, RunOperation::Continue, result)
             }
@@ -380,7 +412,6 @@ impl App {
         }
         match result {
             Ok(session) => {
-                self.queue.rebind_new_session(session.id);
                 self.request_sessions(false);
                 if submit_draft.is_some() {
                     self.clear_draft_for_slot(DraftSlot::NewSession);
@@ -439,14 +470,9 @@ impl App {
         match result {
             Ok(load) => {
                 let session_id = load.execution.session.id;
-                let execution_is_terminal =
-                    load.execution.session.state.active_execution().is_none();
                 if self.apply_transcript_snapshot(load) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
-                    if execution_is_terminal {
-                        self.try_send_pending();
-                    }
                 }
             }
             Err(error) => self.flash_error(error),
@@ -691,18 +717,9 @@ impl App {
                 }
                 if let Some(snapshot) = refresh.snapshot {
                     let session_id = snapshot.execution.session.id;
-                    let execution_is_terminal = snapshot
-                        .execution
-                        .session
-                        .state
-                        .active_execution()
-                        .is_none();
                     if self.apply_transcript_snapshot(snapshot) {
                         self.sync_pending_interactive_after_execution(session_id);
                         self.sync_session_list_selection_to_current_execution();
-                        if execution_is_terminal {
-                            self.try_send_pending();
-                        }
                     }
                 } else if let Some(execution) = refresh.execution_only {
                     // Shells can supplement pending-operation owners without
@@ -758,10 +775,6 @@ impl App {
                 }
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
-                // The terminal execution can arrive before this submit
-                // response. Its earlier drain attempt sees the local submit
-                // operation as busy; retry now that the operation is clear.
-                self.try_send_pending();
             }
             Err(error) => {
                 self.session_composer.pending_restore_draft = None;
@@ -771,41 +784,7 @@ impl App {
                     self.persist_draft_store_with_feedback(true);
                 }
                 self.flash_error(error);
-                // Pause draining: a failed run typically means the user
-                // wants to inspect the error rather than fire the next
-                // queued message blindly. They can press Ctrl+P to recover
-                // the queue contents.
             }
-        }
-    }
-
-    /// Deliver the document captured by an interrupt-and-send. Called whenever
-    /// an active execution completes or a cancel is acknowledged, because the
-    /// runtime only accepts a new user run once the previous one released the
-    /// session.
-    pub(crate) fn try_send_pending(&mut self) {
-        // Deliver every in-flight send whose session has released. The
-        // document targets the session it was captured in, so switching
-        // sessions while an interrupted run unwinds cannot strand it.
-        let slots = self.queue.slots().collect::<Vec<_>>();
-        for slot in slots {
-            let DraftSlot::Session(session_id) = slot else {
-                continue;
-            };
-            if self.session_activity(session_id) != crate::SessionActivity::Idle
-                || self
-                    .pending_interactive_kind_for_session(session_id)
-                    .is_some()
-            {
-                continue;
-            }
-            let Some(draft) = self.queue.take(slot) else {
-                continue;
-            };
-            // Submit the captured document directly. The editor may already
-            // contain the next draft, and restoring into a nonempty editor would
-            // discard this captured document before submission.
-            self.request_submit_message(session_id, draft);
         }
     }
 
@@ -845,12 +824,6 @@ impl App {
                         self.persist_draft_store_with_feedback(true);
                     }
                     self.session_composer.pending_restore_draft = None;
-                } else {
-                    // Borrowed from codex's interrupt-and-send flow: a
-                    // normal cancellation makes a queued message the next
-                    // user turn. A recovered user message must remain an
-                    // editable draft and must never be auto-submitted.
-                    self.try_send_pending();
                 }
             }
             Err(error) => {
@@ -871,14 +844,10 @@ impl App {
         execution: SessionExecutionResource,
         refresh: bool,
     ) {
-        let execution_is_terminal = execution.session.state.active_execution().is_none();
         let transcript_is_target = self.transcript.session_id == Some(session_id);
         if transcript_is_target && self.apply_transcript_execution(execution) {
             self.sync_pending_interactive_after_execution(session_id);
             self.sync_session_list_selection_to_current_execution();
-            if execution_is_terminal {
-                self.try_send_pending();
-            }
         }
         if refresh && transcript_is_target {
             self.request_refresh(session_id, true);

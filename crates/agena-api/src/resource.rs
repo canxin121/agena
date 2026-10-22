@@ -1302,6 +1302,10 @@ pub struct SessionExecutionResource {
     /// Identity of this accepted command, independent of the returned Part window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<SessionExecutionReceiptResource>,
+    /// Server-owned FIFO of accepted input that has not started. These are
+    /// references to durable user messages, not client-local composer drafts.
+    #[serde(default)]
+    pub queued_messages: Vec<QueuedMessageResource>,
     pub session: SessionResource,
     /// The session's parts (ordered parts, including `run` markers).
     pub parts: Vec<crate::part::PartResource>,
@@ -1320,6 +1324,12 @@ pub struct SessionExecutionResource {
     pub background_activities: Vec<BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
     pub usage: SessionUsageResource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedMessageResource {
+    pub execution_id: uuid::Uuid,
+    pub message_id: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

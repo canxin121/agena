@@ -11,6 +11,23 @@ import {
 } from '../src/stores/chat/api'
 import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 
+test('queued user messages retain the pending state from the server', () => {
+  const entries = entriesFromParts('7', [
+    {
+      part_id: 20,
+      run_id: 20,
+      message_boundary: true,
+      role: 'user',
+      kind: 'text',
+      state: 'pending',
+      run_state: 'pending',
+      content: { text: 'next task', execution_id: 'queued-execution' },
+    },
+  ])
+  assert.equal(entries[0]?.info.runState, 'pending')
+  assert.equal(entries[0]?.parts[0]?.text, 'next task')
+})
+
 test('a failed attempt error does not become the latest part of a running retry', () => {
   const oldThought = {
     part_id: 1468,

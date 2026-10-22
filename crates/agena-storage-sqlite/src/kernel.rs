@@ -1977,6 +1977,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Send { session, .. }
         | Command::Claim { session, .. }
         | Command::Cancel { session, .. }
+        | Command::CancelQueued { session, .. }
         | Command::Retry { session, .. }
         | Command::Reply { session, .. }
         | Command::PrepareBlob { session, .. }
@@ -2084,6 +2085,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::Send { session, .. } => (*session, ChangeKind::Membership),
         Command::Claim { session, .. }
         | Command::Cancel { session, .. }
+        | Command::CancelQueued { session, .. }
         | Command::Retry { session, .. } => (*session, ChangeKind::Execution),
         Command::BeginRound { scope, .. }
         | Command::BeginCurrentRound { scope }

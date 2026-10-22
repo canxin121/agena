@@ -126,24 +126,43 @@ impl SessionManager {
         let page = self
             .kernel()
             .reader
-            .summaries(
-                self.current_workspace_id().await?,
+            .query_summaries(SummaryQuery {
                 before,
-                limit.clamp(1, 128),
-            )
+                limit: limit.clamp(1, 128),
+                ..Default::default()
+            })
             .await
             .map_err(kernel_error)?;
         *self.delivery_scan.lock().unwrap_or_else(|p| p.into_inner()) =
             if page.has_more { page.next } else { None };
         let mut recovered = 0;
         for summary in &page.sessions {
-            if self.is_run_active(summary.id.get()).await {
-                continue;
-            }
-            let lock = self.session_lock(summary.id);
-            let Ok(_guard) = lock.try_lock() else {
+            let dispatch = self.session_dispatch(summary.id);
+            let Ok(_submission) = dispatch.submission.try_lock() else {
                 continue;
             };
+            let Ok(_guard) = dispatch.execution.try_lock() else {
+                continue;
+            };
+            if self
+                .active
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+                .any(|run| run.session == summary.id)
+            {
+                continue;
+            }
+            if summary.queued_executions > 0 {
+                // A missing route must not starve recovery of other sessions.
+                match self.restore_queued_executions(summary.id).await {
+                    Ok(count) => recovered += count,
+                    Err(error) => {
+                        tracing::warn!(session_id = summary.id.get(), %error, "queued input recovery deferred")
+                    }
+                }
+                continue;
+            }
             let pending = self
                 .kernel()
                 .reader
@@ -219,6 +238,46 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?
             .value;
+            self.supervise(execution, options, false, permit);
+            recovered += 1;
+        }
+        Ok(recovered)
+    }
+
+    /// Called under the session submission lock, including before accepting a
+    /// new message. Startup recovery may not have scanned this session yet;
+    /// existing durable input must be dispatched before any newer submission.
+    pub(super) async fn restore_queued_executions(
+        &self,
+        session: SessionId,
+    ) -> Result<usize, AppError> {
+        let snapshot = self
+            .kernel()
+            .reader
+            .control_snapshot(session, 128)
+            .await
+            .map_err(kernel_error)?;
+        let mut queued = snapshot
+            .active_executions
+            .executions
+            .iter()
+            .filter(|execution| execution.phase == ExecutionPhase::Queued)
+            .cloned()
+            .collect::<Vec<_>>();
+        queued.sort_by_key(|execution| execution.message_id);
+        let mut recovered = 0;
+        for execution in queued {
+            if self
+                .active
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains_key(&execution.id)
+            {
+                continue;
+            }
+            let options = self
+                .options_for_selection(&snapshot.metadata.selection.clone().unwrap_or_default())?;
+            let permit = self.reserve_execution()?;
             self.supervise(execution, options, false, permit);
             recovered += 1;
         }

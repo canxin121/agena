@@ -293,7 +293,7 @@ export default {
       transcriptSearch: { open: 'Rechercher dans la transcription', previous: 'Correspondance précédente', next: 'Correspondance suivante' },
       attachments: 'Pièces jointes', attachmentsWithCount: 'Pièces jointes ({count})', tools: 'Outils',
       usage: { tokensSuffix: '{value} jetons' },
-      primary: { send: 'Envoyer', sendMessage: 'Envoyer le message', stop: 'Arrêter', stopRun: 'Arrêter l’exécution' },
+      primary: { send: 'Envoyer', sendMessage: 'Envoyer le message', stop: 'Arrêter', queuedMessages: '{count} en attente', stopRun: 'Arrêter l’exécution' },
     },
     btw: {
       title: 'BTW · question en lecture seule', description: 'Posez une question à part pendant que la conversation principale continue. Outils en lecture seule ; aucune modification de la conversation principale.',

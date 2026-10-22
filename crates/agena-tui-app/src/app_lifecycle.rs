@@ -160,7 +160,6 @@ impl App {
             next_hub_request_id: 0,
             active_subscription: None,
             subscription_generation: 0,
-            queue: ComposerQueue::new(),
             status_line,
             plugin_theme,
             keybindings,
@@ -570,13 +569,13 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTerminalColor>) -> Op
 
 use crate::Result;
 use crate::{
-    APP_MESSAGE_QUEUE_CAPACITY, App, BTreeMap, BTreeSet, Color, ComposerQueue,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore, Duration, Editor, Event, HashMap, HashSet,
-    I18n, Instant, LaunchOptions, LayoutCache, PromptHistory, REFRESH_INTERVAL_MS,
-    REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
-    SessionListLoadState, TerminalIntegrationState, TerminalRuntime, TranscriptState,
-    UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path, default_prompt_history_path,
-    interval, provider_studio_auth_poll_interval, ui_text,
+    APP_MESSAGE_QUEUE_CAPACITY, App, BTreeMap, BTreeSet, Color, DRAFT_PERSIST_INTERVAL_MS,
+    DraftSlot, DraftStore, Duration, Editor, Event, HashMap, HashSet, I18n, Instant, LaunchOptions,
+    LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route,
+    RunActivityTracker, RunOptionsState, SessionComposerState, SessionListLoadState,
+    TerminalIntegrationState, TerminalRuntime, TranscriptState, UI_COMMAND_QUEUE_CAPACITY,
+    UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
+    provider_studio_auth_poll_interval, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;

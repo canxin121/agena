@@ -691,19 +691,32 @@ impl App {
 
     pub(crate) fn transcript_footer_text(&self) -> String {
         let mut parts = Vec::new();
-        if !self.queue.is_empty(self.current_draft_slot()) {
+        if let Some(execution) = &self.transcript.execution
+            && !execution.queued_messages.is_empty()
+        {
+            let count = execution.queued_messages.len();
             let preview = self
-                .queue
-                .preview(self.current_draft_slot(), 28)
-                .unwrap_or_default();
-            if preview.is_empty() {
-                parts.push(ui_text::t(&self.i18n, "transcript-footer-pending"));
+                .transcript
+                .parts
+                .iter()
+                .find(|part| part.part_id == execution.queued_messages[0].message_id)
+                .and_then(|part| part.content.get("text").and_then(serde_json::Value::as_str))
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(28)
+                .collect::<String>();
+            let label = if preview.is_empty() {
+                ui_text::t(&self.i18n, "transcript-footer-pending")
             } else {
-                parts.push(self.i18n.text_args(
+                self.i18n.text_args(
                     "transcript-footer-pending-preview",
                     &agena_tui::fl_args!("preview" => preview),
-                ));
-            }
+                )
+            };
+            parts.push(format!("{count} · {label}"));
         }
         if let Some(status_line) = self
             .status_line

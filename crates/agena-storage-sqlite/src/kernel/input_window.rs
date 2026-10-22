@@ -6,7 +6,7 @@ use agena_storage::backend::kernel::Scope;
 use super::*;
 
 const MAX_SCANNED: usize = 10_000;
-pub(super) const CANDIDATES_SQL: &str = "SELECT m.ordinal,e.id,e.kind,r.phase AS round_phase,c.round_id AS compaction_round FROM agena_segment_entries m JOIN agena_entries e ON e.id=m.entry_id LEFT JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_compaction_rounds c ON c.round_id=e.round_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
+pub(super) const CANDIDATES_SQL: &str = "SELECT m.ordinal,e.id,e.kind,COALESCE(e.message_id,e.id) AS message_id,a.phase AS execution_phase,EXISTS(SELECT 1 FROM agena_attempts prior WHERE prior.execution_id=e.execution_id AND prior.started_at_ms IS NOT NULL) AS ever_started,r.phase AS round_phase,c.round_id AS compaction_round FROM agena_segment_entries m JOIN agena_entries e ON e.id=m.entry_id LEFT JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_compaction_rounds c ON c.round_id=e.round_id LEFT JOIN agena_executions x ON x.id=e.execution_id LEFT JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
 
 pub(super) struct Selection {
     pub entries: Vec<EntryId>,
@@ -17,6 +17,7 @@ pub(super) struct Selection {
 pub(super) async fn select(
     connection: &mut SqliteConnection,
     session: SessionId,
+    message: EntryId,
     limit: usize,
     prefix: bool,
 ) -> Result<Selection> {
@@ -74,6 +75,24 @@ pub(super) async fn select(
                     ));
                 }
                 let kind: &str = row.try_get("kind").map_err(storage)?;
+                if row.try_get::<i64, _>("message_id").map_err(storage)? > message.get() {
+                    // An ordinary follow-up must not see later admitted input.
+                    // A compaction cannot jump across it either: doing so would
+                    // advance the checkpoint past a still-queued message.
+                    if prefix {
+                        return Ok(result);
+                    }
+                    continue;
+                }
+                if kind == "user"
+                    && row
+                        .try_get::<Option<&str>, _>("execution_phase")
+                        .map_err(storage)?
+                        == Some("cancelled")
+                    && !row.try_get::<bool, _>("ever_started").map_err(storage)?
+                {
+                    continue;
+                }
                 let phase: Option<&str> = row.try_get("round_phase").map_err(storage)?;
                 let compaction: Option<i64> = row.try_get("compaction_round").map_err(storage)?;
                 if kind == "compaction"

@@ -555,15 +555,6 @@ impl App {
     }
 
     pub(crate) fn request_submit_message(&mut self, session_id: i64, draft: ComposerDraft) {
-        if self
-            .pending_interactive_kind_for_session(session_id)
-            .is_some()
-        {
-            self.restore_composer_draft(draft);
-            self.focus = Focus::Composer;
-            self.prompt_for_pending_interactive_on_session(session_id);
-            return;
-        }
         if self.transcript.session_id == Some(session_id) {
             self.transcript.scroll_to_bottom(
                 self.layout.transcript_body.width,
@@ -611,6 +602,34 @@ impl App {
                 })
                 .await;
         });
+    }
+
+    pub(crate) fn request_take_queued_message(&mut self, restore: bool) -> bool {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return false;
+        };
+        let Some(queued) = execution.queued_messages.first() else {
+            return false;
+        };
+        let session_id = execution.session.id;
+        let execution_id = agena_domain::ExecutionId(queued.execution_id);
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .client()
+                .take_queued_message(session_id, execution_id)
+                .await
+                .map_err(|error| crate::UiFailure::from_backend(error.into()));
+            let _ = tx
+                .send(AppMessage::QueuedMessageTaken {
+                    session_id,
+                    restore,
+                    result,
+                })
+                .await;
+        });
+        true
     }
 
     pub(crate) fn request_continue(&mut self, session_id: i64) {
@@ -783,7 +802,6 @@ use crate::{
     ProviderPickerPurpose, RunActivityTarget, RunOperation, SessionLoadScope, UserInputReply,
     ui_text,
 };
-use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;
 
 /// Rewind is an explicit history operation. Walk the collapsed transcript

@@ -83,7 +83,8 @@ pub(super) async fn read_on(
         )),
         None => active_executions
             .executions
-            .first()
+            .iter()
+            .min_by_key(|run| run.message_id)
             .map(|run| (run.id, run.generation, run.phase == ExecutionPhase::Queued)),
     };
     let active_execution = match selected {

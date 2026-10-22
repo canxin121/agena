@@ -662,3 +662,25 @@ use super::{
     State, ToolDetailSectionQuery, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct TakeQueuedMessageRequest {
+    pub request_id: agena_domain::CommandId,
+}
+
+pub async fn take_queued_message(
+    State(state): State<AppState>,
+    Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
+    Json(request): Json<TakeQueuedMessageRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .take_queued_message(
+                request.request_id,
+                session_id,
+                agena_domain::ExecutionId(execution_id),
+            )
+            .await?,
+    ))
+}

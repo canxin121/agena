@@ -169,6 +169,17 @@ pub(super) async fn apply(
                 .await
                 .map(Mutation::Execution)
         }
+        Command::CancelQueued { session, execution } => {
+            let (view, _) = reads::execution(connection, *session, *execution).await?;
+            if view.phase != ExecutionPhase::Queued {
+                return Err(KernelError::Conflict(
+                    "the queued message has already started or been removed".into(),
+                ));
+            }
+            finish(connection, view, ExecutionPhase::Cancelled)
+                .await
+                .map(Mutation::Execution)
+        }
         Command::Retry { session, execution } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
             let mut state = ExecutionState::from_stored(view.generation, view.phase);
@@ -194,18 +205,30 @@ pub(super) async fn apply(
         }
         Command::BeginRound { scope, inputs } => begin_round(connection, *scope, inputs).await,
         Command::BeginCurrentRound { scope } => {
-            check_scope(connection, *scope, true).await?;
-            let window =
-                super::input_window::select(connection, scope.session, 10000, false).await?;
+            let execution = check_scope(connection, *scope, true).await?;
+            let window = super::input_window::select(
+                connection,
+                scope.session,
+                execution.message_id,
+                10000,
+                false,
+            )
+            .await?;
             begin_round(connection, *scope, &window.entries).await
         }
         Command::BeginCompactionRound { scope, max_entries } => {
-            check_scope(connection, *scope, true).await?;
+            let execution = check_scope(connection, *scope, true).await?;
             if !(2..=10000).contains(max_entries) {
                 return Err(invalid("compaction prefix must admit 2-10000 entries"));
             }
-            let window =
-                super::input_window::select(connection, scope.session, *max_entries, true).await?;
+            let window = super::input_window::select(
+                connection,
+                scope.session,
+                execution.message_id,
+                *max_entries,
+                true,
+            )
+            .await?;
             let value = begin_round(connection, *scope, &window.entries).await?;
             let Mutation::Round(round) = value else {
                 unreachable!("begin-round result")

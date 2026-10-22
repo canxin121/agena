@@ -36,6 +36,47 @@ const { conditionalJson, conditionalJsonObserved } = (await vite.ssrLoadModule(
 
 let runtimeClock = 100_000
 
+test('queue display follows server state across refreshes without dispatching messages locally', () =>
+  withRuntime(async ({ tokens, calls, reply, setFetch, advance }) => {
+    const sid = '99781'
+    const key = `session:${sid}:state`
+    const queue = [
+      { execution_id: '00000000-0000-0000-0000-000000000002', message_id: 20 },
+      { execution_id: '00000000-0000-0000-0000-000000000003', message_id: 30 },
+    ]
+    let queued = queue
+    let version = 1
+    setFetch((url, init) => {
+      expect(init?.method || 'GET').toBe('GET')
+      if (url.pathname !== `/api/v1/sessions/${sid}/state`) throw new Error(`Unexpected queue request ${url}`)
+      return reply(key, {
+        session: {
+          id: Number(sid),
+          workspace_id: 1,
+          title: 'Server queue',
+          version,
+          state: { kind: 'running', data: {} },
+        },
+        execution: { agent_id: 'test' },
+        queued_messages: queued,
+        parts: [],
+      })
+    })
+    const chat = useChatStore()
+    await chat.refreshExecutionStatus(sid)
+    expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
+    await advance(60_000)
+    expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
+    for (const remaining of [queue.slice(1), []]) {
+      queued = remaining
+      tokens.set(key, `granularity-http:${++version}`)
+      sync.noteResourceVersion(key, tokens.get(key)!)
+      await chat.refreshExecutionStatus(sid)
+      expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(remaining)
+    }
+    expect(calls.filter((url) => url.pathname.endsWith('/messages'))).toHaveLength(0)
+  }))
+
 async function withRuntime(
   run: (context: {
     mount: (setup: () => void) => void

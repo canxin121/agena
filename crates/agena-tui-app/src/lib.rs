@@ -88,7 +88,6 @@ use agena_application::provider_studio::{
 };
 
 mod commands;
-mod composer_queue;
 #[cfg(test)]
 mod keymap_contract_tests;
 
@@ -192,7 +191,6 @@ const fn fixture_part_status(
         ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
     }
 }
-use crate::composer_queue::ComposerQueue;
 use agena_application::dto::{
     CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
 };

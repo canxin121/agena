@@ -102,7 +102,10 @@ export type AgenaSessionParts = {
 }
 
 /** SessionExecutionResource — GET /api/v1/sessions/{id}/state. */
+export type QueuedMessage = { execution_id: string; message_id: number }
+
 export type AgenaExecutionState = {
+  queued_messages?: QueuedMessage[]
   session: AgenaSession
   parts: AgenaPart[]
   part_page: { returned: number; has_more: boolean; next_cursor?: string | null } | null
@@ -112,6 +115,7 @@ export type AgenaExecutionState = {
   /// must not rebuild it from the global activity list.
   background_activities?: SessionActivity[] | null
   execution?: {
+    queued_messages?: QueuedMessage[]
     provider_retry?: { attempt: number; max_retries: number; next_at_ms: number; message: string }
     agent_id?: string
     model_provider_id?: string | null
@@ -195,6 +199,7 @@ function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
 }
 
 export type SessionExecutionStatus = {
+  queuedMessages?: QueuedMessage[]
   observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
   session: Session
   state: SessionState
@@ -1416,6 +1421,7 @@ export async function getSessionExecutionStatus(
     parts: state.parts || [],
     backgroundActivityKinds,
     backgroundActivities: raw.background_activities || [],
+    queuedMessages: raw.queued_messages || [],
     observation,
   }
 }

@@ -2,7 +2,7 @@
 //! Only active work is retained here; immutable transcript history is paged by
 //! readers. Provider and tool effects live in supervised tasks, independently
 //! of the lifetime of an HTTP/UI waiter.
-use super::{Session, SessionProcessor};
+use super::{Session, SessionProcessor, kernel::KernelPromptHydrator};
 use crate::{
     AppError, ContextGovernor, RuntimeSessionManagerConfig, SessionCreateRequest,
     SessionExecutionRequest, SessionRunOptions,
@@ -68,9 +68,24 @@ struct RunControl {
     settled: std::sync::atomic::AtomicBool,
 }
 type ActiveToolMap = HashMap<(i64, i64), (ToolHandle, Arc<RunControl>)>;
+#[derive(Default)]
+struct SessionDispatch {
+    submission: tokio::sync::Mutex<()>,
+    execution: tokio::sync::Mutex<()>,
+    tail: StdMutex<std::sync::Weak<RunControl>>,
+}
 impl RunControl {
     fn phase(&self, phase: agena_domain::ExecutionPhase) {
         *self.phase.lock().unwrap_or_else(|p| p.into_inner()) = phase;
+    }
+    async fn wait_settled(&self) {
+        loop {
+            let notified = self.done.notified();
+            if self.settled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -78,11 +93,12 @@ impl RunControl {
 pub struct SessionManager {
     kernel_runtime: Arc<agena_storage_sqlite::SqliteKernel>,
     state: Arc<ArcSwap<ExecutionState>>,
+    prompt_hydrator: KernelPromptHydrator,
     active: Arc<StdMutex<HashMap<ExecutionId, Arc<RunControl>>>>,
     admission: Arc<Semaphore>,
     task_settlements: Arc<Semaphore>,
     /// Locks exist only while queued/running executions retain them.
-    sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
+    sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
     task_preparation: Arc<tokio::sync::Mutex<()>>,
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
@@ -111,6 +127,7 @@ impl SessionManager {
                 tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
                 config,
             })),
+            prompt_hydrator: KernelPromptHydrator::default(),
             active: Default::default(),
             admission: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             task_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
@@ -167,12 +184,12 @@ impl SessionManager {
             .await
             .copied()
     }
-    fn session_lock(&self, id: SessionId) -> Arc<tokio::sync::Mutex<()>> {
+    fn session_dispatch(&self, id: SessionId) -> Arc<SessionDispatch> {
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         match sessions.get(&id).and_then(std::sync::Weak::upgrade) {
             Some(lock) => lock,
             None => {
-                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                let lock = Arc::new(SessionDispatch::default());
                 sessions.insert(id, Arc::downgrade(&lock));
                 lock
             }
@@ -243,11 +260,21 @@ impl SessionManager {
             .collect::<Vec<_>>();
         for run in &active {
             run.cancel.cancel();
-            let _ = self
+            let queued = self
                 .kernel()
-                .sessions
-                .cancel(RequestId::new(), run.session, run.execution)
-                .await;
+                .reader
+                .execution(run.session, run.execution)
+                .await
+                .is_ok_and(|execution| execution.phase == ExecutionPhase::Queued);
+            // Unclaimed input is safe to resume after a service restart. Only
+            // executions that could have made external effects are fenced.
+            if !queued {
+                let _ = self
+                    .kernel()
+                    .sessions
+                    .cancel(RequestId::new(), run.session, run.execution)
+                    .await;
+            }
         }
         for run in active {
             loop {

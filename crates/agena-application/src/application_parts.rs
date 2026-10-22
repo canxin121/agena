@@ -261,6 +261,14 @@ pub(crate) async fn project_kernel_entry(
             part.role = "user".into();
             part.run_id = Some(entry.id.get());
             part.message_boundary = true;
+            part.run_state = Some(
+                match entry.execution_phase {
+                    agena_storage::kernel::ExecutionPhase::Queued => "pending",
+                    agena_storage::kernel::ExecutionPhase::Cancelled => "cancelled",
+                    _ => "completed",
+                }
+                .into(),
+            );
             part.content = serde_json::json!({"text":document.text(),"document":document,
                 "execution_id":entry.execution_id,"run_kind":"user_send"});
         }

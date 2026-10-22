@@ -344,7 +344,7 @@ impl Fixture {
             },
             ..Default::default()
         };
-        let manager = SessionManager::new(
+        let mut manager = SessionManager::new(
             kernel,
             Arc::new(registry),
             ContextGovernor::new(Default::default()),
@@ -352,6 +352,9 @@ impl Fixture {
             executor,
             config,
         );
+        // Fixtures own independent databases with overlapping session IDs.
+        // Keep prompt admission shared within each server, not across tests.
+        manager.prompt_hydrator = KernelPromptHydrator::isolated();
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "supervision".into(),
@@ -396,6 +399,9 @@ impl Fixture {
         .unwrap();
     }
     fn finish(&self, index: usize, value: &str) {
+        self.finish_turn(index, value, true);
+    }
+    fn finish_turn(&self, index: usize, value: &str, end_turn: bool) {
         self.events[index]
             .send(Ok(CompletionStreamEvent::TextDelta {
                 provider_id: ProviderId::new("fixture"),
@@ -410,7 +416,7 @@ impl Fixture {
                 finish_reason: Some(CompletionFinishReason::Stop),
                 usage: None,
                 provider_metadata: None,
-                end_turn: Some(true),
+                end_turn: Some(end_turn),
             }))
             .unwrap();
     }
@@ -864,8 +870,8 @@ async fn shutdown_with_gated_media_and_persistent_commit_failure_is_bounded_and_
     assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
 
     // Release preparation while persistence is still failing. Its accepted
-    // input is supervised by an already cancelled token, so no provider effect
-    // starts. Neither run can pretend to have settled its durable terminal fact.
+    // input is supervised by an already cancelled token, so it remains queued
+    // for restart without claiming an attempt or making a provider effect.
     drop(held);
     let media = tokio::time::timeout(Duration::from_secs(5), waiter)
         .await
@@ -874,29 +880,22 @@ async fn shutdown_with_gated_media_and_persistent_commit_failure_is_bounded_and_
         .unwrap();
     let media_execution = media.receipt.unwrap().execution_id;
     let media_session = session_id(media_id).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if fixture
-                .manager
-                .kernel()
-                .reader
-                .execution(media_session, media_execution)
-                .await
-                .unwrap()
-                .phase
-                == ExecutionPhase::Running
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    fixture.idle(media_id).await;
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .execution(media_session, media_execution)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
     assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
     assert_eq!(
         fixture.manager.admission.available_permits(),
-        MAX_ACTIVE_EXECUTIONS - 2
+        MAX_ACTIVE_EXECUTIONS - 1
     );
     admin
         .execute(Statement::from_string(
@@ -919,9 +918,9 @@ async fn shutdown_with_gated_media_and_persistent_commit_failure_is_bounded_and_
     );
     assert!(fixture.manager.active.lock().unwrap().is_empty());
     assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
-    for (session, execution) in [
-        (active_session, active_execution),
-        (media_session, media_execution),
+    for (session, execution, phase) in [
+        (active_session, active_execution, ExecutionPhase::Cancelled),
+        (media_session, media_execution, ExecutionPhase::Queued),
     ] {
         assert_eq!(
             fixture
@@ -932,7 +931,7 @@ async fn shutdown_with_gated_media_and_persistent_commit_failure_is_bounded_and_
                 .await
                 .unwrap()
                 .phase,
-            ExecutionPhase::Cancelled
+            phase
         );
     }
     let history = fixture
@@ -2662,5 +2661,263 @@ async fn tool_result_commit_rejection_preserves_the_observed_effect_instead_of_i
             .unwrap()
             .contains("one external effect")
     );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn queued_messages_wait_for_the_entire_execution_and_reach_the_model_in_fifo_order() {
+    let fixture = Fixture::new(4).await;
+    let first = fixture.submit("first user").await;
+    fixture.calls(1).await;
+    let second = fixture.submit("queued second user").await;
+    let third = fixture.submit("queued third user").await;
+    let snapshot = fixture
+        .manager
+        .kernel()
+        .reader
+        .control_snapshot(session_id(fixture.session.id).unwrap(), 128)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.summary.queued_executions, 2);
+    assert_eq!(snapshot.summary.running_executions, 1);
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    fixture.finish_turn(0, "first intermediate answer", false);
+    fixture.calls(2).await;
+    let follow_up = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[1]).unwrap();
+    assert!(follow_up.contains("first user"));
+    assert!(follow_up.contains("first intermediate answer"));
+    assert!(!follow_up.contains("queued second user"));
+    assert!(!follow_up.contains("queued third user"));
+    fixture.finish(1, "first final answer");
+    fixture.calls(3).await;
+    let next = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[2]).unwrap();
+    assert!(next.find("first final answer").unwrap() < next.find("queued second user").unwrap());
+    assert!(!next.contains("queued third user"));
+    fixture.finish(2, "second final answer");
+    fixture.calls(4).await;
+    let last = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[3]).unwrap();
+    assert!(last.find("second final answer").unwrap() < last.find("queued third user").unwrap());
+    fixture.finish(3, "third final answer");
+    fixture.idle(fixture.session.id).await;
+    for outcome in [first, second, third] {
+        let execution = fixture
+            .manager
+            .kernel()
+            .reader
+            .execution(
+                session_id(fixture.session.id).unwrap(),
+                outcome.receipt.unwrap().execution_id,
+            )
+            .await
+            .unwrap();
+        assert_eq!(execution.phase, ExecutionPhase::Succeeded);
+    }
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn removing_queued_input_preserves_the_running_execution_and_omits_it_from_later_prompts() {
+    let fixture = Fixture::new(2).await;
+    fixture.submit("active user").await;
+    fixture.calls(1).await;
+    let removed = fixture.submit("removed queued user").await.receipt.unwrap();
+    fixture.submit("retained queued user").await;
+    let session = session_id(fixture.session.id).unwrap();
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .cancel_queued(RequestId::new(), session, removed.execution_id)
+        .await
+        .unwrap();
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    fixture.finish(0, "active answer");
+    fixture.calls(2).await;
+    let prompt = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[1]).unwrap();
+    assert!(!prompt.contains("removed queued user"));
+    assert!(prompt.contains("retained queued user"));
+    fixture.finish(1, "retained answer");
+    fixture.idle(fixture.session.id).await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn service_restart_restores_queued_input_without_replaying_the_cancelled_provider_call() {
+    let fixture = Fixture::new(2).await;
+    let first = fixture
+        .submit("interrupted active user")
+        .await
+        .receipt
+        .unwrap();
+    fixture.calls(1).await;
+    let queued = fixture
+        .submit("queued across restart")
+        .await
+        .receipt
+        .unwrap();
+    fixture.manager.shutdown().await.unwrap();
+    fixture.manager.kernel().clone().shutdown().await.unwrap();
+    let state = fixture.manager.state.load_full();
+    // Rebuild the tool executor without retaining the old kernel reader. The
+    // SQLite service owner is intentionally held by every live reader clone.
+    let executor = ToolExecutor::new(
+        state.executor.workspace_root(),
+        state.executor.principal().clone(),
+        state.executor.plugin_manager().clone(),
+        None,
+        None,
+    );
+    let (providers, governor, processor, config) = (
+        state.providers.clone(),
+        state.governor.clone(),
+        state.processor.clone(),
+        state.config.clone(),
+    );
+    drop(state);
+    let Fixture {
+        manager: old_manager,
+        session: old_session,
+        provider,
+        events,
+        _root,
+    } = fixture;
+    drop(old_manager);
+    let kernel = Arc::new(
+        agena_storage_sqlite::open_kernel_runtime(&format!(
+            "sqlite://{}?mode=rwc",
+            _root.path().join("sessions.db").display()
+        ))
+        .await
+        .unwrap(),
+    );
+    let mut manager = SessionManager::new(kernel, providers, governor, processor, executor, config);
+    manager.prompt_hydrator = KernelPromptHydrator::isolated();
+    let fixture = Fixture {
+        manager,
+        session: old_session,
+        provider,
+        events,
+        _root,
+    };
+    let manager = &fixture.manager;
+    let session = session_id(fixture.session.id).unwrap();
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .execution(session, first.execution_id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Cancelled
+    );
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .execution(session, queued.execution_id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
+    assert_eq!(manager.recover_background_deliveries(128).await.unwrap(), 1);
+    fixture.calls(2).await;
+    fixture.finish(1, "recovered queued answer");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        manager.wait_session_idle(fixture.session.id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .execution(session, queued.execution_id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Succeeded
+    );
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 2);
+    manager.shutdown().await.unwrap();
+    manager.kernel().clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn submitting_before_recovery_scan_preserves_the_existing_durable_queue_order() {
+    let fixture = Fixture::new(2).await;
+    let session = session_id(fixture.session.id).unwrap();
+    // Represents a committed queued input whose old supervisor was lost.
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .send(RequestId::new(), session, document("older durable input"))
+        .await
+        .unwrap();
+    fixture.submit("newly submitted input").await;
+    fixture.calls(1).await;
+    let first = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[0].turns).unwrap();
+    assert!(first.contains("older durable input"));
+    assert!(!first.contains("newly submitted input"), "{first}");
+    fixture.finish(0, "older answer");
+    fixture.calls(2).await;
+    let second = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[1]).unwrap();
+    assert!(second.find("older answer").unwrap() < second.find("newly submitted input").unwrap());
+    fixture.finish(1, "newer answer");
+    fixture.idle(fixture.session.id).await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn recovery_resumes_queued_input_from_another_workspace() {
+    let fixture = Fixture::new(1).await;
+    let other = tempfile::tempdir().unwrap();
+    let workspace = fixture
+        .manager
+        .kernel_runtime
+        .workspaces
+        .ensure_id(&other.path().to_string_lossy())
+        .await
+        .unwrap();
+    let session = fixture
+        .manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "other workspace".into(),
+            SessionConfiguration {
+                effective_workspace_root: Some(other.path().to_path_buf()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .send(RequestId::new(), session, document("other workspace input"))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .recover_background_deliveries(128)
+            .await
+            .unwrap(),
+        1
+    );
+    fixture.calls(1).await;
+    let prompt = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[0]).unwrap();
+    assert!(prompt.contains("other workspace input"));
+    fixture.finish(0, "other workspace answer");
+    fixture.idle(session.get()).await;
     fixture.close().await;
 }

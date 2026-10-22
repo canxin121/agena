@@ -471,6 +471,39 @@ impl Application {
         session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
+    /// Atomically remove unclaimed input and return its original document for
+    /// optional editing. A racing claim returns a conflict without cancellation.
+    pub async fn take_queued_message(
+        &self,
+        request: agena_domain::CommandId,
+        session_id: i64,
+        execution: ExecutionId,
+    ) -> Result<agena_domain::ComposerDocument, ApplicationError> {
+        let session = crate::kernel_session_id(session_id)?;
+        let kernel = self.session_kernel()?;
+        let view = kernel
+            .reader
+            .execution(session, execution)
+            .await
+            .map_err(crate::kernel_error)?;
+        let entry = kernel
+            .reader
+            .entry(session, view.message_id)
+            .await
+            .map_err(crate::kernel_error)?;
+        let agena_storage::kernel::EntryPayload::User { document } = &entry.payload else {
+            return Err(ApplicationError::bad_request(
+                "The queued input is not a user message.",
+            ));
+        };
+        kernel
+            .sessions
+            .cancel_queued(request, session, execution)
+            .await
+            .map_err(crate::kernel_error)?;
+        Ok(document.clone())
+    }
+
     /// Cancel the active run of `session_id`.
     pub async fn cancel_run(
         &self,

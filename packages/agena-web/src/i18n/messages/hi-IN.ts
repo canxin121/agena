@@ -1254,6 +1254,7 @@ export default {
         send: 'भेजें',
         sendMessage: 'संदेश भेजें',
         stop: 'रोकें',
+        queuedMessages: 'कतार में {count}',
         stopRun: 'रन रोकें',
       },
     },

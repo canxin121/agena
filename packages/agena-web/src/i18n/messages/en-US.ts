@@ -1613,6 +1613,7 @@ export default {
         send: 'Send',
         sendMessage: 'Send message',
         stop: 'Stop',
+        queuedMessages: '{count} queued',
         stopRun: 'Stop run',
       },
     },

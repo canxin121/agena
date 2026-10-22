@@ -1,0 +1,119 @@
+use super::*;
+
+#[tokio::test]
+async fn server_queues_messages_across_clients_and_dequeue_cannot_cancel_a_started_turn() {
+    let (release_tx, release_rx) = oneshot::channel();
+    let (provider_url, mut requests, provider) = spawn_fake_responses_provider(vec![
+        FakeProviderPlan {
+            events: terminal_response_events("first answer", "queue-first"),
+            release: Some(release_rx),
+        },
+        FakeProviderPlan {
+            events: terminal_response_events("queued answer", "queue-next"),
+            release: None,
+        },
+    ])
+    .await;
+    let server = start_test_server(&provider_url).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let first = submit_test_run(&client, server.workspace_id, "first prompt").await;
+    let session = first.session.id;
+    tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut queued = Vec::new();
+    for prompt in ["remove this queued prompt", "keep this queued prompt"] {
+        let state = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            client.submit_message(SubmitRunParams {
+                session_id: session,
+                options: RunOptions::default(),
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: prompt.into(),
+                }]),
+            }),
+        )
+        .await
+        .expect("queue admission must return while provider is held")
+        .unwrap();
+        queued.push(state.receipt.unwrap().execution_id);
+    }
+    drop(client);
+    let observer = AgenaClient::new(&server.url).unwrap();
+    let state = observer.get_session_state(session).await.unwrap();
+    assert_eq!(
+        state
+            .queued_messages
+            .iter()
+            .map(|item| item.execution_id)
+            .collect::<Vec<_>>(),
+        queued
+    );
+    assert_eq!(
+        state.session.state.active_execution().unwrap().execution_id,
+        first.receipt.unwrap().execution_id
+    );
+    let pending_parts = observer
+        .session_parts_by_ids(
+            session,
+            &state
+                .queued_messages
+                .iter()
+                .map(|item| item.message_id)
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        pending_parts
+            .parts
+            .iter()
+            .all(|part| part.run_state.as_deref() == Some("pending"))
+    );
+    let removed = observer
+        .take_queued_message(session, agena_domain::ExecutionId(queued[0]))
+        .await
+        .unwrap();
+    assert_eq!(removed.text(), "remove this queued prompt");
+    let removed_part = observer
+        .session_parts_by_ids(session, &[state.queued_messages[0].message_id])
+        .await
+        .unwrap();
+    assert_eq!(
+        removed_part.parts[0].run_state.as_deref(),
+        Some("cancelled")
+    );
+    let race = observer
+        .take_queued_message(
+            session,
+            agena_domain::ExecutionId(first.receipt.unwrap().execution_id),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        race.problem().unwrap().category,
+        agena_failure::FailureCategory::Conflict
+    );
+    let after = observer.get_session_state(session).await.unwrap();
+    assert_eq!(after.queued_messages.len(), 1);
+    assert!(
+        requests.try_recv().is_err(),
+        "the active provider must not be interrupted"
+    );
+    release_tx.send(()).unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let next = serde_json::to_string(&next).unwrap();
+    assert!(next.contains("first answer"));
+    assert!(next.contains("keep this queued prompt"));
+    assert!(!next.contains("remove this queued prompt"));
+    let finished = wait_for_execution(&observer, session, |state| {
+        state.session.state.active_execution().is_none()
+    })
+    .await;
+    assert!(finished.queued_messages.is_empty());
+    provider.await.unwrap();
+}

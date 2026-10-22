@@ -311,7 +311,7 @@ impl App {
         }
         // Configurable bindings define the composer map. The defaults preserve
         // the user's stated preference:
-        // Enter = queue, Ctrl+Enter = submit, Shift+Enter / Ctrl+J = newline.
+        // Enter / Ctrl+Enter = server admission, Shift+Enter / Ctrl+J = newline.
         if let Some(action) = self.keybindings.match_action(&key) {
             match action {
                 ComposerAction::Submit => {
@@ -970,29 +970,15 @@ impl App {
         (items, actions)
     }
 
-    /// Ctrl+P / EditQueue binding: pull the single pending message back into
-    /// the composer for editing from any cursor position. Returns true if
-    /// anything was pulled (so the caller skips the default cursor-up
-    /// behavior).
+    /// Editing and dropping pending input are conditional backend mutations.
     pub(crate) fn try_pop_queue_into_editor(&mut self) -> bool {
-        let Some(combined) = self.queue.take(self.current_draft_slot()) else {
-            return false;
-        };
-        // Capture the editor without clearing it so an attachment that is
-        // still preparing keeps its placeholder, then merge this document on top.
-        self.merge_in_flight_send_into_editor(combined);
-        true
+        self.request_take_queued_message(true)
     }
 
-    /// Cancel the single pending message (Ctrl+X). Shows a hint when there
-    /// is nothing to cancel so the key never silently disappears.
     pub(crate) fn cancel_pending_message(&mut self) {
-        if self.queue.is_empty(self.current_draft_slot()) {
+        if !self.request_take_queued_message(false) {
             self.flash_info(ui_text::t(&self.i18n, "flash-no-pending-message"));
-            return;
         }
-        self.queue.clear(self.current_draft_slot());
-        self.flash_success(ui_text::t(&self.i18n, "flash-pending-cancelled"));
     }
 }
 use crate::{

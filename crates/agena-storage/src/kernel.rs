@@ -603,6 +603,20 @@ impl SessionCommands {
                 .await?,
         )
     }
+    /// Cancel only while input is still queued. The writer serializes this
+    /// decision against claim, so editing a queued message cannot stop a run.
+    pub async fn cancel_queued(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(request, Command::CancelQueued { session, execution })
+                .await?,
+        )
+    }
     pub async fn retry(
         &self,
         request: RequestId,

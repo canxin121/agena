@@ -697,10 +697,10 @@ impl App {
         self.sync_composer_suggestions();
     }
 
-    /// Merge an in-flight interrupt-and-send document back into the editor.
+    /// Restore a document removed from the server queue into the editor.
     /// The editor is captured without clearing it, so attachments that are
     /// still being prepared keep their placeholders.
-    pub(crate) fn merge_in_flight_send_into_editor(&mut self, combined: ComposerDraft) {
+    pub(crate) fn restore_queued_message_into_editor(&mut self, combined: ComposerDraft) {
         // Capture the editor WITHOUT the pending-media substitution used for
         // submission: a still-preparing placeholder must keep its anchor so the
         // upload can replace it instead of being dropped without a trace.

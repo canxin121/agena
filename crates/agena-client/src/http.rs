@@ -2275,6 +2275,18 @@ impl AgenaClient {
         }
     }
 
+    pub async fn take_queued_message(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::ComposerDocument, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/queue/{execution_id}/take"),
+            serde_json::json!({"request_id": agena_domain::CommandId::new()}),
+        )
+        .await
+    }
+
     pub async fn cancel_run(
         &self,
         session_id: i64,

@@ -318,8 +318,20 @@ impl ApplicationService {
             pending_interactive_requests,
         );
 
+        let mut queued_messages = snapshot
+            .active_executions
+            .executions
+            .iter()
+            .filter(|execution| execution.phase == agena_storage::kernel::ExecutionPhase::Queued)
+            .map(|execution| agena_api::resource::QueuedMessageResource {
+                execution_id: execution.id.0,
+                message_id: execution.message_id.get(),
+            })
+            .collect::<Vec<_>>();
+        queued_messages.sort_by_key(|message| message.message_id);
         Ok(SessionExecutionResource {
             receipt: None,
+            queued_messages,
             session: session_resource,
             parts: transcript,
             part_page,

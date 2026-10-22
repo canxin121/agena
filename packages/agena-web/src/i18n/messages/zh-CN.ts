@@ -1606,6 +1606,7 @@ export default {
         send: '发送',
         sendMessage: '发送消息',
         stop: '停止',
+        queuedMessages: '{count} 条排队中',
         stopRun: '停止运行',
       },
     },

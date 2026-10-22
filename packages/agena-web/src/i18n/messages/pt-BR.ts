@@ -829,6 +829,7 @@ export default {
         "send": "Enviar",
         "sendMessage": "Enviar mensagem",
         "stop": "Parar",
+        "queuedMessages": "{count} na fila",
         "stopRun": "Parar execução"
       }
     },

@@ -118,6 +118,8 @@ session / execution / background-activity / notification 的状态类型只有�
 事件分页只共享已校验的不可变物理块与仍有效的授权 context；缓存和块定位索引共同受 16 MiB / 2,048 entries 的上限及写入 COMMIT fence 管理，不保存整个 source 的目录。open head 每次实时捕获，小页只截取所需尾部；缓存不会把旧 accepted/committed head 当作当前事实。跨提交、撤权或裁剪的竞态会重新验证或明确重试，过期 epoch 和已删除前缀继续返回 reset/gap。frozen provider 输入仍按原 committed boundary 读取，后续追加不会进入该输入。
 
 - 用户发送将真实 user EntryId、输入文档、附件 blob 引用和 queued attempt 一起提交后确认。
+- AI 工作中继续发送也使用同一提交接口；后端按已提交的用户 EntryId FIFO 调度，等待当前整次 execution（含工具、交互等待和后续模型轮次）结束。后续待发消息不会提前进入当前 execution 的 prompt，模型历史按消息归属恢复为 user / assistant / user 顺序。Web 与 TUI 只提交和展示服务端 `queued_messages`，不保留自行触发发送的客户端队列。
+- 未认领的 queued 输入在正常关闭及服务重启后保留并由后端恢复；新提交入口也先恢复同会话已持久化的队列，避免抢在后台扫描之前越序。`POST /api/v1/sessions/{session_id}/queue/{execution_id}/take` 以 `request_id` 幂等地移除仍为 queued 的消息并返回原文档；已被认领或已移除时返回 HTTP 409，不能取消正在运行的执行。详细语义与调研见 [消息队列](message-queue.md)。
 - 助手消息使用该 generation 第一条真实 assistant entry 作为稳定边界；后续正文、推理和工具属于同一 response。重试创建新 generation，历史响应身份不变。
 - 压缩使用独立 provider round 与不可变摘要源；只有成功的 `commit_compaction` 才同时提交 checkpoint、覆盖边界与 prompt-window generation。失败、取消及 unchanged 保留原窗口。
 - 普通 provider 请求在 round 开始时冻结 entry revision、tool/interaction 决定、capture head 与 opaque replay。后续正文或后台通知不会改写已经构造的请求。

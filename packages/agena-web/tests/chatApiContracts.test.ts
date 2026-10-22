@@ -9,6 +9,62 @@ import {
   interactivePresentationPath,
   normalizeAgenaPart,
 } from '../src/stores/chat/api'
+import { projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
+
+test('a failed attempt error does not become the latest part of a running retry', () => {
+  const oldThought = {
+    part_id: 1468,
+    run_id: 1468,
+    message_boundary: true,
+    kind: 'think',
+    role: 'assistant',
+    state: 'completed',
+    run_state: 'failed',
+    created_at_ms: 100,
+    started_at_ms: 100,
+    content: { summary: ['old reasoning'] },
+  }
+  const error = {
+    part_id: 2000000690,
+    run_id: 1468,
+    kind: 'error',
+    role: 'assistant',
+    state: 'failed',
+    run_state: 'failed',
+    created_at_ms: 200,
+    started_at_ms: 150,
+    content: { problem: { id: 'historical-failure', user: { fallback: 'operation timed out' } } },
+  }
+  const retryThought = {
+    part_id: 1604,
+    run_id: 1604,
+    message_boundary: true,
+    kind: 'think',
+    role: 'assistant',
+    state: 'running',
+    run_state: 'running',
+    created_at_ms: 200,
+    started_at_ms: 100,
+    content: { summary: ['new reasoning'] },
+  }
+  // Failure projections can arrive after the live tail or before the run marker.
+  for (const snapshot of [
+    [oldThought, retryThought, error],
+    [error, oldThought, retryThought],
+  ]) {
+    const entries = entriesFromParts('20', snapshot)
+    const blocks = projectTranscriptBlocks(entries)
+    assert.equal(blocks.length, 1)
+    assert.equal(blocks[0]?.message.info.runState, 'running')
+    assert.deepEqual(
+      blocks[0]?.displayParts.map((part) => part.id),
+      ['1468', '2000000690', '1604'],
+    )
+    assert.equal(blocks[0]?.displayParts[1]?.status, 'failed')
+    assert.equal(blocks[0]?.displayParts[2]?.source.createdAt, 200)
+    assert.equal(blocks[0]?.displayParts[2]?.status, 'running')
+  }
+})
 
 test('session create request includes the backend-required workspace and title', () => {
   assert.deepEqual(buildCreateSessionRequest({ workspaceId: 42, title: ' New session ', parentId: 7 }), {

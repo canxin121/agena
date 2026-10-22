@@ -356,13 +356,15 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
         >{{ role }}</span
       >
       <span
-        v-if="runStatus.label && runStatus.label !== 'completed'"
-        class="font-mono"
+        v-if="runStatus.label && runStatus.tone !== 'success'"
+        class="inline-flex h-3 w-3 shrink-0 items-center justify-center font-mono"
         :class="{
           'text-primary': runStatus.tone === 'pending',
           'text-amber-600 dark:text-amber-400': runStatus.tone === 'warning',
           'text-rose-600 dark:text-rose-400': runStatus.tone === 'danger',
+          'animate-spin': runStatus.spinning,
         }"
+        :title="runStatus.label"
         >{{ runStatus.icon }}</span
       >
       <span v-if="showTimestamps">{{ formatTime(message.info.time?.created) }}</span>

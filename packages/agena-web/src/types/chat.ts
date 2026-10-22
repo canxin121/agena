@@ -229,6 +229,7 @@ export type MessageInfo = {
 export type MessagePart = {
   revision?: number
   updatedAt?: number
+  createdAt?: number
   id: string
   sessionID: string
   messageID: string

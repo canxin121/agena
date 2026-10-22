@@ -885,7 +885,7 @@ pub(super) async fn rounds(
         if !values.is_empty() && bytes + cost > 4 * 1024 * 1024 {
             break;
         }
-        let row=sqlx::query("SELECT execution_id,phase,provider_state_json,created_at_ms FROM agena_rounds WHERE id=?").bind(id.get()).fetch_one(&mut *tx).await.map_err(sql_error)?;
+        let row=sqlx::query("SELECT execution_id,phase,provider_state_json,created_at_ms,finished_at_ms FROM agena_rounds WHERE id=?").bind(id.get()).fetch_one(&mut *tx).await.map_err(sql_error)?;
         let state = row
             .try_get::<Option<&str>, _>("provider_state_json")
             .map_err(storage)?;
@@ -906,6 +906,7 @@ pub(super) async fn rounds(
                 .parse()
                 .map_err(storage)?,
             created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
+            finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
             id,
             phase: decode(&encode(&row.try_get::<&str, _>("phase").map_err(storage)?)?)?,
             inputs: input

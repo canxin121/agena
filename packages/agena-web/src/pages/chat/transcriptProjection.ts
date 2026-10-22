@@ -106,6 +106,20 @@ export function compareTranscriptIds(left: string, right: string): number {
   return left.localeCompare(right)
 }
 
+function compareTranscriptParts(left: MessagePartLike, right: MessagePartLike): number {
+  const leftCreated = left.createdAt ?? left.time?.start
+  const rightCreated = right.createdAt ?? right.time?.start
+  if (typeof leftCreated === 'number' && typeof rightCreated === 'number' && leftCreated !== rightCreated) {
+    return leftCreated - rightCreated
+  }
+  // A projected failure has a synthetic id outside the entry-id sequence.
+  // At a timestamp tie, keep the earlier attempt's error before its successor.
+  if (typeof left.runId === 'number' && typeof right.runId === 'number' && left.runId !== right.runId) {
+    return left.runId - right.runId
+  }
+  return compareTranscriptIds(String(left.id || ''), String(right.id || ''))
+}
+
 export function durablePartKind(part: MessagePartLike): string {
   return text(part.agenaKind).toLowerCase() || 'unknown'
 }
@@ -538,7 +552,9 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
     folded.push({ message, runIds: id ? [id] : [] })
   }
   for (const entry of folded) {
-    entry.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
+    // Storage indexes use ids for lookup; visual order follows committed time.
+    // Otherwise a historical synthetic error sorts after every retry's content.
+    entry.message.parts.sort(compareTranscriptParts)
   }
   return folded
 }

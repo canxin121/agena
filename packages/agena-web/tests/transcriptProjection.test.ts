@@ -297,6 +297,53 @@ describe('TUI-parity transcript projection', () => {
     expect(blocks[0]?.displayParts.some((part) => part.kind === 'lifecycle')).toBe(false)
   })
 
+  test('historical synthetic errors stay before a retry as its parts stream and complete', () => {
+    const thought = { ...part('1468', 'think', { summary: ['previous attempt'] }), createdAt: 100, runId: 1468 }
+    const error = {
+      ...part('2000000690', 'error', { problem: { user: { fallback: 'operation timed out' } } }, 'failed'),
+      createdAt: 200,
+      runId: 1468,
+    }
+    // Requests may finish and their successors start within the same millisecond.
+    const retryThought = { ...part('1604', 'think', { summary: ['continuing'] }), createdAt: 200, runId: 1604 }
+    const operation = { ...part('1605', 'tool_call', { name: 'fs.read' }), createdAt: 300, runId: 1604 }
+    const answer = { ...part('1606', 'text', { text: 'Done' }), createdAt: 400, runId: 1604 }
+    for (const state of ['running', 'completed']) {
+      const current = message(
+        '1604',
+        'assistant',
+        state === 'running' ? [retryThought, operation] : [retryThought, operation, answer],
+        state,
+      )
+      const messages = [message('1468', 'assistant', [thought, error], 'failed'), current]
+      // Project repeatedly, as happens during live updates and page reconciliation.
+      for (let pass = 0; pass < 2; pass++) {
+        const blocks = projectTranscriptBlocks(messages)
+        expect(blocks).toHaveLength(1)
+        expect(blocks[0]?.message.info.runState).toBe(state)
+        expect(blocks[0]?.displayParts.map((part) => part.id)).toEqual([
+          '1468',
+          '2000000690',
+          '1604',
+          '1605',
+          ...(state === 'completed' ? ['1606'] : []),
+        ])
+        expect(blocks[0]?.displayParts.find((part) => part.id === error.id)?.source).toBe(error)
+      }
+    }
+  })
+
+  test('late parts keep their committed order even when they belong to an earlier run', () => {
+    const first = { ...part('40', 'think', { summary: ['first'] }), createdAt: 100, runId: 40 }
+    const late = { ...part('42', 'text', { text: 'late observation' }), createdAt: 300, runId: 40 }
+    const next = { ...part('41', 'think', { summary: ['next'] }), createdAt: 200, runId: 41 }
+    const blocks = projectTranscriptBlocks([
+      message('40', 'assistant', [late, first]),
+      message('41', 'assistant', [next]),
+    ])
+    expect(blocks[0]?.displayParts.map((part) => part.id)).toEqual(['40', '41', '42'])
+  })
+
   test('does not turn an unknown backend run state into a synthetic failure', () => {
     const blocks = projectTranscriptBlocks([message('50', 'assistant', [], 'future_state')], {
       showReasoning: true,

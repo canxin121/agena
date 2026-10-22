@@ -924,7 +924,7 @@ impl TranscriptState {
             .cloned()
             .collect::<Vec<_>>();
         preserved.extend(recent);
-        preserved.sort_by_key(|part| part.part_id);
+        preserved.sort_by_key(|part| (part.created_at_ms, part.run_id, part.part_id));
         self.merge_parts(preserved);
         if let Some(execution) = &mut self.execution {
             execution.parts = self.parts.clone();
@@ -1092,7 +1092,7 @@ impl TranscriptState {
         }
         self.parts = by_id.into_values().collect();
         self.parts
-            .sort_by_key(|part| (part.created_at_ms, part.part_id));
+            .sort_by_key(|part| (part.created_at_ms, part.run_id, part.part_id));
 
         let next_anchor = parts
             .iter()
@@ -5066,6 +5066,65 @@ mod stall_recovery_tests {
         assert!(!state.recover_stalled_requests(Duration::from_secs(3600)));
         assert!(state.refreshing);
         assert!(state.state_loading);
+    }
+
+    #[test]
+    fn retry_snapshots_keep_historical_errors_before_new_content() {
+        let mut state = state();
+        let mut old_marker = run_part(10, "assistant");
+        old_marker.run_id = Some(10);
+        old_marker.run_state = Some("failed".into());
+        let mut next_marker = run_part(20, "assistant");
+        next_marker.run_id = Some(20);
+        next_marker.run_state = Some("running".into());
+        let error = agena_api::part::PartResource {
+            part_id: 2_000_000_690,
+            run_id: Some(10),
+            kind: "error".into(),
+            role: "assistant".into(),
+            state: "failed".into(),
+            // The retry starts in the same millisecond as this failure.
+            created_at_ms: next_marker.created_at_ms,
+            content: serde_json::json!({"problem":{
+                "id":"f9ff8ed8-db62-43a4-8279-7662584a6914",
+                "code":"provider.connection_failed",
+                "category":"timeout",
+                "responsibility":"dependency",
+                "impact":"request_rejected",
+                "retry":"backoff",
+                "recovery":"retry",
+                "user":{"key":"provider.connection_failed","fallback":"operation timed out"}
+            }}),
+            ..Default::default()
+        };
+        state.merge_parts(vec![old_marker, error.clone()]);
+        for _ in 0..2 {
+            state.merge_execution_parts(vec![
+                next_marker.clone(),
+                assistant_activity(21, 20),
+                error.clone(),
+            ]);
+            assert_eq!(
+                state
+                    .parts
+                    .iter()
+                    .map(|part| part.part_id)
+                    .collect::<Vec<_>>(),
+                vec![10, 2_000_000_690, 20, 21]
+            );
+            let entries = agena_tui_transcript::parts_entries(&state.parts);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].state, agena_api::resource::RunStatus::InProgress);
+            assert!(entries[0].parts.iter().any(|part| {
+                part.id == TranscriptContentId::StoredPart(error.part_id)
+                    && matches!(
+                        part.content,
+                        agena_tui_transcript::TranscriptPartContent::Activity(
+                            agena_tui_transcript::TranscriptActivityContent::Error(_)
+                        )
+                    )
+            }));
+        }
     }
 
     #[test]

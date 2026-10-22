@@ -4,6 +4,13 @@ Execution failures are durable server-owned transcript Parts. They use the
 ordinary storage facade, Part IDs, revisions, membership, live notifications,
 transcript paging, folding, navigation, copy, and export paths.
 
+Part identity is separate from timeline position. Read-time projections of
+failed provider rounds use the round's completion time, and server snapshots,
+Web reply folding, and TUI snapshot merging order content by creation time,
+owning run, and Part ID. A synthetic error ID must not move an earlier attempt's
+failure behind the content of a later attempt. The later attempt's run marker
+continues to own the reply state.
+
 - A model failure creates one `error` Part owned by its original run. Repeated
   attempts and terminal cleanup update that Part. Its Part ID and public
   failure correlation ID stay stable.

@@ -416,6 +416,8 @@ pub struct ProviderRoundView {
     pub execution_id: ExecutionId,
     #[serde(default)]
     pub created_at_ms: i64,
+    #[serde(default)]
+    pub finished_at_ms: Option<i64>,
     pub id: RoundId,
     pub phase: ProviderRoundPhase,
     pub inputs: Vec<EntryId>,

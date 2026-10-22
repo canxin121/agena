@@ -461,6 +461,7 @@ export function normalizeAgenaPart(
     id: partIdStr,
     sessionID: sessionId,
     messageID: messageId,
+    createdAt: createdMs,
     ...(typeof part.origin_session_id === 'number' ? { originSessionId: part.origin_session_id } : {}),
     type: 'text',
     revision: typeof part.revision === 'number' ? part.revision : 0,

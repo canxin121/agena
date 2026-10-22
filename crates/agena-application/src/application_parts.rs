@@ -104,7 +104,9 @@ pub(crate) async fn append_execution_failures(
                     Ok(failure) => (
                         failure_content(&failure)?,
                         round.id.get(),
-                        round.created_at_ms,
+                        // The error follows the content produced by the failed
+                        // request, before any later attempt's response.
+                        round.finished_at_ms.unwrap_or(round.created_at_ms),
                     ),
                     Err(error) => {
                         tracing::warn!(
@@ -155,6 +157,9 @@ pub(crate) async fn append_execution_failures(
             ..PartResource::default()
         });
     }
+    // Synthetic ids are identities, not timeline positions. This projection is
+    // shared by transports, including clients which preserve server order.
+    parts.sort_by_key(|part| (part.created_at_ms, part.run_id, part.part_id));
     Ok(())
 }
 
@@ -1230,6 +1235,152 @@ mod tests {
             agena_runtime_contracts::part_content::ErrorContent::try_from(&errors[0].content)
                 .unwrap();
         assert!(content.message.contains("ended unexpectedly"));
+    }
+
+    #[tokio::test]
+    async fn projected_failure_precedes_the_running_retry_and_preserves_its_state() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .create(root.path().to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let session = kernel
+            .sessions
+            .create(RequestId::new(), workspace.id, "retry-order".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let sent = kernel
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "question".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![sent.message_id])
+            .await
+            .unwrap()
+            .value;
+        let old_text = round
+            .begin_text(RequestId::new(), true)
+            .await
+            .unwrap()
+            .value;
+        old_text.append("partial reasoning").await.unwrap();
+        old_text.finish(RequestId::new()).await.unwrap();
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("provider.connection_failed"),
+            agena_failure::FailureCategory::Timeout,
+            agena_failure::FailureResponsibility::Dependency,
+            agena_failure::RetryDirective::Backoff,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::RequestRejected,
+            agena_failure::UserPresentation::new(
+                "provider.connection_failed",
+                "operation timed out",
+            ),
+        );
+        round
+            .finish(
+                RequestId::new(),
+                Some(serde_json::json!({"failure":failure})),
+                false,
+            )
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+        kernel
+            .sessions
+            .retry(RequestId::new(), session, sent.id)
+            .await
+            .unwrap();
+        let retry = kernel
+            .executor
+            .claim(RequestId::new(), session, sent.id)
+            .await
+            .unwrap()
+            .value;
+        let next_round = retry
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let next_text = next_round
+            .begin_text(RequestId::new(), true)
+            .await
+            .unwrap()
+            .value;
+        next_text.append("new reasoning").await.unwrap();
+
+        let entries = vec![
+            (*kernel
+                .reader
+                .entry(session, old_text.entry_id())
+                .await
+                .unwrap())
+            .clone(),
+            (*kernel
+                .reader
+                .entry(session, next_text.entry_id())
+                .await
+                .unwrap())
+            .clone(),
+        ];
+        let mut parts = Vec::new();
+        for entry in &entries {
+            parts.push(
+                project_kernel_entry(&kernel.reader, session, entry)
+                    .await
+                    .unwrap(),
+            );
+        }
+        append_execution_failures(&kernel.reader, &entries, &mut parts)
+            .await
+            .unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].part_id, old_text.entry_id().get());
+        assert_eq!(parts[1].kind, "error");
+        assert_eq!(parts[1].run_id, Some(old_text.entry_id().get()));
+        assert_eq!(
+            parts[1].content["problem"]["id"],
+            serde_json::json!(failure.id)
+        );
+        let failed_round = kernel.reader.round(session, round.id()).await.unwrap();
+        assert_eq!(Some(parts[1].created_at_ms), failed_round.finished_at_ms);
+        let rounds = kernel.reader.rounds(session, None, 16).await.unwrap();
+        assert_eq!(rounds[0].finished_at_ms, failed_round.finished_at_ms);
+        assert!(rounds[1].finished_at_ms.is_none());
+        assert_eq!(parts[2].part_id, next_text.entry_id().get());
+        assert_eq!(parts[2].run_state.as_deref(), Some("running"));
+        assert_eq!(parts[2].state, "running");
+
+        let error_id = parts[1].part_id;
+        append_execution_failures(&kernel.reader, &entries, &mut parts)
+            .await
+            .unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[1].part_id, error_id);
     }
 
     #[tokio::test]

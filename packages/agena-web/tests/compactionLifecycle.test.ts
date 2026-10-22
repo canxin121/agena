@@ -92,7 +92,14 @@ test('a streamed completion retains the same part key and the preceding answer o
 test('content after automatic compaction retains its durable order and native results stay opaque', () => {
   const messages = transcript('completed', '', 'compacted')
   const answer = messages[1]!
-  const later = { ...answer.parts[0]!, id: '7', text: 'Final answer', agenaContent: { text: 'Final answer' } }
+  const later = {
+    ...answer.parts[0]!,
+    id: '7',
+    createdAt: 70,
+    time: { start: 70 },
+    text: 'Final answer',
+    agenaContent: { text: 'Final answer' },
+  }
   answer.parts.push(later)
   const block = projectTranscriptBlocks(messages)[1]!
   assert.deepEqual(

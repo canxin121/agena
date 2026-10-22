@@ -278,7 +278,7 @@ impl Application {
             }
             resource
                 .parts
-                .sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+                .sort_unstable_by_key(|part| (part.created_at_ms, part.run_id, part.part_id));
         }
         if let Ok(activities) = self.runtime_activities() {
             let filter = agena_domain::BackgroundActivityFilter {

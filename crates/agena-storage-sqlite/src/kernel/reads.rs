@@ -780,7 +780,7 @@ pub(super) async fn round(
 ) -> Result<ProviderRoundView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT r.execution_id,r.phase,r.provider_state_json,r.created_at_ms FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT r.execution_id,r.phase,r.provider_state_json,r.created_at_ms,r.finished_at_ms FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(round.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("provider round".into()))?;
     metrics::add(&diagnostics.0.detail_queries, 1);
     let inputs: Vec<i64> = sqlx::query_scalar(
@@ -800,6 +800,7 @@ pub(super) async fn round(
             .parse()
             .map_err(storage)?,
         created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
+        finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
         id: round,
         phase: decode(&encode(
             &row.try_get::<String, _>("phase").map_err(storage)?,

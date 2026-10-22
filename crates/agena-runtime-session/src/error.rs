@@ -148,6 +148,9 @@ impl AppError {
                 kind: ProviderErrorKind::Timeout | ProviderErrorKind::Connection,
                 ..
             } => "The provider could not be reached in time. Check the connection and try again.",
+            Self::Http(error) if error.is_timeout() || error.is_connect() => {
+                "The provider could not be reached in time. Check the connection and try again."
+            }
             Self::ProviderClassified {
                 kind: ProviderErrorKind::InvalidRequest,
                 ..
@@ -284,6 +287,13 @@ impl AppError {
                 kind: ProviderErrorKind::Timeout | ProviderErrorKind::Connection,
                 ..
             } => (
+                "provider.connection_failed",
+                Category::Timeout,
+                Responsibility::Dependency,
+                Retry::Backoff,
+                Recovery::Retry,
+            ),
+            Self::Http(error) if error.is_timeout() || error.is_connect() => (
                 "provider.connection_failed",
                 Category::Timeout,
                 Responsibility::Dependency,
@@ -606,6 +616,8 @@ impl AppError {
     pub fn provider_error_kind(&self) -> Option<ProviderErrorKind> {
         match self {
             Self::HttpStatus { kind, .. } | Self::ProviderClassified { kind, .. } => Some(*kind),
+            Self::Http(error) if error.is_timeout() => Some(ProviderErrorKind::Timeout),
+            Self::Http(error) if error.is_connect() => Some(ProviderErrorKind::Connection),
             _ => None,
         }
     }
@@ -702,6 +714,49 @@ mod tests {
         let message = error.public_message();
         assert!(message.contains("Compact"));
         assert!(!message.contains("raw provider message"));
+    }
+
+    #[tokio::test]
+    async fn response_body_timeout_is_a_retryable_connection_failure() {
+        use agena_failure::{FailureCategory, RecoveryDirective, RetryDirective};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            connection.read(&mut request).await.unwrap();
+            connection
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{")
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .read_timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let source = response.json::<serde_json::Value>().await.unwrap_err();
+        server.abort();
+        assert!(source.is_decode());
+        assert!(source.is_timeout());
+        let error = AppError::Http(source);
+        let failure = error.failure();
+        assert_eq!(failure.code.as_str(), "provider.connection_failed");
+        assert_eq!(failure.category, FailureCategory::Timeout);
+        assert_eq!(failure.retry, RetryDirective::Backoff);
+        assert_eq!(failure.recovery, RecoveryDirective::Retry);
+        assert!(error.retryable());
+        assert_eq!(
+            error.provider_error_kind(),
+            Some(agena_provider::ProviderErrorKind::Timeout)
+        );
     }
 
     #[test]

@@ -23,13 +23,14 @@ use agena_domain::{
     AccessKind, PathKind, PermissionDecision, StructuredObject, UserInputOption, UserInputQuestion,
 };
 use agena_plugin_host::sdk::host_api::{
-    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
-    HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
-    HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostGetSessionRequest, HostGetSessionResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest,
+    AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse, EventSubscription,
+    HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
+    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
+    HostContextStatusResponse, HostGetSessionRequest, HostGetSessionResponse,
+    HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
     HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
@@ -38,12 +39,9 @@ use agena_plugin_host::sdk::host_api::{
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostSetSessionModelRequest, HostSetSessionModelResponse, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageRecord, HostStorageSetRequest, LogLevel, MessageSubtaskRequest, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, PathPermissionQuery, PermissionQuery, ReadSubtaskOutputRequest,
-    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
-    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
-    current_host_callback_context,
+    HostStorageRecord, HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    PathPermissionQuery, PermissionQuery, ToolDescriptor, current_host_callback_context,
 };
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
@@ -624,158 +622,50 @@ impl HostClient for RuntimeHostClient {
             .map_err(plugin_error)
     }
 
-    async fn run_subtask(&self, req: RunSubtaskRequest) -> Result<RunSubtaskResponse, PluginError> {
-        let parent_session_id = match req.parent_session_id {
-            Some(parent_session_id) => parent_session_id,
-            None => self.callback_session_and_call()?.0,
-        };
-        let selection = req.selection.unwrap_or_default();
-        let launch_call_id = req.launch_call_id.or_else(|| {
-            current_host_callback_context()
-                .filter(|context| context.session_id == Some(parent_session_id))
-                .and_then(|context| context.call_id)
-        });
-        let response = self
-            .use_session_manager(|manager| async move {
-                manager
-                    .run_subtask(crate::session::SessionSubtaskRequest {
-                        parent_session_id,
-                        run_in_background: req.run_in_background,
-                        launch_call_id,
-                        description: req.description,
-                        prompt: req.prompt,
-                        commands: req.commands,
-                        task_id: req.task_id,
-                        requested_model_selection: agena_domain::ModelSelectionConfig {
-                            provider: selection.provider,
-                            adapter: selection.adapter,
-                            model: selection.model,
-                            thinking_mode: selection.thinking_mode,
-                            speed_mode: selection.speed_mode,
-                            verbosity: selection.verbosity,
-                            parallel_tool_calls: selection.parallel_tool_calls,
-                        },
-                        timeout_ms: req.timeout_ms,
-                        max_tokens: req.max_tokens,
-                        max_cost_microusd: req.max_cost_microusd,
-                    })
-                    .await
-            })
-            .await?;
-        let problem = response.failure.as_ref().map(Into::into);
-        let model_feedback = response
-            .failure
-            .as_ref()
-            .and_then(|failure| failure.model.clone());
-        Ok(RunSubtaskResponse {
-            task_id: response.task_id,
-            session_id: response.session.id,
-            parent_session_id: response.parent_session_id,
-            status: match response.status {
-                agena_domain::SubtaskStatus::Created => RunSubtaskStatus::Created,
-                agena_domain::SubtaskStatus::Running => RunSubtaskStatus::Running,
-                agena_domain::SubtaskStatus::Completed => RunSubtaskStatus::Completed,
-                agena_domain::SubtaskStatus::Failed => RunSubtaskStatus::Failed,
-                agena_domain::SubtaskStatus::Cancelled => RunSubtaskStatus::Cancelled,
-                agena_domain::SubtaskStatus::TimedOut => RunSubtaskStatus::TimedOut,
-                agena_domain::SubtaskStatus::Interrupted => RunSubtaskStatus::Interrupted,
-            },
-            resumed: response.resumed,
-            final_text: response.final_text,
-            problem,
-            model_feedback,
-            model_provider_id: response.model_provider_id,
-            model_adapter_id: response.model_adapter_id,
-            model_id: response.model_id,
-            budget_exceeded: response.budget_exceeded,
-            usage: RunSubtaskUsage {
-                input_tokens: response.usage.input_tokens,
-                output_tokens: response.usage.output_tokens,
-                reasoning_tokens: response.usage.reasoning_tokens,
-                cache_write_tokens: response.usage.cache_write_tokens,
-                cache_read_tokens: response.usage.cache_read_tokens,
-                total_cost: response.usage.effective_cost_usd(),
-            },
-        })
+    async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .spawn_agent(session, Some(call), req)
+            .await
+            .map_err(plugin_error)
     }
 
-    async fn cancel_subtask(
+    async fn message_agent(
         &self,
-        req: CancelSubtaskRequest,
-    ) -> Result<SubtaskControlResponse, PluginError> {
-        let parent_session_id = req
-            .parent_session_id
-            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
-            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
-        let task_id = req.task_id.trim().to_string();
-        let session_id = self
-            .session_manager()?
-            .cancel_subtask(parent_session_id, task_id.as_str())
+        req: AgentMessageRequest,
+    ) -> Result<AgentMessageReceipt, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .message_agent(session, Some(call), req)
             .await
-            .map_err(plugin_error)?;
-        Ok(SubtaskControlResponse {
-            task_id,
-            session_id,
-            accepted: true,
-        })
+            .map_err(plugin_error)
     }
 
-    async fn message_subtask(
-        &self,
-        req: MessageSubtaskRequest,
-    ) -> Result<SubtaskControlResponse, PluginError> {
-        let parent_session_id = req
-            .parent_session_id
-            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
-            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
-        let task_id = req.task_id.trim().to_string();
-        let session_id = self
-            .session_manager()?
-            .message_subtask(parent_session_id, task_id.as_str(), req.message)
+    async fn wait_agent(&self, req: AgentWaitRequest) -> Result<AgentWaitResponse, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .wait_agent(session, Some(call), req)
             .await
-            .map_err(plugin_error)?;
-        Ok(SubtaskControlResponse {
-            task_id,
-            session_id,
-            accepted: true,
-        })
+            .map_err(plugin_error)
     }
 
-    async fn read_subtask_output(
-        &self,
-        req: ReadSubtaskOutputRequest,
-    ) -> Result<ReadSubtaskOutputResponse, PluginError> {
-        let parent_session_id = req
-            .parent_session_id
-            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
-            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
-        let task_id = req.task_id.trim().to_string();
-        let output = self
-            .session_manager()?
-            .read_subtask_output(
-                parent_session_id,
-                task_id.as_str(),
-                req.after_cursor,
-                req.limit,
-            )
+    async fn followup_agent(&self, req: AgentMessageRequest) -> Result<AgentHandle, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .followup_agent(session, Some(call), req)
             .await
-            .map_err(plugin_error)?;
-        Ok(ReadSubtaskOutputResponse {
-            task_id,
-            session_id: output.session_id,
-            chunks: output
-                .chunks
-                .into_iter()
-                .map(|chunk| SubtaskOutputChunk {
-                    cursor: chunk.cursor,
-                    role: chunk.role.to_string(),
-                    text: chunk.text,
-                    created_at_ms: chunk.created_at_ms,
-                })
-                .collect(),
-            next_cursor: output.next_cursor,
-            has_more: output.has_more,
-        })
+            .map_err(plugin_error)
+    }
+
+    async fn cancel_agent(
+        &self,
+        req: AgentTargetRequest,
+    ) -> Result<AgentMessageReceipt, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .cancel_agent(session, Some(call), req)
+            .await
+            .map_err(plugin_error)
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {

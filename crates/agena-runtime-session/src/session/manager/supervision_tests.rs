@@ -2,7 +2,7 @@
 //! cancellation fences, independent child settlement and durable deliveries.
 use super::*;
 use crate::provider::{ModelRuntime, ProviderError};
-use agena_domain::{ModelId, ProviderId, SubtaskStatus};
+use agena_domain::{AgentStatus, ModelId, ProviderId};
 use agena_provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     PromptCacheShape, ProviderCompactionOutput,
@@ -913,7 +913,7 @@ async fn shutdown_with_gated_media_and_persistent_commit_failure_is_bounded_and_
         MAX_ACTIVE_EXECUTIONS
     );
     assert_eq!(
-        fixture.manager.task_settlements.available_permits(),
+        fixture.manager.agent_settlements.available_permits(),
         MAX_ACTIVE_EXECUTIONS
     );
     assert!(fixture.manager.active.lock().unwrap().is_empty());
@@ -1413,102 +1413,46 @@ async fn idle_background_delivery_wakes_once_and_keeps_its_originating_user_mess
     fixture.close().await;
 }
 
-fn task_request(parent: i64) -> SessionSubtaskRequest {
-    SessionSubtaskRequest {
-        parent_session_id: parent,
-        run_in_background: false,
-        launch_call_id: None,
-        description: "independent task".into(),
+mod agent_tests;
+use agena_plugin_host::sdk::host_api::{
+    AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest, AgentWaitRequest, AgentWakeReason,
+};
+fn agent_request() -> AgentSpawnRequest {
+    AgentSpawnRequest {
+        name: "worker".into(),
         prompt: "finish the delegated work".into(),
-        commands: None,
-        task_id: Some("task-one".into()),
-        requested_model_selection: Default::default(),
-        timeout_ms: Some(5_000),
+        commands: Vec::new(),
+        selection: None,
+        timeout_ms: Some(5000),
         max_tokens: None,
         max_cost_microusd: None,
     }
 }
-#[tokio::test]
-async fn child_settlement_survives_dropped_foreground_waiter_and_task_resume_uses_a_new_start() {
-    let fixture = Fixture::new(3).await;
-    let parent = fixture.submit("delegate this task").await;
-    fixture.calls(1).await;
-    fixture.finish(0, "ready");
-    fixture.idle(fixture.session.id).await;
-    let origin = fixture
-        .manager
-        .kernel()
-        .reader
-        .execution(
-            session_id(fixture.session.id).unwrap(),
-            parent.receipt.unwrap().execution_id,
-        )
-        .await
-        .unwrap()
-        .message_id;
-    let manager = fixture.manager.clone();
-    let request = task_request(fixture.session.id);
-    let waiter = tokio::spawn(async move { manager.run_subtask(request).await });
-    fixture.calls(2).await;
-    waiter.abort();
-    fixture.finish(1, "child result");
-    let child = tokio::time::timeout(Duration::from_secs(5), async {
+async fn settled_agent(fixture: &Fixture, id: i64) -> SessionAgentConfiguration {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let child = fixture
+            let mut watch = fixture
                 .manager
-                .task_session(fixture.session.id, "task-one")
+                .kernel()
+                .reader
+                .watch(session_id(id).unwrap(), None)
+                .unwrap();
+            let config = fixture
+                .manager
+                .kernel()
+                .reader
+                .configuration(session_id(id).unwrap())
                 .await
                 .unwrap();
-            if child.subtask_status == Some(SubtaskStatus::Completed) {
-                break child;
+            let agent = config.agent.clone().unwrap();
+            if agent.status.is_terminal() {
+                return agent;
             }
-            tokio::task::yield_now().await;
+            let _ = watch.recv().await;
         }
     })
     .await
-    .unwrap();
-    fixture.idle(child.id).await;
-    let manager = fixture.manager.clone();
-    let request = task_request(fixture.session.id);
-    let resumed = tokio::spawn(async move { manager.run_subtask(request).await });
-    fixture.calls(3).await;
-    fixture.finish(2, "resumed result");
-    let resumed = resumed.await.unwrap().unwrap();
-    assert!(resumed.resumed);
-    assert_eq!(resumed.status, SubtaskStatus::Completed);
-    assert_eq!(resumed.final_text.as_deref(), Some("resumed result"));
-    assert!(resumed.session.subtask_started_at_ms > child.subtask_started_at_ms);
-    let pending = fixture
-        .manager
-        .kernel()
-        .reader
-        .pending_deliveries(session_id(fixture.session.id).unwrap(), None, 128)
-        .await
-        .unwrap();
-    assert_eq!(pending.len(), 2);
-    assert!(
-        pending
-            .iter()
-            .all(|delivery| delivery.payload["message_id"] == origin.get())
-    );
-    let output = fixture
-        .manager
-        .read_subtask_output(fixture.session.id, "task-one", 0, 128)
-        .await
-        .unwrap();
-    assert!(
-        output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.text == "child result")
-    );
-    assert!(
-        output
-            .chunks
-            .iter()
-            .any(|chunk| chunk.text == "resumed result")
-    );
-    fixture.close().await;
+    .unwrap()
 }
 
 #[tokio::test]
@@ -1998,110 +1942,7 @@ async fn boundary_consumes_only_guidance_owned_by_its_execution() {
 }
 
 #[tokio::test]
-async fn task_guidance_continues_the_supervised_execution_and_terminal_tasks_require_followup() {
-    let fixture = Fixture::new(3).await;
-    fixture.submit("delegate work").await;
-    fixture.calls(1).await;
-    fixture.finish(0, "ready");
-    fixture.idle(fixture.session.id).await;
-    let manager = fixture.manager.clone();
-    let request = task_request(fixture.session.id);
-    let task = tokio::spawn(async move { manager.run_subtask(request).await });
-    fixture.calls(2).await;
-    let child = fixture
-        .manager
-        .task_session(fixture.session.id, "task-one")
-        .await
-        .unwrap();
-    let session = session_id(child.id).unwrap();
-    let execution = fixture
-        .manager
-        .kernel()
-        .reader
-        .active_executions(session, None, 1)
-        .await
-        .unwrap()
-        .executions[0]
-        .id;
-    fixture
-        .manager
-        .message_subtask(
-            fixture.session.id,
-            "task-one",
-            "Keep the important instruction.".into(),
-        )
-        .await
-        .unwrap();
-    let pending = fixture
-        .manager
-        .kernel()
-        .reader
-        .pending_deliveries(session, None, 64)
-        .await
-        .unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].target_execution, Some(execution));
-    drop(pending);
-    fixture.finish(1, "initial answer");
-    fixture.calls(3).await;
-    assert_eq!(
-        fixture
-            .manager
-            .task_session(fixture.session.id, "task-one")
-            .await
-            .unwrap()
-            .subtask_status,
-        Some(SubtaskStatus::Running)
-    );
-    assert!(
-        serde_json::to_string(&fixture.provider.requests.lock().unwrap()[2].turns)
-            .unwrap()
-            .contains("Keep the important instruction.")
-    );
-    assert!(
-        fixture
-            .manager
-            .kernel()
-            .reader
-            .pending_deliveries(session, None, 64)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    fixture.finish(2, "guided answer");
-    let response = task.await.unwrap().unwrap();
-    assert_eq!(response.status, SubtaskStatus::Completed);
-    assert_eq!(response.final_text.as_deref(), Some("guided answer"));
-    let rounds = fixture
-        .manager
-        .kernel()
-        .reader
-        .rounds(session, None, 64)
-        .await
-        .unwrap();
-    assert_eq!(rounds.len(), 2);
-    assert!(rounds.iter().all(|round| round.execution_id == execution));
-    drop(rounds);
-    let output = fixture
-        .manager
-        .read_subtask_output(fixture.session.id, "task-one", 0, 128)
-        .await
-        .unwrap();
-    for text in ["initial answer", "guided answer"] {
-        assert!(output.chunks.iter().any(|chunk| chunk.text == text));
-    }
-    assert!(matches!(
-        fixture
-            .manager
-            .message_subtask(fixture.session.id, "task-one", "too late".into())
-            .await,
-        Err(AppError::PersistenceConflict(_))
-    ));
-    fixture.close().await;
-}
-
-#[tokio::test]
-async fn interrupted_task_recovery_repairs_terminal_projection_and_parent_delivery_once() {
+async fn interrupted_agent_recovery_delivers_once_without_reclassifying_current_launches() {
     let fixture = Fixture::new(0).await;
     let parent = session_id(fixture.session.id).unwrap();
     let child = fixture
@@ -2111,15 +1952,16 @@ async fn interrupted_task_recovery_repairs_terminal_projection_and_parent_delive
         .create_configured(
             RequestId::new(),
             fixture.session.workspace_id,
-            "crashed task".into(),
+            "recovered agent".into(),
             SessionConfiguration {
                 parent_session_id: Some(parent),
                 relation_kind: agena_domain::SessionRelationKind::Subagent,
-                task: Some(SessionTaskConfiguration {
-                    id: "task-recovered".into(),
-                    status: SubtaskStatus::Running,
+                agent: Some(SessionAgentConfiguration {
+                    name: "recovered".into(),
+                    limits: Default::default(),
+                    status: AgentStatus::Interrupted,
                     started_at_ms: Some(1),
-                    finished_at_ms: None,
+                    finished_at_ms: Some(2),
                     failure: None,
                 }),
                 ..Default::default()
@@ -2130,7 +1972,11 @@ async fn interrupted_task_recovery_repairs_terminal_projection_and_parent_delive
         .value
         .id;
     assert_eq!(
-        fixture.manager.reconcile_background_tasks(1).await.unwrap(),
+        fixture
+            .manager
+            .reconcile_background_agents(1)
+            .await
+            .unwrap(),
         1
     );
     assert_eq!(
@@ -2141,15 +1987,19 @@ async fn interrupted_task_recovery_repairs_terminal_projection_and_parent_delive
             .configuration(child)
             .await
             .unwrap()
-            .task
+            .agent
             .as_ref()
             .unwrap()
             .status,
-        SubtaskStatus::Interrupted
+        AgentStatus::Interrupted
     );
     assert_eq!(
-        fixture.manager.reconcile_background_tasks(1).await.unwrap(),
-        0
+        fixture
+            .manager
+            .reconcile_background_agents(1)
+            .await
+            .unwrap(),
+        1
     );
     let pending = fixture
         .manager
@@ -2159,8 +2009,53 @@ async fn interrupted_task_recovery_repairs_terminal_projection_and_parent_delive
         .await
         .unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].payload["child_session_id"], child.get());
+    assert_eq!(pending[0].payload["agent_id"], child.get());
     drop(pending);
+    // A running configuration without a claimed execution is a legitimate
+    // launch/settlement boundary, not evidence of a process crash.
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .configure(
+            RequestId::new(),
+            child,
+            SessionConfigurationChange {
+                agent: Some(Some(SessionAgentConfiguration {
+                    name: "recovered".into(),
+                    limits: Default::default(),
+                    status: AgentStatus::Running,
+                    started_at_ms: Some(3),
+                    finished_at_ms: None,
+                    failure: None,
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .reconcile_background_agents(1)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .configuration(child)
+            .await
+            .unwrap()
+            .agent
+            .as_ref()
+            .unwrap()
+            .status,
+        AgentStatus::Running
+    );
     assert!(fixture.provider.requests.lock().unwrap().is_empty());
     fixture.close().await;
 }
@@ -2266,16 +2161,19 @@ async fn scheduled_delivery_keeps_one_business_event_and_rejects_changed_replays
 }
 
 #[tokio::test]
-async fn delegated_token_budget_bounds_provider_output_and_settles_the_task_with_usage() {
+async fn delegated_token_budget_bounds_provider_output_and_settles_the_agent_with_usage() {
     let fixture = Fixture::new(2).await;
     fixture.submit("delegate bounded work").await;
     fixture.calls(1).await;
     fixture.finish(0, "ready");
     fixture.idle(fixture.session.id).await;
     let manager = fixture.manager.clone();
-    let mut request = task_request(fixture.session.id);
+    let mut request = agent_request();
     request.max_tokens = Some(10);
-    let task = tokio::spawn(async move { manager.run_subtask(request).await });
+    let agent = manager
+        .spawn_agent(fixture.session.id, None, request)
+        .await
+        .unwrap();
     fixture.calls(2).await;
     assert_eq!(
         fixture.provider.requests.lock().unwrap()[1].max_output_tokens,
@@ -2302,11 +2200,18 @@ async fn delegated_token_budget_bounds_provider_output_and_settles_the_task_with
             end_turn: Some(false),
         }))
         .unwrap();
-    let task = task.await.unwrap().unwrap();
-    assert!(task.budget_exceeded);
-    assert_eq!(task.status, SubtaskStatus::Failed);
-    assert_eq!(task.usage.total_tokens(), 20);
-    assert!(task.failure.is_some());
+    let status = settled_agent(&fixture, agent.agent_id).await;
+    assert_eq!(status.status, AgentStatus::Failed);
+    assert_eq!(
+        fixture
+            .manager
+            .aggregate_usage(agent.agent_id)
+            .await
+            .unwrap()
+            .total_tokens(),
+        20
+    );
+    assert!(status.failure.is_some());
     assert_eq!(fixture.provider.requests.lock().unwrap().len(), 2);
     fixture.close().await;
 }

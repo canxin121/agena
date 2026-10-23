@@ -2056,7 +2056,7 @@ activity-title-pasted-text = 貼上的文字
 # Newly localized TUI surfaces: activities, usage, composer, plugin workbench.
 activities-title = 後台活動
 activities-empty = 沒有後台活動。
-activities-empty-hint = 執行 shell.spawn、shell.open 或 tasks.run 可建立一個。
+activities-empty-hint = 執行 shell.spawn、shell.open 或 agent.spawn 可建立一個。
 activities-section-active = 進行中
 activities-section-finished = 已完成
 activities-footer-close = Esc 關閉
@@ -2192,7 +2192,7 @@ activities-control-delete = 刪除
 activities-control-dismiss = 移除
 activities-kind-shell = 終端機命令
 activities-kind-monitor = 監控
-activities-kind-task = 任務
+activities-kind-agent = Agent
 activities-kind-cron = 排程任務
 activities-kind-runtime = 執行階段
 activities-kind-browser = 瀏覽器
@@ -2806,7 +2806,6 @@ timeline-type-execution-completed = 執行完成
 timeline-type-execution-cancelled = 執行已取消
 timeline-type-execution-failed = 執行失敗
 timeline-type-compaction-completed = 上下文压缩完成
-timeline-type-subtask-status-changed = 子任務狀態已更新
 timeline-type-stream-error = 流錯誤
 timeline-type-message-part-checkpointed = 訊息分段检查点
 timeline-type-message-part-delta = 訊息分段增量
@@ -2916,7 +2915,7 @@ value-runtime-config-file = 執行時設定 (agena.json)
 status-part-workspace = 工作区 {$value}
 status-part-state = 狀態={$value}
 status-part-agent = agent={$value}
-status-part-task = task={$value}
+status-part-agent-name = agent_name={$value}
 status-part-model = model={$value}
 status-part-thinking = think={$value}
 status-part-speed = speed={$value}
@@ -2950,7 +2949,6 @@ operation-diff-summary-detailed-one = diff：1 个檔案，+{$added} / -{$delete
 operation-diff-summary-detailed-one-rename = diff：1 个檔案，+{$added} / -{$deleted}，重新命名 {$renamed} 个
 operation-diff-summary-detailed = diff：{$files} 个檔案，+{$added} / -{$deleted}
 operation-diff-summary-detailed-renames = diff：{$files} 个檔案，+{$added} / -{$deleted}，重新命名 {$renamed} 个
-operation-nested-task-summary = {$title}（{$status}）
 snapshot-action-keep = 已退出
 snapshot-action-remove = 已移除
 snapshot-action-exit = 已退出

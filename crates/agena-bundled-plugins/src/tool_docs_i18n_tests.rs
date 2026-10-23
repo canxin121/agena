@@ -24,7 +24,7 @@ fn bundled_plugin_and_tool_documentation_are_localized() {
         crate::tool::new_interaction_plugin().manifest(),
         crate::tool::new_terminal_plugin().manifest(),
         crate::tool::new_plan_plugin().manifest(),
-        crate::tool::new_tasks_plugin().manifest(),
+        crate::tool::new_agent_plugin().manifest(),
         crate::tool::new_report_plugin().manifest(),
         crate::tool::new_notebook_plugin().manifest(),
         crate::tool::new_web_plugin().manifest(),

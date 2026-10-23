@@ -28,7 +28,6 @@ pub mod router;
 pub(crate) mod shell;
 pub(crate) mod shell_tool;
 pub(crate) mod shell_tools;
-pub(crate) mod task;
 mod terminal_tool;
 pub mod tool_registry;
 pub(crate) mod tool_search;

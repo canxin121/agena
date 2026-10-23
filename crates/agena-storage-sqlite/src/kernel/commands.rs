@@ -20,6 +20,7 @@ pub(super) async fn apply(
         | Command::PresentInteraction { .. }
         | Command::CreateConfigured { .. }
         | Command::Configure { .. }
+        | Command::FinishAgent { .. }
         | Command::Fork { .. }
         | Command::Withdraw { .. }
         | Command::DeleteSession { .. }
@@ -1093,8 +1094,14 @@ pub(super) async fn recover(database: &sea_orm::DatabaseConnection) -> Result<()
     let now = now_ms();
     for sql in [
         "DELETE FROM agena_history_snapshots",
-        "UPDATE agena_sessions SET control_version=control_version+1 WHERE id IN (SELECT session_id FROM agena_attempts WHERE phase='running' UNION SELECT session_id FROM agena_background_activities WHERE phase='running' UNION SELECT session_id FROM agena_content_streams WHERE capture_state='open' UNION SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND json_extract(configuration_json,'$.task.status') IN ('created','running'))",
-        "UPDATE agena_sessions SET configuration_json=json_set(configuration_json,'$.task.status','interrupted','$.task.finished_at_ms',?),metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE deleted_at_ms IS NULL AND json_extract(configuration_json,'$.task.status') IN ('created','running')",
+        "UPDATE agena_sessions SET control_version=control_version+1 WHERE id IN (SELECT session_id FROM agena_attempts WHERE phase='running' UNION SELECT session_id FROM agena_background_activities WHERE phase='running' UNION SELECT session_id FROM agena_content_streams WHERE capture_state='open' UNION SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND json_extract(configuration_json,'$.agent.status') IN ('created','running'))",
+        "UPDATE agena_sessions SET configuration_json=json_set(configuration_json,'$.agent.status','interrupted','$.agent.finished_at_ms',?),metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE deleted_at_ms IS NULL AND json_extract(configuration_json,'$.agent.status') IN ('created','running')",
+        // Agent launches require a supervised handoff and their retained
+        // budgets. Even an unclaimed launch waits for explicit followup;
+        // generic queued-input recovery must never start it unsupervised.
+        "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT x.message_id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE a.phase='queued' AND a.session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted'))",
+        "UPDATE agena_session_statistics SET queued_executions=0,last_message_at_ms=MAX(?,COALESCE(last_message_at_ms,?)) WHERE queued_executions>0 AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted')",
+        "UPDATE agena_attempts SET phase='interrupted',finished_at_ms=? WHERE phase='queued' AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted')",
         "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT x.message_id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE a.phase='running') OR id IN (SELECT response_entry_id FROM agena_attempts WHERE phase='running')",
         "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT entry_id FROM agena_background_activities WHERE phase='running')",
         "UPDATE agena_background_activities SET phase='interrupted',outcome_json='{\"outcome\":\"interrupted\",\"diagnostic\":\"service restarted; external activity outcome is unknown\"}',finished_at_ms=MAX(?,created_at_ms) WHERE phase='running'",

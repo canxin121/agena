@@ -9,7 +9,7 @@ use agena_domain::{
     OperationError, OperationUserInput, ProcessShell, RawOutput, ToolInvocation, ToolResultState,
     UserInputQuestion,
 };
-use agena_tool::{ReadMode, TaskModelSelection};
+use agena_tool::ReadMode;
 
 use agena_domain::TimeRange;
 
@@ -569,60 +569,6 @@ pub struct GrepToolInput {
     /// Defaults to 500; 1–500. Context lines do not consume this limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(
-    trim("description", "prompt", "task_id"),
-    non_empty("description", "prompt"),
-    non_empty_if_present("task_id"),
-    minimum("timeout_ms", 1),
-    minimum("max_tokens", 1),
-    minimum("max_cost_microusd", 1)
-)]
-#[serde(deny_unknown_fields)]
-/// Input of the task tool.
-pub struct TaskToolInput {
-    /// Short label for the subtask session.
-    pub description: String,
-    /// Full instruction payload for the delegated subtask.
-    pub prompt: String,
-    /// Run the subtask in the background (default false). When false (default)
-    /// the subtask runs inline and this call returns its final result before
-    /// the tool call returns. When true, the tool returns immediately with a
-    /// task id and the result is delivered as a `system_notification` when the
-    /// subtask settles — do not poll tasks.get/tasks.output waiting for it.
-    #[serde(default)]
-    pub run_in_background: bool,
-    /// Optional command names, slash spellings or aliases to attach to the
-    /// delegated subtask's first user message as lazy references. The child
-    /// model receives catalog metadata and reads the instructions through the
-    /// plugin that declared the command. Use commands appropriate to the task:
-    /// for example a read-only review task can attach a review command, an
-    /// exploration task can attach an explore command. Unknown names are
-    /// rejected before the subtask starts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commands: Option<Vec<String>>,
-    /// Resume an existing subtask session instead of creating a new one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-    /// Optional model and mode overrides. Explicit values take precedence over
-    /// the parent session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<TaskModelSelection>,
-    /// Overall task timeout. A timeout cancels the child execution and returns
-    /// a structured `timed_out` task result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// Cumulative child-completion token budget. This includes prompt,
-    /// output, reasoning and cache token accounting reported by the route.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u64>,
-    /// Cumulative child-completion cost ceiling in USD micro-units (one
-    /// millionth of a USD). Integer micro-units avoid a floating-point value
-    /// becoming a durable budget boundary; for example, 250000 means $0.25.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_cost_microusd: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -1626,7 +1572,7 @@ mod operation_part_tests {
 
 #[cfg(test)]
 mod current_input_contract_tests {
-    use super::{ReadToolInput, ShellCommandInput, TaskToolInput};
+    use super::{ReadToolInput, ShellCommandInput};
     use serde_json::json;
 
     #[test]
@@ -1696,16 +1642,6 @@ mod current_input_contract_tests {
                 "removed shell input fields must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn task_input_rejects_removed_background_field() {
-        let input = json!({
-            "description": "inspect",
-            "prompt": "inspect the repository",
-            "background": true
-        });
-        assert!(serde_json::from_value::<TaskToolInput>(input).is_err());
     }
 
     #[test]

@@ -82,16 +82,7 @@ function part(id, kind, command) {
 }
 const shell = part('shell', 'log', 'bun run build')
 const pty = part('pty', 'terminal', 'interactive terminal')
-const task = part('task', 'log', 'Review project')
-task.source.agenaContent.name = 'tasks.run'
-task.source.agenaContent.input = { description: 'Review project', prompt: 'Review the project in a child session' }
-task.source.agenaContent.metadata = { child_session_id: 3, task_id: 'task-fixture' }
-// Real delegated-task output is attached to operation.resources; the task
-// tool does not synthesize the content presentation block that shell emits.
-task.source.agenaPresentation.blocks = task.source.agenaPresentation.blocks.filter(
-  (block) => !['command', 'content'].includes(block.type),
-)
-const expanded = reactive({shell:true,pty:true,task:true})
+const expanded = reactive({shell:true,pty:true})
 fixture.expanded = expanded
 fixture.emit = (id, payload, state='active') => {
   const value = resource(id, id === 'pty' ? 'terminal' : 'log')
@@ -104,7 +95,7 @@ fixture.emit = (id, payload, state='active') => {
   const page = {resource:{...value,chunks:undefined},chunks:[chunk],next_cursor:chunk.cursor,has_more:false,gap:false}
   streams.get(id)?.enqueue(encoder.encode(`event: content\ndata: ${JSON.stringify(page)}\n\n`))
   if (state !== 'active') {
-    const operation = id === 'pty' ? pty : id === 'task' ? task : shell
+    const operation = id === 'pty' ? pty : shell
     operation.status = state === 'complete' ? 'completed' : 'failed'
     operation.source.partState = operation.status
     operation.source.agenaContent.state = operation.status
@@ -127,7 +118,6 @@ createApp({setup() {
   h('h1',{class:'text-xl font-semibold'},'Part streaming'),
   h('section',{'data-fixture':'shell'},[h(OperationPart,{part:shell,expanded:expanded.shell,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.shell=!expanded.shell})]),
   h('section',{'data-fixture':'pty'},[h(OperationPart,{part:pty,expanded:expanded.pty,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.pty=!expanded.pty})]),
-  h('section',{'data-fixture':'task'},[h(OperationPart,{part:task,expanded:expanded.task,collapseSignal:0,sessionId:'1',onToggle:()=>expanded.task=!expanded.task})]),
   h('section',{'data-fixture':'markdown'},[h(Markdown,{content:text.value,stream:true})]),
   h('section',{'data-fixture':'code'},[h(CodeBlock,{code:code.value,lang:'text',compact:true})]),
 ])}}).use(createPinia()).use(i18n).mount('#app')

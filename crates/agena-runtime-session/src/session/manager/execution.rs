@@ -31,7 +31,7 @@ impl SessionManager {
         options: SessionRunOptions,
         compact: bool,
         permit: OwnedSemaphorePermit,
-        budget: Option<TaskBudget>,
+        budget: Option<AgentBudget>,
     ) -> Arc<RunControl> {
         let state = self.state.load_full();
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
@@ -48,7 +48,6 @@ impl SessionManager {
             done: Notify::new(),
             budget,
             failure: Default::default(),
-            budget_exceeded: std::sync::atomic::AtomicBool::new(false),
             settled: std::sync::atomic::AtomicBool::new(false),
         });
         active.insert(execution.id, run.clone());
@@ -350,7 +349,7 @@ impl SessionManager {
                 // the request's frozen facts and route then stay fixed.
                 self.prepare_options_with_state(control.session,&mut options,&state).await?;
                 if let Some(max)=control.budget.as_ref().and_then(|b|b.max_tokens){
-                    let remaining=max.saturating_sub(usage.total_tokens());if remaining==0{control.budget_exceeded.store(true,std::sync::atomic::Ordering::Release);return Err(AppError::SubtaskBudgetExceeded("the delegated run reached its token budget".into()));}
+                    let remaining=max.saturating_sub(usage.total_tokens());if remaining==0{return Err(AppError::AgentBudgetExceeded("the delegated run reached its token budget".into()));}
                     let output=options.max_output_tokens.unwrap_or(u32::MAX).min(remaining.min(u32::MAX as u64) as u32);options.max_output_tokens=Some(output);crate::prompt_budget::align_output_token_overrides(&mut options.request_override,output);
                 }
                 let round_id=RequestId::new();
@@ -366,7 +365,9 @@ impl SessionManager {
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{executor.available_tool_api_bindings_async().await};
-                let system=Some(self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref()));
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref());
+                system_text.push_str(&self.agent_roster(control.session).await?);
+                let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
                 let metadata=state.providers.model_metadata(&options.model).unwrap_or_default();
                 let hard_limit=crate::prompt_budget::prompt_token_budget(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens).map(u64::from);
@@ -404,8 +405,7 @@ impl SessionManager {
                 if let Some(observed)=&outcome.usage {usage.add_assign(observed);}
                 if let Some(budget)=&control.budget
                     && (budget.max_tokens.is_some_and(|max|usage.total_tokens()>=max)||budget.max_cost_microusd.is_some_and(|max|usage.effective_cost_usd()*1_000_000.0>=max as f64)){
-                        control.budget_exceeded.store(true,std::sync::atomic::Ordering::Release);
-                        return Err(AppError::SubtaskBudgetExceeded("the delegated run reached its token or cost budget".into()));
+                        return Err(AppError::AgentBudgetExceeded("the delegated run reached its token or cost budget".into()));
                 }
                 if !outcome.tools.is_empty(){
                     for tool in &outcome.tools{
@@ -530,10 +530,15 @@ impl SessionManager {
         model: ModelRef,
     ) -> Result<(), AppError> {
         let key = (control.session.get(), tool.tool.id().get());
-        self.tools
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(key, (tool.tool.clone(), control.clone()));
+        let permit_slot: ToolPermitSlot = Arc::new(tokio::sync::Mutex::new(None));
+        self.tools.lock().unwrap_or_else(|p| p.into_inner()).insert(
+            key,
+            LiveTool {
+                tool: tool.tool.clone(),
+                control: control.clone(),
+                permit: permit_slot.clone(),
+            },
+        );
         let mut applied_invocation = tool.invocation.clone();
         let effect=async {
             let prepared=executor.prepare_invocation(&tool.invocation,key.0,key.1).await?;
@@ -543,7 +548,8 @@ impl SessionManager {
             if control.cancel.is_cancelled(){return Err(ToolError::Cancelled);}
             let kind=executor.streaming_content_kind(&invocation)?;
             let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool.tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
-            let _permit=tokio::select!{_ = control.cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
+            let permit=tokio::select!{_ = control.cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
+            *permit_slot.lock().await = Some(permit);
             let mut execution=executor.execute_invocation(&invocation,crate::tool::ToolRuntimeContext{
                 session_id:Some(key.0),call_id:Some(key.1),prepared_shell_command:shell,launch_provenance:None,
                 output,tool:Some(tool.tool.clone()),
@@ -551,6 +557,7 @@ impl SessionManager {
             if let Some(title)=prepared.title_override{execution.view.set_title(title);}execution.view.metadata.extend(prepared.metadata);
             Ok(execution)
         }.await;
+        permit_slot.lock().await.take();
         // The effect is now over. Everything below only retries persistence of
         // this exact observed value, never invocation preparation or execution.
         let effect = match effect {
@@ -1225,15 +1232,10 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
-        let mut completion = completion_request(
-            options,
-            Some(self.assemble_session_system_prompt_with_executor(
-                &executor,
-                options.system.as_deref(),
-            )),
-            Vec::new(),
-            Vec::new(),
-        );
+        let mut system =
+            self.assemble_session_system_prompt_with_executor(&executor, options.system.as_deref());
+        system.push_str(&self.agent_roster(control.session).await?);
+        let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state
             .providers
             .model_metadata(&options.model)

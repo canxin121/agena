@@ -1,10 +1,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Lifecycle status of a delegated subtask.
+/// Lifecycle status of an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum SubtaskStatus {
+pub enum AgentStatus {
     #[default]
     Created,
     Running,
@@ -15,7 +15,7 @@ pub enum SubtaskStatus {
     Interrupted,
 }
 
-impl AsRef<str> for SubtaskStatus {
+impl AsRef<str> for AgentStatus {
     fn as_ref(&self) -> &str {
         match self {
             Self::Created => "created",
@@ -29,7 +29,7 @@ impl AsRef<str> for SubtaskStatus {
     }
 }
 
-impl SubtaskStatus {
+impl AgentStatus {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "created" => Some(Self::Created),
@@ -202,20 +202,17 @@ pub enum WorkflowState {
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus, WorkflowState,
+        AgentStatus, SessionLifecycleState, SessionRelationKind, SessionStateKind, WorkflowState,
     };
     use crate::ExecutionPhase;
 
     #[test]
     fn session_state_values_have_stable_wire_spellings_and_semantics() {
-        assert_eq!(SubtaskStatus::default(), SubtaskStatus::Created);
-        assert_eq!(
-            SubtaskStatus::parse("timed_out"),
-            Some(SubtaskStatus::TimedOut)
-        );
-        assert!(SubtaskStatus::Cancelled.is_terminal());
-        assert!(!SubtaskStatus::Running.is_terminal());
-        assert_eq!(SubtaskStatus::Interrupted.as_ref(), "interrupted");
+        assert_eq!(AgentStatus::default(), AgentStatus::Created);
+        assert_eq!(AgentStatus::parse("timed_out"), Some(AgentStatus::TimedOut));
+        assert!(AgentStatus::Cancelled.is_terminal());
+        assert!(!AgentStatus::Running.is_terminal());
+        assert_eq!(AgentStatus::Interrupted.as_ref(), "interrupted");
 
         assert_eq!(
             SessionRelationKind::parse("subagent"),
@@ -316,18 +313,18 @@ mod tests {
     #[test]
     fn shared_state_enums_agree_between_as_str_parse_and_serde() {
         for status in [
-            SubtaskStatus::Created,
-            SubtaskStatus::Running,
-            SubtaskStatus::Completed,
-            SubtaskStatus::Failed,
-            SubtaskStatus::Cancelled,
-            SubtaskStatus::TimedOut,
-            SubtaskStatus::Interrupted,
+            AgentStatus::Created,
+            AgentStatus::Running,
+            AgentStatus::Completed,
+            AgentStatus::Failed,
+            AgentStatus::Cancelled,
+            AgentStatus::TimedOut,
+            AgentStatus::Interrupted,
         ] {
             let wire: &str = status.as_ref();
-            assert_eq!(SubtaskStatus::parse(wire), Some(status));
+            assert_eq!(AgentStatus::parse(wire), Some(status));
             assert_eq!(
-                serde_json::to_value(status).expect("serialize subtask"),
+                serde_json::to_value(status).expect("serialize agent"),
                 serde_json::json!(wire)
             );
         }

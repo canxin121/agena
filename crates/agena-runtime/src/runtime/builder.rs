@@ -168,7 +168,7 @@ impl AgenaRuntime {
         let activity_registry =
             crate::activity::ActivityRegistry::with_signals(live_signals.clone());
         // Background-completion bridge: correlates launched-in-background
-        // operations (monitored shells, delegated tasks) with their transcript
+        // shell operations with their transcript
         // parts. The manager may not exist yet on a control-only bootstrap;
         // the bridge tolerates `None` and simply never terminalizes parts.
         let background_completion = crate::activity::BackgroundCompletionBridge::new(None);
@@ -240,7 +240,7 @@ impl AgenaRuntime {
                     monitor_service,
                 )),
                 live_signals,
-                subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
+                agent_bridge: Arc::new(std::sync::Mutex::new(None)),
                 background_completion,
                 automatic_maintenance,
             }),
@@ -287,7 +287,7 @@ impl AgenaRuntime {
         if automatic_maintenance {
             runtime.spawn_background_tasks();
         }
-        runtime.spawn_subtask_activity_bridge();
+        runtime.spawn_agent_activity_bridge();
         runtime.start_scheduler_activity_bridge();
         runtime.spawn_background_delivery_recovery();
         agena_runtime::install_plugin_host(initial_snapshot.plugin_manager());
@@ -305,11 +305,11 @@ impl AgenaRuntime {
             return;
         };
         tokio::spawn(async move {
-            if let Err(error) = manager.reconcile_background_tasks(64).await {
+            if let Err(error) = manager.reconcile_background_agents(64).await {
                 tracing::warn!(
                     target: "agena_background",
                     %error,
-                    "startup background task reconciliation failed"
+                    "startup agent reconciliation failed"
                 );
             }
             if let Err(error) = manager.recover_background_deliveries(64).await {
@@ -322,10 +322,10 @@ impl AgenaRuntime {
         });
     }
 
-    /// Follow native configuration and transcript changes with bounded replay.
-    fn spawn_subtask_activity_bridge(&self) {
+    /// Project agent configuration changes with bounded replay.
+    fn spawn_agent_activity_bridge(&self) {
         let mut slot = self
-            .subtask_bridge
+            .agent_bridge
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if slot.is_some() {
@@ -348,7 +348,7 @@ impl AgenaRuntime {
                     let page = match kernel
                         .reader
                         .query_summaries(agena_storage::kernel::SummaryQuery {
-                            tasks_only: true,
+                            agents_only: true,
                             before,
                             limit: 128,
                             ..Default::default()
@@ -357,13 +357,13 @@ impl AgenaRuntime {
                     {
                         Ok(page) => page,
                         Err(error) => {
-                            tracing::warn!(%error,"task activity refresh failed");
+                            tracing::warn!(%error,"agent activity refresh failed");
                             break;
                         }
                     };
                     for meta in &page.sessions {
                         if let Ok(config) = kernel.reader.configuration(meta.id).await {
-                            crate::activity::upsert_task_activity_from_meta(
+                            crate::activity::upsert_agent_activity_from_meta(
                                 &registry, meta, &config,
                             );
                         }
@@ -384,9 +384,8 @@ impl AgenaRuntime {
                         kernel.reader.summary(change.session).await,
                         kernel.reader.configuration(change.session).await,
                     ) {
-                        crate::activity::upsert_task_activity_from_meta(&registry, &meta, &config);
+                        crate::activity::upsert_agent_activity_from_meta(&registry, &meta, &config);
                     }
-                    registry.touch_task_logs(change.session.get());
                 }
             }
         }));
@@ -629,9 +628,9 @@ fn durable_operation_activity(
     let kind = match operation.start.kind {
         Kind::Process | Kind::Terminal => BackgroundActivityKind::Shell,
         Kind::Monitor => BackgroundActivityKind::Monitor,
-        Kind::Task => BackgroundActivityKind::Task,
+        Kind::Agent => BackgroundActivityKind::Agent,
     };
-    let id = if kind == BackgroundActivityKind::Task {
+    let id = if kind == BackgroundActivityKind::Agent {
         format!("activity_{}", operation.id)
     } else {
         external_id
@@ -850,7 +849,8 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 }
                 observed += operations.len();
                 for operation in operations.iter() {
-                    if operation.start.kind == agena_storage::kernel::BackgroundActivityKind::Task {
+                    if operation.start.kind == agena_storage::kernel::BackgroundActivityKind::Agent
+                    {
                         continue;
                     }
                     let activity = durable_operation_activity(&projected, operation.clone());
@@ -996,27 +996,11 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     })?
                     .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
             }
-            agena_domain::BackgroundActivityKind::Task => {
-                let (parent_session_id, task_id) = activity
-                    .parent_session_id
-                    .zip(activity_id.strip_prefix("task_"))
-                    .ok_or_else(|| {
-                        agena_runtime::ActivityControlError::no_log_source(activity_id)
-                    })?;
-                let mut logs = crate::activity::read_task_logs(
-                    self.current_snapshot().session_manager().as_ref(),
-                    parent_session_id,
-                    task_id,
-                    since_seq as i64,
-                )
-                .await;
-                logs.status = activity.status;
-                Ok(logs)
-            }
             // Kinds without a registered source adapter (runtime maintenance
             // tasks today, browser sessions before the web plugin registers
             // its adapter) have no incremental log stream.
-            agena_domain::BackgroundActivityKind::Cron
+            agena_domain::BackgroundActivityKind::Agent
+            | agena_domain::BackgroundActivityKind::Cron
             | agena_domain::BackgroundActivityKind::Runtime
             | agena_domain::BackgroundActivityKind::Browser => {
                 Ok(agena_domain::BackgroundActivityLogRead {
@@ -1080,10 +1064,8 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     .cancel(activity_id)
                     .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
             }
-            agena_domain::BackgroundActivityKind::Task => {
-                let Some((parent_session_id, task_id)) = activity
-                    .parent_session_id
-                    .zip(activity_id.strip_prefix("task_"))
+            agena_domain::BackgroundActivityKind::Agent => {
+                let Some((parent, child)) = activity.parent_session_id.zip(activity.session_id)
                 else {
                     return Err(agena_runtime::ActivityControlError::not_stoppable(
                         activity_id,
@@ -1095,7 +1077,13 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     ));
                 };
                 manager
-                    .cancel_subtask(parent_session_id, task_id)
+                    .cancel_agent(
+                        parent,
+                        None,
+                        agena_plugin_host::sdk::host_api::AgentTargetRequest {
+                            target: child.to_string(),
+                        },
+                    )
                     .await
                     .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
             }
@@ -1446,7 +1434,7 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                         )
                     }),
                     open_world,
-                    task: agena_plugin_host::sdk::ToolTag::is_task(&tags),
+                    agent: agena_plugin_host::sdk::ToolTag::is_agent(&tags),
                     plugin_id: tool.plugin_full_name(),
                 }
             })
@@ -2387,8 +2375,8 @@ pub(crate) struct AgenaRuntimeShared {
     pub(crate) activities: Arc<crate::activity::ActivityRuntimeState>,
     pub(crate) live_signals: Arc<crate::live_signal::LiveSignalHub>,
     /// Bounded kernel-feed task retained for the runtime lifetime.
-    subtask_bridge: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    /// Reliable process event/completion bridge. Task supervisors publish
+    agent_bridge: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Reliable process event/completion bridge. Agent supervisors publish
     /// their own outcomes directly through the same kernel delivery port.
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
@@ -2536,7 +2524,7 @@ impl AgenaRuntime {
         }
         self.background_completion.set_manager(None);
         if let Some(task) = self
-            .subtask_bridge
+            .agent_bridge
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()

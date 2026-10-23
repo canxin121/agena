@@ -8,45 +8,44 @@ use serde_json::{Value, json};
 use super::run_single;
 use super::{Fixture, Harness, PendingReply, SuiteReport, assert_contains, baseline_permission};
 
-pub(crate) async fn run_task_case(
+pub(crate) async fn run_agent_case(
     harness: &Harness,
     report: &mut SuiteReport,
 ) -> anyhow::Result<()> {
-    if !harness.selector.enabled("tasks.run") {
+    if !harness.selector.enabled("agent.spawn") {
         return Ok(());
     }
     let session = harness
         .create_session(
-            "dsv4f task run",
-            &["agena.tasks.run"],
+            "dsv4f agent spawn",
+            &["agena.agent.spawn"],
             baseline_permission(PermissionMode::Allow),
         )
         .await?;
     let outcome = harness
         .run_execution_tool_with_timeout(
             session,
-            "tasks.run",
-            "tasks.run",
+            "agent.spawn",
+            "agent.spawn",
             json!({
-                "description": "dsv4f Tool API task",
-                "prompt": "Reply with exactly SUBTASK_OK. Do not call any tools.",
-                "access": "read_only"
+                "name": "e2e_worker",
+                "prompt": "Reply with exactly AGENT_OK. Do not call any tools."
             }),
             PendingReply::None,
             true,
-            harness.task_timeout,
+            harness.agent_timeout,
         )
         .await?;
     let child_id = outcome
         .payload()
-        .get("session_id")
+        .get("agent_id")
         .and_then(|value| {
             value
                 .as_i64()
                 .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
         })
-        .context("tasks.run payload lacks session_id")?;
-    let child_messages = tokio::time::timeout(harness.task_timeout, async {
+        .context("agent.spawn payload lacks agent_id")?;
+    let child_messages = tokio::time::timeout(harness.agent_timeout, async {
         loop {
             let _presentation = harness
                 .session_queries
@@ -72,13 +71,13 @@ pub(crate) async fn run_task_case(
         }
     })
     .await
-    .context("tasks.run child session did not complete")??;
+    .context("agent.spawn child session did not complete")??;
     ensure!(
-        child_messages.contains("SUBTASK_OK"),
-        "tasks.run child transcript did not contain SUBTASK_OK: {}",
+        child_messages.contains("AGENT_OK"),
+        "agent.spawn child transcript did not contain AGENT_OK: {}",
         child_messages
     );
-    report.pass("tasks.run");
+    report.pass("agent.spawn");
     Ok(())
 }
 

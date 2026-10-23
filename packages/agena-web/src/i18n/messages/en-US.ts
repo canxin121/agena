@@ -1762,7 +1762,7 @@ export default {
             grep: 'Grep',
             fetch: 'Fetch URL',
             question: 'Question',
-            task: 'Task',
+            agent: 'Agent',
           },
           summary: {
             askedQuestions: 'Asked {count} question(s)',

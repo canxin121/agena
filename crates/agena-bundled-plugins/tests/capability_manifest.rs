@@ -57,3 +57,36 @@ fn capability_identity_snapshot_matches_committed_json() {
         "capability identities drifted; regenerate with `agena inspect --json --identity-snapshot`"
     );
 }
+
+#[test]
+fn agent_surface_has_exactly_the_five_coordination_tools() {
+    let manifest = bundled_capability_manifest();
+    let plugin = manifest
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == "agena.agent")
+        .expect("bundled agent plugin");
+    let names = plugin
+        .tools
+        .iter()
+        .map(|tool| tool.canonical_name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "agena.agent.spawn",
+            "agena.agent.message",
+            "agena.agent.wait",
+            "agena.agent.followup",
+            "agena.agent.cancel"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(
+        manifest
+            .plugins
+            .iter()
+            .all(|plugin| plugin.id != "agena.tasks")
+    );
+}

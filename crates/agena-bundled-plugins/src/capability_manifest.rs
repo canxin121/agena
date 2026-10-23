@@ -22,7 +22,7 @@ const EFFECT_TAGS: &[&str] = &[
     "shell",
     "interactive",
     "scheduler",
-    "subtask",
+    "agent",
 ];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -139,7 +139,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_session_plugin());
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
-    add!(crate::tool::new_tasks_plugin());
+    add!(crate::tool::new_agent_plugin());
     add!(crate::tool::new_tool_api_plugin());
     add!(crate::tool::new_web_plugin());
     plugins

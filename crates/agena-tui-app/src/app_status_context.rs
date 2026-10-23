@@ -180,13 +180,15 @@ impl App {
                 &agena_tui::fl_args!("value" => execution.execution.agent_id.as_str()),
             ),
         ));
-        if let Some(task_id) = execution.execution.task_id.as_deref()
-            && !task_id.trim().is_empty()
+        if let Some(agent_name) = execution.execution.agent_name.as_deref()
+            && !agent_name.trim().is_empty()
         {
             parts.push(StatusRow::normal(
-                "session-task",
-                self.i18n
-                    .text_args("status-part-task", &agena_tui::fl_args!("value" => task_id)),
+                "session-agent-name",
+                self.i18n.text_args(
+                    "status-part-agent-name",
+                    &agena_tui::fl_args!("value" => agent_name),
+                ),
             ));
         }
         if let Some(model_label) = execution_model_status_label(&execution.execution) {

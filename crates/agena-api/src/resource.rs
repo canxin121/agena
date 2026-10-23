@@ -25,7 +25,7 @@ pub use notification::*;
 // them so every server layer, client, and generated TypeScript mirror shares
 // one definition instead of keeping local copies of the same variants.
 pub use agena_domain::{
-    ExecutionPhase, SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus,
+    AgentStatus, ExecutionPhase, SessionLifecycleState, SessionRelationKind, SessionStateKind,
     WorkflowState,
 };
 
@@ -983,9 +983,9 @@ pub struct SessionResource {
     #[serde(default)]
     pub is_subagent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_status: Option<SubtaskStatus>,
+    pub agent_status: Option<AgentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
@@ -1246,15 +1246,15 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_status: Option<SubtaskStatus>,
+    pub agent_status: Option<AgentStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_started_at: Option<DateTime<Utc>>,
+    pub agent_started_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_finished_at: Option<DateTime<Utc>>,
+    pub agent_finished_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_failure: Option<agena_failure::UserProblem>,
+    pub agent_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1357,7 +1357,7 @@ pub struct PendingInteractiveRequestResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
     #[serde(flatten)]
     pub request: PendingInteractiveRequest,
 }

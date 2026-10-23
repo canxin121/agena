@@ -1,7 +1,7 @@
 //! Unified background-activity registry.
 //!
 //! Every long-running piece of work Agena tools create (background shell
-//! processes, delegated subagent tasks, runtime maintenance tasks) is
+//! processes, agents, runtime maintenance tasks) is
 //! projected into one bounded in-memory store. Sources push [`BackgroundActivity`]
 //! records in; every mutation publishes a [`BackgroundActivityChangedEvent`] on
 //! the runtime event bus so TUI/Web can react live. Log-only presentation
@@ -254,30 +254,6 @@ impl ActivityRegistry {
             );
         }
         finished.into_iter().map(|activity| activity.id).collect()
-    }
-
-    /// A task log cursor denotes a run, whose text can change in place. A
-    /// transcript mutation is a real log update even when its descriptor is
-    /// unchanged; it must wake an expanded log without rewriting the list.
-    pub(crate) fn touch_task_logs(&self, session_id: i64) {
-        let mut store = self.store.lock();
-        let activities = store
-            .activities
-            .values()
-            .filter(|activity| {
-                activity.kind == agena_domain::BackgroundActivityKind::Task
-                    && activity.session_id == Some(session_id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        for activity in activities {
-            self.publish(
-                &mut store,
-                activity,
-                BackgroundActivityEventReason::LogsChanged,
-                true,
-            );
-        }
     }
 
     pub(crate) fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {

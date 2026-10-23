@@ -1609,7 +1609,7 @@ export default {
             grep: 'Grep खोज',
             fetch: 'URL से सामग्री लें',
             question: 'प्रश्न',
-            task: 'कार्य',
+            agent: 'Agent',
           },
           summary: { askedQuestions: '{count} प्रश्न पूछे' },
           sections: { input: 'इनपुट', diff: 'अंतर', diffCode: 'अंतर', error: 'त्रुटि', output: 'आउटपुट' },

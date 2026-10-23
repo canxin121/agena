@@ -5,6 +5,11 @@
 //! still match `tests::every_locale_covers_every_key`.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
+    ("Start agent", "에이전트 시작"),
+    ("Message agent", "에이전트에 메시지 보내기"),
+    ("Wait for agents", "에이전트 기다리기"),
+    ("Continue agent", "에이전트 계속"),
+    ("Cancel agent", "에이전트 취소"),
     ("Read", "읽기"),
     ("Read files", "파일 읽기"),
     ("Write", "쓰기"),

@@ -1034,41 +1034,51 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
-                    method::HOST_SUBTASK_RUN => {
-                        let p: HostRunSubtaskParams = parse(params)?;
+                    method::HOST_AGENT_SPAWN => {
+                        let p: HostAgentSpawnParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.run_subtask(p.request),
+                            inner.spawn_agent(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
-                    method::HOST_SUBTASK_CANCEL => {
-                        let p: HostCancelSubtaskParams = parse(params)?;
+                    method::HOST_AGENT_MESSAGE => {
+                        let p: HostAgentMessageParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.cancel_subtask(p.request),
+                            inner.message_agent(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
-                    method::HOST_SUBTASK_MESSAGE => {
-                        let p: HostMessageSubtaskParams = parse(params)?;
+                    method::HOST_AGENT_WAIT => {
+                        let p: HostAgentWaitParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.message_subtask(p.request),
+                            inner.wait_agent(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
-                    method::HOST_SUBTASK_OUTPUT => {
-                        let p: HostReadSubtaskOutputParams = parse(params)?;
+                    method::HOST_AGENT_FOLLOWUP => {
+                        let p: HostAgentMessageParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.read_subtask_output(p.request),
+                            inner.followup_agent(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_AGENT_CANCEL => {
+                        let p: HostAgentTargetParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.cancel_agent(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -1987,7 +1997,8 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use super::{
     Arc, BTreeMap, CallbackAuthorityRecord, CommandCatalogItem, EventEnvelope, EventSubscription,
-    HashMap, HostAskUserParams, HostCallbackContext, HostCancelSubtaskParams, HostClient,
+    HashMap, HostAgentMessageParams, HostAgentSpawnParams, HostAgentTargetParams,
+    HostAgentWaitParams, HostAskUserParams, HostCallbackContext, HostClient,
     HostCommandMutationResponse, HostCommandRegisterParams, HostCommandRemoveParams,
     HostCommandUpdateParams, HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams,
     HostDisplayContributeParams, HostDisplayContributeRequest, HostDisplayContribution,
@@ -1995,14 +2006,13 @@ use super::{
     HostHookRegistration, HostImageExecuteParams, HostInvokeServiceParams, HostInvokeToolParams,
     HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams,
     HostMcpAddServerParams, HostMcpListServersParams, HostMcpRemoveServerParams,
-    HostMessageSubtaskParams, HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams,
-    HostMonitorStopParams, HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
+    HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
+    HostNotification, HostNotifyParams, HostPermissionCheckNetworkParams,
     HostPermissionCheckPathParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredCommandListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
-    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
-    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
-    HostSetSessionModelParams, HostStorageDeleteParams, HostStorageGetParams,
+    HostPluginStatusListResponse, HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostSchedulerCreateParams, HostSchedulerDeleteParams,
+    HostSchedulerListParams, HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams,
+    HostSecretSetParams, HostSetSessionModelParams, HostStorageDeleteParams, HostStorageGetParams,
     HostStorageListParams, HostStorageSetParams, HostSubscribeParams, HostThemeListResponse,
     HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,

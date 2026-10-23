@@ -66,7 +66,7 @@ export type KnownChatToolActivityType =
   | 'apply_patch'
   | 'multiedit'
   | 'bash'
-  | 'task'
+  | 'agent'
   | 'webfetch'
   | 'websearch'
   | 'codesearch'
@@ -90,7 +90,7 @@ const KNOWN_CHAT_TOOL_ACTIVITY_TYPES: KnownChatToolActivityType[] = [
   'apply_patch',
   'multiedit',
   'bash',
-  'task',
+  'agent',
   'webfetch',
   'websearch',
   'codesearch',
@@ -130,7 +130,7 @@ export function normalizeChatToolActivityId(value: unknown): string {
   if (namespace === 'web') return name === 'search' ? 'websearch' : 'webfetch'
   if (namespace === 'code') return 'codesearch'
   if (namespace === 'interaction' && name === 'ask') return 'question'
-  if (namespace === 'tasks') return 'task'
+  if (namespace === 'agent') return 'agent'
   if (namespace === 'commands') return 'command'
   if (namespace === 'lsp') return 'lsp'
 

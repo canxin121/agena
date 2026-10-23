@@ -235,8 +235,8 @@ impl ActivitiesPresentation {
         self.kind_filter = match self.kind_filter.as_deref() {
             None => Some("shell".to_owned()),
             Some("shell") => Some("monitor".to_owned()),
-            Some("monitor") => Some("task".to_owned()),
-            Some("task") => Some("cron".to_owned()),
+            Some("monitor") => Some("agent".to_owned()),
+            Some("agent") => Some("cron".to_owned()),
             Some("cron") => Some("runtime".to_owned()),
             Some("runtime") => Some("browser".to_owned()),
             _ => None,
@@ -277,7 +277,7 @@ pub fn kind_label(i18n: &I18n, kind: &str) -> String {
     i18n.text(match kind {
         "shell" => "activities-kind-shell",
         "monitor" => "activities-kind-monitor",
-        "task" => "activities-kind-task",
+        "agent" => "activities-kind-agent",
         "cron" => "activities-kind-cron",
         "runtime" => "activities-kind-runtime",
         "browser" => "activities-kind-browser",
@@ -311,7 +311,7 @@ pub fn kind_icon(kind: &str) -> &'static str {
     match kind {
         "shell" => "\u{2699}",   // ⚙
         "monitor" => "\u{224B}", // ≋
-        "task" => "\u{25C8}",    // ◈
+        "agent" => "\u{25C8}",   // ◈
         "cron" => "\u{25F7}",    // ◷
         "runtime" => "\u{21BB}", // ↻
         "browser" => "\u{25C9}", // ◉
@@ -335,7 +335,7 @@ fn kind_style(kind: &str) -> Style {
     match kind {
         "shell" => Style::default().fg(info_color()),
         "monitor" => Style::default().fg(accent_color()),
-        "task" => Style::default().fg(special_color()),
+        "agent" => Style::default().fg(special_color()),
         "cron" => Style::default().fg(warning_color()),
         "runtime" => Style::default().fg(warning_color()),
         "browser" => Style::default().fg(accent_color()),
@@ -874,7 +874,7 @@ mod tests {
     fn row_line_offsets_counts_section_headers() {
         let rows = [
             row("shell", "running"),
-            row("task", "running"),
+            row("agent", "running"),
             row("shell", "succeeded"),
         ];
         let visible: Vec<&ActivitiesRow> = rows.iter().collect();
@@ -887,7 +887,7 @@ mod tests {
     fn reveal_selected_scrolls_down_and_resets_empty() {
         let rows = [
             row("shell", "running"),
-            row("task", "running"),
+            row("agent", "running"),
             row("shell", "succeeded"),
         ];
         let visible: Vec<&ActivitiesRow> = rows.iter().collect();
@@ -916,7 +916,7 @@ mod tests {
         let rows = [
             row("shell", "running"),
             row("browser", "running"),
-            row("task", "failed"),
+            row("agent", "failed"),
         ];
         let presentation = ActivitiesPresentation {
             selected: 0,

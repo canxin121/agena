@@ -5,6 +5,11 @@
 //! translated.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
+    ("Start agent", "Iniciar agente"),
+    ("Message agent", "Enviar mensaje al agente"),
+    ("Wait for agents", "Esperar agentes"),
+    ("Continue agent", "Continuar agente"),
+    ("Cancel agent", "Cancelar agente"),
     ("Read", "Leer"),
     ("Read files", "Leer archivos"),
     ("Write", "Escribir"),

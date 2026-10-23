@@ -25,7 +25,7 @@ pub struct OperatorToolResource {
     #[serde(default)]
     pub open_world: bool,
     #[serde(default)]
-    pub task: bool,
+    pub agent: bool,
     /// Stable full plugin id (for example, `agena.fs`).
     pub plugin_id: String,
 }

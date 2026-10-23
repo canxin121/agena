@@ -230,7 +230,7 @@ pub struct ListSessionsParams {
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub roots: bool,
-    /// Hide task child sessions (`relation_kind = 'subagent'`).
+    /// Hide agent child sessions (`relation_kind = 'subagent'`).
     #[serde(default)]
     pub exclude_subagents: bool,
     #[serde(default)]
@@ -270,7 +270,7 @@ pub struct GetPermissionRuleParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Parameters for listing background activities.
 pub struct ListActivitiesParams {
-    /// Comma-separated kind filters (`shell`, `task`, `runtime`, `browser`).
+    /// Comma-separated kind filters (`shell`, `agent`, `runtime`, `browser`).
     #[serde(default)]
     pub kinds: Option<String>,
     /// Comma-separated status filters (`running`, `succeeded`, `failed`, …).

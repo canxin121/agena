@@ -384,7 +384,7 @@ export default {
             grep: 'بحث نصي',
             fetch: 'جلب عنوان URL',
             question: 'سؤال',
-            task: 'مهمة',
+            agent: 'Agent',
           },
           summary: { askedQuestions: 'تم طرح {count} سؤالًا' },
           sections: {

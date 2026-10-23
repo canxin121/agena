@@ -514,19 +514,19 @@ mod tests {
     fn whitespace_separated_tool_identifiers_are_searched_as_a_batch() {
         let docs = vec![
             doc("shell.exec", "Run a foreground command", &["shell"]),
-            doc("tasks.list", "List current tasks", &["tasks"]),
+            doc("agent.message", "Send an agent message", &["agent"]),
             doc("session.rename", "Rename the current session", &["session"]),
             doc("fs.read", "Read a workspace file", &["filesystem"]),
         ];
 
-        let results = search_tools(&docs, "shell.exec tasks.list session.rename", 10);
+        let results = search_tools(&docs, "shell.exec agent.message session.rename", 10);
 
         assert_eq!(
             results
                 .iter()
                 .map(|doc| doc.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["shell.exec", "tasks.list", "session.rename"]
+            vec!["shell.exec", "agent.message", "session.rename"]
         );
     }
 

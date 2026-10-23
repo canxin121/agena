@@ -887,7 +887,7 @@ value-open = 打开
 status-part-workspace = 工作区 {$value}
 status-part-state = 状态={$value}
 status-part-agent = agent={$value}
-status-part-task = task={$value}
+status-part-agent-name = agent_name={$value}
 status-part-model = model={$value}
 status-part-thinking = think={$value}
 status-part-speed = speed={$value}
@@ -1334,7 +1334,6 @@ message-activity-input-running = 正在提交用户输入
 message-activity-input-completed = 用户输入已提交
 message-activity-input-failed = 用户输入提交失败
 message-activity-input-cancelled = 用户输入提交已取消
-timeline-type-subtask-status-changed = 子任务状态已更新
 timeline-type-stream-error = 流错误
 timeline-type-message-part-checkpointed = 消息分段检查点
 timeline-type-message-part-delta = 消息分段增量
@@ -1536,7 +1535,6 @@ operation-diff-summary-detailed-one = diff：1 个文件，+{$added} / -{$delete
 operation-diff-summary-detailed-one-rename = diff：1 个文件，+{$added} / -{$deleted}，重命名 {$renamed} 个
 operation-diff-summary-detailed = diff：{$files} 个文件，+{$added} / -{$deleted}
 operation-diff-summary-detailed-renames = diff：{$files} 个文件，+{$added} / -{$deleted}，重命名 {$renamed} 个
-operation-nested-task-summary = {$title}（{$status}）
 flash-timeline-event-copied = 已复制当前时间线事件
 flash-clipboard-copy-failed = 剪贴板复制失败：{$error}
 flash-composer-drafts-load-failed = 加载 composer drafts 失败：{$error}
@@ -2366,7 +2364,7 @@ activity-title-pasted-text = 粘贴的文本
 # Newly localized TUI surfaces: activities, usage, composer, plugin workbench.
 activities-title = 后台活动
 activities-empty = 没有后台活动。
-activities-empty-hint = 运行 shell.spawn、shell.open 或 tasks.run 可创建一个。
+activities-empty-hint = 运行 shell.spawn、shell.open 或 agent.spawn 可创建一个。
 activities-section-active = 进行中
 activities-section-finished = 已完成
 activities-footer-close = Esc 关闭
@@ -2502,7 +2500,7 @@ activities-control-delete = 删除
 activities-control-dismiss = 移除
 activities-kind-shell = 终端命令
 activities-kind-monitor = 监控
-activities-kind-task = 任务
+activities-kind-agent = Agent
 activities-kind-cron = 定时任务
 activities-kind-runtime = 运行时
 activities-kind-browser = 浏览器

@@ -192,7 +192,7 @@ async fn execution_guidance_and_successful_finish_have_one_atomic_order() {
                     assert!(replay.value.consumed);
                 }
                 (Err(KernelError::Conflict(message)), Ok(_)) => {
-                    assert!(message.contains("tasks.followup"))
+                    assert!(message.contains("agent.followup"))
                 }
                 other => panic!("guidance was lost or terminal state admitted it: {other:?}"),
             }
@@ -1562,5 +1562,335 @@ async fn tool_interaction_history_has_real_identity_time_and_a_bounded_durable_l
         .await
         .is_err()
     );
+    ports.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn reopening_fences_queued_and_running_agents_but_retains_ordinary_queued_input() {
+    use agena_domain::AgentStatus;
+    let (ports, admin, _root, url) = fixture(false).await;
+    let parent = ports
+        .sessions
+        .create(RequestId::new(), 1, "parent".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let queued_user = ports
+        .sessions
+        .send(RequestId::new(), parent, document("ordinary queued input"))
+        .await
+        .unwrap()
+        .value;
+    let mut agents = Vec::new();
+    for (name, claimed) in [("queued", false), ("running", true)] {
+        let child = ports
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                1,
+                name.into(),
+                SessionConfiguration {
+                    parent_session_id: Some(parent),
+                    relation_kind: SessionRelationKind::Subagent,
+                    agent: Some(SessionAgentConfiguration {
+                        name: name.into(),
+                        status: AgentStatus::Running,
+                        started_at_ms: Some(1),
+                        finished_at_ms: None,
+                        failure: None,
+                        limits: AgentExecutionLimits {
+                            max_tokens: Some(100),
+                            ..Default::default()
+                        },
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = ports
+            .sessions
+            .send(RequestId::new(), child, document("agent launch"))
+            .await
+            .unwrap()
+            .value;
+        if claimed {
+            ports
+                .executor
+                .claim(RequestId::new(), child, execution.id)
+                .await
+                .unwrap();
+        }
+        agents.push((child, execution.id));
+    }
+    drop(admin);
+    ports.shutdown().await.unwrap();
+    let reopened = open_session_kernel(&url).await.unwrap();
+    for (child, execution) in agents {
+        let configuration = reopened.reader.configuration(child).await.unwrap();
+        let agent = configuration.agent.as_ref().unwrap();
+        assert_eq!(agent.status, AgentStatus::Interrupted);
+        assert!(agent.finished_at_ms.is_some());
+        assert_eq!(agent.limits.max_tokens, Some(100));
+        assert_eq!(
+            reopened
+                .reader
+                .execution(child, execution)
+                .await
+                .unwrap()
+                .phase,
+            ExecutionPhase::Interrupted
+        );
+        assert!(
+            reopened
+                .reader
+                .active_executions(child, None, 1)
+                .await
+                .unwrap()
+                .executions
+                .is_empty()
+        );
+        let summary = reopened.reader.summary(child).await.unwrap();
+        assert_eq!(summary.queued_executions, 0);
+        assert_eq!(summary.running_executions, 0);
+    }
+    assert_eq!(
+        reopened
+            .reader
+            .execution(parent, queued_user.id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
+    assert_eq!(
+        reopened
+            .reader
+            .summary(parent)
+            .await
+            .unwrap()
+            .queued_executions,
+        1
+    );
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_terminal_state_and_parent_mailbox_commit_together_and_replay_once() {
+    use agena_domain::AgentStatus;
+    for memory in [true, false] {
+        let (ports, admin, _root, _url) = fixture(memory).await;
+        let parent = ports
+            .sessions
+            .create(RequestId::new(), 1, "parent".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let running = SessionAgentConfiguration {
+            name: "worker".into(),
+            status: AgentStatus::Running,
+            started_at_ms: Some(1),
+            finished_at_ms: None,
+            failure: None,
+            limits: Default::default(),
+        };
+        let child = ports
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                1,
+                "worker".into(),
+                SessionConfiguration {
+                    parent_session_id: Some(parent),
+                    relation_kind: SessionRelationKind::Subagent,
+                    agent: Some(running.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let terminal = SessionAgentConfiguration {
+            status: AgentStatus::Completed,
+            finished_at_ms: Some(2),
+            ..running.clone()
+        };
+        let payload =
+            serde_json::json!({"kind":"agent_result","agent_id":child.get(),"text":"complete"});
+        // A conflicting delivery key rejects the entire terminal transition.
+        ports
+            .executor
+            .deliver(
+                RequestId::new(),
+                parent,
+                "occupied-key".into(),
+                serde_json::json!({"text":"previous"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            ports
+                .sessions
+                .finish_agent(
+                    RequestId::new(),
+                    child,
+                    terminal.clone(),
+                    "occupied-key".into(),
+                    payload.clone()
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            ports
+                .reader
+                .configuration(child)
+                .await
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .status,
+            AgentStatus::Running
+        );
+        let request = RequestId::new();
+        let mut parent_watch = ports.reader.watch(parent, None).unwrap();
+        let receipt = ports
+            .sessions
+            .finish_agent(
+                request,
+                child,
+                terminal.clone(),
+                "agent-completion".into(),
+                payload.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt.value.agent.as_ref().unwrap().status,
+            AgentStatus::Completed
+        );
+        // A cross-session transaction resets observers; they snapshot both facts.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), parent_watch.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        ports
+            .sessions
+            .finish_agent(
+                request,
+                child,
+                terminal.clone(),
+                "agent-completion".into(),
+                payload.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ports
+                .reader
+                .pending_deliveries(parent, None, 64)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            ports
+                .sessions
+                .configure(
+                    RequestId::new(),
+                    child,
+                    SessionConfigurationChange {
+                        agent: Some(None),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let mut other = terminal;
+        other.name = "renamed".into();
+        assert!(
+            ports
+                .sessions
+                .finish_agent(
+                    RequestId::new(),
+                    child,
+                    other,
+                    "renamed-key".into(),
+                    payload
+                )
+                .await
+                .is_err()
+        );
+        drop(parent_watch);
+        drop(admin);
+        ports.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn agent_mailbox_pressure_rejects_new_messages_without_losing_accepted_mail_or_blocking_results()
+ {
+    let (ports, admin, _root, _url) = fixture(true).await;
+    let session = ports
+        .sessions
+        .create(RequestId::new(), 1, "mailbox".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    for index in 0..32 {
+        ports
+            .executor
+            .deliver(
+                RequestId::new(),
+                session,
+                format!("message-{index}"),
+                serde_json::json!({"kind":"agent_message","wake":false,"text":"keep this message"}),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        ports
+            .executor
+            .deliver(
+                RequestId::new(),
+                session,
+                "overflow".into(),
+                serde_json::json!({"kind":"agent_message","text":"new message"})
+            )
+            .await
+            .is_err()
+    );
+    ports
+        .executor
+        .deliver(
+            RequestId::new(),
+            session,
+            "result".into(),
+            serde_json::json!({"kind":"agent_result","text":"required result"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ports
+            .reader
+            .pending_deliveries(session, None, 64)
+            .await
+            .unwrap()
+            .len(),
+        33
+    );
+    drop(admin);
     ports.shutdown().await.unwrap();
 }

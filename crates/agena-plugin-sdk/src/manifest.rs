@@ -158,9 +158,9 @@ pub enum ToolTag {
     /// tool through the shell command-class rules, and makes the tool
     /// ineligible for the read-only builtin profile.
     Shell,
-    /// Long-running autonomous task tool; excluded from no-task model
+    /// Agent coordination tool; excluded from no-agent model
     /// profiles and granted a long invoke budget.
-    Task,
+    Agent,
     /// Declared read-only: the tool only reads. Used for the read-only builtin
     /// profile, the `tools.rules."*".read-only` class default, and discovery.
     ReadOnly,
@@ -190,8 +190,6 @@ pub enum ToolTag {
     Lsp,
     /// MCP bridge tools.
     Mcp,
-    /// Spawns or manages subtasks.
-    Subtask,
     /// Custom extension tags contributed by a plugin.
     Custom(String),
 }
@@ -207,9 +205,9 @@ impl ToolTag {
         tags.contains(&Self::Interactive)
     }
 
-    /// Whether `tags` describes a long-running task tool.
-    pub fn is_task(tags: &[Self]) -> bool {
-        tags.contains(&Self::Task)
+    /// Whether `tags` describes an agent coordination tool.
+    pub fn is_agent(tags: &[Self]) -> bool {
+        tags.contains(&Self::Agent)
     }
 
     /// Whether `tags` describes a state-changing tool.
@@ -218,7 +216,7 @@ impl ToolTag {
     }
 
     /// Whether `tags` declares a tool that only reads: read-only, and neither
-    /// shell, interactive, mutating, nor a task.
+    /// shell, interactive, mutating, nor an agent coordination tool.
     ///
     /// This is the single definition of the read-only class. The permission
     /// engine's `tools.rules."*".read-only` default, the read-only builtin
@@ -229,16 +227,16 @@ impl ToolTag {
             && !Self::is_shell(tags)
             && !Self::is_interactive(tags)
             && !Self::is_mutating(tags)
-            && !Self::is_task(tags)
+            && !Self::is_agent(tags)
     }
 
     /// Whether independent invocations may share a local scheduler wave.
     /// Read-only tools are safe by default; stateful tools must explicitly
-    /// declare `parallel_safe`. Interactive and task tools stay serial even
+    /// declare `parallel_safe`. Interactive and agent tools stay serial even
     /// when that tag is present because they own external lifecycles. Shell
     /// tools may opt in explicitly when their command contract is safe.
     pub fn is_parallel_safe(tags: &[Self]) -> bool {
-        if Self::is_interactive(tags) || Self::is_task(tags) {
+        if Self::is_interactive(tags) || Self::is_agent(tags) {
             return false;
         }
         Self::is_read_only(tags) || tags.contains(&Self::ParallelSafe)
@@ -258,7 +256,7 @@ impl ToolTag {
             "mutate" => Self::Mutate,
             "execute" => Self::Execute,
             "shell" => Self::Shell,
-            "task" => Self::Task,
+            "agent" => Self::Agent,
             "read_only" | "read-only" | "readonly" => Self::ReadOnly,
             "parallel_safe" | "parallel-safe" => Self::ParallelSafe,
             "filesystem" => Self::Filesystem,
@@ -271,7 +269,6 @@ impl ToolTag {
             "scheduler" => Self::Scheduler,
             "lsp" => Self::Lsp,
             "mcp" => Self::Mcp,
-            "subtask" => Self::Subtask,
             other => Self::Custom(other.to_string()),
         })
     }
@@ -282,7 +279,7 @@ impl ToolTag {
             Self::Mutate => "mutate",
             Self::Execute => "execute",
             Self::Shell => "shell",
-            Self::Task => "task",
+            Self::Agent => "agent",
             Self::ReadOnly => "read_only",
             Self::ParallelSafe => "parallel_safe",
             Self::Filesystem => "filesystem",
@@ -295,7 +292,6 @@ impl ToolTag {
             Self::Scheduler => "scheduler",
             Self::Lsp => "lsp",
             Self::Mcp => "mcp",
-            Self::Subtask => "subtask",
             Self::Custom(value) => value.as_str(),
         }
     }
@@ -352,7 +348,7 @@ pub struct ToolDefinition {
     /// What this tool is, as declared by the plugin.
     ///
     /// This is the tool's single self-description surface: the host reads
-    /// `shell`, `task`, `read_only`, `interactive`, and `mutate` here to select
+    /// `shell`, `agent`, `read_only`, `interactive`, and `mutate` here to select
     /// an executor, decide whether the tool may run concurrently, filter the
     /// builtin profiles, and pick the shell command-class rules. A tool that
     /// performs its own I/O is responsible for asking the host
@@ -1163,7 +1159,7 @@ mod parallel_safety_tests {
         ]));
         assert!(!ToolTag::is_parallel_safe(&[
             ToolTag::ParallelSafe,
-            ToolTag::Task,
+            ToolTag::Agent,
         ]));
     }
 

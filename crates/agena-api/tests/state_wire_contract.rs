@@ -9,8 +9,8 @@
 
 use agena_api::part::PartExecutionStatusResource;
 use agena_api::resource::{
-    ActiveExecutionResource, ExecutionPhase, RunStatus, SessionLifecycleState, SessionRelationKind,
-    SessionState, SessionStateKind, SubtaskStatus, WorkflowState,
+    ActiveExecutionResource, AgentStatus, ExecutionPhase, RunStatus, SessionLifecycleState,
+    SessionRelationKind, SessionState, SessionStateKind, WorkflowState,
 };
 
 #[test]
@@ -20,7 +20,7 @@ fn api_state_enums_are_the_domain_enums() {
     let kind: agena_domain::SessionStateKind = SessionStateKind::Ready;
     let lifecycle: agena_domain::SessionLifecycleState = SessionLifecycleState::Ready;
     let relation: agena_domain::SessionRelationKind = SessionRelationKind::Root;
-    let subtask: agena_domain::SubtaskStatus = SubtaskStatus::Created;
+    let agent: agena_domain::AgentStatus = AgentStatus::Created;
     let workflow: agena_domain::WorkflowState = WorkflowState::Quiescent;
     let phase: agena_domain::ExecutionPhase = ExecutionPhase::Starting;
     let status: agena_domain::ExecutionStatus = RunStatus::Pending;
@@ -29,8 +29,8 @@ fn api_state_enums_are_the_domain_enums() {
     assert_eq!(kind.as_str(), "ready");
     assert_eq!(lifecycle.as_str(), "ready");
     assert_eq!(relation.as_str(), "root");
-    let subtask_wire: &str = subtask.as_ref();
-    assert_eq!(subtask_wire, "created");
+    let agent_wire: &str = agent.as_ref();
+    assert_eq!(agent_wire, "created");
     assert_eq!(workflow, agena_domain::WorkflowState::Quiescent);
     assert_eq!(phase, agena_domain::ExecutionPhase::Starting);
     assert_eq!(status, agena_domain::ExecutionStatus::Pending);

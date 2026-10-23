@@ -1306,7 +1306,6 @@ message-activity-input-running = Submitting user input
 message-activity-input-completed = User input submitted
 message-activity-input-failed = User input submission failed
 message-activity-input-cancelled = User input submission cancelled
-timeline-type-subtask-status-changed = subtask status changed
 timeline-type-stream-error = stream error
 timeline-type-message-part-checkpointed = message part checkpointed
 timeline-type-message-part-delta = message part delta
@@ -1435,7 +1434,7 @@ value-permission-rule-subject-network-access = network_access
 status-part-workspace = ws {$value}
 status-part-state = state={$value}
 status-part-agent = agent={$value}
-status-part-task = task={$value}
+status-part-agent-name = agent_name={$value}
 status-part-model = model={$value}
 status-part-thinking = think={$value}
 status-part-speed = speed={$value}
@@ -1541,7 +1540,6 @@ operation-diff-summary-detailed-one = diff: 1 file, +{$added} -{$deleted}
 operation-diff-summary-detailed-one-rename = diff: 1 file, +{$added} -{$deleted}, {$renamed} renamed
 operation-diff-summary-detailed = diff: {$files} files, +{$added} -{$deleted}
 operation-diff-summary-detailed-renames = diff: {$files} files, +{$added} -{$deleted}, {$renamed} renamed
-operation-nested-task-summary = {$title} ({$status})
 flash-timeline-event-copied = copied selected timeline event
 flash-clipboard-copy-failed = clipboard copy failed: {$error}
 flash-transcript-node-expanded = expanded {$kind}
@@ -2366,7 +2364,7 @@ activity-title-pasted-text = Pasted text
 # Newly localized TUI surfaces: activities, usage, composer, plugin workbench.
 activities-title = Background Activities
 activities-empty = No background activities.
-activities-empty-hint = Run shell.spawn, shell.open or tasks.run to create one.
+activities-empty-hint = Run shell.spawn, shell.open or agent.spawn to create one.
 activities-section-active = Active
 activities-section-finished = Finished
 activities-footer-close = Esc close
@@ -2502,7 +2500,7 @@ activities-control-delete = delete
 activities-control-dismiss = dismiss
 activities-kind-shell = Shell
 activities-kind-monitor = Monitor
-activities-kind-task = Task
+activities-kind-agent = Agent
 activities-kind-cron = Scheduled task
 activities-kind-runtime = Runtime
 activities-kind-browser = Browser

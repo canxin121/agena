@@ -1753,7 +1753,7 @@ export default {
             grep: 'Grep',
             fetch: '抓取 URL',
             question: '提问',
-            task: '任务',
+            agent: 'Agent',
           },
           summary: {
             askedQuestions: '已提问 {count} 个问题',

@@ -72,8 +72,8 @@ pub enum AppError {
     Tool(Box<crate::tool::ToolError>),
     #[error("automatic approval classification failed: {0}")]
     AutoApproveClassifyFailed(agena_permission::ClassifyFailure),
-    #[error("subtask usage budget exceeded: {0}")]
-    SubtaskBudgetExceeded(String),
+    #[error("agent usage budget exceeded: {0}")]
+    AgentBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
     ExecutionAlreadyActive(i64),
     #[error("session {0} mutation queue is full or did not become available before its deadline")]
@@ -185,8 +185,8 @@ impl AppError {
             Self::AutoApproveClassifyFailed(_) => {
                 "Automatic approval could not classify this request. Choose an option below."
             }
-            Self::SubtaskBudgetExceeded(_) => {
-                "The subtask reached its usage limit before it could finish."
+            Self::AgentBudgetExceeded(_) => {
+                "The agent reached its usage limit before it could finish."
             }
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
             Self::SessionMutationBusy(_) => {
@@ -408,8 +408,8 @@ impl AppError {
                 Retry::Backoff,
                 Recovery::Retry,
             ),
-            Self::SubtaskBudgetExceeded(_) => (
-                "subtask.budget_exceeded",
+            Self::AgentBudgetExceeded(_) => (
+                "agent.budget_exceeded",
                 Category::QuotaExceeded,
                 Responsibility::Caller,
                 Retry::AfterUserAction,

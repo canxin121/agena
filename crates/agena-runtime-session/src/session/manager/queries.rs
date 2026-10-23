@@ -36,7 +36,7 @@ impl SessionManager {
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
             effective_workspace_root: configuration.effective_workspace_root.clone(),
         };
-        let task = configuration.task.as_ref();
+        let agent = configuration.agent.as_ref();
         Ok(Session {
             id,
             parent_id: configuration.parent_session_id.map(SessionId::get),
@@ -49,7 +49,7 @@ impl SessionManager {
             version: metadata.metadata_version.get(),
             relation_kind: configuration.relation_kind,
             lifecycle_state: agena_domain::SessionLifecycleState::Ready,
-            task_id: task.map(|t| t.id.clone()),
+            agent_name: agent.map(|t| t.name.clone()),
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),
             message_count: summary.user_message_count,
@@ -59,10 +59,10 @@ impl SessionManager {
                 WorkflowState::Quiescent
             },
             execution: context,
-            subtask_status: task.map(|t| t.status),
-            subtask_started_at_ms: task.and_then(|t| t.started_at_ms),
-            subtask_finished_at_ms: task.and_then(|t| t.finished_at_ms),
-            subtask_failure: task.and_then(|t| t.failure.clone()),
+            agent_status: agent.map(|t| t.status),
+            agent_started_at_ms: agent.and_then(|t| t.started_at_ms),
+            agent_finished_at_ms: agent.and_then(|t| t.finished_at_ms),
+            agent_failure: agent.and_then(|t| t.failure.clone()),
         })
     }
     pub(super) async fn execution_context_value(
@@ -157,8 +157,8 @@ impl SessionManager {
             lifecycle_state: agena_domain::SessionLifecycleState::Ready,
             source_cutoff_seq_global: None,
             source_message_id: None,
-            task_id: configuration.task.as_ref().map(|t| t.id.clone()),
-            subtask_status: configuration.task.as_ref().map(|t| t.status),
+            agent_name: configuration.agent.as_ref().map(|t| t.name.clone()),
+            agent_status: configuration.agent.as_ref().map(|t| t.status),
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),
             message_count: summary.user_message_count,
@@ -397,11 +397,11 @@ impl SessionManager {
             }
             if visited.len() > 10_000 {
                 return Err(AppError::Config(
-                    "pending interaction task tree exceeds its bound".into(),
+                    "pending interaction agent tree exceeds its bound".into(),
                 ));
             }
             // Root attention belongs to the same cut as its execution state.
-            // Each descendant has its own short control snapshot; a task tree
+            // Each descendant has its own short control snapshot; an agent tree
             // is not one globally atomic projection.
             let descendant;
             let snapshot = if session == root.metadata.id {
@@ -448,7 +448,7 @@ impl SessionManager {
                 result.push(PendingInteractiveRequestContext {
                     session_id: id,
                     parent_session_id: config.parent_session_id.map(SessionId::get),
-                    task_id: config.task.as_ref().map(|t| t.id.clone()),
+                    agent_name: config.agent.as_ref().map(|t| t.name.clone()),
                     request,
                 });
                 if result.len() >= 128 {
@@ -588,7 +588,7 @@ impl SessionQueryService for SessionManager {
             .config
             .default_selection
             .overlay_with_cascade(&snapshot.metadata.selection.clone().unwrap_or_default());
-        let task = configuration.task.as_ref();
+        let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
             conversation: configuration.conversation.clone(),
             workflow_state: if snapshot.pending_interactions.interactions.is_empty() {
@@ -614,11 +614,11 @@ impl SessionQueryService for SessionManager {
                 .effective_workspace_root
                 .as_ref()
                 .map(|p| p.to_string_lossy().into()),
-            task_id: task.map(|task| task.id.clone()),
-            subtask_status: task.map(|task| task.status),
-            subtask_started_at: task.and_then(|task| task.started_at_ms).map(timestamp),
-            subtask_finished_at: task.and_then(|task| task.finished_at_ms).map(timestamp),
-            subtask_failure: task.and_then(|task| task.failure.clone()),
+            agent_name: agent.map(|agent| agent.name.clone()),
+            agent_status: agent.map(|agent| agent.status),
+            agent_started_at: agent.and_then(|agent| agent.started_at_ms).map(timestamp),
+            agent_finished_at: agent.and_then(|agent| agent.finished_at_ms).map(timestamp),
+            agent_failure: agent.and_then(|agent| agent.failure.clone()),
         })
     }
     async fn is_descendant_session(&self, d: i64, a: i64) -> Result<bool, SessionQueryError> {

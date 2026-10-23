@@ -168,7 +168,7 @@ fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
         name: tool.name.as_str(),
         plugin_id: tool.plugin_id.as_str(),
         interactive: tool.interactive,
-        task: tool.task,
+        agent: tool.agent,
     })
 }
 
@@ -3971,7 +3971,7 @@ mod tests {
             read_only: true,
             destructive: false,
             open_world: false,
-            task: false,
+            agent: false,
             plugin_id: plugin_id.unwrap_or_default().to_owned(),
         }
     }
@@ -4134,7 +4134,7 @@ mod tests {
             tool("agena.schema_lab.echo", false, None),
             tool("settings.set", false, Some("agena.settings")),
             tool("commands.install", false, Some("agena.commands")),
-            tool("tasks.list", false, Some("agena.tasks")),
+            tool("agent.wait", false, Some("agena.agent")),
             tool("tools.search", false, Some("agena.tools")),
             tool("session.model", false, Some("agena.session")),
             tool("session.rename", false, None),
@@ -4164,9 +4164,9 @@ mod tests {
             Some("agena.utility")
         )));
 
-        let mut task = tool("job.start", false, Some("agena.jobs"));
-        task.task = true;
-        assert!(!mcp_tool_is_exposed(&task));
+        let mut agent = tool("helper.start", false, Some("example.helpers"));
+        agent.agent = true;
+        assert!(!mcp_tool_is_exposed(&agent));
     }
 
     #[test]

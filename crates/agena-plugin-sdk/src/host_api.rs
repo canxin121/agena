@@ -143,26 +143,28 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Run or resume a child-agent task and return its terminal result.
-    async fn run_subtask(&self, _req: RunSubtaskRequest) -> Result<RunSubtaskResponse> {
+    /// Create an attached agent and return after its launch is durable.
+    async fn spawn_agent(&self, _req: AgentSpawnRequest) -> Result<AgentHandle> {
         Err(unavailable())
     }
 
-    /// Request cancellation of a running child-agent task.
-    async fn cancel_subtask(&self, _req: CancelSubtaskRequest) -> Result<SubtaskControlResponse> {
+    /// Queue a message without starting an idle recipient.
+    async fn message_agent(&self, _req: AgentMessageRequest) -> Result<AgentMessageReceipt> {
         Err(unavailable())
     }
 
-    /// Inject additional user guidance into a running child-agent task.
-    async fn message_subtask(&self, _req: MessageSubtaskRequest) -> Result<SubtaskControlResponse> {
+    /// Wait for this callback session's mailbox, new input, or a timeout.
+    async fn wait_agent(&self, _req: AgentWaitRequest) -> Result<AgentWaitResponse> {
         Err(unavailable())
     }
 
-    /// Read persisted child-session output after a message cursor.
-    async fn read_subtask_output(
-        &self,
-        _req: ReadSubtaskOutputRequest,
-    ) -> Result<ReadSubtaskOutputResponse> {
+    /// Deliver more work to a child, starting an execution when it is idle.
+    async fn followup_agent(&self, _req: AgentMessageRequest) -> Result<AgentHandle> {
+        Err(unavailable())
+    }
+
+    /// Cancel a direct child's execution without deleting its session.
+    async fn cancel_agent(&self, _req: AgentTargetRequest) -> Result<AgentMessageReceipt> {
         Err(unavailable())
     }
 
@@ -744,177 +746,102 @@ pub struct AskUserResponse {
     pub answers: BTreeMap<String, Vec<String>>,
 }
 
-// ---------------- run_subtask ----------------
+// ---------------- agents ----------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[input(
+    trim("name", "prompt"),
+    non_empty("name", "prompt"),
+    minimum("timeout_ms", 1),
+    minimum("max_tokens", 1),
+    minimum("max_cost_microusd", 1)
+)]
 #[serde(deny_unknown_fields)]
-/// Request to run a subtask.
-pub struct RunSubtaskRequest {
-    /// Explicit parent used by asynchronous plugin tasks after the originating
-    /// callback scope has ended. When absent, the current callback session is used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_session_id: Option<i64>,
-    /// Background executions have a durable completion delivery for each run.
-    /// Inline callers receive their result directly instead.
-    #[serde(default)]
-    pub run_in_background: bool,
-    /// Correlate delegated work and live output with its durable tool receipt.
-    /// The host validates the call against the explicit parent session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub launch_call_id: Option<i64>,
-    pub description: String,
+pub struct AgentSpawnRequest {
+    /// Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.
+    pub name: String,
+    /// Scope, constraints and expected final result. Parent history is not copied.
     pub prompt: String,
-    /// Optional command names or aliases attached to the child session's first
-    /// user message as command references. The child applies their instructions
-    /// as task guidance. Unknown names or aliases are rejected before start.
+    /// Command instructions attached to the initial message.
+    #[serde(default)]
+    pub commands: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commands: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<RunSubtaskModelSelection>,
+    pub selection: Option<AgentModelSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Per-execution token budget, retained for followup executions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cost_microusd: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-/// Model selection of a subtask.
-pub struct RunSubtaskModelSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+pub struct AgentModelSelection {
     pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Status of a subtask.
-pub enum RunSubtaskStatus {
-    Created,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-    TimedOut,
-    Interrupted,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-/// Usage of a subtask.
-pub struct RunSubtaskUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub total_cost: f64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of a subtask run.
-pub struct RunSubtaskResponse {
-    pub task_id: String,
-    pub session_id: i64,
-    pub parent_session_id: i64,
-    pub status: RunSubtaskStatus,
-    pub resumed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub final_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub problem: Option<agena_failure::UserProblem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_feedback: Option<agena_failure::ModelFeedback>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    /// True only when execution stopped because the explicit per-task usage
-    /// budget was crossed. It is distinct from provider/tool failures.
-    #[serde(default)]
-    pub budget_exceeded: bool,
-    #[serde(default)]
-    pub usage: RunSubtaskUsage,
+pub struct AgentHandle {
+    pub agent_id: i64,
+    pub name: String,
+    pub status: agena_domain::AgentStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[input(trim("target", "message"), non_empty("target", "message"))]
 #[serde(deny_unknown_fields)]
-/// Request to cancel a subtask.
-pub struct CancelSubtaskRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_session_id: Option<i64>,
-    pub task_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Request to send a message to a subtask.
-pub struct MessageSubtaskRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_session_id: Option<i64>,
-    pub task_id: String,
+pub struct AgentMessageRequest {
+    /// An agent_id, a visible agent name, or `parent`.
+    pub target: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of a subtask control operation.
-pub struct SubtaskControlResponse {
-    pub task_id: String,
-    pub session_id: i64,
-    pub accepted: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[input(trim("target"), non_empty("target"))]
 #[serde(deny_unknown_fields)]
-/// Request to read subtask output.
-pub struct ReadSubtaskOutputRequest {
+pub struct AgentTargetRequest {
+    pub target: String,
+}
+
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput,
+)]
+#[input(minimum("timeout_ms", 1), maximum("timeout_ms", 300000))]
+#[serde(deny_unknown_fields)]
+pub struct AgentWaitRequest {
+    /// Defaults to 60 seconds. Wait for messages instead of polling statuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_session_id: Option<i64>,
-    pub task_id: String,
-    #[serde(default)]
-    pub after_cursor: i64,
-    #[serde(default = "default_subtask_output_limit")]
-    pub limit: u32,
-}
-
-const fn default_subtask_output_limit() -> u32 {
-    100
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// A chunk of subtask output.
-pub struct SubtaskOutputChunk {
-    pub cursor: i64,
-    pub role: String,
-    pub text: String,
-    pub created_at_ms: i64,
+pub struct AgentMessageReceipt {
+    pub agent_id: i64,
+    /// Acceptance into the durable mailbox, not proof the recipient has read it.
+    pub accepted: bool,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWakeReason {
+    Message,
+    UserInput,
+    Timeout,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response with subtask output chunks.
-pub struct ReadSubtaskOutputResponse {
-    pub task_id: String,
-    pub session_id: i64,
-    pub chunks: Vec<SubtaskOutputChunk>,
-    pub next_cursor: i64,
-    pub has_more: bool,
+pub struct AgentWaitResponse {
+    /// Message content is delivered once at the next model boundary.
+    pub reason: AgentWakeReason,
 }
 
 // ---------------- list_tools ----------------
@@ -1899,5 +1826,50 @@ mod notify_request_tests {
             "location": "composer_footer",
         });
         assert!(serde_json::from_value::<PluginNotifyRequest>(wire).is_err());
+    }
+}
+
+#[cfg(test)]
+mod agent_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn coordination_inputs_reject_authority_overrides_and_implicit_request_mode() {
+        for extra in [
+            json!({"parent_session_id":1}),
+            json!({"session_id":1}),
+            json!({"request":true}),
+            json!({"type":"request"}),
+        ] {
+            let mut input = json!({"target":"parent","message":"hello"});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(AgentMessageRequest::parse_input(input).is_err());
+        }
+        for timeout in [0, 300001] {
+            assert!(AgentWaitRequest::parse_input(json!({"timeout_ms":timeout})).is_err());
+        }
+        assert!(AgentWaitRequest::parse_input(json!({})).is_ok());
+        assert!(
+            AgentSpawnRequest::parse_input(
+                json!({"name":"worker","prompt":"work","run_in_background":true})
+            )
+            .is_err()
+        );
+        assert!(AgentSpawnRequest::parse_input(json!({"name":"worker","prompt":"work"})).is_ok());
+    }
+
+    #[test]
+    fn mailbox_wakes_have_no_message_or_transcript_fields() {
+        assert_eq!(
+            serde_json::to_value(AgentWaitResponse {
+                reason: AgentWakeReason::Message
+            })
+            .unwrap(),
+            json!({"reason":"message"})
+        );
     }
 }

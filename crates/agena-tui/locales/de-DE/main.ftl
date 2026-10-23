@@ -1888,7 +1888,7 @@ transcript-image-embedded = embedded image
 # Activities, composer, diagnostics and usage analytics.
 activities-title = Hintergrundaktivitäten
 activities-empty = Keine Hintergrundaktivitäten.
-activities-empty-hint = Mit shell.spawn, shell.open oder tasks.run eine Aktivität erstellen.
+activities-empty-hint = Mit shell.spawn, shell.open oder agent.spawn eine Aktivität erstellen.
 activities-section-active = Aktiv
 activities-section-finished = Beendet
 activities-footer-close = Esc schließen
@@ -2006,7 +2006,7 @@ activities-control-delete = löschen
 activities-control-dismiss = ausblenden
 activities-kind-shell = Shell
 activities-kind-monitor = Überwachung
-activities-kind-task = Aufgabe
+activities-kind-agent = Agent
 activities-kind-cron = Geplante Aufgabe
 activities-kind-runtime = Laufzeit
 activities-kind-browser = Browser
@@ -2646,7 +2646,6 @@ timeline-type-execution-completed = Ausführung abgeschlossen
 timeline-type-execution-cancelled = Ausführung abgebrochen
 timeline-type-execution-failed = Ausführung fehlgeschlagen
 timeline-type-compaction-completed = Kontextkomprimierung abgeschlossen
-timeline-type-subtask-status-changed = Status der Teilaufgabe geändert
 timeline-type-stream-error = Datenstromfehler
 timeline-type-message-part-checkpointed = Nachrichtenteil gespeichert
 timeline-type-message-part-delta = Nachrichtenteil geändert
@@ -3018,7 +3017,7 @@ overlay-timeline-events = Ereignisse
 status-part-workspace = Arbeitsbereich {$value}
 status-part-state = Status={$value}
 status-part-agent = Agent={$value}
-status-part-task = Aufgabe={$value}
+status-part-agent-name = Agentenname={$value}
 status-part-model = Modell={$value}
 status-part-thinking = Denken={$value}
 status-part-speed = Geschwindigkeit={$value}
@@ -3052,7 +3051,6 @@ operation-diff-summary-detailed-one = Diff: 1 Datei, +{$added} -{$deleted}
 operation-diff-summary-detailed-one-rename = Diff: 1 Datei, +{$added} -{$deleted}, {$renamed} umbenannt
 operation-diff-summary-detailed = Diff: {$files} Dateien, +{$added} -{$deleted}
 operation-diff-summary-detailed-renames = Diff: {$files} Dateien, +{$added} -{$deleted}, {$renamed} umbenannt
-operation-nested-task-summary = {$title} ({$status})
 snapshot-action-keep = behalten
 snapshot-action-remove = entfernt
 snapshot-action-exit = beendet

@@ -179,7 +179,10 @@ impl SessionManager {
                 .pending_deliveries(summary.id, None, 128)
                 .await
                 .map_err(kernel_error)?;
-            let Some(delivery) = pending.first() else {
+            let Some(delivery) = pending.iter().find(|delivery| {
+                delivery.target_execution.is_none()
+                    && delivery.payload.get("kind").and_then(Value::as_str) != Some("agent_message")
+            }) else {
                 continue;
             };
             // Targeted guidance belongs only to its supervised owner. A

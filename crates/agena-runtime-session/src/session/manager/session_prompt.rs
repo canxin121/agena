@@ -79,15 +79,27 @@ Use the tool for every question; wait before dependent work. A timeout, cancella
     section
 }
 
-/// Delegation decision semantics injected when the `agena.tasks` tools are
+/// Delegation decision semantics injected when the `agena.agent` tools are
 /// available: bounded independent work with retained responsibility.
-fn render_delegating_section() -> String {
-    r#"# Delegating work
-
-Use `tasks.run` for bounded independent work. Give scope, checks and `commands`; limit concurrency, verify results, and do not redo delegated work. Handle simple lookups yourself.
-
-Default execution waits for the task. Use `run_in_background: true` for concurrent work; follow notification rules below."#
-        .to_string()
+fn render_delegating_section(tool_names: &[String]) -> String {
+    let has = |name: &str| tool_names.iter().any(|tool| tool == name);
+    let mut paragraphs = vec!["# Agent communication"];
+    if has("agent.spawn") {
+        paragraphs.push("`agent.spawn` returns a handle immediately; final replies arrive automatically. Give scope, checks and `commands`; verify results.");
+    }
+    if has("agent.message") {
+        paragraphs.push("`agent.message` queues without waking idle agents or pausing you.");
+    }
+    if has("agent.wait") {
+        paragraphs.push("`agent.wait` returns a wake reason; mail arrives once next turn. Await required results. Yield on user_input.");
+    }
+    if has("agent.followup") {
+        paragraphs.push("`agent.followup` guides/restarts a child.");
+    }
+    if has("agent.cancel") {
+        paragraphs.push("`agent.cancel` stops a child, keeps its session.");
+    }
+    paragraphs.join("\n\n")
 }
 
 /// Notification and terminal advice mentions only available execution tools.
@@ -103,9 +115,6 @@ fn render_background_section(tool_names: &[String]) -> String {
     if has("shell.watch") {
         paragraphs.push("`shell.watch` launches/replaces a watch; null policy removes it. ready_pattern notifies once; include_pattern wakes once or coalesces on_change (30s default). Success/failure patterns or quiet_period_ms stop the tree. Filters affect notifications, not capture.".to_owned());
     }
-    if has("tasks.run") {
-        paragraphs.push("Background `tasks.run` returns a handle; completion/failure/timeout/cancel sends system_notification.".to_owned());
-    }
     if has("monitor.start") {
         paragraphs.push("`monitor.start`: WebSocket text in bounded system_notification batches; each event has a sequence. Ends on source exit/disconnect/timeout/cancel/session end. Do not restart to check events.".to_owned());
         if has("shell.watch") {
@@ -118,7 +127,7 @@ fn render_background_section(tool_names: &[String]) -> String {
     if has("cron.create") {
         paragraphs.push("`cron.create` wakes at safe turn boundaries, retaining the originating assistant run. Use the environment's IANA timezone; timestamps are RFC 3339. Session-only jobs expire after seven days.".to_owned());
     }
-    paragraphs.push("When only a notification remains, end the current turn with the work still pending; resume from the notification. Waiting is not task completion; verify outcomes. Never poll or sleep for promised wakes. Read only for a concrete diagnosis or result details.".to_owned());
+    paragraphs.push("For shell, monitor and scheduler notifications, end the current turn with the work still pending; resume from the notification. Waiting is not task completion; verify outcomes. Never poll or sleep for promised wakes. Read only for a concrete diagnosis or result details.".to_owned());
     if has("shell.open") {
         paragraphs.push("`shell.open`: persistent interactive terminal/PTY process_id; yield_time_ms sets wait, timeout_ms lifetime. Exit sends no wake. Silence/yield is not process exit.".to_owned());
         if has("shell.read") {
@@ -152,10 +161,9 @@ fn render_background_section(tool_names: &[String]) -> String {
 
 /// Whether the available tool set can launch background work, so the
 /// `# Background execution` discipline section must be injected. Covers
-/// `shell.exec`, `shell.spawn`, `shell.watch`, `shell.open`, `tasks.run`, WebSocket `monitor.start`, and
+/// `shell.exec`, `shell.spawn`, `shell.watch`, `shell.open`, WebSocket `monitor.start`, and
 /// `cron.create` (a scheduled job fires later and wakes the session again).
 fn wants_background_section(tool_names: &[String]) -> bool {
-    let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
     let has_monitor = tool_names.iter().any(|name| name == "monitor.start");
     let has_cron = tool_names.iter().any(|name| name == "cron.create");
     let has_shell = tool_names.iter().any(|name| {
@@ -164,7 +172,7 @@ fn wants_background_section(tool_names: &[String]) -> bool {
             "shell.exec" | "shell.spawn" | "shell.watch" | "shell.open"
         )
     });
-    has_shell || has_tasks || has_monitor || has_cron
+    has_shell || has_monitor || has_cron
 }
 
 fn render_web_reading_section(tool_names: &[String]) -> String {
@@ -215,8 +223,8 @@ fn workflow_sections(tool_names: &[String]) -> Vec<String> {
     if has("interaction.ask") {
         sections.push(render_asking_section(has("plan.review")));
     }
-    if has("tasks.run") {
-        sections.push(render_delegating_section());
+    if tool_names.iter().any(|name| name.starts_with("agent.")) {
+        sections.push(render_delegating_section(tool_names));
     }
     if wants_background_section(tool_names) {
         sections.push(render_background_section(tool_names));
@@ -286,7 +294,11 @@ mod tests {
         "plan.edit",
         "plan.phase",
         "interaction.ask",
-        "tasks.run",
+        "agent.spawn",
+        "agent.message",
+        "agent.wait",
+        "agent.followup",
+        "agent.cancel",
         "shell.exec",
         "shell.spawn",
         "shell.watch",
@@ -386,7 +398,12 @@ mod tests {
             &["cron.create"],
             &["monitor.start"],
             &["monitor.start", "monitor.stop"],
-            &["tasks.run"],
+            &["agent.spawn"],
+            &["agent.message"],
+            &["agent.wait"],
+            &["agent.followup"],
+            &["agent.cancel"],
+            &["agent.message", "agent.wait"],
             &["shell.exec"],
             &["shell.spawn"],
             &["shell.spawn", "shell.logs"],
@@ -427,7 +444,6 @@ mod tests {
             let wants_background = [
                 "cron.create",
                 "monitor.start",
-                "tasks.run",
                 "shell.exec",
                 "shell.spawn",
                 "shell.open",
@@ -450,8 +466,8 @@ mod tests {
                 available.contains(&"interaction.ask")
             );
             assert_eq!(
-                rendered.contains("# Delegating work"),
-                available.contains(&"tasks.run")
+                rendered.contains("# Agent communication"),
+                available.iter().any(|name| name.starts_with("agent."))
             );
             if sections.is_empty() {
                 assert_eq!(
@@ -510,13 +526,13 @@ mod tests {
         }
         let delegation = &sections[2];
         for rule in [
-            "tasks.run",
-            "bounded independent work",
+            "agent.spawn",
             "commands",
             "verify results",
-            "do not redo delegated work",
-            "waits for the task",
-            "run_in_background: true",
+            "returns a handle immediately",
+            "final replies arrive automatically",
+            "agent.wait",
+            "Await required results",
         ] {
             assert!(delegation.contains(rule), "delegation rule: {rule}");
         }
@@ -572,7 +588,7 @@ mod tests {
         for heading in [
             "# Planning",
             "# Asking the user",
-            "# Delegating work",
+            "# Agent communication",
             "# Background execution",
             "# Git and file recovery",
             "# Communication and delivery",

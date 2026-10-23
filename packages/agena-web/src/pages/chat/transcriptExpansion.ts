@@ -1,6 +1,5 @@
 import type { TranscriptDisplayPart } from '../../components/chat/messageList.types'
 import { chatActivityKindIdForTranscriptPart, normalizeChatToolActivityId } from '../../lib/chatActivity'
-import { partIsDelegatedTask } from './transcriptProjection'
 
 export type TranscriptExpansionPreferences = {
   toolExpanded: (tool: unknown) => boolean | undefined
@@ -37,6 +36,5 @@ export function activityInitiallyExpandedForPart(
   if (!category && Object.prototype.hasOwnProperty.call(preferences.toolCategoryOverrides, 'unknown')) {
     return preferences.toolCategoryOverrides.unknown === true
   }
-  if (partIsDelegatedTask(part.source)) return true
   return preferences.kindExpanded('operation')
 }

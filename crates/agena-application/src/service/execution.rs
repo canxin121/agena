@@ -363,11 +363,11 @@ impl ApplicationService {
                 model_verbosity: context.model_verbosity,
                 model_parallel_tool_calls: context.model_parallel_tool_calls,
                 effective_workspace_root: context.effective_workspace_root,
-                task_id: context.task_id,
-                subtask_status: context.subtask_status,
-                subtask_started_at: context.subtask_started_at,
-                subtask_finished_at: context.subtask_finished_at,
-                subtask_failure: context.subtask_failure.map(Into::into),
+                agent_name: context.agent_name,
+                agent_status: context.agent_status,
+                agent_started_at: context.agent_started_at,
+                agent_finished_at: context.agent_finished_at,
+                agent_failure: context.agent_failure.map(Into::into),
             },
             usage: session_usage_resource(session_queries, session_id).await?,
         })
@@ -569,7 +569,7 @@ async fn pending_interactive_requests(
         .map(|context| PendingInteractiveRequestResource {
             session_id: context.session_id,
             parent_session_id: context.parent_session_id,
-            task_id: context.task_id,
+            agent_name: context.agent_name,
             request: pending_interactive_request_from_domain(context.request),
         })
         .collect())

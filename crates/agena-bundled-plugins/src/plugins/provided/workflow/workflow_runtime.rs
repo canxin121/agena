@@ -450,111 +450,6 @@ impl WorkflowPlugin {
         Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
     }
 
-    pub(crate) async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
-        let host = self.host()?;
-        let response = host
-            .run_subtask(RunSubtaskRequest {
-                parent_session_id: None,
-                run_in_background: false,
-                launch_call_id: None,
-                description: input.description.clone(),
-                prompt: input.prompt.clone(),
-                commands: input.commands.clone(),
-                task_id: input.task_id.clone(),
-                selection: input
-                    .selection
-                    .as_ref()
-                    .map(|selection| RunSubtaskModelSelection {
-                        provider: selection.provider.clone(),
-                        adapter: selection.adapter.clone(),
-                        model: selection.model.clone(),
-                        thinking_mode: selection.thinking_mode.clone(),
-                        speed_mode: selection.speed_mode.clone(),
-                        verbosity: selection.verbosity.clone(),
-                        parallel_tool_calls: selection.parallel_tool_calls,
-                    }),
-                timeout_ms: input.timeout_ms,
-                max_tokens: input.max_tokens,
-                max_cost_microusd: input.max_cost_microusd,
-            })
-            .await?;
-
-        let status = match response.status {
-            RunSubtaskStatus::Created => "created",
-            RunSubtaskStatus::Running => "running",
-            RunSubtaskStatus::Completed => "completed",
-            RunSubtaskStatus::Failed => "failed",
-            RunSubtaskStatus::Cancelled => "cancelled",
-            RunSubtaskStatus::TimedOut => "timed_out",
-            RunSubtaskStatus::Interrupted => "interrupted",
-        };
-        let failure_message = response
-            .problem
-            .as_ref()
-            .map(|failure| failure.user.fallback.as_str());
-        let output_text = match (&response.final_text, failure_message) {
-            (final_text, Some(error)) if !error.trim().is_empty() => match final_text {
-                Some(text) if !text.trim().is_empty() => format!(
-                    "Subtask {} {status}: {error}\n\nLast assistant output:\n{text}",
-                    response.task_id
-                ),
-                _ => format!("Subtask {} {status}: {error}", response.task_id),
-            },
-            (Some(text), _) if !text.trim().is_empty() => text.clone(),
-            _ => format!(
-                "Subtask {} finished with status {status}.",
-                response.task_id
-            ),
-        };
-        let mut view =
-            ToolExecutionView::simple(format!("Task {}", input.description), status, output_text);
-        view.metadata
-            .insert("description".to_string(), input.description.clone());
-        view.metadata
-            .insert("task_id".to_string(), response.task_id.clone());
-        view.metadata
-            .insert("session_id".to_string(), response.session_id.to_string());
-        view.metadata
-            .insert("status".to_string(), status.to_string());
-        view.metadata
-            .insert("resumed".to_string(), response.resumed.to_string());
-        if let Some(model_provider_id) = response.model_provider_id.clone() {
-            view.metadata
-                .insert("model_provider_id".to_string(), model_provider_id);
-        }
-        if let Some(model_adapter_id) = response.model_adapter_id.clone() {
-            view.metadata
-                .insert("model_adapter_id".to_string(), model_adapter_id);
-        }
-        if let Some(model_id) = response.model_id.clone() {
-            view.metadata.insert("model_id".to_string(), model_id);
-        }
-
-        let output = ToolPayloadOutput::Task {
-            task_id: response.task_id,
-            session_id: response.session_id,
-            parent_session_id: response.parent_session_id,
-            status: status.to_string(),
-            resumed: response.resumed,
-            final_text: response.final_text,
-            model_feedback: response.model_feedback,
-            model_provider_id: response.model_provider_id,
-            model_adapter_id: response.model_adapter_id,
-            model_id: response.model_id,
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
-            reasoning_tokens: response.usage.reasoning_tokens,
-            cache_write_tokens: response.usage.cache_write_tokens,
-            cache_read_tokens: response.usage.cache_read_tokens,
-            total_cost_microusd: (response.usage.total_cost.max(0.0) * 1_000_000.0).round() as u64,
-        };
-        Ok(
-            crate::plugins::provided::router::tool_execution_to_invoke_output(
-                ToolPayloadExecution::new(output, view),
-            ),
-        )
-    }
-
     pub(crate) async fn invoke_tool_api_list(
         &self,
         input: &ToolApiListInput,
@@ -874,12 +769,10 @@ impl WorkflowPlugin {
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     CommandBeforeInput, HashMap, PlanEditInput, PlanEditTarget, PlanGetInput, PlanPhaseInput,
-    PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput, ToolApiHelpInput,
-    ToolApiListInput, ToolBeforeInput, ToolDescriptor, ToolExecutionView, ToolInvokeOutput,
-    ToolPayloadExecution, ToolPayloadOutput, ToolTag, WorkflowPlan, WorkflowPlanPhase,
-    WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user, compact_tool_summary,
-    search_tools, tags_summary,
+    PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError, SdkResult, ToolApiHelpInput,
+    ToolApiListInput, ToolBeforeInput, ToolDescriptor, ToolInvokeOutput, ToolTag, WorkflowPlan,
+    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user,
+    compact_tool_summary, search_tools, tags_summary,
 };
 
 fn validate_plugin_selector(plugin: Option<&super::ToolApiStringBatch>) -> SdkResult<()> {

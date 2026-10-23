@@ -484,7 +484,7 @@ describe('TUI-parity part presentation', () => {
     if (block?.kind === 'message') expect(block.displayParts[0]?.defaultExpanded).toBe(true)
   })
 
-  test('opens delegated task parts by default while honoring explicit tool and category preferences', () => {
+  test('uses ordinary expansion defaults for agent receipts while honoring explicit tool and category preferences', () => {
     const [block] = projectTranscriptBlocks(
       [
         {
@@ -493,11 +493,11 @@ describe('TUI-parity part presentation', () => {
             {
               id: 'task-1',
               type: 'tool',
-              tool: 'run',
+              tool: 'spawn',
               partState: 'in_progress',
               agenaKind: 'tool_call',
               agenaRole: 'assistant',
-              agenaContent: { plugin: 'agena.tasks', name: 'run' },
+              agenaContent: { plugin: 'agena.agent', name: 'spawn' },
             },
           ],
         },
@@ -513,12 +513,12 @@ describe('TUI-parity part presentation', () => {
         toolCategoryOverrides: {},
         kindExpanded: () => false,
       }
-      expect(activityInitiallyExpandedForPart(part, defaults)).toBe(true)
+      expect(activityInitiallyExpandedForPart(part, defaults)).toBe(false)
       expect(
         activityInitiallyExpandedForPart(part, {
           ...defaults,
           toolExpanded: (tool) => {
-            expect(tool).toBe('agena.tasks.run')
+            expect(tool).toBe('agena.agent.spawn')
             return false
           },
         }),
@@ -526,7 +526,7 @@ describe('TUI-parity part presentation', () => {
       expect(
         activityInitiallyExpandedForPart(part, {
           ...defaults,
-          toolCategoryOverrides: { task: false },
+          toolCategoryOverrides: { agent: false },
         }),
       ).toBe(false)
     }

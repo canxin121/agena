@@ -21,10 +21,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-fn is_zero_u64(value: &u64) -> bool {
-    *value == 0
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -36,7 +32,6 @@ pub enum ToolPayloadInput {
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
-    Task(crate::part::TaskToolInput),
     ToolSearch(ToolSearchToolInput),
     #[serde(rename = "ask_user")]
     AskUser(AskUserToolInput),
@@ -65,7 +60,6 @@ impl ToolPayloadInput {
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
             Self::Grep(_) => "grep",
-            Self::Task(_) => "task",
             Self::ToolSearch(_) => "tool_search",
             Self::AskUser(_) => "ask_user",
             Self::WebFetch(_) => "web_fetch",
@@ -400,36 +394,6 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "is_false")]
         truncated: bool,
     },
-    Task {
-        task_id: String,
-        session_id: i64,
-        parent_session_id: i64,
-        status: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        resumed: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        final_text: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_feedback: Option<agena_failure::ModelFeedback>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_provider_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_adapter_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_id: Option<String>,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        input_tokens: u64,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        output_tokens: u64,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        reasoning_tokens: u64,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        cache_write_tokens: u64,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        cache_read_tokens: u64,
-        #[serde(default, skip_serializing_if = "is_zero_u64")]
-        total_cost_microusd: u64,
-    },
     ToolSearch {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<String>,
@@ -667,7 +631,6 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.fs.apply_patch",
         "agena_fs_apply_patch",
     ),
-    ("task", "tasks.run", "agena.tasks.run", "agena_tasks_run"),
     (
         "tool_search",
         "tools.search",
@@ -774,7 +737,7 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("glob", "agena.fs", "glob"),
     ("grep", "agena.fs", "grep"),
     ("apply_patch", "agena.fs", "apply_patch"),
-    ("task", "agena.tasks", "run"),
+    ("task", "agena.agent", "run"),
     ("tool_search", "agena.tools", "search"),
     ("ask_user", "agena.interaction", "ask"),
     ("lsp_definition", "agena.lsp", "definition"),
@@ -979,7 +942,7 @@ mod tests {
         for (plugin, tool) in [
             ("agena.shell", "run"),
             ("agena.fs", "write"),
-            ("agena.tasks", "run"),
+            ("agena.agent", "run"),
             ("agena.interaction", "notify"),
         ] {
             let registered = registered_tool(plugin, tool);
@@ -1121,9 +1084,6 @@ mod tests {
             ("agena_monitor_start", "monitor"),
             ("agena_monitor_stop", "monitor"),
             // tasks / tools / interaction family
-            ("tasks.run", "task"),
-            ("agena.tasks.run", "task"),
-            ("agena_tasks_run", "task"),
             ("tools.search", "tool_search"),
             ("agena.tools.search", "tool_search"),
             ("agena_tools_search", "tool_search"),
@@ -1178,7 +1138,6 @@ mod tests {
             ("fs.apply_patch", "apply_patch"),
             ("web.fetch", "web_fetch"),
             ("web.search", "web_search"),
-            ("tasks.run", "task"),
             ("tools.search", "tool_search"),
             ("interaction.ask", "ask_user"),
             ("cron.create", "cron_create"),

@@ -1,7 +1,7 @@
 //! Concrete activity service state: registry + source bridges + log readers.
 //!
 //! The runtime owns one [`ActivityRuntimeState`] for its whole lifetime. Source
-//! bridges push shell processes, runtime tasks, and delegated tasks into the
+//! bridges push shell processes, runtime tasks, and agents into the
 //! unified registry; the application-facing [`RuntimeActivityService`]
 //! implementation reads the same state.
 
@@ -12,9 +12,9 @@ use std::{
 };
 
 use agena_domain::{
-    BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
+    AgentStatus, BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
     BackgroundActivityLogRead, BackgroundActivityStatus, ProcessEvent, ProcessStatus,
-    ProcessStream, ProcessSummary, SubtaskStatus,
+    ProcessStream, ProcessSummary,
 };
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
@@ -300,76 +300,57 @@ fn runtime_task_activity(task: &RuntimeBackgroundTask) -> BackgroundActivity {
     }
 }
 
-fn subtask_status_to_background(status: SubtaskStatus) -> BackgroundActivityStatus {
+fn agent_status_to_background(status: AgentStatus) -> BackgroundActivityStatus {
     match status {
-        SubtaskStatus::Created => BackgroundActivityStatus::Pending,
-        SubtaskStatus::Running => BackgroundActivityStatus::Running,
-        SubtaskStatus::Completed => BackgroundActivityStatus::Succeeded,
-        SubtaskStatus::Failed => BackgroundActivityStatus::Failed,
-        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => {
-            BackgroundActivityStatus::Cancelled
-        }
-        SubtaskStatus::TimedOut => BackgroundActivityStatus::Failed,
+        AgentStatus::Created => BackgroundActivityStatus::Pending,
+        AgentStatus::Running => BackgroundActivityStatus::Running,
+        AgentStatus::Completed => BackgroundActivityStatus::Succeeded,
+        AgentStatus::Failed => BackgroundActivityStatus::Failed,
+        AgentStatus::Cancelled | AgentStatus::Interrupted => BackgroundActivityStatus::Cancelled,
+        AgentStatus::TimedOut => BackgroundActivityStatus::Failed,
     }
 }
 
-fn subtask_activity(
-    task_id: &str,
-    session_id: i64,
-    parent_session_id: Option<i64>,
-    status: BackgroundActivityStatus,
-    started_at_ms: i64,
-    finished_at_ms: Option<i64>,
-    message: Option<String>,
-    failure: Option<agena_failure::UserProblem>,
-) -> BackgroundActivity {
-    BackgroundActivity {
-        id: format!("task_{task_id}"),
-        kind: BackgroundActivityKind::Task,
+/// Project agent configuration into the bounded process-local activity registry.
+pub(crate) fn upsert_agent_activity_from_meta(
+    registry: &ActivityRegistry,
+    meta: &SessionSummaryView,
+    configuration: &SessionConfiguration,
+) {
+    let Some(agent) = &configuration.agent else {
+        return;
+    };
+    let agent_id = meta.id.get();
+    let status = agent_status_to_background(agent.status);
+    let started_at_ms = agent.started_at_ms.unwrap_or(meta.created_at_ms);
+    registry.upsert(BackgroundActivity {
+        id: format!("agent_{agent_id}"),
+        kind: BackgroundActivityKind::Agent,
         status,
-        title: format!("Delegated task · {task_id}"),
+        title: format!("Agent · {}", agent.name),
         description: String::new(),
         command: None,
         workdir: None,
-        session_id: Some(session_id),
-        parent_session_id,
+        session_id: Some(agent_id),
+        parent_session_id: configuration.parent_session_id.map(SessionId::get),
         operation_id: None,
         source_part_id: None,
         created_at_ms: started_at_ms,
         started_at_ms,
-        finished_at_ms,
+        finished_at_ms: agent.finished_at_ms,
         next_event_at_ms: None,
         exit_code: None,
-        message,
-        failure,
+        message: agent
+            .failure
+            .as_ref()
+            .map(|failure| failure.user.fallback.clone()),
+        failure: agent.failure.as_ref().map(Into::into),
         last_seq: 0,
         has_more: false,
         dropped_lines: 0,
         cancellable: status.is_active(),
         dismissible: status.is_terminal(),
-    }
-}
-
-/// Project task configuration into the bounded process-local activity registry.
-pub(crate) fn upsert_task_activity_from_meta(
-    registry: &ActivityRegistry,
-    meta: &SessionSummaryView,
-    configuration: &SessionConfiguration,
-) {
-    let Some(task) = &configuration.task else {
-        return;
-    };
-    let failure = task.failure.as_ref();
-    registry.upsert(subtask_activity(
-        &task.id,
-        meta.id.get(),
-        configuration.parent_session_id.map(SessionId::get),
-        subtask_status_to_background(task.status),
-        task.started_at_ms.unwrap_or(meta.created_at_ms),
-        task.finished_at_ms,
-        failure.map(|failure| failure.user.fallback.clone()),
-        failure.map(Into::into),
-    ));
+    });
 }
 
 /// Publishes bounded process event batches and terminal observations as
@@ -855,7 +836,6 @@ fn background_failure(status: ProcessStatus, fallback: String) -> Failure {
     )
 }
 
-/// Terminalize the parent's `task` part once the child session settles. The
 /// Resolve the deterministic launch identity without enumerating processes.
 fn managed_process_scope(id: &str) -> Option<(SessionId, ToolId)> {
     let mut pieces = id.strip_prefix("proc_")?.split('_');
@@ -906,82 +886,6 @@ pub(crate) fn read_shell_logs(
         exit_code: read.exit_code,
         completion_reason: read.completion_reason,
     })
-}
-
-/// Read a delegated task's transcript as unified log lines.
-/// `session_manager` may be missing during early bootstrap or after reload;
-/// callers treat that as an empty result.
-pub(crate) async fn read_task_logs(
-    session_manager: Option<&Arc<SessionManager>>,
-    parent_session_id: i64,
-    task_id: &str,
-    after_cursor: i64,
-) -> BackgroundActivityLogRead {
-    let Some(manager) = session_manager else {
-        return empty_task_logs(task_id, after_cursor);
-    };
-    match manager
-        // A provider keeps appending to one run. Re-read the cursor run as
-        // well, so its log line can be replaced while it streams; an exclusive
-        // cursor only ever exposed the first fragment of that reply.
-        .read_subtask_output_bounded(parent_session_id, task_id, after_cursor.saturating_sub(1), 200)
-        .await
-    {
-        Ok(output) => {
-            let mut lines = Vec::new();
-            let last_seq = output.next_cursor.max(after_cursor);
-            for chunk in output.chunks {
-                let text = format!(
-                    "{}: {}",
-                    format!("{:?}", chunk.role).to_lowercase(),
-                    chunk.text
-                );
-                lines.push(BackgroundActivityLogLine {
-                    seq: chunk.cursor as u64,
-                    stream: "message".to_string(),
-                    ts_ms: chunk.created_at_ms,
-                    text,
-                    chunk: false,
-                });
-            }
-            BackgroundActivityLogRead {
-                activity_id: format!("task_{task_id}"),
-                status: BackgroundActivityStatus::Running,
-                lines,
-                last_seq: last_seq as u64,
-                has_more: output.has_more,
-                dropped_lines: 0,
-                exit_code: None,
-                completion_reason: None,
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                parent_session_id,
-                task_id,
-                after_cursor,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to read delegated-task logs; returning an empty activity-log page",
-                    &error,
-                ),
-                "delegated-task activity log is temporarily unavailable"
-            );
-            empty_task_logs(task_id, after_cursor)
-        }
-    }
-}
-
-fn empty_task_logs(task_id: &str, cursor: i64) -> BackgroundActivityLogRead {
-    BackgroundActivityLogRead {
-        activity_id: format!("task_{task_id}"),
-        status: BackgroundActivityStatus::Running,
-        lines: Vec::new(),
-        last_seq: cursor as u64,
-        has_more: false,
-        dropped_lines: 0,
-        exit_code: None,
-        completion_reason: None,
-    }
 }
 
 #[cfg(test)]

@@ -33,7 +33,7 @@ impl BuiltinToolSet {
         match self.profile {
             BuiltinToolProfile::Full => true,
             BuiltinToolProfile::ReadOnly => ToolTag::is_read_only(tags),
-            BuiltinToolProfile::NoTask => !ToolTag::is_task(tags),
+            BuiltinToolProfile::NoAgent => !ToolTag::is_agent(tags),
         }
     }
 }

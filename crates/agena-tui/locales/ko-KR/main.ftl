@@ -1903,7 +1903,7 @@ transcript-image-embedded = 포함된 이미지
 # Activities, composer, diagnostics and usage analytics.
 activities-title = 백그라운드 활동
 activities-empty = 백그라운드 활동이 없습니다.
-activities-empty-hint = shell.spawn, shell.open 또는 tasks.run을 실행하여 활동을 만드세요.
+activities-empty-hint = shell.spawn, shell.open 또는 agent.spawn을 실행하여 활동을 만드세요.
 activities-section-active = 진행 중
 activities-section-finished = 완료됨
 activities-footer-close = Esc 닫기
@@ -2021,7 +2021,7 @@ activities-control-delete = 삭제
 activities-control-dismiss = 닫기
 activities-kind-shell = 셸
 activities-kind-monitor = 모니터링
-activities-kind-task = 작업
+activities-kind-agent = 에이전트
 activities-kind-cron = 예약 작업
 activities-kind-runtime = 런타임
 activities-kind-browser = 브라우저
@@ -2482,7 +2482,6 @@ timeline-type-execution-completed = 실행 완료
 timeline-type-execution-cancelled = 실행 취소
 timeline-type-execution-failed = 실행 실패
 timeline-type-compaction-completed = 컨텍스트 압축 완료
-timeline-type-subtask-status-changed = 하위 작업 상태 변경
 timeline-type-stream-error = 스트림 오류
 timeline-type-message-part-checkpointed = 메시지 부분 체크포인트 저장
 timeline-type-message-part-delta = 메시지 부분 변경
@@ -2826,7 +2825,7 @@ value-runtime-config-file = 런타임 구성 (agena.json)
 status-part-workspace = 워크스페이스 {$value}
 status-part-state = 상태={$value}
 status-part-agent = 에이전트={$value}
-status-part-task = 작업={$value}
+status-part-agent-name = 에이전트_이름={$value}
 status-part-model = 모델={$value}
 status-part-thinking = 추론={$value}
 status-part-speed = 속도={$value}
@@ -2864,7 +2863,6 @@ operation-diff-summary-detailed-one = diff: 파일 1개, +{$added} -{$deleted}
 operation-diff-summary-detailed-one-rename = diff: 파일 1개, +{$added} -{$deleted}, 이름 변경 {$renamed}개
 operation-diff-summary-detailed = diff: 파일 {$files}개, +{$added} -{$deleted}
 operation-diff-summary-detailed-renames = diff: 파일 {$files}개, +{$added} -{$deleted}, 이름 변경 {$renamed}개
-operation-nested-task-summary = {$title} ({$status})
 snapshot-action-keep = 유지됨
 snapshot-action-remove = 제거됨
 snapshot-action-exit = 종료됨

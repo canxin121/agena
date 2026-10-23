@@ -202,11 +202,11 @@ mod tests {
             model_verbosity: None,
             model_parallel_tool_calls: None,
             effective_workspace_root: None,
-            task_id: None,
-            subtask_status: None,
-            subtask_started_at: None,
-            subtask_finished_at: None,
-            subtask_failure: None,
+            agent_name: None,
+            agent_status: None,
+            agent_started_at: None,
+            agent_finished_at: None,
+            agent_failure: None,
         };
         assert_eq!(
             execution_model_status_label(&execution).as_deref(),

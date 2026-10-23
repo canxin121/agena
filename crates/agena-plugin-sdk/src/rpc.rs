@@ -188,10 +188,11 @@ pub mod method {
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
     pub const HOST_SERVICE_INVOKE: &str = "host/service.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";
-    pub const HOST_SUBTASK_RUN: &str = "host/subtask.run";
-    pub const HOST_SUBTASK_CANCEL: &str = "host/subtask.cancel";
-    pub const HOST_SUBTASK_MESSAGE: &str = "host/subtask.message";
-    pub const HOST_SUBTASK_OUTPUT: &str = "host/subtask.output";
+    pub const HOST_AGENT_SPAWN: &str = "host/agent.spawn";
+    pub const HOST_AGENT_MESSAGE: &str = "host/agent.message";
+    pub const HOST_AGENT_WAIT: &str = "host/agent.wait";
+    pub const HOST_AGENT_FOLLOWUP: &str = "host/agent.followup";
+    pub const HOST_AGENT_CANCEL: &str = "host/agent.cancel";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
     pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";

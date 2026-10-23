@@ -5,6 +5,11 @@
 //! `tests::every_locale_covers_every_key`.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
+    ("Start agent", "エージェントを開始"),
+    ("Message agent", "エージェントに送信"),
+    ("Wait for agents", "エージェントを待機"),
+    ("Continue agent", "エージェントを再開"),
+    ("Cancel agent", "エージェントを停止"),
     ("Read", "読み取り"),
     ("Read files", "複数ファイルの読み取り"),
     ("Write", "書き込み"),

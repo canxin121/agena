@@ -494,7 +494,7 @@ mod permission_ceiling_tests {
         let child = PermissionConfig {
             tools: Some(ToolPermissionConfig {
                 default: Some(allow),
-                names: BTreeMap::from([("agena.tasks.run".to_string(), allow)]),
+                names: BTreeMap::from([("agena.agent.spawn".to_string(), allow)]),
                 ..Default::default()
             }),
             ..Default::default()
@@ -502,7 +502,7 @@ mod permission_ceiling_tests {
         let parent = PermissionConfig {
             tools: Some(ToolPermissionConfig {
                 default: Some(allow),
-                names: BTreeMap::from([("agena.tasks.run".to_string(), deny)]),
+                names: BTreeMap::from([("agena.agent.spawn".to_string(), deny)]),
                 ..Default::default()
             }),
             ..Default::default()
@@ -517,7 +517,7 @@ mod permission_ceiling_tests {
         .expect("parent ceiling");
 
         assert!(matches!(
-            principal.authorize_tool_name("agena.tasks.run"),
+            principal.authorize_tool_name("agena.agent.spawn"),
             PermissionDecision::Deny { .. }
         ));
     }

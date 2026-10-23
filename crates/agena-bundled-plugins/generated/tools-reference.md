@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 140 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -14,6 +14,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## Table of Contents
 
+- [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
@@ -33,9 +34,307 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
-- [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (3 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
+
+## agena.agent
+
+**Version** `0.1.0` · **Tools** 5
+
+Agent communication and delegation.
+
+### cancel
+
+`agena.agent.cancel` · **Summary**: Stop a direct child execution. Preserves the agent session for agent.followup.
+
+**Tags**: `agent`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `target` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "target": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+### followup
+
+`agena.agent.followup` · **Summary**: Give a direct child more work. Queues guidance while running; starts another execution in the same session when idle.
+
+**Tags**: `agent`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `message` | `string` | ✓ | — |  |
+| `target` | `string` | ✓ | — | An agent_id, a visible agent name, or `parent`. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "message": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "target": {
+      "description": "An agent_id, a visible agent name, or `parent`.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "target",
+    "message"
+  ],
+  "type": "object"
+}
+```
+
+### message
+
+`agena.agent.message` · **Summary**: Queue a message to a visible agent. Does not start idle recipients or pause the sender. Use agent.wait when you need a reply.
+
+**Tags**: `agent`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `message` | `string` | ✓ | — |  |
+| `target` | `string` | ✓ | — | An agent_id, a visible agent name, or `parent`. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "message": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "target": {
+      "description": "An agent_id, a visible agent name, or `parent`.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "target",
+    "message"
+  ],
+  "type": "object"
+}
+```
+
+### spawn
+
+`agena.agent.spawn` · **Summary**: Create an independent child and return its handle immediately. Its final reply is delivered automatically. Parent history is not copied; include scope and constraints in prompt.
+
+**Tags**: `agent`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `commands` | `array<string>` | — | `[]` | Command instructions attached to the initial message. |
+| `max_cost_microusd` | `integer / null` | — | — |  |
+| `max_tokens` | `integer / null` | — | — | Per-execution token budget, retained for followup executions. |
+| `name` | `string` | ✓ | — | Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved. |
+| `prompt` | `string` | ✓ | — | Scope, constraints and expected final result. Parent history is not copied. |
+| `selection` | `AgentModelSelection / null` | — | — |  |
+| `timeout_ms` | `integer / null` | — | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "AgentModelSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parallel_tool_calls": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "provider": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speed_mode": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thinking_mode": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verbosity": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "commands": {
+      "default": [],
+      "description": "Command instructions attached to the initial message.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000002"
+    },
+    "max_cost_microusd": {
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "max_tokens": {
+      "description": "Per-execution token budget, retained for followup executions.",
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "name": {
+      "description": "Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "description": "Scope, constraints and expected final result. Parent history is not copied.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "selection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentModelSelection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000003"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    }
+  },
+  "required": [
+    "name",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### wait
+
+`agena.agent.wait` · **Summary**: Wait on your own mailbox for messages, new user input or timeout. Returns only a wake reason; messages enter context automatically. Do not poll.
+
+**Tags**: `agent`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `timeout_ms` | `integer / null` | — | — | Defaults to 60 seconds. Wait for messages instead of polling statuses. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "timeout_ms": {
+      "description": "Defaults to 60 seconds. Wait for messages instead of polling statuses.",
+      "format": "uint64",
+      "maximum": 300000,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    }
+  },
+  "type": "object"
+}
+```
 
 ## agena.chatgpt
 
@@ -6008,7 +6307,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `agent.spawn` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8284,428 +8583,6 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "required": [
     "process_id",
     "chars"
-  ],
-  "type": "object"
-}
-```
-
-## agena.tasks
-
-**Version** `0.1.0` · **Tools** 7
-
-Delegated subtask orchestration tools.
-
-### cancel
-
-`agena.tasks.cancel` · **Summary**: Cancel a running delegated task and its child execution.
-
-**Tags**: `subtask` `mutate` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `task_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "task_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "task_id"
-  ],
-  "type": "object"
-}
-```
-
-### followup
-
-`agena.tasks.followup` · **Summary**: Resume a terminal delegated task with a follow-up prompt.
-
-**Tags**: `subtask` `mutate` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `max_cost_microusd` | `integer / null` | — | — |  |
-| `max_tokens` | `integer / null` | — | — |  |
-| `prompt` | `string` | ✓ | — |  |
-| `task_id` | `string` | ✓ | — |  |
-| `timeout_ms` | `integer / null` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "max_cost_microusd": {
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "max_tokens": {
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "prompt": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "task_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    }
-  },
-  "required": [
-    "task_id",
-    "prompt"
-  ],
-  "type": "object"
-}
-```
-
-### get
-
-`agena.tasks.get` · **Summary**: Get delegated task metadata and terminal result.
-
-**Tags**: `subtask` `query` `read_only` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `task_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "task_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "task_id"
-  ],
-  "type": "object"
-}
-```
-
-### list
-
-`agena.tasks.list` · **Summary**: List delegated background tasks.
-
-**Tags**: `subtask` `query` `discovery` `read_only` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `status` | `string / null` | — | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "status": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    }
-  },
-  "type": "object"
-}
-```
-
-### message
-
-`agena.tasks.message` · **Summary**: Send additional guidance to a running delegated task.
-
-**Tags**: `subtask` `mutate` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `message` | `string` | ✓ | — |  |
-| `task_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "message": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "task_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "task_id",
-    "message"
-  ],
-  "type": "object"
-}
-```
-
-### output
-
-`agena.tasks.output` · **Summary**: Read incremental delegated-task transcript output after a cursor.
-
-**Tags**: `subtask` `query` `read_only` `task`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `cursor` | `integer` | — | `0` |  |
-| `limit` | `integer` | — | `100` |  |
-| `task_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "cursor": {
-      "default": 0,
-      "format": "int64",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001"
-    },
-    "limit": {
-      "default": 100,
-      "format": "uint32",
-      "maximum": 500,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "task_id": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "task_id"
-  ],
-  "type": "object"
-}
-```
-
-### run
-
-`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach command names in `commands` so the child session applies their instructions as task guidance.
-
-**Tags**: `subtask` `execute` `task`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Reach for this tool when the work matches an available command or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `commands` to command names, slash spellings or aliases (for example a read-only review command for a review task, or an explore command for an exploration task); the child session receives the instructions those commands name and should follow them. Unknown names are rejected before the subtask starts. Use the `agena.commands` plugin's `list` tool to discover what this workspace offers. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `commands` | `array<string>` | — | — | Optional command names, slash spellings or aliases to attach to the<br>delegated subtask's first user message as lazy references. The child<br>model receives catalog metadata and reads the instructions through the<br>plugin that declared the command. Use commands appropriate to the task:<br>for example a read-only review task can attach a review command, an<br>exploration task can attach an explore command. Unknown names are<br>rejected before the subtask starts. |
-| `description` | `string` | ✓ | — | Short label for the subtask session. |
-| `max_cost_microusd` | `integer / null` | — | — | Cumulative child-completion cost ceiling in USD micro-units (one<br>millionth of a USD). Integer micro-units avoid a floating-point value<br>becoming a durable budget boundary; for example, 250000 means $0.25. |
-| `max_tokens` | `integer / null` | — | — | Cumulative child-completion token budget. This includes prompt,<br>output, reasoning and cache token accounting reported by the route. |
-| `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
-| `run_in_background` | `boolean` | — | `false` | Run the subtask in the background (default false). When false (default)<br>the subtask runs inline and this call returns its final result before<br>the tool call returns. When true, the tool returns immediately with a<br>task id and the result is delivered as a `system_notification` when the<br>subtask settles — do not poll tasks.get/tasks.output waiting for it. |
-| `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
-| `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
-| `timeout_ms` | `integer / null` | — | — | Overall task timeout. A timeout cancels the child execution and returns<br>a structured `timed_out` task result. |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "TaskModelSelection": {
-      "additionalProperties": false,
-      "description": "Optional provider/model selection overrides for a delegated task.",
-      "properties": {
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "parallel_tool_calls": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "speed_mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thinking_mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "verbosity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    }
-  },
-  "additionalProperties": false,
-  "description": "Input of the task tool.",
-  "properties": {
-    "commands": {
-      "description": "Optional command names, slash spellings or aliases to attach to the\ndelegated subtask's first user message as lazy references. The child\nmodel receives catalog metadata and reads the instructions through the\nplugin that declared the command. Use commands appropriate to the task:\nfor example a read-only review task can attach a review command, an\nexploration task can attach an explore command. Unknown names are\nrejected before the subtask starts.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "description": {
-      "description": "Short label for the subtask session.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "max_cost_microusd": {
-      "description": "Cumulative child-completion cost ceiling in USD micro-units (one\nmillionth of a USD). Integer micro-units avoid a floating-point value\nbecoming a durable budget boundary; for example, 250000 means $0.25.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000008"
-    },
-    "max_tokens": {
-      "description": "Cumulative child-completion token budget. This includes prompt,\noutput, reasoning and cache token accounting reported by the route.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
-    "prompt": {
-      "description": "Full instruction payload for the delegated subtask.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "run_in_background": {
-      "default": false,
-      "description": "Run the subtask in the background (default false). When false (default)\nthe subtask runs inline and this call returns its final result before\nthe tool call returns. When true, the tool returns immediately with a\ntask id and the result is delivered as a `system_notification` when the\nsubtask settles — do not poll tasks.get/tasks.output waiting for it.",
-      "type": "boolean",
-      "x-agena-order": "000002"
-    },
-    "selection": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TaskModelSelection"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional model and mode overrides. Explicit values take precedence over\nthe parent session.",
-      "x-agena-order": "000005"
-    },
-    "task_id": {
-      "description": "Resume an existing subtask session instead of creating a new one.",
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "timeout_ms": {
-      "description": "Overall task timeout. A timeout cancels the child execution and returns\na structured `timed_out` task result.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    }
-  },
-  "required": [
-    "description",
-    "prompt"
   ],
   "type": "object"
 }

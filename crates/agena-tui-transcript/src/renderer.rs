@@ -817,7 +817,7 @@ mod tests {
                     kind: ContentKind::Log,
                 }],
                 call_id: 10,
-                invocation: ToolInvocation::new("tasks.run", StructuredObject::default()),
+                invocation: ToolInvocation::new("agent.spawn", StructuredObject::default()),
                 authorization: Default::default(),
                 user_input: Default::default(),
                 output: None,

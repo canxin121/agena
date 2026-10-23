@@ -748,7 +748,7 @@ export default {
             "grep": "Grep",
             "fetch": "Buscar URL",
             "question": "Pergunta",
-            "task": "Tarefa"
+            "agent": "Agente"
           },
           "summary": {
             "askedQuestions": "{count} pergunta(s) feita(s)"

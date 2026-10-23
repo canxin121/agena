@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use super::AgenaRuntime;
 
+mod agent_communication_tests;
 mod client_identity_tests;
 mod reload_shutdown_tests;
 mod shutdown_notification_tests;

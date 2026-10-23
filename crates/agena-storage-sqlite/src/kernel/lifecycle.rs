@@ -115,20 +115,40 @@ async fn configure(
     if let Some(value) = &change.effective_workspace_root {
         next.effective_workspace_root = value.clone();
     }
-    if let Some(value) = &change.task {
-        if let (Some(old), Some(new)) = (&original.task, value)
-            && (old.id != new.id
+    if let Some(value) = &change.agent {
+        if original.agent.is_some() && value.is_none() {
+            return Err(KernelError::Conflict(
+                "agent identity cannot be removed".into(),
+            ));
+        }
+        if let Some(agent) = value {
+            if next.relation_kind != SessionRelationKind::Subagent
+                || next.parent_session_id.is_none()
+                || agent.name.is_empty()
+                || agent.name.len() > 64
+                || !agent
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                || matches!(agent.name.as_str(), "parent" | "self")
+                || agent.name.bytes().all(|b| b.is_ascii_digit())
+            {
+                return Err(invalid("invalid agent identity"));
+            }
+        }
+        if let (Some(old), Some(new)) = (&original.agent, value)
+            && (old.name != new.name
                 || (old.status.is_terminal()
                     && old != new
-                    && !(new.status == agena_domain::SubtaskStatus::Running
+                    && !(new.status == agena_domain::AgentStatus::Running
                         && new.started_at_ms > old.started_at_ms
                         && new.finished_at_ms.is_none())))
         {
             return Err(KernelError::Conflict(
-                "task identity and terminal outcome are immutable".into(),
+                "agent identity and terminal outcome are immutable".into(),
             ));
         }
-        next.task = value.clone();
+        next.agent = value.clone();
     }
     let body = encode(&next)?;
     if body.len() > 65536 {
@@ -220,7 +240,7 @@ async fn fork(
     } else {
         SessionRelationKind::Fork
     };
-    config.task = None;
+    config.agent = None;
     config.conversation = conversation_mode.map(|mode| agena_domain::SessionConversation {
         mode,
         parent_session_id: session.get(),
@@ -395,7 +415,16 @@ async fn publish_delivery(
         .map_err(sql_error)?;
         if view.phase.is_terminal() || stopping {
             return Err(KernelError::Conflict(
-                "the delegated execution has ended; use tasks.followup to resume it".into(),
+                "the delegated execution has ended; use agent.followup to resume it".into(),
+            ));
+        }
+    }
+    if payload.get("kind").and_then(serde_json::Value::as_str) == Some("agent_message") {
+        let (count, bytes):(i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(length(CAST(payload_json AS BLOB))),0) FROM agena_deliveries WHERE session_id=? AND state='pending' AND json_extract(payload_json,'$.kind')='agent_message'")
+            .bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+        if count >= 32 || bytes.saturating_add(encode(payload)?.len() as i64) > 128 * 1024 {
+            return Err(invalid(
+                "agent mailbox is full; wait for the recipient to consume accepted messages before sending more",
             ));
         }
     }
@@ -547,13 +576,43 @@ pub(super) async fn apply(
                     permission_ceiling: Some(config.permission_ceiling.clone()),
                     capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
                     effective_workspace_root: Some(config.effective_workspace_root.clone()),
-                    task: Some(config.task.clone()),
+                    agent: Some(config.agent.clone()),
                 },
             )
             .await?;
             Mutation::Session(Box::new(reads::metadata(connection, metadata.id).await?))
         }
         Command::Configure { session, change } => configure(connection, *session, change).await?,
+        Command::FinishAgent {
+            session,
+            agent,
+            business_key,
+            payload,
+        } => {
+            let config = configuration(connection, *session).await?;
+            if config
+                .agent
+                .as_ref()
+                .is_none_or(|previous| previous.name != agent.name)
+                || config.relation_kind != SessionRelationKind::Subagent
+                || !agent.status.is_terminal()
+            {
+                return Err(KernelError::Ownership);
+            }
+            let parent = config.parent_session_id.ok_or(KernelError::Ownership)?;
+            let outcome = configure(
+                connection,
+                *session,
+                &SessionConfigurationChange {
+                    agent: Some(Some(agent.clone())),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            publish_delivery(connection, parent, None, business_key, payload).await?;
+            outcome
+        }
+
         Command::Fork {
             session,
             through,
@@ -666,7 +725,7 @@ pub(super) async fn refresh_paused_summary(
 
 pub(super) const STATE_SQL: &str = "t.processing_state";
 pub(super) fn summary_fields() -> String {
-    "s.parent_session_id,COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.task_id,s.task_status AS subtask_status,t.child_session_count,t.processing_state,".to_owned()
+    "s.parent_session_id,COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,s.agent_status AS agent_status,t.child_session_count,t.processing_state,".to_owned()
 }
 fn filter<'a>(
     builder: &mut sqlx::QueryBuilder<'a, sqlx::Sqlite>,
@@ -682,8 +741,8 @@ fn filter<'a>(
             .push(" AND s.parent_session_id=")
             .push_bind(parent.get());
     }
-    if query.tasks_only {
-        builder.push(" AND s.task_id IS NOT NULL");
+    if query.agents_only {
+        builder.push(" AND s.agent_name IS NOT NULL");
     }
     if query.roots_only {
         builder.push(" AND s.parent_session_id IS NULL");
@@ -971,14 +1030,14 @@ pub(super) async fn pending_deliveries(
     backend.wrap_read(session, values, bytes)
 }
 
-pub(super) async fn find_task(
+pub(super) async fn find_agent(
     backend: &Backend,
     parent: SessionId,
-    task_id: &str,
+    agent_name: &str,
 ) -> Result<ReadView<Option<SessionId>>> {
     backend.cache.ensure_open()?;
-    if task_id.is_empty() || task_id.len() > 4096 {
-        return Err(invalid("invalid task identity"));
+    if agent_name.is_empty() || agent_name.len() > 4096 {
+        return Err(invalid("invalid agent identity"));
     }
     let _read = backend
         .control_reads
@@ -992,8 +1051,8 @@ pub(super) async fn find_task(
         .await
         .map_err(storage)?;
     reads::metadata(&mut tx, parent).await?;
-    let id:Option<i64>=sqlx::query_scalar("SELECT id FROM agena_sessions WHERE parent_session_id=? AND json_extract(configuration_json,'$.task.id')=? AND deleted_at_ms IS NULL ORDER BY id LIMIT 1")
-        .bind(parent.get()).bind(task_id).fetch_optional(&mut *tx).await.map_err(sql_error)?;
+    let id:Option<i64>=sqlx::query_scalar("SELECT id FROM agena_sessions WHERE parent_session_id=? AND agent_name=? AND deleted_at_ms IS NULL ORDER BY id LIMIT 1")
+        .bind(parent.get()).bind(agent_name).fetch_optional(&mut *tx).await.map_err(sql_error)?;
     let value = id.map(SessionId::try_from).transpose().map_err(storage)?;
     backend.wrap_read(parent, value, std::mem::size_of::<Option<SessionId>>())
 }

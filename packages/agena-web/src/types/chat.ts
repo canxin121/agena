@@ -15,7 +15,7 @@ import type {
   SessionRelationKind,
   SessionState,
   SessionStateKind,
-  SubtaskStatus,
+  AgentStatus,
   WorkflowState,
 } from '../generated/agenaState'
 
@@ -32,7 +32,7 @@ export type {
   SessionRelationKind,
   SessionState,
   SessionStateKind,
-  SubtaskStatus,
+  AgentStatus,
   WorkflowState,
 }
 

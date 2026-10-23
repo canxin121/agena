@@ -4,6 +4,11 @@
 //! structure already match `tests::every_locale_covers_every_key`.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
+    ("Start agent", "Démarrer un agent"),
+    ("Message agent", "Envoyer un message à un agent"),
+    ("Wait for agents", "Attendre les agents"),
+    ("Continue agent", "Continuer un agent"),
+    ("Cancel agent", "Annuler un agent"),
     ("Read", "Lire"),
     ("Read files", "Lire plusieurs fichiers"),
     ("Write", "Écrire"),

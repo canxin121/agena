@@ -66,9 +66,7 @@ struct LiteralEnum {
 
 /// Rust-side predicates used for the generated classification constants.
 mod predicates {
-    use agena_domain::{
-        BackgroundActivityStatus, ExecutionStatus, SessionStateKind, SubtaskStatus,
-    };
+    use agena_domain::{AgentStatus, BackgroundActivityStatus, ExecutionStatus, SessionStateKind};
 
     pub(super) fn session_state_busy(value: &str) -> Option<bool> {
         SessionStateKind::parse(value).map(SessionStateKind::is_busy)
@@ -82,8 +80,8 @@ mod predicates {
         SessionStateKind::parse(value).map(SessionStateKind::is_failed)
     }
 
-    pub(super) fn subtask_terminal(value: &str) -> Option<bool> {
-        SubtaskStatus::parse(value).map(SubtaskStatus::is_terminal)
+    pub(super) fn agent_terminal(value: &str) -> Option<bool> {
+        AgentStatus::parse(value).map(AgentStatus::is_terminal)
     }
 
     pub(super) fn execution_status_active(value: &str) -> Option<bool> {
@@ -159,13 +157,13 @@ fn literal_enums() -> Vec<LiteralEnum> {
             lists: Vec::new(),
         },
         LiteralEnum {
-            name: "SubtaskStatus",
-            doc: "Lifecycle status of a delegated subtask.",
-            schema: schema_of::<agena_api::resource::SubtaskStatus>(),
+            name: "AgentStatus",
+            doc: "Lifecycle status of an agent.",
+            schema: schema_of::<agena_api::resource::AgentStatus>(),
             lists: vec![(
-                "SUBTASK_TERMINAL_STATUSES",
-                "Statuses where a delegated subtask can no longer progress.",
-                predicates::subtask_terminal,
+                "AGENT_TERMINAL_STATUSES",
+                "Statuses where an agent can no longer progress.",
+                predicates::agent_terminal,
             )],
         },
         LiteralEnum {
@@ -710,7 +708,7 @@ mod tests {
             "SessionLifecycleState",
             "WorkflowState",
             "ExecutionPhase",
-            "SubtaskStatus",
+            "AgentStatus",
             "SessionRelationKind",
             "ExecutionStatus",
             "BackgroundActivityKind",

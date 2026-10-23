@@ -11,7 +11,7 @@ use crate::backend::kernel::{ActivityScope, OutputScope};
 pub enum BackgroundActivityKind {
     Process,
     Terminal,
-    Task,
+    Agent,
     Monitor,
 }
 

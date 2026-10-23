@@ -678,11 +678,8 @@ fn tool_result_fragment(
                 return Some(fragment);
             }
         }
-        "tasks.run" | "tasks.get" | "tasks.list" | "tasks.cancel" | "tasks.followup"
-        | "tasks.message" | "tasks.output" => {
-            if let Some(fragment) = task_result_fragment(key, object) {
-                return Some(fragment);
-            }
+        "agent.spawn" | "agent.message" | "agent.wait" | "agent.followup" | "agent.cancel" => {
+            return agent_result_fragment(key, object);
         }
         "commands.install"
         | "commands.remove"
@@ -1352,101 +1349,29 @@ fn session_result_fragment(object: &serde_json::Map<String, serde_json::Value>) 
     }
 }
 
-fn task_result_fragment(
+fn agent_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
-    if object.get("timed_out").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Some("timed out".to_owned());
-    }
-
-    if let Some(tasks) = object.get("tasks").and_then(serde_json::Value::as_array) {
-        if tasks.len() == 1
-            && let Some(task) = tasks.first().and_then(serde_json::Value::as_object)
-            && let Some(status) = task_status(task)
-        {
-            return Some(task_action_result_fragment(key, Some(status.as_str())));
-        }
-        let mut counts = BTreeMap::<String, usize>::new();
-        for task in tasks.iter().filter_map(serde_json::Value::as_object) {
-            if let Some(status) = task_status(task) {
-                *counts.entry(status).or_default() += 1;
-            }
-        }
-        let mut parts = vec![format_count(tasks.len(), "tasks")];
-        for (status, count) in counts {
-            parts.push(format_count(count, status.as_str()));
-        }
-        return Some(parts.join(" · "));
-    }
-
-    let task = object.get("task").and_then(serde_json::Value::as_object);
-    let status = task.and_then(task_status).or_else(|| {
-        object
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            .and_then(normalize_result_status)
-    });
-    let chunks = object
-        .get("chunks")
-        .and_then(serde_json::Value::as_array)
-        .map(|chunks| format_count(chunks.len(), "chunks"));
-    let more = object.get("has_more").and_then(serde_json::Value::as_bool) == Some(true);
-    let mut parts = Vec::new();
-    if let Some(chunks) = chunks {
-        parts.push(chunks);
-    }
-    if let Some(status) = status {
-        parts.push(task_action_result_fragment(key, Some(status.as_str())));
-    } else if matches!(key, "tasks.cancel" | "tasks.message" | "tasks.followup") {
-        parts.push(task_action_result_fragment(key, None));
-    }
-    if more {
-        parts.push("more available".to_owned());
-    }
-    if !parts.is_empty() {
-        return Some(parts.join(" · "));
-    }
-    None
-}
-
-fn task_action_result_fragment(key: &str, status: Option<&str>) -> String {
-    let status = status.map(str::trim).filter(|value| !value.is_empty());
-    match key {
-        "tasks.cancel" => match status {
-            Some("cancelling") | Some("running") | Some("created") => {
-                "cancellation requested".to_owned()
-            }
-            Some("cancelled") => "cancelled".to_owned(),
-            Some(status)
-                if matches!(status, "completed" | "failed" | "timed out" | "interrupted") =>
-            {
-                format!("already {status}")
-            }
-            Some(status) => format!("cancellation requested · {status}"),
-            None => "cancellation requested".to_owned(),
-        },
-        "tasks.message" => status
-            .map(|status| format!("message sent · {status}"))
-            .unwrap_or_else(|| "message sent".to_owned()),
-        "tasks.followup" => status
-            .map(|status| format!("follow-up started · {status}"))
-            .unwrap_or_else(|| "follow-up started".to_owned()),
-        "tasks.run" => match status {
-            Some("running") | Some("created") => "started · running".to_owned(),
-            Some(status) => status.to_owned(),
-            None => "started".to_owned(),
-        },
-        _ => status.unwrap_or("completed").to_owned(),
-    }
-}
-
-fn task_status(object: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    object
+    let state = object
         .get("status")
         .or_else(|| object.get("state"))
+        .or_else(|| object.get("reason"))
         .and_then(serde_json::Value::as_str)
-        .and_then(normalize_result_status)
+        .and_then(normalize_result_status);
+    state.or_else(|| {
+        Some(
+            match key {
+                "agent.spawn" => "started",
+                "agent.message" => "message queued",
+                "agent.wait" => "awakened",
+                "agent.followup" => "follow-up accepted",
+                "agent.cancel" => "cancelled",
+                _ => return None,
+            }
+            .to_owned(),
+        )
+    })
 }
 
 fn command_result_fragment(
@@ -2473,13 +2398,11 @@ fn tool_action_label(tool_name: &str) -> String {
         "cron.pause" | "cron_pause" => "Pause schedule".to_owned(),
         "cron.resume" | "cron_resume" => "Resume schedule".to_owned(),
         "cron.history" | "cron_history" => "Show schedule history".to_owned(),
-        "tasks.run" | "task" => "Run task".to_owned(),
-        "tasks.cancel" => "Cancel task".to_owned(),
-        "tasks.followup" => "Continue task".to_owned(),
-        "tasks.get" => "Inspect task".to_owned(),
-        "tasks.list" => "List tasks".to_owned(),
-        "tasks.message" => "Message task".to_owned(),
-        "tasks.output" => "Read task output".to_owned(),
+        "agent.spawn" => "Start agent".to_owned(),
+        "agent.cancel" => "Cancel agent".to_owned(),
+        "agent.followup" => "Continue agent".to_owned(),
+        "agent.message" => "Message agent".to_owned(),
+        "agent.wait" => "Wait for agents".to_owned(),
         "plan.update" => "Update plan".to_owned(),
         "plan.get" => "Inspect plan".to_owned(),
         "plan.clear" => "Clear plan".to_owned(),
@@ -2661,34 +2584,13 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
         &["path", "key", "setting", "name"]
     } else if key.starts_with("settings.") {
         &["path", "key", "name"]
-    } else if key.ends_with("tasks.run") || key.ends_with("plan.update") {
-        // A task/plan prompt is an instruction payload, not a compact
+    } else if key.ends_with("agent.spawn") || key.ends_with("plan.update") {
+        // An agent/plan prompt is an instruction payload, not a compact
         // operation target. It may contain secrets, a whole user request, or
         // an arbitrarily large document; keep it in the expanded input only.
-        &["description", "title", "task_id", "phase"]
-    } else if key.ends_with("tasks.output") {
-        &["task_id", "id", "cursor"]
-    } else if key.ends_with("tasks.cancel")
-        || key.ends_with("tasks.message")
-        || key.ends_with("tasks.followup")
-        || key.ends_with("tasks.get")
-    {
-        // The task id identifies the operation. Message/follow-up text is
-        // deliberately left out of the collapsed title: it can be long or
-        // contain sensitive instructions, while the expanded input keeps it
-        // available when needed.
-        &["task_id", "id"]
-    } else if key.ends_with("tasks.list") {
-        &["status"]
-    } else if key.starts_with("tasks.") {
-        &[
-            "task_id",
-            "id",
-            "description",
-            "cursor",
-            "message",
-            "prompt",
-        ]
+        &["name", "title", "phase"]
+    } else if key.starts_with("agent.") {
+        &["target", "name", "timeout_ms"]
     } else if key.starts_with("plan.") {
         &["title", "step", "phase", "decision"]
     } else if key.starts_with("cron.") {
@@ -2744,7 +2646,7 @@ fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> Strin
             "expression",
             "notebook_path",
             "process_id",
-            "task_id",
+            "agent_id",
             "job_id",
             "monitor_id",
             "element",
@@ -3117,7 +3019,7 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
         "expression",
         "notebook_path",
         "process_id",
-        "task_id",
+        "agent_id",
         "function",
         "model",
         "id",
@@ -3249,17 +3151,17 @@ mod tool_title_tests {
 
     #[test]
     fn initial_titles_keep_instruction_and_secret_values_out_of_collapsed_text() {
-        let task = ToolInvocation::new(
-            "agena.tasks.run",
+        let agent = ToolInvocation::new(
+            "agena.agent.spawn",
             StructuredObject::try_from(json!({
-                "prompt": "Do not expose this full task prompt or bearer-secret",
-                "task_id": "task-1"
+                "prompt": "Do not expose this full agent prompt or bearer-secret",
+                "name": "worker"
             }))
             .expect("structured input"),
         );
-        let task_title = initial_tool_title(&task);
-        assert_eq!(task_title, "Run task · task-1");
-        assert!(!task_title.contains("bearer-secret"));
+        let agent_title = initial_tool_title(&agent);
+        assert_eq!(agent_title, "Start agent · worker");
+        assert!(!agent_title.contains("bearer-secret"));
 
         let browser = ToolInvocation::new(
             "agena.web.browser_type",
@@ -3337,9 +3239,9 @@ mod tool_title_tests {
                 "Ask user · 1 question",
             ),
             (
-                "agena.tasks.cancel",
-                json!({"task_id": "task-1"}),
-                "Cancel task · task-1",
+                "agena.agent.cancel",
+                json!({"target": "worker"}),
+                "Cancel agent · worker",
             ),
             (
                 "agena.settings.get",
@@ -3813,7 +3715,7 @@ mod tool_title_tests {
     }
 
     #[test]
-    fn completed_titles_cover_code_session_task_command_browser_and_repo_results() {
+    fn completed_titles_cover_code_session_agent_command_browser_and_repo_results() {
         let check =
             |name: &str, input: serde_json::Value, payload: serde_json::Value, facts: &[&str]| {
                 let invocation = ToolInvocation::new(
@@ -3892,25 +3794,16 @@ mod tool_title_tests {
             &["12000 used", "5000 remaining"],
         );
         check(
-            "agena.tasks.list",
-            json!({}),
-            json!({
-                "tasks": [
-                    {"task_id": "t-1", "status": "completed"},
-                    {"task_id": "t-2", "status": "running"}
-                ]
-            }),
-            &["2 tasks", "1 completed", "1 running"],
+            "agena.agent.spawn",
+            json!({"name":"worker","prompt":"inspect"}),
+            json!({"agent_id":2,"name":"worker","status":"running"}),
+            &["running"],
         );
         check(
-            "agena.tasks.output",
-            json!({"task_id": "t-1"}),
-            json!({
-                "task": {"task_id": "t-1", "status": "completed"},
-                "chunks": [{"text": "done"}, {"text": "verified"}],
-                "has_more": true
-            }),
-            &["2 chunks", "completed", "more available"],
+            "agena.agent.wait",
+            json!({}),
+            json!({"reason":"message"}),
+            &["message"],
         );
         check(
             "agena.commands.install",
@@ -3970,11 +3863,11 @@ mod tool_title_tests {
 
         let timeout = completed_tool_title(
             &ToolInvocation::new(
-                "agena.tasks.output",
-                StructuredObject::try_from(json!({"task_id": "t-1"})).expect("structured input"),
+                "agena.agent.wait",
+                StructuredObject::try_from(json!({"timeout_ms": 1})).expect("structured input"),
             ),
             &RawOutput {
-                payload: Some(json!({"timed_out": true})),
+                payload: Some(json!({"reason": "timeout"})),
                 ..RawOutput::default()
             },
         );
@@ -4090,26 +3983,6 @@ pub enum ReadMode {
     Auto,
 }
 
-/// Optional provider/model selection overrides for a delegated task.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct TaskModelSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-}
-
 /// One file-level change produced by the apply-patch tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppliedFileChange {
@@ -4192,7 +4065,7 @@ pub enum PatchOpKind {
 pub enum BuiltinToolProfile {
     Full,
     ReadOnly,
-    NoTask,
+    NoAgent,
 }
 
 impl BuiltinToolProfile {
@@ -4204,8 +4077,8 @@ impl BuiltinToolProfile {
         if lowered.contains("readonly") || lowered.contains("read_only") {
             return Self::ReadOnly;
         }
-        if lowered.contains("no-task") || lowered.contains("chat") {
-            return Self::NoTask;
+        if lowered.contains("no-agent") || lowered.contains("chat") {
+            return Self::NoAgent;
         }
         Self::Full
     }
@@ -4408,8 +4281,8 @@ mod tests {
             BuiltinToolProfile::ReadOnly
         );
         assert_eq!(
-            BuiltinToolProfile::infer(Some("model-no-task")),
-            BuiltinToolProfile::NoTask
+            BuiltinToolProfile::infer(Some("model-no-agent")),
+            BuiltinToolProfile::NoAgent
         );
     }
 

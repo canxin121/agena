@@ -387,7 +387,7 @@ export default {
         moreCount: '+{count} de plus…',
         toolInvocation: {
           toolNames: {
-            bash: 'Exécuter une commande', edit: 'Modifier un fichier', applyPatch: 'Appliquer un correctif', replaceText: 'Remplacer du texte', read: 'Lire un fichier', write: 'Écrire dans un fichier', list: 'Lister les fichiers', glob: 'Rechercher des fichiers', search: 'Rechercher', grep: 'Rechercher (grep)', fetch: 'Récupérer une URL', question: 'Question', task: 'Tâche',
+            bash: 'Exécuter une commande', edit: 'Modifier un fichier', applyPatch: 'Appliquer un correctif', replaceText: 'Remplacer du texte', read: 'Lire un fichier', write: 'Écrire dans un fichier', list: 'Lister les fichiers', glob: 'Rechercher des fichiers', search: 'Rechercher', grep: 'Rechercher (grep)', fetch: 'Récupérer une URL', question: 'Question', agent: 'Agent',
           },
           summary: { askedQuestions: '{count} question(s) posée(s)' },
           sections: { input: 'Entrée', diff: 'Différences', diffCode: 'diff', error: 'Erreur', output: 'Sortie' },

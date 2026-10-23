@@ -1979,7 +1979,7 @@ export default {
             "grep": "Grep",
             "fetch": "Obtener URL",
             "question": "Pregunta",
-            "task": "Tarea"
+            "agent": "Agente"
           },
           "summary": {
             "askedQuestions": "Se han formulado {count} pregunta(s)"

@@ -196,7 +196,7 @@ mod interactive_request_visibility_tests {
         PendingInteractiveRequestResource {
             session_id: 8,
             parent_session_id: None,
-            task_id: None,
+            agent_name: None,
             request: PendingInteractiveRequest::Permission {
                 request: PermissionRequest {
                     request_id: request_id.to_owned(),
@@ -223,7 +223,7 @@ mod interactive_request_visibility_tests {
         PendingInteractiveRequestResource {
             session_id: 8,
             parent_session_id: None,
-            task_id: None,
+            agent_name: None,
             request: PendingInteractiveRequest::UserInput {
                 request: UserInputRequest {
                     request_id: request_id.to_owned(),
@@ -245,7 +245,7 @@ mod interactive_request_visibility_tests {
         PendingInteractiveRequestResource {
             session_id: 8,
             parent_session_id: None,
-            task_id: None,
+            agent_name: None,
             request: PendingInteractiveRequest::UserInput {
                 request: UserInputRequest {
                     request_id: request_id.to_owned(),
@@ -793,8 +793,8 @@ mod interaction_part_routing_tests {
             source_cutoff_seq_global: None,
             source_message_id: None,
             is_subagent: false,
-            task_id: None,
-            subtask_status: None,
+            agent_name: None,
+            agent_status: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             message_count: 1,
@@ -844,11 +844,11 @@ mod interaction_part_routing_tests {
                 model_verbosity: None,
                 model_parallel_tool_calls: None,
                 effective_workspace_root: None,
-                task_id: None,
-                subtask_status: None,
-                subtask_started_at: None,
-                subtask_finished_at: None,
-                subtask_failure: None,
+                agent_name: None,
+                agent_status: None,
+                agent_started_at: None,
+                agent_finished_at: None,
+                agent_failure: None,
             },
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
@@ -869,7 +869,7 @@ mod interaction_part_routing_tests {
         PendingInteractiveRequestResource {
             session_id: SESSION_ID,
             parent_session_id: None,
-            task_id: None,
+            agent_name: None,
             request: PendingInteractiveRequest::UserInput {
                 request: wire_request(),
             },
@@ -1124,7 +1124,7 @@ mod interaction_part_routing_tests {
             vec![PendingInteractiveRequestResource {
                 session_id: SESSION_ID,
                 parent_session_id: None,
-                task_id: None,
+                agent_name: None,
                 request: PendingInteractiveRequest::UserInput {
                     request: wire.clone(),
                 },
@@ -2584,7 +2584,7 @@ mod interaction_part_routing_tests {
             vec![PendingInteractiveRequestResource {
                 session_id: SESSION_ID,
                 parent_session_id: None,
-                task_id: None,
+                agent_name: None,
                 request: PendingInteractiveRequest::Permission { request: wire },
             }],
             vec![run_marker(), part],
@@ -2746,8 +2746,8 @@ mod session_activity_state_machine_tests {
                 source_cutoff_seq_global: None,
                 source_message_id: None,
                 is_subagent: false,
-                task_id: None,
-                subtask_status: None,
+                agent_name: None,
+                agent_status: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 message_count: 1,
@@ -2773,11 +2773,11 @@ mod session_activity_state_machine_tests {
                 model_verbosity: None,
                 model_parallel_tool_calls: None,
                 effective_workspace_root: None,
-                task_id: None,
-                subtask_status: None,
-                subtask_started_at: None,
-                subtask_finished_at: None,
-                subtask_failure: None,
+                agent_name: None,
+                agent_status: None,
+                agent_started_at: None,
+                agent_finished_at: None,
+                agent_failure: None,
             },
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
@@ -2798,7 +2798,7 @@ mod session_activity_state_machine_tests {
         PendingInteractiveRequestResource {
             session_id: SESSION_ID,
             parent_session_id: None,
-            task_id: None,
+            agent_name: None,
             request: PendingInteractiveRequest::Permission {
                 request: PermissionRequest {
                     request_id: "host:1:2:0".to_owned(),
@@ -6502,8 +6502,8 @@ mod new_session_model_stack_tests {
             source_cutoff_seq_global: None,
             source_message_id: None,
             is_subagent: false,
-            task_id: None,
-            subtask_status: None,
+            agent_name: None,
+            agent_status: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             message_count: 1,

@@ -834,10 +834,10 @@ impl PluginHost {
 
     pub(super) fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
-        // Interactive and subtask tools need long-lived budgets; these are
+        // Interactive and agent tools need long-lived budgets; these are
         // declared on the tool's tags, not static capabilities.
         let tags = registered_tool.effective_tags();
-        if crate::sdk::ToolTag::is_interactive(&tags) || crate::sdk::ToolTag::is_task(&tags) {
+        if crate::sdk::ToolTag::is_interactive(&tags) || crate::sdk::ToolTag::is_agent(&tags) {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
         base

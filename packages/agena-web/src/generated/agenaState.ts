@@ -37,12 +37,12 @@ export type WorkflowState = (typeof WORKFLOW_STATES)[number]
 export const EXECUTION_PHASES = ['starting', 'preparing_model', 'streaming_model', 'executing_tools', 'awaiting_interaction', 'cancelling'] as const
 export type ExecutionPhase = (typeof EXECUTION_PHASES)[number]
 
-/** Lifecycle status of a delegated subtask. */
-export const SUBTASK_STATUSES = ['created', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted'] as const
-export type SubtaskStatus = (typeof SUBTASK_STATUSES)[number]
+/** Lifecycle status of an agent. */
+export const AGENT_STATUSES = ['created', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted'] as const
+export type AgentStatus = (typeof AGENT_STATUSES)[number]
 
-/** Statuses where a delegated subtask can no longer progress. */
-export const SUBTASK_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'] as const
+/** Statuses where an agent can no longer progress. */
+export const AGENT_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'timed_out', 'interrupted'] as const
 
 /** Domain meaning of a session's immutable parent edge. */
 export const SESSION_RELATION_KINDS = ['root', 'child', 'fork', 'rewind', 'subagent'] as const
@@ -59,7 +59,7 @@ export const PART_EXECUTION_ACTIVE_STATUSES = ['pending', 'in_progress'] as cons
 export const PART_EXECUTION_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'policy_denied', 'user_declined', 'capability_unavailable', 'tool_unavailable'] as const
 
 /** Kind of background activity. */
-export const BACKGROUND_ACTIVITY_KINDS = ['shell', 'monitor', 'task', 'cron', 'runtime', 'browser'] as const
+export const BACKGROUND_ACTIVITY_KINDS = ['shell', 'monitor', 'agent', 'cron', 'runtime', 'browser'] as const
 export type BackgroundActivityKind = (typeof BACKGROUND_ACTIVITY_KINDS)[number]
 
 /** Lifecycle status shared by every background activity source. */

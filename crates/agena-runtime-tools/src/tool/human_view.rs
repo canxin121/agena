@@ -1100,36 +1100,6 @@ impl BuiltinHumanRenderer {
         Self::display_value(value)
     }
 
-    fn model_feedback_kind_label(kind: &agena_failure::ModelFeedbackKind) -> &'static str {
-        match kind {
-            agena_failure::ModelFeedbackKind::InternalToolFailure => "internal tool failure",
-            agena_failure::ModelFeedbackKind::InvalidInput => "invalid input",
-            agena_failure::ModelFeedbackKind::InvalidPattern => "invalid pattern",
-            agena_failure::ModelFeedbackKind::ToolUnavailable => "tool unavailable",
-            agena_failure::ModelFeedbackKind::StaleToolCall => "stale tool call",
-            agena_failure::ModelFeedbackKind::PermissionRequired => "permission required",
-            agena_failure::ModelFeedbackKind::UserInputRequired => "user input required",
-            agena_failure::ModelFeedbackKind::PluginFailure => "plugin failure",
-            agena_failure::ModelFeedbackKind::PermissionDenied => "permission denied",
-            agena_failure::ModelFeedbackKind::UserDeclined => "user declined",
-        }
-    }
-
-    fn model_feedback_block(feedback: &agena_failure::ModelFeedback) -> ViewBlock {
-        let mut lines = vec![
-            "### Model feedback".to_owned(),
-            format!(
-                "- **Category**: `{}`",
-                Self::model_feedback_kind_label(&feedback.kind)
-            ),
-            format!("- **Message**: {}", feedback.message()),
-        ];
-        if feedback.field_count() > 0 {
-            lines.push(format!("- **Field issues**: {}", feedback.field_count()));
-        }
-        Self::markdown_block("task-feedback", lines.join("\n"))
-    }
-
     fn event_log_blocks(events: &[agena_domain::ProcessEvent]) -> Vec<ViewBlock> {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -4225,97 +4195,17 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
-    fn specific_task_blocks(key: &str, object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
-        let mut blocks = Vec::new();
-        if let Some(tasks) = Self::object_array(object, "tasks") {
-            if !tasks.is_empty()
-                && let Some(table) = Self::scalar_table(
-                    "tasks",
-                    "Tasks",
-                    tasks,
-                    &[
-                        ("task_id", "Task"),
-                        ("status", "Status"),
-                        ("description", "Description"),
-                        ("model_id", "Model"),
-                        ("session_id", "Session"),
-                    ],
-                )
-            {
-                blocks.push(table);
-            } else if tasks.is_empty() {
-                blocks.push(Self::markdown_block("tasks", "### Tasks\nNo tasks found."));
-            }
-        }
-        if let Some(task) = object.get("task").and_then(Value::as_object) {
-            let title = match key {
-                "tasks.run" => "Task started",
-                "tasks.cancel" => "Task cancellation",
-                "tasks.followup" => "Task follow-up",
-                "tasks.message" => "Task message",
-                "tasks.output" => "Task output",
-                "tasks.get" => "Task details",
-                _ => "Task",
-            };
-            let fields = [
-                ("Task", Self::object_text(task, "task_id")),
-                ("Description", Self::object_text(task, "description")),
-                ("Status", Self::object_text(task, "status")),
-                ("Session", Self::object_text(task, "session_id")),
-                ("Model", Self::object_text(task, "model_id")),
-                ("Error", Self::object_text(task, "error")),
-            ];
-            blocks.push(Self::details_block("task-meta", title, &fields));
-        }
-        if let Some(chunks) = Self::object_array(object, "chunks") {
-            if !chunks.is_empty()
-                && let Some(table) = Self::scalar_table(
-                    "task-chunks",
-                    "Task output",
-                    chunks,
-                    &[("role", "Role"), ("text", "Text")],
-                )
-            {
-                blocks.push(table);
-            } else if let Some(chunks) = object.get("chunks").and_then(Value::as_array)
-                && !chunks.is_empty()
-            {
-                blocks.extend(Self::generic_value_blocks(
-                    "task-chunks",
-                    "Task output",
-                    &Value::Array(chunks.clone()),
-                    0,
-                ));
-            } else if chunks.is_empty() {
-                blocks.push(Self::markdown_block(
-                    "task-chunks",
-                    "### Task output\nNo output chunks returned.",
-                ));
-            }
-        }
-        let output_fields = [
-            ("Next Cursor", Self::object_text(object, "next_cursor")),
-            ("More available", Self::object_text(object, "has_more")),
-            ("Timed out", Self::object_text(object, "timed_out")),
+    fn specific_agent_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
+        let fields = [
+            ("Agent", Self::object_text(object, "agent_id")),
+            ("Name", Self::object_text(object, "name")),
+            ("Status", Self::object_text(object, "status")),
+            ("State", Self::object_text(object, "state")),
+            ("Wake reason", Self::object_text(object, "reason")),
         ];
-        if let Some(block) = Self::details_block_if_nonempty(
-            "task-output-meta",
-            "Task output status",
-            &output_fields,
-        ) {
-            blocks.push(block);
-        }
-        if let Some(final_text) = object
-            .get("final_text")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            blocks.push(Self::markdown_block(
-                "task-result",
-                Self::bounded_human_text(final_text),
-            ));
-        }
-        blocks
+        Self::details_block_if_nonempty("agent", "Agent", &fields)
+            .into_iter()
+            .collect()
     }
 
     fn specific_command_blocks(
@@ -5242,8 +5132,8 @@ impl BuiltinHumanRenderer {
             value if value.starts_with("plan.") => {
                 blocks.extend(Self::specific_plan_blocks(value, &object));
             }
-            value if value.starts_with("tasks.") => {
-                blocks.extend(Self::specific_task_blocks(value, &object));
+            value if value.starts_with("agent.") => {
+                blocks.extend(Self::specific_agent_blocks(&object));
             }
             value if value.starts_with("commands.") => {
                 blocks.extend(Self::specific_command_blocks(value, &object));
@@ -5526,74 +5416,6 @@ impl BuiltinHumanRenderer {
                             "matches-status",
                             status_lines.join("\n"),
                         ));
-                    }
-                }
-                ToolPayloadOutput::Task {
-                    task_id,
-                    session_id,
-                    parent_session_id,
-                    status,
-                    resumed,
-                    final_text,
-                    model_feedback,
-                    model_provider_id,
-                    model_adapter_id,
-                    model_id,
-                    input_tokens,
-                    output_tokens,
-                    reasoning_tokens,
-                    cache_write_tokens,
-                    cache_read_tokens,
-                    total_cost_microusd,
-                } => {
-                    let task_title = match Self::normalized_tool_name(tool_name).as_str() {
-                        "tasks.cancel" => "Task cancellation",
-                        "tasks.followup" => "Task follow-up",
-                        "tasks.message" => "Task message",
-                        "tasks.output" => "Task output",
-                        "tasks.get" => "Task details",
-                        "tasks.run" | "task" => "Task started",
-                        _ => "Task",
-                    };
-                    let mut fields = vec![
-                        ("Status", status),
-                        ("Task", task_id),
-                        ("Session", session_id.to_string()),
-                        ("Parent session", parent_session_id.to_string()),
-                        ("Resumed", resumed.to_string()),
-                    ];
-                    if let Some(provider) = model_provider_id {
-                        fields.push(("Provider", provider));
-                    }
-                    if let Some(adapter) = model_adapter_id {
-                        fields.push(("Adapter", adapter));
-                    }
-                    if let Some(model) = model_id {
-                        fields.push(("Model", model));
-                    }
-                    if input_tokens > 0 || output_tokens > 0 || reasoning_tokens > 0 {
-                        fields.push((
-                            "Tokens",
-                            format!(
-                                "in {input_tokens} · out {output_tokens} · reasoning {reasoning_tokens}"
-                            ),
-                        ));
-                    }
-                    if cache_write_tokens > 0 || cache_read_tokens > 0 {
-                        fields.push((
-                            "Cache",
-                            format!("write {cache_write_tokens} · read {cache_read_tokens}"),
-                        ));
-                    }
-                    if total_cost_microusd > 0 {
-                        fields.push(("Cost", format!("{total_cost_microusd} micro-USD")));
-                    }
-                    blocks.push(Self::details_block("task", task_title, &fields));
-                    if let Some(final_text) = final_text {
-                        blocks.push(Self::markdown_block("task-result", final_text));
-                    }
-                    if let Some(feedback) = model_feedback {
-                        blocks.push(Self::model_feedback_block(&feedback));
                     }
                 }
                 ToolPayloadOutput::ToolSearch { results } => {
@@ -7471,8 +7293,8 @@ mod tests {
             ),
             ("fs.grep", json!({"matches": 1, "results": ["a.rs:1: hit"]})),
             (
-                "tasks.run",
-                json!({"task_id":"t","session_id":1,"parent_session_id":0,"status":"completed","model_feedback":{"kind":"invalid_input"}}),
+                "agent.spawn",
+                json!({"agent_id":1,"name":"worker","status":"running"}),
             ),
             ("tools.search", json!({"results":["fs.read"]})),
             ("interaction.ask", json!({"answers":{"0":["yes"]}})),

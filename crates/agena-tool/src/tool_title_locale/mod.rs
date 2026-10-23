@@ -24,6 +24,11 @@ mod locale_zh;
 
 /// Canonical action keys, in the order the English table declares them.
 pub const ACTION_KEYS: &[&str] = &[
+    "Start agent",
+    "Message agent",
+    "Wait for agents",
+    "Continue agent",
+    "Cancel agent",
     "Read",
     "Read files",
     "Write",

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{SessionLifecycleState, SessionRelationKind, SubtaskStatus};
+use crate::{AgentStatus, SessionLifecycleState, SessionRelationKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Pagination and filter request for listing sessions.
@@ -44,9 +44,9 @@ pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_message_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtask_status: Option<SubtaskStatus>,
+    pub agent_status: Option<AgentStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,

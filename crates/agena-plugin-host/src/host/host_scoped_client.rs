@@ -236,45 +236,48 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn run_subtask(&self, req: RunSubtaskRequest) -> crate::sdk::Result<RunSubtaskResponse> {
+    async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.run_subtask(req)).await
+            host_api::run_in_host_callback_context(self.context()?, inner.spawn_agent(req)).await
         })
         .await
     }
 
-    async fn cancel_subtask(
+    async fn message_agent(
         &self,
-        req: CancelSubtaskRequest,
-    ) -> crate::sdk::Result<SubtaskControlResponse> {
+        req: AgentMessageRequest,
+    ) -> crate::sdk::Result<AgentMessageReceipt> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.cancel_subtask(req)).await
+            host_api::run_in_host_callback_context(self.context()?, inner.message_agent(req)).await
         })
         .await
     }
 
-    async fn message_subtask(
-        &self,
-        req: MessageSubtaskRequest,
-    ) -> crate::sdk::Result<SubtaskControlResponse> {
+    async fn wait_agent(&self, req: AgentWaitRequest) -> crate::sdk::Result<AgentWaitResponse> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.message_subtask(req))
-                .await
+            host_api::run_in_host_callback_context(self.context()?, inner.wait_agent(req)).await
         })
         .await
     }
 
-    async fn read_subtask_output(
-        &self,
-        req: ReadSubtaskOutputRequest,
-    ) -> crate::sdk::Result<ReadSubtaskOutputResponse> {
+    async fn followup_agent(&self, req: AgentMessageRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(self.context()?, inner.read_subtask_output(req))
-                .await
+            host_api::run_in_host_callback_context(self.context()?, inner.followup_agent(req)).await
+        })
+        .await
+    }
+
+    async fn cancel_agent(
+        &self,
+        req: AgentTargetRequest,
+    ) -> crate::sdk::Result<AgentMessageReceipt> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.cancel_agent(req)).await
         })
         .await
     }
@@ -684,8 +687,9 @@ impl HostClient for ScopedHostClient {
     }
 }
 use super::{
-    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
-    EventSubscription, HostCallbackContext, HostClient, HostCommandMutationResponse,
+    AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest,
+    AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse, EventEnvelope,
+    EventFilter, EventSubscription, HostCallbackContext, HostClient, HostCommandMutationResponse,
     HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
     HostConfigReloadRequestResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
     HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
@@ -701,9 +705,8 @@ use super::{
     HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
     HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError,
-    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginError, PluginNotifyRequest,
+    ScopedHostClient, ToolDescriptor, ToolInvokeOutput,
     host_api::{self, BackgroundActivity, BackgroundActivityKind},
 };

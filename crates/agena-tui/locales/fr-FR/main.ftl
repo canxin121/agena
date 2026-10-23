@@ -1910,7 +1910,7 @@ transcript-image-embedded = image intégrée
 # Activities, composer, diagnostics and usage analytics.
 activities-title = Activités en arrière-plan
 activities-empty = Aucune activité en arrière-plan.
-activities-empty-hint = Exécutez shell.spawn, shell.open ou tasks.run pour en créer une.
+activities-empty-hint = Exécutez shell.spawn, shell.open ou agent.spawn pour en créer une.
 activities-section-active = En cours
 activities-section-finished = Terminées
 activities-footer-close = Esc fermer
@@ -2028,7 +2028,7 @@ activities-control-delete = supprimer
 activities-control-dismiss = retirer
 activities-kind-shell = Shell
 activities-kind-monitor = Surveillance
-activities-kind-task = Tâche
+activities-kind-agent = Agent
 activities-kind-cron = Tâche planifiée
 activities-kind-runtime = Exécution
 activities-kind-browser = Navigateur
@@ -2115,7 +2115,6 @@ timeline-type-execution-completed = exécution terminée
 timeline-type-execution-cancelled = exécution annulée
 timeline-type-execution-failed = échec de l’exécution
 timeline-type-compaction-completed = condensation du contexte terminée
-timeline-type-subtask-status-changed = état de la sous-tâche modifié
 timeline-type-stream-error = erreur de flux
 timeline-type-message-part-checkpointed = partie du message enregistrée comme point de contrôle
 timeline-type-message-part-delta = variation d’une partie du message
@@ -2871,7 +2870,7 @@ insert-content-file-detail = Joindre un fichier ou un dossier de l’espace de t
 status-part-workspace = espace={$value}
 status-part-state = état={$value}
 status-part-agent = agent={$value}
-status-part-task = tâche={$value}
+status-part-agent-name = nom_agent={$value}
 status-part-model = modèle={$value}
 status-part-thinking = réflexion={$value}
 status-part-speed = vitesse={$value}
@@ -2905,7 +2904,6 @@ operation-diff-summary-detailed-one = diff : 1 fichier, +{$added} -{$deleted}
 operation-diff-summary-detailed-one-rename = diff : 1 fichier, +{$added} -{$deleted}, {$renamed} renommé(s)
 operation-diff-summary-detailed = diff : {$files} fichiers, +{$added} -{$deleted}
 operation-diff-summary-detailed-renames = diff : {$files} fichiers, +{$added} -{$deleted}, {$renamed} renommé(s)
-operation-nested-task-summary = {$title} ({$status})
 snapshot-action-keep = conservé
 snapshot-action-remove = supprimé
 snapshot-action-exit = quitté

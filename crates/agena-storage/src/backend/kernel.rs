@@ -77,6 +77,13 @@ pub enum Command {
         session: SessionId,
         change: SessionConfigurationChange,
     },
+    /// Atomically publish an agent outcome and its durable parent handoff.
+    FinishAgent {
+        session: SessionId,
+        agent: SessionAgentConfiguration,
+        business_key: String,
+        payload: serde_json::Value,
+    },
     Fork {
         session: SessionId,
         through: EntryId,
@@ -449,10 +456,10 @@ pub trait KernelBackend: Send + Sync {
         after_entry: Option<EntryId>,
         limit: usize,
     ) -> Result<ReadView<HistoryPage>>;
-    async fn find_task(
+    async fn find_agent(
         &self,
         parent: SessionId,
-        task_id: &str,
+        agent_name: &str,
     ) -> Result<ReadView<Option<SessionId>>>;
 
     async fn import_archive(

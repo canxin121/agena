@@ -24,6 +24,7 @@ use std::{
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
+mod agents;
 mod commands;
 mod deliveries;
 mod execution;
@@ -31,10 +32,7 @@ mod host;
 mod media;
 mod queries;
 mod results;
-mod tasks;
-pub use tasks::{
-    SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest, SessionSubtaskResponse,
-};
+mod results_text;
 mod session_prompt;
 #[cfg(test)]
 mod supervision_tests;
@@ -52,7 +50,7 @@ struct ExecutionState {
     tools: Arc<Semaphore>,
 }
 #[derive(Clone)]
-struct TaskBudget {
+struct AgentBudget {
     max_tokens: Option<u64>,
     max_cost_microusd: Option<u64>,
 }
@@ -64,12 +62,18 @@ struct RunControl {
     cancel: CancellationToken,
     phase: StdMutex<agena_domain::ExecutionPhase>,
     done: Notify,
-    budget: Option<TaskBudget>,
+    budget: Option<AgentBudget>,
     failure: StdMutex<Option<agena_failure::Failure>>,
-    budget_exceeded: std::sync::atomic::AtomicBool,
     settled: std::sync::atomic::AtomicBool,
 }
-type ActiveToolMap = HashMap<(i64, i64), (ToolHandle, Arc<RunControl>)>;
+type ToolPermitSlot = Arc<tokio::sync::Mutex<Option<OwnedSemaphorePermit>>>;
+#[derive(Clone)]
+struct LiveTool {
+    tool: ToolHandle,
+    control: Arc<RunControl>,
+    permit: ToolPermitSlot,
+}
+type ActiveToolMap = HashMap<(i64, i64), LiveTool>;
 #[derive(Default)]
 struct SessionDispatch {
     submission: tokio::sync::Mutex<()>,
@@ -98,11 +102,11 @@ pub struct SessionManager {
     prompt_hydrator: KernelPromptHydrator,
     active: Arc<StdMutex<HashMap<ExecutionId, Arc<RunControl>>>>,
     admission: Arc<Semaphore>,
-    task_settlements: Arc<Semaphore>,
+    agent_settlements: Arc<Semaphore>,
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
-    task_preparation: Arc<tokio::sync::Mutex<()>>,
+    agent_preparation: Arc<tokio::sync::Mutex<()>>,
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
     workspace: Arc<tokio::sync::OnceCell<i64>>,
@@ -132,11 +136,11 @@ impl SessionManager {
             prompt_hydrator: KernelPromptHydrator::default(),
             active: Default::default(),
             admission: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
-            task_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
+            agent_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             sessions: Default::default(),
             tools: Default::default(),
             host_sequences: Default::default(),
-            task_preparation: Default::default(),
+            agent_preparation: Default::default(),
             delivery_scan: Default::default(),
             workspace: Default::default(),
             shutdown: CancellationToken::new(),
@@ -293,7 +297,7 @@ impl SessionManager {
             }
         }
         // Preparation owns an execution permit before it can commit input;
-        // task settlement has a separate permit after the provider exits.
+        // agent settlement has a separate permit after the provider exits.
         let drain = async {
             let _executions = self
                 .admission
@@ -301,8 +305,8 @@ impl SessionManager {
                 .acquire_many_owned(MAX_ACTIVE_EXECUTIONS as u32)
                 .await
                 .map_err(|_| AppError::Cancelled)?;
-            let _tasks = self
-                .task_settlements
+            let _agents = self
+                .agent_settlements
                 .clone()
                 .acquire_many_owned(MAX_ACTIVE_EXECUTIONS as u32)
                 .await

@@ -129,9 +129,7 @@ pub use content::{
 pub use context_policy::ContextPolicy;
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
-pub use execution_events::{
-    ExecutionFinishedEvent, ExecutionStartedEvent, SubtaskStatusChangedEvent,
-};
+pub use execution_events::{ExecutionFinishedEvent, ExecutionStartedEvent};
 pub use execution_lifecycle::{ExecutionLifecycle, ExecutionTransitionError};
 pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
@@ -206,7 +204,7 @@ pub use role::Role;
 pub use session_conversation::{ConversationMode, SessionConversation};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{
-    SessionLifecycleState, SessionRelationKind, SessionStateKind, SubtaskStatus, WorkflowState,
+    AgentStatus, SessionLifecycleState, SessionRelationKind, SessionStateKind, WorkflowState,
 };
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};

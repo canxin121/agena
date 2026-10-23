@@ -1,8 +1,8 @@
 //! Bounded, read-only session projections. Transcript content is read through
 //! kernel history/content capabilities and is never retained on this value.
 use agena_domain::{
-    ExecutionSelection, PermissionConfig, SessionConversation, SessionLifecycleState,
-    SessionRelationKind, SubtaskStatus, WorkflowState,
+    AgentStatus, ExecutionSelection, PermissionConfig, SessionConversation, SessionLifecycleState,
+    SessionRelationKind, WorkflowState,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,16 +24,16 @@ pub struct Session {
     pub version: i64,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,
-    pub task_id: Option<String>,
+    pub agent_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
     pub workflow: WorkflowState,
     pub execution: SessionExecutionContext,
-    pub subtask_status: Option<SubtaskStatus>,
-    pub subtask_started_at_ms: Option<i64>,
-    pub subtask_finished_at_ms: Option<i64>,
-    pub subtask_failure: Option<agena_failure::Failure>,
+    pub agent_status: Option<AgentStatus>,
+    pub agent_started_at_ms: Option<i64>,
+    pub agent_finished_at_ms: Option<i64>,
+    pub agent_failure: Option<agena_failure::Failure>,
 }
 
 impl Session {

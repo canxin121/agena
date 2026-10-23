@@ -444,30 +444,6 @@ pub fn operation_diff_summary(
     )
 }
 
-pub fn operation_nested_task_summary(
-    i18n: &I18n,
-    title: &str,
-    status: agena_api::part::PartExecutionStatusResource,
-) -> String {
-    i18n.text_args(
-        "operation-nested-task-summary",
-        &fl_args!(
-            "title" => title,
-            "status" => match status {
-                agena_api::part::PartExecutionStatusResource::Pending => t(i18n, "message-state-pending"),
-                agena_api::part::PartExecutionStatusResource::InProgress => t(i18n, "message-state-in-progress"),
-                agena_api::part::PartExecutionStatusResource::Completed => t(i18n, "message-state-completed"),
-                agena_api::part::PartExecutionStatusResource::PolicyDenied => t(i18n, "message-state-policy-denied"),
-                agena_api::part::PartExecutionStatusResource::UserDeclined => t(i18n, "message-state-user-declined"),
-                agena_api::part::PartExecutionStatusResource::CapabilityUnavailable => t(i18n, "message-state-capability-unavailable"),
-                agena_api::part::PartExecutionStatusResource::ToolUnavailable => t(i18n, "message-state-tool-unavailable"),
-                agena_api::part::PartExecutionStatusResource::Failed => t(i18n, "message-state-failed"),
-                agena_api::part::PartExecutionStatusResource::Cancelled => t(i18n, "todo-status-cancelled"),
-            },
-        ),
-    )
-}
-
 pub fn message_error_text(i18n: &I18n, code: &str, message: &str) -> String {
     i18n.text_args(
         "message-error",

@@ -397,6 +397,61 @@ impl HostClient for HttpCallbackHostClient {
         .await
     }
 
+    async fn spawn_agent(
+        &self,
+        request: crate::host_api::AgentSpawnRequest,
+    ) -> crate::Result<crate::host_api::AgentHandle> {
+        self.call(
+            method::HOST_AGENT_SPAWN,
+            params_with_current_context(serde_json::json!({"request":request})),
+        )
+        .await
+    }
+
+    async fn message_agent(
+        &self,
+        request: crate::host_api::AgentMessageRequest,
+    ) -> crate::Result<crate::host_api::AgentMessageReceipt> {
+        self.call(
+            method::HOST_AGENT_MESSAGE,
+            params_with_current_context(serde_json::json!({"request":request})),
+        )
+        .await
+    }
+
+    async fn wait_agent(
+        &self,
+        request: crate::host_api::AgentWaitRequest,
+    ) -> crate::Result<crate::host_api::AgentWaitResponse> {
+        self.call(
+            method::HOST_AGENT_WAIT,
+            params_with_current_context(serde_json::json!({"request":request})),
+        )
+        .await
+    }
+
+    async fn followup_agent(
+        &self,
+        request: crate::host_api::AgentMessageRequest,
+    ) -> crate::Result<crate::host_api::AgentHandle> {
+        self.call(
+            method::HOST_AGENT_FOLLOWUP,
+            params_with_current_context(serde_json::json!({"request":request})),
+        )
+        .await
+    }
+
+    async fn cancel_agent(
+        &self,
+        request: crate::host_api::AgentTargetRequest,
+    ) -> crate::Result<crate::host_api::AgentMessageReceipt> {
+        self.call(
+            method::HOST_AGENT_CANCEL,
+            params_with_current_context(serde_json::json!({"request":request})),
+        )
+        .await
+    }
+
     async fn image_execute(
         &self,
         req: HostImageExecuteRequest,

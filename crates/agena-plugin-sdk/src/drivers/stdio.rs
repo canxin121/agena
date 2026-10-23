@@ -27,8 +27,9 @@ use crate::hooks::{
     EventEnvelope, EventFilter, ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
-    HostCommandMutationResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
+    AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest,
+    AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse, EventSubscription,
+    HostClient, HostCommandMutationResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
     HostCommandUpdateRequest, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
     HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
     HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
@@ -45,10 +46,8 @@ use crate::host_api::{
     HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
     HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PluginNotifyRequest,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    SubtaskControlResponse, ToolDescriptor,
+    HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, PluginNotifyRequest, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -789,57 +788,57 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn run_subtask(
-        &self,
-        req: RunSubtaskRequest,
-    ) -> crate::error::Result<RunSubtaskResponse> {
+    async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::error::Result<AgentHandle> {
         self.call(
-            method::HOST_SUBTASK_RUN,
+            method::HOST_AGENT_SPAWN,
             serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
+                "request": req, "context": crate::host_api::current_host_callback_context(),
             }),
         )
         .await
     }
 
-    async fn cancel_subtask(
+    async fn message_agent(
         &self,
-        req: CancelSubtaskRequest,
-    ) -> crate::error::Result<SubtaskControlResponse> {
+        req: AgentMessageRequest,
+    ) -> crate::error::Result<AgentMessageReceipt> {
         self.call(
-            method::HOST_SUBTASK_CANCEL,
+            method::HOST_AGENT_MESSAGE,
             serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
+                "request": req, "context": crate::host_api::current_host_callback_context(),
             }),
         )
         .await
     }
 
-    async fn message_subtask(
-        &self,
-        req: MessageSubtaskRequest,
-    ) -> crate::error::Result<SubtaskControlResponse> {
+    async fn wait_agent(&self, req: AgentWaitRequest) -> crate::error::Result<AgentWaitResponse> {
         self.call(
-            method::HOST_SUBTASK_MESSAGE,
+            method::HOST_AGENT_WAIT,
             serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
+                "request": req, "context": crate::host_api::current_host_callback_context(),
             }),
         )
         .await
     }
 
-    async fn read_subtask_output(
-        &self,
-        req: ReadSubtaskOutputRequest,
-    ) -> crate::error::Result<ReadSubtaskOutputResponse> {
+    async fn followup_agent(&self, req: AgentMessageRequest) -> crate::error::Result<AgentHandle> {
         self.call(
-            method::HOST_SUBTASK_OUTPUT,
+            method::HOST_AGENT_FOLLOWUP,
             serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
+                "request": req, "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn cancel_agent(
+        &self,
+        req: AgentTargetRequest,
+    ) -> crate::error::Result<AgentMessageReceipt> {
+        self.call(
+            method::HOST_AGENT_CANCEL,
+            serde_json::json!({
+                "request": req, "context": crate::host_api::current_host_callback_context(),
             }),
         )
         .await

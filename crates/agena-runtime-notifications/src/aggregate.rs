@@ -132,7 +132,7 @@ mod tests {
     fn sample_activity(status: BackgroundActivityStatus) -> BackgroundActivity {
         BackgroundActivity {
             id: "task_1".to_owned(),
-            kind: BackgroundActivityKind::Task,
+            kind: BackgroundActivityKind::Agent,
             status,
             title: "Run tests".to_owned(),
             description: "cargo test".to_owned(),

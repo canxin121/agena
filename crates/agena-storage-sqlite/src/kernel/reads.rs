@@ -106,12 +106,12 @@ pub(super) fn summary_row(row: &SqliteRow) -> Result<SessionSummaryView> {
             row.try_get("relation_kind").map_err(storage)?,
         )
         .ok_or_else(|| storage("invalid session relation"))?,
-        task_id: row.try_get("task_id").map_err(storage)?,
-        subtask_status: row
-            .try_get::<Option<&str>, _>("subtask_status")
+        agent_name: row.try_get("agent_name").map_err(storage)?,
+        agent_status: row
+            .try_get::<Option<&str>, _>("agent_status")
             .map_err(storage)?
             .map(|status| {
-                agena_domain::SubtaskStatus::parse(status)
+                agena_domain::AgentStatus::parse(status)
                     .ok_or_else(|| storage("invalid task status"))
             })
             .transpose()?,

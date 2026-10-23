@@ -19,7 +19,7 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     "agena.interaction",
     "agena.session",
     "agena.plan",
-    "agena.tasks",
+    "agena.agent",
     "agena.cron",
     "agena.monitor",
     "agena.report",
@@ -51,7 +51,7 @@ pub struct StatelessMcpToolMetadata<'a> {
     pub name: &'a str,
     pub plugin_id: &'a str,
     pub interactive: bool,
-    pub task: bool,
+    pub agent: bool,
 }
 
 /// Return whether a runtime tool is meaningful on a stateless MCP transport.
@@ -62,7 +62,7 @@ pub struct StatelessMcpToolMetadata<'a> {
 pub fn is_stateless_mcp_tool_exposed(tool: StatelessMcpToolMetadata<'_>) -> bool {
     !tool.plugin_id.trim().is_empty()
         && !tool.interactive
-        && !tool.task
+        && !tool.agent
         && !plugin_id_is_hidden(tool.plugin_id)
         && !tool_has_known_interactive_name(tool.name)
 }
@@ -88,13 +88,13 @@ mod tests {
         name: &'a str,
         plugin_id: &'a str,
         interactive: bool,
-        task: bool,
+        agent: bool,
     ) -> StatelessMcpToolMetadata<'a> {
         StatelessMcpToolMetadata {
             name,
             plugin_id,
             interactive,
-            task,
+            agent,
         }
     }
 

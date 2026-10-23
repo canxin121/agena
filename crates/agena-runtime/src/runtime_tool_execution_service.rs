@@ -50,9 +50,9 @@ pub struct RuntimeToolDescriptor {
     pub destructive: bool,
     /// The tool can reach network targets outside the local workspace.
     pub open_world: bool,
-    /// Long-running autonomous task tools are not suitable for the stateless
+    /// Agent communication tools require a session and are unsuitable for the stateless
     /// ChatGPT connector surface.
-    pub task: bool,
+    pub agent: bool,
     /// Stable full plugin id (for example, `agena.fs`).
     pub plugin_id: String,
 }

@@ -36,7 +36,7 @@ impl SessionManager {
         session: i64,
         call: i64,
     ) -> Result<(ToolHandle, Arc<RunControl>), AppError> {
-        let (tool, control) = self
+        let live = self
             .tools
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -45,10 +45,10 @@ impl SessionManager {
             .ok_or_else(|| {
                 AppError::Config("the host callback has no active tool authority".into())
             })?;
-        if control.cancel.is_cancelled() {
+        if live.control.cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
-        Ok((tool, control))
+        Ok((live.tool, live.control))
     }
     pub async fn request_host_user_input(
         &self,

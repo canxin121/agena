@@ -299,16 +299,6 @@ fn operation_default_expanded(
             return *expanded;
         }
     }
-    // Delegated tasks can run for a while and publish shell-like output into
-    // the parent operation's content resource. Open that operation by default
-    // so the live log is visible as soon as it starts; an explicit tool
-    // preference above still lets users choose a collapsed default.
-    if tool_ids
-        .iter()
-        .any(|tool_id| matches!(tool_id.as_str(), "agena.tasks.run" | "tasks.run" | "task"))
-    {
-        return true;
-    }
     defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
 }
 
@@ -324,7 +314,7 @@ fn operation_tool_activity_category(tool_id: &str) -> Option<&'static str> {
         "apply_patch" | "fs.apply_patch" => Some("apply_patch"),
         "multiedit" => Some("multiedit"),
         "bash" | "shell.exec" | "shell.spawn" | "shell.watch" | "shell.open" => Some("bash"),
-        "task" | "tasks.run" => Some("task"),
+        "agent.spawn" => Some("agent"),
         "webfetch" | "web.read" | "web.fetch" => Some("webfetch"),
         "websearch" | "web.search" => Some("websearch"),
         "codesearch" | "code.search" => Some("codesearch"),
@@ -3435,33 +3425,36 @@ mod ask_wizard_tests {
 }
 
 #[cfg(test)]
-mod delegated_task_default_tests {
+mod agent_receipt_default_tests {
     use super::*;
 
     #[test]
-    fn delegated_task_output_is_visible_by_default_but_tool_preferences_win() {
+    fn agent_receipts_use_normal_expansion_defaults_and_tool_preferences() {
         let defaults = TranscriptDetailDefaults {
             activity_default_expanded: false,
             kind_defaults: std::collections::BTreeMap::new(),
         };
-        assert!(operation_default_expanded(
+        assert!(!operation_default_expanded(
             &defaults,
-            "run",
-            Some("agena.tasks")
+            "spawn",
+            Some("agena.agent")
         ));
-        assert!(operation_default_expanded(&defaults, "tasks.run", None));
+        assert_eq!(
+            operation_default_expanded(&defaults, "agent.spawn", None),
+            defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
+        );
         assert!(!operation_default_expanded(&defaults, "shell.exec", None));
 
         let configured = TranscriptDetailDefaults {
             activity_default_expanded: false,
-            kind_defaults: [("tool:agena.tasks.run".to_owned(), false)]
+            kind_defaults: [("tool:agena.agent.spawn".to_owned(), false)]
                 .into_iter()
                 .collect(),
         };
         assert!(!operation_default_expanded(
             &configured,
-            "run",
-            Some("agena.tasks")
+            "spawn",
+            Some("agena.agent")
         ));
     }
 }

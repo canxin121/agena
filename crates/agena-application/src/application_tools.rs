@@ -311,7 +311,7 @@ impl Application {
                 read_only: tool.read_only,
                 destructive: tool.destructive,
                 open_world: tool.open_world,
-                task: tool.task,
+                agent: tool.agent,
                 plugin_id: tool.plugin_id,
             })
             .collect()

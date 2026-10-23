@@ -1,7 +1,7 @@
 //! Session configuration, immutable branch membership and durable deliveries.
 use super::*;
 use agena_domain::{
-    PermissionConfig, SessionConversation, SessionRelationKind, SessionStateKind, SubtaskStatus,
+    AgentStatus, PermissionConfig, SessionConversation, SessionRelationKind, SessionStateKind,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,15 +21,23 @@ pub struct SessionConfiguration {
     pub permission_ceiling: PermissionConfig,
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
-    pub task: Option<SessionTaskConfiguration>,
+    pub agent: Option<SessionAgentConfiguration>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionTaskConfiguration {
-    pub id: String,
-    pub status: SubtaskStatus,
+pub struct SessionAgentConfiguration {
+    pub name: String,
+    pub status: AgentStatus,
     pub started_at_ms: Option<i64>,
     pub finished_at_ms: Option<i64>,
     pub failure: Option<agena_failure::Failure>,
+    pub limits: AgentExecutionLimits,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AgentExecutionLimits {
+    pub timeout_ms: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub max_cost_microusd: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -42,7 +50,7 @@ pub struct SessionConfigurationChange {
     pub permission_ceiling: Option<PermissionConfig>,
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
-    pub task: Option<Option<SessionTaskConfiguration>>,
+    pub agent: Option<Option<SessionAgentConfiguration>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RewindResult {
@@ -80,7 +88,7 @@ pub struct SummaryQuery {
     pub roots_only: bool,
     pub exclude_subagents: bool,
     pub temporary_only: bool,
-    pub tasks_only: bool,
+    pub agents_only: bool,
     pub search: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
@@ -185,6 +193,35 @@ impl SessionCommands {
         match r.value {
             Mutation::Configuration(value) => Ok(CommitReceipt {
                 position: r.position,
+                value: *value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
+    /// The terminal status and parent mailbox entry commit together.
+    pub async fn finish_agent(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        agent: SessionAgentConfiguration,
+        business_key: String,
+        payload: serde_json::Value,
+    ) -> Result<CommitReceipt<SessionConfiguration>> {
+        let receipt = self
+            .0
+            .command(
+                request,
+                Command::FinishAgent {
+                    session,
+                    agent,
+                    business_key,
+                    payload,
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::Configuration(value) => Ok(CommitReceipt {
+                position: receipt.position,
                 value: *value,
             }),
             _ => Err(unexpected()),
@@ -341,12 +378,12 @@ impl KernelReader {
             .history_after(session, after_entry, limit)
             .await
     }
-    pub async fn find_task(
+    pub async fn find_agent(
         &self,
         parent: SessionId,
-        task_id: &str,
+        agent_name: &str,
     ) -> Result<ReadView<Option<SessionId>>> {
-        self.0.backend.find_task(parent, task_id).await
+        self.0.backend.find_agent(parent, agent_name).await
     }
 
     pub async fn latest_round(

@@ -70,9 +70,9 @@ struct Args {
     #[arg(long, default_value_t = 180)]
     case_timeout_secs: u64,
 
-    /// Maximum end-to-end duration of a tasks.run parent Tool API turn and child run.
+    /// Maximum end-to-end duration of an agent.spawn parent Tool API turn and child run.
     #[arg(long, default_value_t = 600)]
-    task_timeout_secs: u64,
+    agent_timeout_secs: u64,
 
     /// Keep the isolated HOME/workspace fixture for postmortem inspection.
     #[arg(long)]
@@ -147,7 +147,7 @@ async fn async_main() -> anyhow::Result<()> {
         execution_commands,
         options: run_options(model),
         case_timeout: Duration::from_secs(args.case_timeout_secs),
-        task_timeout: Duration::from_secs(args.task_timeout_secs),
+        agent_timeout: Duration::from_secs(args.agent_timeout_secs),
         selector: CaseSelector::new(args.cases),
     };
     let mut report = SuiteReport::default();
@@ -283,7 +283,7 @@ struct Harness {
     execution_commands: Arc<dyn SessionExecutionCommandService>,
     options: SessionRunOptions,
     case_timeout: Duration,
-    task_timeout: Duration,
+    agent_timeout: Duration,
     selector: CaseSelector,
 }
 

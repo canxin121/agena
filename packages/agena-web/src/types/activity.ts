@@ -57,8 +57,7 @@ export function activityLogText(log: ActivityLog | null): string {
 /** Bound retained output even for a monitor that runs for days. */
 export function mergeActivityLog(previous: ActivityLog | null, next: ActivityLog): ActivityLog {
   const old = previous?.activity_id === next.activity_id ? previous.lines : []
-  // Shell lines are immutable, while a delegated task's cursor line is a
-  // snapshot of its still-streaming run. Replace a repeated sequence number.
+  // Replace repeated sequence numbers when a source refreshes a retained line.
   const bySequence = new Map(old.map((line) => [line.seq, line]))
   for (const line of next.lines) bySequence.set(line.seq, line)
   const lines = [...bySequence.values()].sort((a, b) => a.seq - b.seq).slice(-200)

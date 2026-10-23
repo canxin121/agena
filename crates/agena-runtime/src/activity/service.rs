@@ -88,7 +88,7 @@ pub trait RuntimeActivityService: Send + Sync {
     ) -> Result<BackgroundActivityLogRead, ActivityControlError>;
 
     /// Stop a running activity. Shell processes are killed, runtime tasks are
-    /// cancelled, delegated tasks are cancelled through their child session.
+    /// cancelled, agents are cancelled through their child session.
     async fn stop_activity(
         &self,
         activity_id: &str,

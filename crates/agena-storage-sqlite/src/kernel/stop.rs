@@ -10,7 +10,7 @@ pub(super) async fn observe_round(
     scope: Scope,
     round: RoundId,
 ) -> Result<()> {
-    sqlx::query("UPDATE agena_deliveries SET observed_round_id=? WHERE session_id=? AND state='consumed' AND observed_round_id IS NULL AND (target_execution_id IS NOT NULL OR COALESCE(json_extract(payload_json,'$.wake'),1)!=0) AND (target_execution_id IS NULL OR target_execution_id=?) AND result_entry_id IN (SELECT entry_id FROM agena_round_inputs WHERE round_id=?)")
+    sqlx::query("UPDATE agena_deliveries SET observed_round_id=? WHERE session_id=? AND state='consumed' AND observed_round_id IS NULL AND (target_execution_id IS NOT NULL OR COALESCE(json_extract(payload_json,'$.wake'),1)!=0 OR json_extract(payload_json,'$.kind')='agent_message') AND (target_execution_id IS NULL OR target_execution_id=?) AND result_entry_id IN (SELECT entry_id FROM agena_round_inputs WHERE round_id=?)")
         .bind(round.get()).bind(scope.session.get()).bind(scope.execution.to_string()).bind(round.get())
         .execute(&mut *connection).await.map_err(sql_error)?;
     Ok(())
@@ -33,7 +33,7 @@ pub(super) async fn prepare(
     let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_deliveries INDEXED BY idx_agena_delivery_session WHERE session_id=? AND state='pending' AND (target_execution_id IS NULL OR target_execution_id=?))")
         .bind(scope.session.get()).bind(scope.execution.to_string())
         .fetch_one(&mut *connection).await.map_err(sql_error)?;
-    let unobserved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_deliveries d INDEXED BY idx_agena_delivery_unobserved WHERE d.session_id=? AND d.state='consumed' AND d.observed_round_id IS NULL AND (d.target_execution_id IS NULL OR d.target_execution_id=?) AND (d.target_execution_id IS NOT NULL OR COALESCE(json_extract(d.payload_json,'$.wake'),1)!=0) AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=d.session_id AND m.entry_id=d.result_entry_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal))")
+    let unobserved: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_deliveries d INDEXED BY idx_agena_delivery_unobserved WHERE d.session_id=? AND d.state='consumed' AND d.observed_round_id IS NULL AND (d.target_execution_id IS NULL OR d.target_execution_id=?) AND (d.target_execution_id IS NOT NULL OR COALESCE(json_extract(d.payload_json,'$.wake'),1)!=0 OR json_extract(d.payload_json,'$.kind')='agent_message') AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=d.session_id AND m.entry_id=d.result_entry_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal))")
         .bind(scope.session.get()).bind(scope.execution.to_string())
         .fetch_one(&mut *connection).await.map_err(sql_error)?;
     if pending || unobserved {

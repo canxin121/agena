@@ -6,6 +6,11 @@
 
 pub(crate) mod simplified {
     pub(crate) const ACTIONS: &[(&str, &str)] = &[
+        ("Start agent", "启动 Agent"),
+        ("Message agent", "向 Agent 发消息"),
+        ("Wait for agents", "等待 Agent"),
+        ("Continue agent", "继续 Agent"),
+        ("Cancel agent", "取消 Agent"),
         ("Read", "读取"),
         ("Read files", "读取多个文件"),
         ("Write", "写入"),
@@ -108,6 +113,11 @@ pub(crate) mod simplified {
 
 pub(crate) mod traditional {
     pub(crate) const ACTIONS: &[(&str, &str)] = &[
+        ("Start agent", "啟動 Agent"),
+        ("Message agent", "向 Agent 傳送訊息"),
+        ("Wait for agents", "等待 Agent"),
+        ("Continue agent", "繼續 Agent"),
+        ("Cancel agent", "取消 Agent"),
         ("Read", "讀取"),
         ("Read files", "讀取多個檔案"),
         ("Write", "寫入"),

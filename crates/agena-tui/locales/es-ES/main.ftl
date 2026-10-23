@@ -1842,7 +1842,7 @@ transcript-image-embedded = imagen incrustada
 # Activities, composer, diagnostics and usage analytics.
 activities-title = Actividades en segundo plano
 activities-empty = No hay actividades en segundo plano.
-activities-empty-hint = Ejecuta shell.spawn, shell.open o tasks.run para crear una.
+activities-empty-hint = Ejecuta shell.spawn, shell.open o agent.spawn para crear una.
 activities-section-active = En curso
 activities-section-finished = Finalizadas
 activities-footer-close = Esc cerrar
@@ -1960,7 +1960,7 @@ activities-control-delete = eliminar
 activities-control-dismiss = descartar
 activities-kind-shell = Shell
 activities-kind-monitor = Monitoreo
-activities-kind-task = Tarea
+activities-kind-agent = Agente
 activities-kind-cron = Tarea programada
 activities-kind-runtime = Entorno de ejecución
 activities-kind-browser = Navegador
@@ -2511,7 +2511,6 @@ timeline-type-execution-completed = ejecución completada
 timeline-type-execution-cancelled = ejecución cancelada
 timeline-type-execution-failed = error en la ejecución
 timeline-type-compaction-completed = compactación del contexto completada
-timeline-type-subtask-status-changed = estado de la subtarea cambiado
 timeline-type-stream-error = error del flujo
 timeline-type-message-part-checkpointed = parte del mensaje guardada
 timeline-type-message-part-delta = cambio en la parte del mensaje
@@ -2880,7 +2879,6 @@ operation-diff-summary-detailed = diff: {$files} archivos, +{$added} -{$deleted}
 operation-diff-summary-detailed-one = diff: 1 archivo, +{$added} -{$deleted}
 operation-diff-summary-detailed-one-rename = diff: 1 archivo, +{$added} -{$deleted}, {$renamed} renombrado(s)
 operation-diff-summary-detailed-renames = diff: {$files} archivos, +{$added} -{$deleted}, {$renamed} renombrado(s)
-operation-nested-task-summary = {$title} ({$status})
 operation-search-heading = búsqueda: {$query}
 operation-search-results-heading = resultados de búsqueda
 permission-label-auto-approve = aprobación automática
@@ -2930,7 +2928,7 @@ status-part-permission = permiso={$value}
 status-part-permissions = permisos={$count}
 status-part-speed = velocidad={$value}
 status-part-state = estado={$value}
-status-part-task = tarea={$value}
+status-part-agent-name = nombre_agente={$value}
 status-part-thinking = razonamiento={$value}
 status-part-tools = herramientas={$count}
 status-part-user-input = respuestas={$count}

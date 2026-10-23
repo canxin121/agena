@@ -189,7 +189,7 @@ fn tool_name_is_hidden_from_stateless_mcp(name: &str) -> bool {
         "interaction.",
         "session.",
         "plan.",
-        "tasks.",
+        "agent.",
         "cron.",
         "monitor.",
         "snapshot.",

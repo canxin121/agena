@@ -28,7 +28,7 @@ fn input_for(name: &str) -> Value {
 #[test]
 fn manifest_exposes_exactly_32_hosted_tools() {
     let manifest = agena_bundled_plugins::bundled_capability_manifest();
-    assert_eq!(manifest.counts.execution_tools, 137);
+    assert_eq!(manifest.counts.execution_tools, 135);
     assert_eq!(manifest.counts.gateway_tools, 3);
     let all = manifest
         .plugins
@@ -63,7 +63,7 @@ fn manifest_exposes_exactly_32_hosted_tools() {
         "mcp.tools.call",
         "memory.write",
         "web.browser_open",
-        "tasks.run",
+        "agent.spawn",
     ] {
         assert!(all.contains(native), "native capability removed: {native}");
     }

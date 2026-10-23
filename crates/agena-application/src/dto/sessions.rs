@@ -1,10 +1,10 @@
 use super::{Deserialize, SearchPaginationQuery};
 
 pub use agena_api::resource::{
-    ActiveExecutionResource, ExecutionPhase, PendingInteractiveRequestResource,
+    ActiveExecutionResource, AgentStatus, ExecutionPhase, PendingInteractiveRequestResource,
     RunOptions as SessionRunOptionsRequest, SessionExecutionContextResource,
     SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-    SessionState, SessionUsageLimitBasis, SessionUsageResource, SubtaskStatus, WorkflowState,
+    SessionState, SessionUsageLimitBasis, SessionUsageResource, WorkflowState,
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -18,7 +18,7 @@ pub struct SessionListQuery {
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub roots: bool,
-    /// Hide task child sessions (`relation_kind = 'subagent'`).
+    /// Hide agent child sessions (`relation_kind = 'subagent'`).
     #[serde(default)]
     pub exclude_subagents: bool,
     #[serde(default)]

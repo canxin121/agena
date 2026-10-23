@@ -6,7 +6,7 @@ use agena_domain::{BackgroundActivity, BackgroundActivityLogRead};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-/// A background activity (process, task) with its log state.
+/// A background activity (process, agent) with its log state.
 pub struct BackgroundActivityResource {
     pub id: String,
     pub kind: String,

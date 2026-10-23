@@ -23,29 +23,29 @@ use crate::logs::{PluginLogRecord, PluginLogStore};
 use crate::registry::{PluginToolRegistry, RegisteredTool};
 use crate::scoped_registry::{PluginScopeKey, ScopedRegistry};
 use crate::sdk::host_api::{
-    self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
-    HostCallbackContext, HostClient, HostCommandMutationResponse, HostCommandRegisterRequest,
-    HostCommandRemoveRequest, HostCommandUpdateRequest, HostConfigReloadRequestResponse,
-    HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
-    HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
-    HostDisplayRemoveResponse, HostHookDescriptor, HostHookListResponse, HostHookRegistration,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSetSessionModelRequest, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
-    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel,
-    MessageSubtaskRequest, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, PluginNotifyAction,
-    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind,
+    self, AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest,
+    AgentTargetRequest, AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse,
+    EventSubscription, HostCallbackContext, HostClient, HostCommandMutationResponse,
+    HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
+    HostConfigReloadRequestResponse, HostConfigReloadStatusRequest, HostConfigReloadStatusResponse,
+    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostHookDescriptor, HostHookListResponse,
+    HostHookRegistration, HostImageExecuteRequest, HostImageExecuteResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredCommandListResponse,
+    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSetSessionModelRequest, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    PluginNotifyAction, PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind,
     ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
@@ -1010,29 +1010,29 @@ struct HostAskUserParams {
 }
 
 #[derive(serde::Deserialize)]
-struct HostRunSubtaskParams {
-    request: RunSubtaskRequest,
+struct HostAgentSpawnParams {
+    request: AgentSpawnRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostCancelSubtaskParams {
-    request: CancelSubtaskRequest,
+struct HostAgentMessageParams {
+    request: AgentMessageRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostMessageSubtaskParams {
-    request: MessageSubtaskRequest,
+struct HostAgentWaitParams {
+    request: AgentWaitRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostReadSubtaskOutputParams {
-    request: ReadSubtaskOutputRequest,
+struct HostAgentTargetParams {
+    request: AgentTargetRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

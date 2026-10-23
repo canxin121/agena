@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 
 use agena_domain::{
-    PendingInteractiveRequestContext, PermissionConfig, SessionCostSummary, SessionSummary,
-    SessionUsage, SubtaskStatus, UsageStats, UsageStatsQuery, WorkflowState,
+    AgentStatus, PendingInteractiveRequestContext, PermissionConfig, SessionCostSummary,
+    SessionSummary, SessionUsage, UsageStats, UsageStatsQuery, WorkflowState,
 };
 use chrono::{DateTime, Utc};
 
@@ -47,11 +47,11 @@ pub struct SessionExecutionContext {
     pub model_verbosity: Option<String>,
     pub model_parallel_tool_calls: Option<bool>,
     pub effective_workspace_root: Option<String>,
-    pub task_id: Option<String>,
-    pub subtask_status: Option<SubtaskStatus>,
-    pub subtask_started_at: Option<DateTime<Utc>>,
-    pub subtask_finished_at: Option<DateTime<Utc>>,
-    pub subtask_failure: Option<agena_failure::Failure>,
+    pub agent_name: Option<String>,
+    pub agent_status: Option<AgentStatus>,
+    pub agent_started_at: Option<DateTime<Utc>>,
+    pub agent_finished_at: Option<DateTime<Utc>>,
+    pub agent_failure: Option<agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,11 +280,11 @@ mod tests {
                 model_verbosity: None,
                 model_parallel_tool_calls: None,
                 effective_workspace_root: None,
-                task_id: None,
-                subtask_status: None,
-                subtask_started_at: None,
-                subtask_finished_at: None,
-                subtask_failure: None,
+                agent_name: None,
+                agent_status: None,
+                agent_started_at: None,
+                agent_finished_at: None,
+                agent_failure: None,
             })
         }
 

@@ -406,12 +406,12 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<HistoryPage>> {
         lifecycle::history_after(self, session, after_entry, limit).await
     }
-    async fn find_task(
+    async fn find_agent(
         &self,
         parent: SessionId,
-        task_id: &str,
+        agent_name: &str,
     ) -> Result<ReadView<Option<SessionId>>> {
-        lifecycle::find_task(self, parent, task_id).await
+        lifecycle::find_agent(self, parent, agent_name).await
     }
 
     async fn latest_round(
@@ -1747,7 +1747,17 @@ async fn commit_batch(
             }
         })
         .collect::<Vec<_>>();
-    let shared_family = if shared_entries.is_empty() && shared_sessions.is_empty() {
+    // Agent settlement updates the child and a different session's mailbox in
+    // one transaction. A reset makes both observers take a consistent snapshot.
+    let agent_handoff = batch.iter().zip(&results).any(|(pending, result)| {
+        matches!(pending.command, Command::FinishAgent { .. })
+            && result
+                .as_ref()
+                .is_ok_and(|r| r.position.sequence == sequence)
+    });
+    let shared_family = if agent_handoff {
+        true
+    } else if shared_entries.is_empty() && shared_sessions.is_empty() {
         false
     } else {
         let identities = match encode(&shared_entries) {
@@ -1970,6 +1980,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         }
         Command::PresentInteraction { session, .. }
         | Command::Configure { session, .. }
+        | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
         | Command::DeleteSession { session }
         | Command::Continue { session, .. }
@@ -2076,7 +2087,9 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             Mutation::Rewind(value) => (value.session.id, ChangeKind::Membership),
             _ => (*session, ChangeKind::Membership),
         },
-        Command::Configure { session, .. } => (*session, ChangeKind::Metadata),
+        Command::Configure { session, .. } | Command::FinishAgent { session, .. } => {
+            (*session, ChangeKind::Metadata)
+        }
         Command::Withdraw { session, .. }
         | Command::DeleteSession { session }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),

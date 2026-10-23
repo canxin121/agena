@@ -349,14 +349,6 @@ const progressCount = computed(() =>
       </div>
     </div>
 
-    <div
-      v-else-if="kind === 'nested_task'"
-      class="flex min-w-0 items-center gap-2 border-y border-border/50 py-1 text-xs"
-    >
-      <span class="font-mono text-primary">{{ stringValue(block.status) || 'pending' }}</span>
-      <span class="min-w-0 flex-1 break-words">{{ stringValue(block.title) || stringValue(block.task_id) }}</span>
-    </div>
-
     <MarkdownRenderer
       v-else-if="kind === 'custom'"
       :content="structuredValueMarkdown(block.presentation ?? {})"

@@ -404,7 +404,7 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         // `mutating` is the adjective spelling of the `mutate` tag.
         "mutating" => quote! { ::agena_plugin_sdk::ToolTag::Mutate },
         "shell" => quote! { ::agena_plugin_sdk::ToolTag::Shell },
-        "task" => quote! { ::agena_plugin_sdk::ToolTag::Task },
+        "agent" => quote! { ::agena_plugin_sdk::ToolTag::Agent },
         "read_only" => quote! { ::agena_plugin_sdk::ToolTag::ReadOnly },
         "parallel_safe" | "parallel-safe" => {
             quote! { ::agena_plugin_sdk::ToolTag::ParallelSafe }
@@ -421,7 +421,6 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         "scheduler" => quote! { ::agena_plugin_sdk::ToolTag::Scheduler },
         "lsp" => quote! { ::agena_plugin_sdk::ToolTag::Lsp },
         "mcp" => quote! { ::agena_plugin_sdk::ToolTag::Mcp },
-        "subtask" => quote! { ::agena_plugin_sdk::ToolTag::Subtask },
         _ => return None,
     };
     Some(parse_quote!(#variant))

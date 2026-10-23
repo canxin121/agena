@@ -1,3 +1,4 @@
+pub mod agent;
 mod cloud_media;
 pub mod code;
 pub mod commands;
@@ -15,7 +16,6 @@ pub mod report;
 pub mod session;
 pub mod settings;
 pub mod shell;
-pub mod tasks;
 pub mod terminal;
 pub mod tool_api;
 pub mod workflow;

@@ -7,7 +7,7 @@ use agena_plugin_host::sdk::ToolInput;
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     ToolRuntimeContext, apply_patch, ask_user, glob, grep, read, shell_tool, suggest_tool_names,
-    task, tool_search, unknown_tool_hint,
+    tool_search, unknown_tool_hint,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -28,7 +28,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "lsp_references",
     "shell",
     "read",
-    "task",
     "tool_search",
 ];
 
@@ -124,7 +123,6 @@ pub(crate) fn execute_tool(
         "read" => read::execute(executor, &parse_shape_input(input)?),
         "glob" => glob::execute(executor, &parse_shape_input(input)?),
         "grep" => grep::execute(executor, &parse_shape_input(input)?),
-        "task" => task::execute(executor, &parse_shape_input(input)?),
         "tool_search" => tool_search::execute(executor, &parse_shape_input(input)?),
         "ask_user" => ask_user::execute(&parse_shape_input(input)?),
         "shell" => shell_tool::execute(

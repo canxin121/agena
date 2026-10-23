@@ -48,15 +48,6 @@ fn sample_payload(tool: &str) -> Value {
         "retry_max_attempts": 1,
         "last_run_status": "completed"
     });
-    let task = json!({
-        "task_id": "task-1",
-        "description": "Example delegated task",
-        "status": "completed",
-        "session_id": 42,
-        "model_id": "gpt-5",
-        "started_at_ms": 1,
-        "finished_at_ms": 2
-    });
 
     match tool {
         "content.read" => {
@@ -376,19 +367,11 @@ fn sample_payload(tool: &str) -> Value {
         "commands.refresh" => {
             json!({"changed": true, "generation": 3, "declared": 14, "external": 0})
         }
-        "tasks.run" => json!({
-            "task_id": "task-1", "session_id": 42, "parent_session_id": 0, "status": "completed",
-            "resumed": false, "final_text": "Task completed.", "model_provider_id": "openai", "model_id": "gpt-5",
-            "input_tokens": 10, "output_tokens": 20, "reasoning_tokens": 5, "cache_write_tokens": 0, "cache_read_tokens": 0,
-            "total_cost_microusd": 12
-        }),
-        "tasks.list" => json!({"tasks": [task.clone()]}),
-        "tasks.get" | "tasks.cancel" | "tasks.followup" | "tasks.message" => {
-            json!({"task": task.clone()})
+        "agent.spawn" | "agent.followup" => {
+            json!({"agent_id":42,"name":"worker","status":"running"})
         }
-        "tasks.output" => {
-            json!({"task": task.clone(), "chunks": [{"role": "assistant", "text": "done"}], "next_cursor": 1, "has_more": true})
-        }
+        "agent.message" | "agent.cancel" => json!({"agent_id":42,"accepted":true,"state":"queued"}),
+        "agent.wait" => json!({"reason":"message"}),
         "web.fetch" | "web.read" => {
             json!({"url": "https://example.test", "status": 200, "cached": false, "truncated": false, "summary": "Example page", "markdown": "# Example"})
         }
@@ -482,8 +465,10 @@ fn sample_input(tool: &str) -> Value {
         "plan.phase" => json!({"phase": "implementation"}),
         "plan.review" => json!({"decision": "approve"}),
         value if value.starts_with("plan.") => json!({}),
-        "tasks.run" => json!({"description": "Run release checks"}),
-        value if value.starts_with("tasks.") => json!({"task_id": "task-1"}),
+        "agent.spawn" => json!({"name": "worker", "prompt":"Run release checks"}),
+        value if value.starts_with("agent.") => {
+            json!({"target":"worker", "message":"Check the result"})
+        }
         "commands.install" | "commands.remove" | "commands.get" => {
             json!({"name": "review"})
         }
@@ -1390,42 +1375,16 @@ fn representative_plugin_payloads_render_complete_readable_facts() {
             false,
         ),
         (
-            "tasks.list",
+            "agent.spawn",
             RawOutput::from_parts(
-                Some(json!({
-                    "tasks": [
-                        {"task_id": "t-1", "parent_session_id": 42, "status": "completed", "description": "Inspect files", "model_id": "gpt-5"},
-                        {"task_id": "t-2", "parent_session_id": 42, "status": "running", "description": "Run tests", "model_id": "gpt-5"}
-                    ],
-                    "timed_out": false
-                })),
-                "2 delegated tasks: t-1 completed, t-2 running",
+                Some(json!({"agent_id":42,"name":"worker","status":"running"})),
+                "Agent started",
                 Vec::new(),
                 Vec::new(),
                 false,
             ),
-            vec!["t-1", "t-2", "Inspect files"],
-            true,
-        ),
-        (
-            "tasks.output",
-            RawOutput::from_parts(
-                Some(json!({
-                    "task": {"task_id": "t-1", "status": "completed"},
-                    "chunks": [
-                        {"role": "assistant", "text": "The renderer is ready."},
-                        {"role": "tool", "text": "2 tests passed."}
-                    ],
-                    "next_cursor": 8,
-                    "has_more": false
-                })),
-                "[assistant] The renderer is ready.\n[tool] 2 tests passed.",
-                Vec::new(),
-                Vec::new(),
-                false,
-            ),
-            vec!["t-1", "tests passed", "Next Cursor"],
-            true,
+            vec!["42", "worker", "running"],
+            false,
         ),
         (
             "code.search_ast",

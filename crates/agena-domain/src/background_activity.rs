@@ -24,8 +24,8 @@ pub enum BackgroundActivityKind {
     Shell,
     /// An output event from shell.watch or a WebSocket subscription.
     Monitor,
-    /// A delegated subagent task spawned by `tasks.create` / `tasks.run`.
-    Task,
+    /// A delegated agent execution started by `agent.spawn` or `agent.followup`.
+    Agent,
     /// A durable scheduled job owned by the scheduler.
     Cron,
     /// A runtime-maintained maintenance task (marketplace sync, catalog
@@ -40,7 +40,7 @@ impl BackgroundActivityKind {
     pub const ALL: [Self; 6] = [
         Self::Shell,
         Self::Monitor,
-        Self::Task,
+        Self::Agent,
         Self::Cron,
         Self::Runtime,
         Self::Browser,
@@ -50,7 +50,7 @@ impl BackgroundActivityKind {
         match self {
             Self::Shell => "shell",
             Self::Monitor => "monitor",
-            Self::Task => "task",
+            Self::Agent => "agent",
             Self::Cron => "cron",
             Self::Runtime => "runtime",
             Self::Browser => "browser",

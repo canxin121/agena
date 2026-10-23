@@ -92,12 +92,78 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 137,
+    "execution_tools": 135,
     "gateway_tools": 3,
     "plugins": 22,
-    "tools": 140
+    "tools": 138
   },
   "plugins": [
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.agent",
+      "tools": [
+        {
+          "canonical_name": "agena.agent.cancel",
+          "conditional": null,
+          "definition_identity": "16d749c89ea9b209f14bf0f2feb2d5d907fdd7ad0520639742c8f9b04b39ba59",
+          "gateway": false,
+          "input_schema_sha256": "313b15dabdbc84bcc2d04f24ec4936e73cd4c77196207d69ef080e2143a88187",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.agent.followup",
+          "conditional": null,
+          "definition_identity": "32c3e72104ccbb6eee6a9e3d32139d8574b90d1a05c208d1b8dc8c6ea66cd637",
+          "gateway": false,
+          "input_schema_sha256": "1fba21c2ba9641f3e70b769d7f41a08ea7027afa4b56060bca12d00a9c1fcdfd",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.agent.message",
+          "conditional": null,
+          "definition_identity": "ec62865018301bfd00865620bd0917bfe318f27583ed001f1563701dc3cd5d66",
+          "gateway": false,
+          "input_schema_sha256": "1fba21c2ba9641f3e70b769d7f41a08ea7027afa4b56060bca12d00a9c1fcdfd",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.agent.spawn",
+          "conditional": null,
+          "definition_identity": "2ea2fbbecbbbe9c2136ecb12d82cf0bee48b327226b48adaf75ccdc067d77bca",
+          "gateway": false,
+          "input_schema_sha256": "3cdd958bcfe611c9503d21fb2a5d09019538ac699e74da066eb5bec2ed102c4f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.agent.wait",
+          "conditional": null,
+          "definition_identity": "06022a290c5a51a417cc1833e851140b89823de6c3eadcb4caeb37d27a42f018",
+          "gateway": false,
+          "input_schema_sha256": "c965f61f10da1dd0a51461ba12650bfc4229a352d89a9503a635c03b287333ab",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
     {
       "conditional": null,
       "hooks": [
@@ -1811,113 +1877,6 @@
             "interactive",
             "tty",
             "pty"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": null,
-      "hooks": [
-        "init",
-        "tool.invoke",
-        "session.end"
-      ],
-      "id": "agena.tasks",
-      "tools": [
-        {
-          "canonical_name": "agena.tasks.cancel",
-          "conditional": null,
-          "definition_identity": "5cbc125624c402272349a8165f260bac7a15a4a2325238230afb54a1f65ff9e9",
-          "gateway": false,
-          "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "mutate",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.followup",
-          "conditional": null,
-          "definition_identity": "e1274553b7608029517db4730eead12bbb4c402918e5d2283c9013226a5c55fc",
-          "gateway": false,
-          "input_schema_sha256": "517332e4fe23c700629ee24f46598105e4e40c40fd5bb8a236b69a45856a2a59",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "mutate",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.get",
-          "conditional": null,
-          "definition_identity": "0ac37c06b8e46024204fd8da83726c01d35fa30d21572732dab4b394c12877c5",
-          "gateway": false,
-          "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "query",
-            "read_only",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.list",
-          "conditional": null,
-          "definition_identity": "71dff6b1bd47f4450951716f69ce5b62d89e405b06ff104417e037989584e96e",
-          "gateway": false,
-          "input_schema_sha256": "6a7af1b86b1dd945d0b003eb61ba513e87666af36362201ae03501fc6e4c714f",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "query",
-            "discovery",
-            "read_only",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.message",
-          "conditional": null,
-          "definition_identity": "8f2336110485e73f77793e663a30efa80e5d3d0de9de006da88a416b800fefa8",
-          "gateway": false,
-          "input_schema_sha256": "3b7d2cecfa5269f529c60ca41973d18ce44348bc8922b50e8051c62e52b259a6",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "mutate",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.output",
-          "conditional": null,
-          "definition_identity": "f46d1a4cb87c7494aa43b3f26f6b03330bbcc5712c7531a437b86dbb944deabd",
-          "gateway": false,
-          "input_schema_sha256": "cbdc8ef8fe8839d6ce02a65f7e4a0bc25307cfb7e228b4efc052cee708e4b55b",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "query",
-            "read_only",
-            "task"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.run",
-          "conditional": null,
-          "definition_identity": "8e1ebe4065d77f90d43ee68997efbb93561cf09d2adc29c2201b79d94ac6574d",
-          "gateway": false,
-          "input_schema_sha256": "65cbe2d1a1c8b4cfe1cbc63666b818730dfdb5a2b2d5cfefef66ba96fa867a4d",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "execute",
-            "task"
           ]
         }
       ],

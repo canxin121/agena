@@ -1995,7 +1995,7 @@ transcript-image-embedded = 埋め込み画像
 # Activities, composer, diagnostics and usage analytics.
 activities-title = バックグラウンドアクティビティ
 activities-empty = バックグラウンドアクティビティはありません。
-activities-empty-hint = shell.spawn、shell.open または tasks.run を実行して作成してください。
+activities-empty-hint = shell.spawn、shell.open または agent.spawn を実行して作成してください。
 activities-section-active = 実行中
 activities-section-finished = 完了
 activities-footer-close = Esc 閉じる
@@ -2113,7 +2113,7 @@ activities-control-delete = 削除
 activities-control-dismiss = 除外
 activities-kind-shell = シェル
 activities-kind-monitor = 監視
-activities-kind-task = タスク
+activities-kind-agent = エージェント
 activities-kind-cron = スケジュールタスク
 activities-kind-runtime = ランタイム
 activities-kind-browser = ブラウザー
@@ -2515,7 +2515,6 @@ timeline-type-execution-completed = 実行 完了
 timeline-type-execution-cancelled = 実行 キャンセル
 timeline-type-execution-failed = 実行 失敗
 timeline-type-compaction-completed = コンテキスト圧縮 完了
-timeline-type-subtask-status-changed = サブタスクの状態 changed
 timeline-type-stream-error = ストリームエラー
 timeline-type-message-part-checkpointed = メッセージパート 保存
 timeline-type-message-part-delta = メッセージパート delta
@@ -2872,7 +2871,7 @@ value-runtime-config-file = ランタイム設定 (agena.json)
 status-part-workspace = ws {$value}
 status-part-state = 状態={$value}
 status-part-agent = エージェント={$value}
-status-part-task = タスク={$value}
+status-part-agent-name = エージェント名={$value}
 status-part-model = モデル={$value}
 status-part-thinking = 思考={$value}
 status-part-speed = 速度={$value}
@@ -2906,7 +2905,6 @@ operation-diff-summary-detailed-one = 差分: 1 ファイル、+{$added} -{$dele
 operation-diff-summary-detailed-one-rename = 差分: 1 ファイル、+{$added} -{$deleted}、{$renamed} 件の名前変更
 operation-diff-summary-detailed = 差分: {$files} ファイル、+{$added} -{$deleted}
 operation-diff-summary-detailed-renames = 差分: {$files} ファイル、+{$added} -{$deleted}、{$renamed} 件の名前変更
-operation-nested-task-summary = {$title} ({$status})
 snapshot-action-keep = 保持
 snapshot-action-remove = 削除
 snapshot-action-exit = 終了

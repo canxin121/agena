@@ -136,23 +136,24 @@ impl HostClient for HostClientProxy {
         self.run(self.current().ask_user(_req)).await
     }
 
-    async fn run_subtask(&self, _req: RunSubtaskRequest) -> Result<RunSubtaskResponse> {
-        self.run(self.current().run_subtask(_req)).await
+    async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle> {
+        self.run(self.current().spawn_agent(req)).await
     }
 
-    async fn cancel_subtask(&self, _req: CancelSubtaskRequest) -> Result<SubtaskControlResponse> {
-        self.run(self.current().cancel_subtask(_req)).await
+    async fn message_agent(&self, req: AgentMessageRequest) -> Result<AgentMessageReceipt> {
+        self.run(self.current().message_agent(req)).await
     }
 
-    async fn message_subtask(&self, _req: MessageSubtaskRequest) -> Result<SubtaskControlResponse> {
-        self.run(self.current().message_subtask(_req)).await
+    async fn wait_agent(&self, req: AgentWaitRequest) -> Result<AgentWaitResponse> {
+        self.run(self.current().wait_agent(req)).await
     }
 
-    async fn read_subtask_output(
-        &self,
-        _req: ReadSubtaskOutputRequest,
-    ) -> Result<ReadSubtaskOutputResponse> {
-        self.run(self.current().read_subtask_output(_req)).await
+    async fn followup_agent(&self, req: AgentMessageRequest) -> Result<AgentHandle> {
+        self.run(self.current().followup_agent(req)).await
+    }
+
+    async fn cancel_agent(&self, req: AgentTargetRequest) -> Result<AgentMessageReceipt> {
+        self.run(self.current().cancel_agent(req)).await
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {

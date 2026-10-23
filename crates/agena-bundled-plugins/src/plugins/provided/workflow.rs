@@ -1,26 +1,24 @@
-//! Shared implementation for the agent/tools/interaction/planning/repo/session/tasks plugins.
+//! Shared implementation for the agent/tools/interaction/planning/repo/session plugins.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::part::{AskUserToolInput, TaskToolInput};
+use crate::part::AskUserToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
     HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
+    ToolDescriptor,
 };
 use agena_plugin_host::sdk::{
     CommandBeforeInput, CommandBeforeResponse, ContributionKind, PluginDisplayContent,
     PluginDisplayContribution, Result as SdkResult, ToolBeforeInput, ToolBeforePatch,
     ToolInvokeOutput, ToolTag,
 };
-use agena_runtime_tools::tool::{
-    ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user,
-};
+use agena_runtime_tools::tool::ask_user;
 use agena_tool::tool_search::{ToolSearchDocument, search_tools};
 
 use schemars::JsonSchema;

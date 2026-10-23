@@ -188,7 +188,7 @@ const displayName = computed(() => {
     return t('chat.messages.activity.toolInvocation.toolNames.fetch')
   }
   if (tool === 'question') return t('chat.messages.activity.toolInvocation.toolNames.question')
-  if (tool === 'task') return t('chat.messages.activity.toolInvocation.toolNames.task')
+  if (tool === 'agent') return t('chat.messages.activity.toolInvocation.toolNames.agent')
   return tool.charAt(0).toUpperCase() + tool.slice(1)
 })
 
@@ -268,7 +268,7 @@ const summary = computed(() => {
     }
   }
 
-  if (tool === 'task' && typeof inp.description === 'string') {
+  if (tool === 'agent' && typeof inp.description === 'string') {
     return inp.description.substring(0, 50)
   }
 

@@ -19,6 +19,6 @@ pub use tool::{
     MonitorToolInput, MonitorWsInput, OperationPart, ReadMediaInput, ReadToolInput,
     ShellCommandInput, ShellLaunchInput, ShellMonitorInput, ShellMonitorPatternKind,
     ShellOpenInput, ShellReadInput, ShellSignal, ShellToolInput, ShellWatchInput,
-    ShellWatchNotifications, ShellWatchPolicy, ShellWriteInput, TaskToolInput, ToolSearchToolInput,
+    ShellWatchNotifications, ShellWatchPolicy, ShellWriteInput, ToolSearchToolInput,
     WebFetchToolInput, WebSearchToolInput,
 };

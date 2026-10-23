@@ -8,11 +8,17 @@ import { entriesFromParts } from '../src/stores/chat/api'
 import { createTranscriptProjector, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
 import { queuedMessagePreviews } from '../src/pages/chat/queuedMessages'
 import { foldedMessageCount, upsertMessageEntryIn } from '../src/stores/chat/messageIndex'
+import type { ExecutionPhase, SessionState } from '../src/types/chat'
 
 const queue = [
   { execution_id: 'next', message_id: 2 },
   { execution_id: 'last', message_id: 3 },
 ]
+const ready: SessionState = { kind: 'ready', data: {} }
+const activeState = (executionId = 'current', phase: ExecutionPhase = 'streaming_model'): SessionState => ({
+  kind: 'running',
+  data: { workflow: 'quiescent', execution: { execution_id: executionId, phase } },
+})
 const user = (id: number, pending: boolean, text = `message ${id}`) => ({
   part_id: id,
   run_id: id,
@@ -42,12 +48,12 @@ test('queued inputs stay in FIFO previews while the current reply stays beside i
   const messages = entriesFromParts('1', [user(1, false), user(2, true), user(3, true), answer(4, 1)])
   expect(projectTranscriptBlocks(messages).map((block) => block.message.info.id)).toEqual(['1', '4'])
   expect(foldedMessageCount(messages)).toBe(2)
-  expect(queuedMessagePreviews(messages, queue)).toEqual([
+  expect(queuedMessagePreviews(messages, queue, activeState(), false)).toEqual([
     { messageId: '2', executionId: 'next', preview: 'message 2' },
     { messageId: '3', executionId: 'last', preview: 'message 3' },
   ])
   // A pending boundary can lead a delayed execution shell.
-  expect(queuedMessagePreviews(messages, [])).toHaveLength(2)
+  expect(queuedMessagePreviews(messages, [], activeState(), false)).toHaveLength(2)
 })
 
 test('claiming a queue item moves it after the entire preceding reply without rebuilding older blocks', () => {
@@ -60,7 +66,7 @@ test('claiming a queue item moves it after the entire preceding reply without re
   expect(blocks.value[0]).toBe(before[0])
   expect(blocks.value[1]).toBe(before[1])
   // A stale shell cannot keep a visibly started input in the preview.
-  expect(queuedMessagePreviews(messages, queue)).toEqual([
+  expect(queuedMessagePreviews(messages, queue, activeState('next'), false)).toEqual([
     { messageId: '3', executionId: 'last', preview: 'message 3' },
   ])
   upsertMessageEntryIn(messages, entriesFromParts('1', [user(2, true)])[0]!.info)
@@ -76,7 +82,7 @@ test('withdrawn inputs stay out of history and out of the queue, and distinct re
   withdrawn.run_state = 'cancelled'
   const messages = entriesFromParts('1', [user(1, false), withdrawn, answer(4, 1), answer(5, 3)])
   expect(projectTranscriptBlocks(messages).map((block) => block.message.info.id)).toEqual(['1', '4', '5'])
-  expect(queuedMessagePreviews(messages, queue.slice(0, 1))).toEqual([])
+  expect(queuedMessagePreviews(messages, queue.slice(0, 1), activeState(), false)).toEqual([])
 })
 
 test('a queued retry previews the original input while retaining its existing conversation turn', () => {
@@ -84,7 +90,7 @@ test('a queued retry previews the original input while retaining its existing co
   Object.assign(retry.content, { execution_phase: 'queued' })
   const messages = entriesFromParts('1', [retry, answer(4, 2)])
   expect(projectTranscriptBlocks(messages)).toHaveLength(2)
-  expect(queuedMessagePreviews(messages, queue.slice(0, 1))).toEqual([
+  expect(queuedMessagePreviews(messages, queue.slice(0, 1), activeState(), false)).toEqual([
     { messageId: '2', executionId: 'next', preview: 'message 2' },
   ])
 })
@@ -105,14 +111,82 @@ test('queue previews load by backend identity and represent attachments, multili
     ],
   })
   const messages = entriesFromParts('1', [attachment, user(3, true, '  line one\n\nline two  ')])
-  expect(queuedMessagePreviews(messages, [...queue, { execution_id: 'missing', message_id: 8 }])).toEqual([
+  expect(
+    queuedMessagePreviews(messages, [...queue, { execution_id: 'missing', message_id: 8 }], activeState(), false),
+  ).toEqual([
     { messageId: '2', executionId: 'next', preview: 'report.pdf' },
     { messageId: '3', executionId: 'last', preview: 'line one line two' },
     { messageId: '8', executionId: 'missing', preview: '' },
   ])
   expect(
-    queuedMessagePreviews(entriesFromParts('1', [user(2, true, '你好'), user(3, true, '你好')]), queue),
+    queuedMessagePreviews(
+      entriesFromParts('1', [user(2, true, '你好'), user(3, true, '你好')]),
+      queue,
+      activeState(),
+      false,
+    ),
   ).toHaveLength(2)
+})
+
+test('sending from idle never previews the directly starting input, including delayed state and parts', () => {
+  const messages = entriesFromParts('1', [user(2, true)])
+  // The pending part can arrive before the accepted command's state shell.
+  expect(queuedMessagePreviews(messages, [], ready, false)).toEqual([])
+  expect(queuedMessagePreviews([], queue.slice(0, 1), ready, false)).toEqual([])
+  expect(
+    queuedMessagePreviews(messages, queue.slice(0, 1), { kind: 'running', data: { workflow: 'quiescent' } }, false),
+  ).toEqual([])
+  for (const phase of ['starting', 'preparing_model', 'streaming_model'] as const) {
+    expect(queuedMessagePreviews(messages, queue.slice(0, 1), activeState('next', phase), false)).toEqual([])
+  }
+  expect(
+    queuedMessagePreviews(entriesFromParts('1', [user(2, false)]), queue.slice(0, 1), activeState('next'), false),
+  ).toEqual([])
+})
+
+test('back-to-back submissions show only the inputs waiting behind the starting execution', () => {
+  const messages = entriesFromParts('1', [user(2, true), user(3, true)])
+  const waiting = [{ messageId: '3', executionId: 'last', preview: 'message 3' }]
+  expect(queuedMessagePreviews(messages, [], ready, false)).toEqual(waiting)
+  expect(queuedMessagePreviews(messages, queue, activeState('next', 'starting'), false)).toEqual(waiting)
+  // A stale queued part must not reintroduce the current input after claim.
+  expect(queuedMessagePreviews(messages, queue, activeState('next'), false)).toEqual(waiting)
+  expect(queuedMessagePreviews(messages, queue, activeState('last', 'starting'), false)).toEqual([])
+})
+
+test('real waiting inputs remain visible during tools, interaction waits, and a paused queue', () => {
+  const messages = entriesFromParts('1', [user(2, true), user(3, true)])
+  const waiting = [
+    { messageId: '2', executionId: 'next', preview: 'message 2' },
+    { messageId: '3', executionId: 'last', preview: 'message 3' },
+  ]
+  expect(queuedMessagePreviews(messages, queue, activeState('current', 'executing_tools'), false)).toEqual(waiting)
+  expect(
+    queuedMessagePreviews(
+      messages,
+      queue,
+      {
+        kind: 'awaiting_interaction',
+        data: { execution: { execution_id: 'current', phase: 'awaiting_interaction' } },
+      },
+      false,
+    ),
+  ).toEqual(waiting)
+  expect(queuedMessagePreviews(messages, queue, ready, true)).toEqual(waiting)
+  expect(queuedMessagePreviews(messages, queue, activeState('next', 'starting'), true)).toEqual(waiting)
+  const current = user(1, false)
+  Object.assign(current.content, { execution_phase: 'running' })
+  expect(
+    queuedMessagePreviews(
+      entriesFromParts('1', [current, user(2, true), user(3, true)]),
+      queue,
+      {
+        kind: 'running',
+        data: { workflow: 'quiescent' },
+      },
+      false,
+    ),
+  ).toEqual(waiting)
 })
 
 const vite = await createServer({
@@ -160,7 +234,12 @@ test('queue renders as a bounded ordered preview, without ordinary message roles
     expect(paused).toContain('恢复发送')
     expect(paused).toContain('消息已保留')
     expect(paused).toContain('disabled')
-    expect(await render([], true)).toContain('恢复发送')
+    for (const paused of [false, true]) {
+      const empty = await render([], paused)
+      expect(empty).not.toContain('data-queued-messages')
+      expect(empty).not.toContain('待发消息 · 0')
+      expect(empty).not.toContain('恢复发送')
+    }
   } finally {
     i18n.global.locale.value = locale
   }

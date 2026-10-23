@@ -1153,7 +1153,12 @@ async function queueAction(action: 'pause' | 'resume' | 'clear' | 'remove', exec
 }
 
 const queuedMessages = computed(() =>
-  queuedMessagePreviews(chat.messages, chat.selectedSessionExecution?.queued_messages ?? []),
+  queuedMessagePreviews(
+    chat.messages,
+    chat.selectedSessionExecution?.queued_messages ?? [],
+    chat.selectedSessionState,
+    queuePaused.value,
+  ),
 )
 
 const {

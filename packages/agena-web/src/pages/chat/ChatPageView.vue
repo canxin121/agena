@@ -580,18 +580,22 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               </IconButton>
             </div>
           </div>
-          <QueuedMessages
-            :messages="queuedMessages"
-            :session-id="chat.selectedSessionId"
-            :paused="queuePaused"
-            :busy="queueBusy"
-            :stop-choice-open="queueStopChoiceOpen"
-            @remove="queueAction('remove', $event)"
-            @clear="queueAction('clear')"
-            @pause="queueAction('pause')"
-            @resume="queueAction('resume')"
-            @keep-stopped="keepQueueStopped"
-          />
+          <div class="shrink-0" :style="{ paddingInlineEnd: `${scrollbarGutter}px` }">
+            <div class="chat-column">
+              <QueuedMessages
+                :messages="queuedMessages"
+                :session-id="chat.selectedSessionId"
+                :paused="queuePaused"
+                :busy="queueBusy"
+                :stop-choice-open="queueStopChoiceOpen"
+                @remove="queueAction('remove', $event)"
+                @clear="queueAction('clear')"
+                @pause="queueAction('pause')"
+                @resume="queueAction('resume')"
+                @keep-stopped="keepQueueStopped"
+              />
+            </div>
+          </div>
         </div>
       </template>
 

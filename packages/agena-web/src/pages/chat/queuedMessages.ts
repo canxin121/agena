@@ -1,5 +1,6 @@
 import type { MessageLike } from '@/components/chat/messageList.types'
 import type { QueuedMessage } from '@/stores/chat/api'
+import type { SessionState } from '@/types/chat'
 import { isQueuedUserMessage } from './conversationMessages'
 
 export type QueuedMessagePreview = {
@@ -33,6 +34,8 @@ function messagePreview(message: MessageLike | undefined): string {
 export function queuedMessagePreviews(
   messages: MessageLike[],
   queue: readonly QueuedMessage[],
+  state: SessionState | null | undefined,
+  paused: boolean,
 ): QueuedMessagePreview[] {
   const byId = new Map(messages.map((message) => [String(message.info.id), message]))
   const pending = new Set(queue.map((item) => String(item.message_id)))
@@ -43,7 +46,7 @@ export function queuedMessagePreviews(
     if (isQueuedUserMessage(message)) pending.add(id)
     else if (message.info.runState && record(message.info.runContent).execution_phase !== 'queued') pending.delete(id)
   }
-  return [...pending]
+  const previews = [...pending]
     .sort((left, right) => Number(left) - Number(right))
     .map((messageId) => ({
       messageId,
@@ -52,4 +55,23 @@ export function queuedMessagePreviews(
         String(record(byId.get(messageId)?.info.runContent).execution_id || ''),
       preview: messagePreview(byId.get(messageId)),
     }))
+  if (paused) return previews
+  if (state?.kind === 'running' || state?.kind === 'awaiting_interaction') {
+    // The backend also lists the current input as queued until it is claimed.
+    // It is already starting, so only later inputs belong in the waiting panel.
+    const activeId = state.data.execution?.execution_id
+    const activeIndex = activeId ? previews.findIndex((message) => message.executionId === activeId) : -1
+    if (activeIndex >= 0) return previews.slice(activeIndex + 1)
+    if (
+      activeId ||
+      state.kind === 'awaiting_interaction' ||
+      messages.some(
+        (message) => message.info.role === 'user' && record(message.info.runContent).execution_phase === 'running',
+      )
+    )
+      return previews
+  }
+  // A pending boundary can precede the execution shell when sending from idle.
+  // The head will start immediately; additional inputs still wait behind it.
+  return previews.slice(1)
 }

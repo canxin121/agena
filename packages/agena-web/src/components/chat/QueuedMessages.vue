@@ -33,13 +33,13 @@ watch(
 
 <template>
   <section
-    v-if="messages.length || paused"
-    class="shrink-0 border-t border-border/60 bg-muted/20"
+    v-if="messages.length"
+    class="mb-1.5 w-full min-w-0 rounded-xl border border-border/60 bg-muted/20"
     :aria-label="t('chat.page.queue.title', { count: messages.length })"
     :aria-busy="busy"
     data-queued-messages
   >
-    <div class="chat-column py-2">
+    <div class="px-3 py-2">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <RiListOrdered2 class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span class="font-medium text-foreground/80" role="status">{{

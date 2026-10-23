@@ -175,7 +175,13 @@ test('queue display follows server state across refreshes without dispatching me
           workspace_id: 1,
           title: 'Server queue',
           version,
-          state: { kind: 'running', data: {} },
+          state: {
+            kind: 'running',
+            data: {
+              workflow: 'quiescent',
+              execution: { execution_id: '00000000-0000-0000-0000-000000000001', phase: 'streaming_model' },
+            },
+          },
         },
         execution: { agent_id: 'test' },
         queued_messages: queued,
@@ -185,10 +191,11 @@ test('queue display follows server state across refreshes without dispatching me
     const chat = useChatStore()
     await chat.refreshExecutionStatus(sid)
     expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
-    expect(queuedMessagePreviews(chat.getMessagesForSession(sid), queue).map((item) => item.preview)).toEqual([
-      'queued 20',
-      'queued 30',
-    ])
+    expect(
+      queuedMessagePreviews(chat.getMessagesForSession(sid), queue, chat.getSessionById(sid)?.state, false).map(
+        (item) => item.preview,
+      ),
+    ).toEqual(['queued 20', 'queued 30'])
     expect(projectTranscriptBlocks(chat.getMessagesForSession(sid))).toHaveLength(0)
     chat.applyEvent({
       type: 'session_changed',
@@ -211,7 +218,9 @@ test('queue display follows server state across refreshes without dispatching me
       },
     })
     expect(chat.getMessagesForSession(sid)[0]?.info.runState).toBe('pending')
-    expect(queuedMessagePreviews(chat.getMessagesForSession(sid), queue)).toHaveLength(2)
+    expect(
+      queuedMessagePreviews(chat.getMessagesForSession(sid), queue, chat.getSessionById(sid)?.state, false),
+    ).toHaveLength(2)
     await advance(60_000)
     expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(queue)
     for (const remaining of [queue.slice(1), []]) {
@@ -220,7 +229,9 @@ test('queue display follows server state across refreshes without dispatching me
       sync.noteResourceVersion(key, tokens.get(key)!)
       await chat.refreshExecutionStatus(sid)
       expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(remaining)
-      expect(queuedMessagePreviews(chat.getMessagesForSession(sid), remaining)).toHaveLength(remaining.length)
+      expect(
+        queuedMessagePreviews(chat.getMessagesForSession(sid), remaining, chat.getSessionById(sid)?.state, false),
+      ).toHaveLength(remaining.length)
       expect(projectTranscriptBlocks(chat.getMessagesForSession(sid))).toHaveLength(queue.length - remaining.length)
     }
     expect(calls.filter((url) => url.pathname.endsWith('/messages'))).toHaveLength(0)

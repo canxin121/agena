@@ -12,13 +12,13 @@ use super::{
     MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
     OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
     Path, ProviderAdapterDefinition, ProviderAuthConfig, ProviderModelRoute, ProviderRegistry,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_has_direct_source,
-    api_auth_managed_credential, copilot_base_url, gitlab_auth_managed_credential,
-    gitlab_credential_instance_url, gitlab_credential_runtime_config, gitlab_runtime_config,
-    http_adapter_default_user_agent, http_adapter_extra_headers, openai_adapter_api_credential,
-    openai_adapter_capability_family, parse_adapter_model_ref, require_provider_auth_credential,
-    required_api_auth_credential, resolve_adapter_default_models, resolve_http_adapter_base_url,
-    runtime_adapter_provider_id, static_bedrock_credentials, to_hash_map,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_managed_credential,
+    copilot_base_url, gitlab_auth_managed_credential, gitlab_credential_instance_url,
+    gitlab_credential_runtime_config, gitlab_runtime_config, http_adapter_default_user_agent,
+    http_adapter_extra_headers, openai_adapter_api_credential, openai_adapter_capability_family,
+    parse_adapter_model_ref, require_provider_auth_credential, required_api_auth_credential,
+    resolve_adapter_default_models, resolve_http_adapter_base_url, runtime_adapter_provider_id,
+    static_bedrock_credentials, to_hash_map,
 };
 
 fn config_adapter_error(error: crate::ProviderError) -> ConfigError {
@@ -843,13 +843,8 @@ pub(crate) fn build_adapter_provider(
                     if api.gitlab().is_some() {
                         gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
                             .credential
-                    } else if api_auth_has_direct_source(api, env) {
-                        required_api_auth_credential(provider_id, "api_key", api, env)?
                     } else {
-                        return Err(ConfigError::MissingProviderField {
-                            provider_id: provider_id.to_owned(),
-                            field: "api_key",
-                        });
+                        required_api_auth_credential(provider_id, "api_key", api, env)?
                     }
                 }
                 ProviderAuthConfig::Credential(_) => {

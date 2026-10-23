@@ -187,23 +187,9 @@ fn summary_triggers() -> Vec<String> {
 }
 
 pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbErr> {
-    // Unchanged infrastructure has one declaration shared with the retiring
-    // Part adapter. No old chat tables or business engine are installed here.
-    let infrastructure = crate::schema::TABLES
-        .iter()
-        .chain(crate::schema::INDEXES)
-        .filter(|sql| {
-            [
-                "agena_workspaces",
-                "agena_permission_rules",
-                "agena_model_catalog_entries",
-                "agena_model_catalog_state",
-            ]
-            .iter()
-            .any(|name| {
-                sql.contains(&format!(" {name} (")) || sql.contains(&format!(" ON {name}("))
-            })
-        });
+    // One database owner installs and validates the complete instance schema.
+    // Repositories never initialize their own tables after composition.
+    let infrastructure = crate::schema::TABLES.iter().chain(crate::schema::INDEXES);
     let summary_triggers = summary_triggers();
     let declarations = TABLES
         .iter()
@@ -211,29 +197,68 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
         .chain(INDEXES.iter().copied())
         .chain(TRIGGERS.iter().copied())
         .chain(infrastructure.copied())
-        .chain(summary_triggers.iter().map(String::as_str));
+        .chain(agena_scheduler::schema::declarations())
+        .map(str::to_owned)
+        .chain(summary_triggers);
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
         let expected = declarations
             .map(|sql| {
-                let d = declaration(sql)?;
+                let d = declaration(&sql)?;
                 Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
         if expected != actual {
-            return Err(DbErr::Custom("database does not match the session-kernel schema; open a fresh database path; the existing database has not been modified".into()));
+            return Err(DbErr::Custom("database schema does not match this Agena build; open a fresh database path; the existing database has not been modified".into()));
         }
+        instance_id(database).await?;
         return Ok(());
     }
     let transaction = database.begin().await?;
-    for sql in declarations.chain([
-        "INSERT INTO agena_commits VALUES (1,0)",
-        "INSERT INTO agena_blob_gc_state VALUES (1,'')",
-        "INSERT INTO agena_history_snapshot_gc_state VALUES (1,0)",
-    ]) {
+    for sql in declarations.chain(
+        [
+            "INSERT INTO agena_commits VALUES (1,0)",
+            "INSERT INTO agena_blob_gc_state VALUES (1,'')",
+            "INSERT INTO agena_history_snapshot_gc_state VALUES (1,0)",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    ) {
         transaction
             .execute(Statement::from_string(database.get_database_backend(), sql))
             .await?;
     }
+    transaction
+        .execute(Statement::from_sql_and_values(
+            database.get_database_backend(),
+            "INSERT INTO agena_instance (id, instance_id, created_at_ms) VALUES (1, ?, ?)",
+            [
+                uuid::Uuid::new_v4().to_string().into(),
+                chrono::Utc::now().timestamp_millis().into(),
+            ],
+        ))
+        .await?;
     transaction.commit().await
+}
+
+pub(crate) async fn instance_id(database: &DatabaseConnection) -> Result<String, DbErr> {
+    let id: String = database
+        .query_one(Statement::from_string(
+            database.get_database_backend(),
+            "SELECT instance_id FROM agena_instance WHERE id=1",
+        ))
+        .await?
+        .ok_or_else(|| {
+            DbErr::Custom("instance identity is missing; open a fresh database path".into())
+        })?
+        .try_get("", "instance_id")?;
+    let parsed = uuid::Uuid::parse_str(&id).map_err(|_| {
+        DbErr::Custom("instance identity is invalid; open a fresh database path".into())
+    })?;
+    if parsed.get_version_num() != 4 || parsed.to_string() != id {
+        return Err(DbErr::Custom(
+            "instance identity is invalid; open a fresh database path".into(),
+        ));
+    }
+    Ok(id)
 }

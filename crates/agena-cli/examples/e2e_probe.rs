@@ -1,7 +1,7 @@
 //! Real end-to-end probe against the live runtime and a real provider.
 //!
 //! Boots the same runtime the CLI boots (config from `~/agena/agena.json`,
-//! database from `AGENA_DATABASE_PATH` / `AGENA_SCHEDULER_DATABASE_PATH`),
+//! all application storage from `AGENA_DATA_DIR`),
 //! submits a short user message to a fresh session, waits for the run to
 //! reach quiescence, and prints the full projected tool-call sequence.
 //!
@@ -11,8 +11,7 @@
 //! prove.
 //!
 //! Usage:
-//!   AGENA_DATABASE_PATH=/tmp/agena-e2e/agena.db \
-//!   AGENA_SCHEDULER_DATABASE_PATH=/tmp/agena-e2e/scheduler.db \
+//!   AGENA_DATA_DIR=/tmp/agena-e2e \
 //!   AGENA_PROBE_MODEL=provider/explicit-model \
 //!   cargo run -p agena-cli --example e2e_probe -- "你是谁？"
 
@@ -34,13 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_path: None,
         config_override_expressions: Vec::new(),
         database_url: None,
-        database_path: std::env::var("AGENA_DATABASE_PATH")
-            .ok()
-            .map(std::path::PathBuf::from),
-        scheduler_database_url: None,
-        scheduler_database_path: std::env::var("AGENA_SCHEDULER_DATABASE_PATH")
-            .ok()
-            .map(std::path::PathBuf::from),
+        database_path: None,
         tracing_reload_handle: None,
     };
     let runtime = agena_runtime::bootstrap_application_services(request).await?;

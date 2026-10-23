@@ -6,6 +6,7 @@ Param(
   [string]$Archive = "",
   [string]$Checksum = "",
   [string]$InstallDir = "",
+  [string]$DataDir = "",
   [string]$ListenHost = "127.0.0.1",
   [int]$Port = 3210,
   [string]$Workspace = "",
@@ -22,9 +23,51 @@ $ProgressPreference = "SilentlyContinue"
 if (-not $InstallDir) {
   $InstallDir = Join-Path $env:LOCALAPPDATA "Agena"
 }
+if (-not $DataDir) {
+  if ($env:AGENA_DATA_DIR) { $DataDir = $env:AGENA_DATA_DIR }
+  else { $DataDir = Join-Path $HOME "agena" }
+}
 if (-not $Workspace) {
   $Workspace = $HOME
 }
+
+function Resolve-Directory([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path)) { throw "directory must not be empty" }
+  return [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+}
+
+function Assert-StoragePaths([switch]$InstallOnly) {
+  $script:InstallDir = Resolve-Directory $InstallDir
+  $paths = @($InstallDir)
+  if (-not $InstallOnly) {
+    $script:DataDir = Resolve-Directory $DataDir
+    $paths += $DataDir
+  }
+  $blocked = @($HOME, $env:SystemRoot, $env:ProgramFiles, $env:LOCALAPPDATA, $env:TEMP) |
+    Where-Object { $_ } | ForEach-Object { Resolve-Directory $_ }
+  foreach ($path in $paths) {
+    if ($path -eq [IO.Path]::GetPathRoot($path).TrimEnd('\', '/') -or $blocked -contains $path) {
+      throw "unsafe Agena storage directory: $path"
+    }
+    $ancestor = $path
+    while ($ancestor) {
+      if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Agena storage directories must not traverse links or junctions: $ancestor"
+      }
+      $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+    }
+  }
+  if ($InstallOnly) { return }
+  $separator = [IO.Path]::DirectorySeparatorChar
+  $comparison = [StringComparison]::OrdinalIgnoreCase
+  if (($InstallDir + $separator).StartsWith($DataDir + $separator, $comparison) -or
+      ($DataDir + $separator).StartsWith($InstallDir + $separator, $comparison)) {
+    throw "application installation and instance data directories must be separate"
+  }
+}
+
+if ($Action -eq "Install") { Assert-StoragePaths }
+else { Assert-StoragePaths -InstallOnly }
 
 $StateFile = Join-Path $InstallDir "install-state.json"
 $BinDir = Join-Path $InstallDir "bin"
@@ -140,9 +183,11 @@ function Assert-Checksum([string]$ArchivePath, [string]$ChecksumPath) {
 function Save-State {
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   $state = [ordered]@{
+    schema = 2
     repo = $Repo
     version = $Version
     installDir = $InstallDir
+    dataDir = $DataDir
     host = $ListenHost
     port = $Port
     workspace = $Workspace
@@ -156,15 +201,22 @@ function Load-State {
   if (-not (Test-Path -LiteralPath $StateFile)) {
     throw "Agena is not installed at $InstallDir"
   }
+  $selectedInstallDir = $InstallDir
   $state = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+  if ($state.schema -ne 2 -or -not $state.dataDir) {
+    throw "installer state is incompatible; reinstall with an explicit -DataDir"
+  }
   $script:Repo = [string]$state.repo
   $script:Version = [string]$state.version
-  $script:InstallDir = [string]$state.installDir
+  $script:InstallDir = Resolve-Directory ([string]$state.installDir)
+  if ($InstallDir -ne $selectedInstallDir) { throw "installer state belongs to a different installation" }
+  $script:DataDir = [string]$state.dataDir
   $script:ListenHost = [string]$state.host
   $script:Port = [int]$state.port
   $script:Workspace = [string]$state.workspace
   $script:UiPassword = [string]$state.uiPassword
   $script:ServiceMode = [string]$state.serviceMode
+  Assert-StoragePaths
   $script:StateFile = Join-Path $script:InstallDir "install-state.json"
   $script:BinDir = Join-Path $script:InstallDir "bin"
   $script:AgenaBin = Join-Path $script:BinDir "agena.exe"
@@ -173,6 +225,8 @@ function Load-State {
 
 function Update-UserPath {
   if ($NoPathUpdate) { return }
+  [Environment]::SetEnvironmentVariable("AGENA_DATA_DIR", $DataDir, "User")
+  $env:AGENA_DATA_DIR = $DataDir
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   $parts = @($userPath -split ';' | Where-Object { $_ })
   if ($parts -notcontains $BinDir) {
@@ -185,6 +239,9 @@ function Update-UserPath {
 }
 
 function Remove-UserPath {
+  if (-not $NoPathUpdate -and [Environment]::GetEnvironmentVariable("AGENA_DATA_DIR", "User") -eq $DataDir) {
+    [Environment]::SetEnvironmentVariable("AGENA_DATA_DIR", $null, "User")
+  }
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   if ($null -eq $userPath) { return }
   $parts = @($userPath -split ';' | Where-Object { $_ -and $_ -ne $BinDir })
@@ -210,8 +267,7 @@ function Get-ServerArgs {
 
 function Invoke-AgenaLifecycle([string[]]$Arguments, [switch]$Capture) {
   $names = @(
-    "AGENA_DATABASE_URL",
-    "AGENA_DATABASE_PATH",
+    "AGENA_DATA_DIR",
     "AGENA_SERVER_HOST",
     "AGENA_SERVER_PORT",
     "AGENA_SERVER_UI_PASSWORD",
@@ -230,7 +286,7 @@ function Invoke-AgenaLifecycle([string[]]$Arguments, [switch]$Capture) {
       $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
       Remove-Item "Env:$name" -ErrorAction SilentlyContinue
     }
-    $output = (& $AgenaBin @Arguments 2>&1 | Out-String)
+    $output = (& $AgenaBin --data-dir $DataDir @Arguments 2>&1 | Out-String)
     $code = $LASTEXITCODE
     if ($Capture) {
       return [pscustomobject]@{ Code = [int]$code; Output = $output }
@@ -431,6 +487,7 @@ function Install-OrUpgrade([string]$RequestedAction) {
       throw $installError
     }
     Write-Host "Agena $Version installed at $InstallDir"
+    Write-Host "Instance data: $DataDir"
     Write-Host "Web UI: http://${ListenHost}:$Port"
   }
   finally {
@@ -462,6 +519,9 @@ function Show-Status {
 
 function Uninstall-Agena {
   Load-State
+  if ($PurgeData -and (Test-Path -LiteralPath $DataDir) -and -not (Test-Path -LiteralPath (Join-Path $DataDir "agena.db") -PathType Leaf)) {
+    throw "refusing to purge a directory without an Agena instance database: $DataDir"
+  }
   if (Test-Path -LiteralPath $AgenaBin) {
     if ($ServiceMode -eq "native") {
       $code = Invoke-AgenaLifecycle @("server", "uninstall")
@@ -474,9 +534,8 @@ function Uninstall-Agena {
   Remove-UserPath
   Remove-Item -LiteralPath $InstallDir -Recurse -Force
   if ($PurgeData) {
-    $dataDir = Join-Path $HOME "agena"
-    if (Test-Path -LiteralPath $dataDir) { Remove-Item -LiteralPath $dataDir -Recurse -Force }
-    Write-Host "Removed Agena runtime data at $dataDir"
+    if (Test-Path -LiteralPath $DataDir) { Remove-Item -LiteralPath $DataDir -Recurse -Force }
+    Write-Host "Removed Agena runtime data at $DataDir"
   }
   Write-Host "Agena uninstalled. Configuration/session data was preserved unless -PurgeData was used."
 }

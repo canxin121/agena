@@ -346,12 +346,6 @@ impl ServerSessionClient {
 }
 
 async fn connect_server_client(cli: &AgenaCli) -> Result<AgenaClient, AppError> {
-    if cli.database_url.is_some() || cli.database_path.is_some() {
-        return Err(AppError::Config(
-                "--database-url/--database-path belong to the server and cannot be used by thin CLI session commands"
-                    .to_owned(),
-            ));
-    }
     if !cli.overrides.is_empty() {
         return Err(AppError::Config(
             "--set overrides belong to the server and cannot be used by thin CLI session commands"
@@ -359,13 +353,9 @@ async fn connect_server_client(cli: &AgenaCli) -> Result<AgenaClient, AppError> 
         ));
     }
 
-    let server_url = cli
-        .server
-        .as_deref()
-        .filter(|url| !url.trim().is_empty())
-        .unwrap_or("http://127.0.0.1:3210");
+    let server_url = agena_client::resolve_server_url(cli.server.as_deref());
     let client = AgenaClient::connect_server(
-        server_url,
+        &server_url,
         cli.server_token.as_deref(),
         cli.server_password.as_deref(),
     )
@@ -845,8 +835,7 @@ impl AgenaCli {
                     plugin_count: runtime.plugin_count,
                 },
                 environment: DiagnosticsEnvironmentOutput {
-                    agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
-                    agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
+                    agena_data_dir_set: std::env::var_os("AGENA_DATA_DIR").is_some(),
                     agena_adapter_log_set: std::env::var_os("AGENA_ADAPTER_LOG").is_some(),
                 },
             },

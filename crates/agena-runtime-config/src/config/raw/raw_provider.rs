@@ -469,12 +469,10 @@ fn resolve_api_auth(
                             .to_owned(),
                 });
             }
-            let Some(access) = raw_auth.access.map(resolve_gitlab_api_access) else {
-                return Err(ConfigError::MissingProviderField {
-                    provider_id: provider_id.to_owned(),
-                    field: "access",
-                });
-            };
+            let access = raw_auth
+                .access
+                .map(resolve_gitlab_api_access)
+                .unwrap_or(ProviderGitlabApiAccessConfig::Managed);
             Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
                 access,
                 instance_url: normalize_optional(raw_auth.instance_url),
@@ -537,6 +535,7 @@ fn resolve_secret_source(raw: ProviderSecretSourceOverlay) -> ProviderSecretSour
 
 fn resolve_gitlab_api_access(raw: ProviderGitlabApiAccessOverlay) -> ProviderGitlabApiAccessConfig {
     match raw {
+        ProviderGitlabApiAccessOverlay::Managed => ProviderGitlabApiAccessConfig::Managed,
         ProviderGitlabApiAccessOverlay::ApiKey { source } => {
             ProviderGitlabApiAccessConfig::ApiKey {
                 source: resolve_secret_source(source),
@@ -972,5 +971,26 @@ fn issuer_label(issuer: CredentialIssuer) -> &'static str {
         CredentialIssuer::Gitlab => "gitlab",
         CredentialIssuer::GoogleAdc => "google_adc",
         CredentialIssuer::SapAiCore => "sap_ai_core",
+    }
+}
+
+#[cfg(test)]
+mod managed_auth_tests {
+    use super::*;
+
+    #[test]
+    fn gitlab_api_configuration_can_reference_managed_credentials_without_inline_sources() {
+        let raw = serde_json::from_value::<ProviderAuthOverlay>(serde_json::json!({
+            "mode": "api", "subtype": "gitlab_api"
+        }))
+        .unwrap();
+        let resolved = resolve_api_auth("gitlab", raw, &[]).unwrap();
+        assert!(matches!(
+            resolved,
+            ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
+                access: ProviderGitlabApiAccessConfig::Managed,
+                ..
+            })
+        ));
     }
 }

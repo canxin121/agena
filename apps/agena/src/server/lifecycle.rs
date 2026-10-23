@@ -53,8 +53,6 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     args.action = None;
     if super::user_service::is_installed() {
         if !args.overrides.is_empty()
-            || args.database_url.is_some()
-            || args.database_path.is_some()
             || args.workspace_root.is_some()
             || args.ui_password.is_some()
             || args.mcp_enabled.is_some()
@@ -115,6 +113,11 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         .await
     {
         Ok(identity) => {
+            let record = server_record::read_record(&server_record::record_path())
+                .context("this address already serves an Agena process that is not recorded in the selected data directory; select another port")?;
+            ensure_record_matches(&record, &identity)
+                .context("this address belongs to another Agena process; select another port")?;
+
             println!(
                 "Agena server is already running at {intended_url} (pid {}, id {}).",
                 identity.pid, identity.id
@@ -129,24 +132,16 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
 
     let executable = std::env::current_exe().context("failed to resolve the Agena executable")?;
     let record_path = server_record::record_path();
-    let state_dir = record_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let log_dir = state_dir.join("logs");
-    fs::create_dir_all(&log_dir).with_context(|| {
-        format!(
-            "failed to create server log directory {}",
-            log_dir.display()
-        )
-    })?;
+    let log_dir = agena_storage_layout::StorageLayout::current().logs_dir();
+    agena_storage_layout::secure_directory(&log_dir)
+        .context("failed to create private server log directory")?;
     let log_path = log_dir.join("server.log");
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
         .with_context(|| format!("failed to open server log {}", log_path.display()))?;
+    agena_storage_layout::secure_file(&log_path)?;
     let stderr = stdout
         .try_clone()
         .context("failed to clone the server log handle")?;
@@ -155,12 +150,9 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     for expression in &args.overrides {
         command.arg("--set").arg(expression);
     }
-    if let Some(database_url) = &args.database_url {
-        command.arg("--database-url").arg(database_url);
-    }
-    if let Some(database_path) = &args.database_path {
-        command.arg("--database-path").arg(database_path);
-    }
+    command
+        .arg("--data-dir")
+        .arg(agena_storage_layout::StorageLayout::current().root());
     command
         .arg("server")
         .arg("--host")
@@ -194,7 +186,6 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         command.env("AGENA_SERVER_UI_PASSWORD", password);
     }
     command
-        .env("AGENA_SERVER_RECORD", &record_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));

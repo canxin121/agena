@@ -17,6 +17,41 @@ use super::{
     parse_sap_ai_core_service_key,
 };
 
+fn managed_auth_data(provider_id: &str) -> Result<Option<AuthData>, ConfigError> {
+    agena_runtime_provider::config_support::managed_provider_auth_data(provider_id).map_err(
+        |error| ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: error.to_string(),
+        },
+    )
+}
+
+fn stored_managed_credential(
+    provider_id: &str,
+    field: &'static str,
+    auth_data: AuthData,
+    selector: AuthSecretSelector,
+    refresh: AuthRefreshStrategy,
+) -> Result<ResolvedManagedCredential, ConfigError> {
+    if !auth_supports_selector(&auth_data, selector) {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!("managed credential does not satisfy `{field}` requirements"),
+        });
+    }
+    let auth_data = Arc::new(Mutex::new(auth_data));
+    Ok(ResolvedManagedCredential {
+        credential: ManagedCredential::auth_data_shared_persistent(
+            format!("{provider_id} {field}"),
+            provider_id.to_owned(),
+            auth_data.clone(),
+            selector,
+            refresh,
+        ),
+        auth_data: Some(auth_data),
+    })
+}
+
 pub(crate) fn api_auth<'a>(
     auth: &'a ProviderAuthConfig,
     provider_id: &str,
@@ -316,7 +351,7 @@ pub(crate) fn gitlab_auth_managed_credential(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     env: &dyn ConfigEnvironment,
-    config_path: Option<&Path>,
+    _config_path: Option<&Path>,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let config = match auth {
         ProviderAuthConfig::Api(api) => api.gitlab(),
@@ -326,6 +361,18 @@ pub(crate) fn gitlab_auth_managed_credential(
         provider_id: provider_id.to_owned(),
         message: "adapter requires gitlab api auth".to_owned(),
     })?;
+
+    if let Some(auth_data) = managed_auth_data(provider_id)? {
+        return stored_managed_credential(
+            provider_id,
+            "api_key",
+            auth_data,
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::GitlabOAuth {
+                instance_url: gitlab_instance_url(&config),
+            },
+        );
+    }
 
     if let Some(value) = config
         .access
@@ -374,27 +421,15 @@ pub(crate) fn gitlab_auth_managed_credential(
 
     if let Some(auth_data) = config.access.credential().cloned() {
         let auth_data = Arc::new(Mutex::new(auth_data));
-        let credential = match config_path {
-            Some(config_path) => ManagedCredential::auth_data_shared_with_store(
-                format!("{provider_id} api_key"),
-                provider_id.to_owned(),
-                auth_data.clone(),
-                AuthSecretSelector::AccessOrApiKey,
-                AuthRefreshStrategy::GitlabOAuth {
-                    instance_url: gitlab_instance_url(&config),
-                },
-                config_path.to_path_buf(),
-            ),
-            None => ManagedCredential::auth_data_shared(
-                format!("{provider_id} api_key"),
-                provider_id.to_owned(),
-                auth_data.clone(),
-                AuthSecretSelector::AccessOrApiKey,
-                AuthRefreshStrategy::GitlabOAuth {
-                    instance_url: gitlab_instance_url(&config),
-                },
-            ),
-        };
+        let credential = ManagedCredential::auth_data_shared(
+            format!("{provider_id} api_key"),
+            provider_id.to_owned(),
+            auth_data.clone(),
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::GitlabOAuth {
+                instance_url: gitlab_instance_url(&config),
+            },
+        );
         return Ok(ResolvedManagedCredential {
             credential,
             auth_data: Some(auth_data),
@@ -459,29 +494,23 @@ pub(crate) fn gitlab_credential_runtime_config(
     }
 }
 
-pub(crate) fn api_auth_has_direct_source(
-    api: &ProviderApiAuthConfig,
-    env: &dyn ConfigEnvironment,
-) -> bool {
-    match (
-        api.api_key().and_then(normalize_text),
-        api.api_key_env().and_then(normalize_text),
-    ) {
-        (Some(_), _) => true,
-        (None, Some(env_key)) => env
-            .var(env_key.as_str())
-            .and_then(|value| normalize_text(&value))
-            .is_some(),
-        (None, None) => false,
-    }
-}
-
 pub(crate) fn required_api_auth_credential(
     provider_id: &str,
     field: &'static str,
     api: &ProviderApiAuthConfig,
     env: &dyn ConfigEnvironment,
 ) -> Result<ManagedCredential, ConfigError> {
+    if let Some(auth_data) = managed_auth_data(provider_id)? {
+        return stored_managed_credential(
+            provider_id,
+            field,
+            auth_data,
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::None,
+        )
+        .map(|resolved| resolved.credential);
+    }
+
     if let Some(value) = api.api_key().and_then(normalize_text) {
         return Ok(ManagedCredential::static_value(
             format!("{provider_id} {field}"),
@@ -520,12 +549,16 @@ pub(crate) fn api_auth_managed_credential(
     provider_id: &str,
     field: &'static str,
     auth: &ProviderAuthConfig,
-    _selector: AuthSecretSelector,
-    _refresh: AuthRefreshStrategy,
+    selector: AuthSecretSelector,
+    refresh: AuthRefreshStrategy,
     env: &dyn ConfigEnvironment,
     allow_deferred_env: bool,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let api = api_auth(auth, provider_id)?;
+    if let Some(auth_data) = managed_auth_data(provider_id)? {
+        return stored_managed_credential(provider_id, field, auth_data, selector, refresh);
+    }
+
     if let Some(value) = api.api_key().and_then(normalize_text) {
         return Ok(ResolvedManagedCredential {
             credential: ManagedCredential::static_value(format!("{provider_id} {field}"), value),
@@ -577,7 +610,7 @@ pub(crate) fn require_provider_auth_credential(
     selector: AuthSecretSelector,
     refresh: AuthRefreshStrategy,
     _env: &dyn ConfigEnvironment,
-    config_path: Option<&Path>,
+    _config_path: Option<&Path>,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let ProviderAuthConfig::Credential(config) = auth else {
         return Err(ConfigError::InvalidProviderConfig {
@@ -585,6 +618,21 @@ pub(crate) fn require_provider_auth_credential(
             message: format!("{field} must come from provider credential auth"),
         });
     };
+    if let Some(auth_data) = managed_auth_data(provider_id)? {
+        if let AuthData::OAuth {
+            issuer: Some(issuer),
+            ..
+        } = &auth_data
+            && *issuer != config.issuer()
+        {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: "managed credential issuer does not match provider configuration"
+                    .to_owned(),
+            });
+        }
+        return stored_managed_credential(provider_id, field, auth_data, selector, refresh);
+    }
     if let Some(auth_data) = config.credential().cloned() {
         if !auth_supports_selector(&auth_data, selector) {
             return Err(ConfigError::InvalidProviderConfig {
@@ -596,23 +644,13 @@ pub(crate) fn require_provider_auth_credential(
         }
 
         let auth_data = Arc::new(Mutex::new(auth_data));
-        let credential = match config_path {
-            Some(config_path) => ManagedCredential::auth_data_shared_with_store(
-                format!("{provider_id} {field}"),
-                provider_id.to_owned(),
-                auth_data.clone(),
-                selector,
-                refresh,
-                config_path.to_path_buf(),
-            ),
-            None => ManagedCredential::auth_data_shared(
-                format!("{provider_id} {field}"),
-                provider_id.to_owned(),
-                auth_data.clone(),
-                selector,
-                refresh,
-            ),
-        };
+        let credential = ManagedCredential::auth_data_shared(
+            format!("{provider_id} {field}"),
+            provider_id.to_owned(),
+            auth_data.clone(),
+            selector,
+            refresh,
+        );
         return Ok(ResolvedManagedCredential {
             credential,
             auth_data: Some(auth_data),

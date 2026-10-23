@@ -651,12 +651,11 @@ mod router_contract_tests {
     async fn runtime_route_surfaces_scheduler_failure_with_the_shared_problem_envelope() {
         use sea_orm::ConnectionTrait;
         let workspace = tempfile::tempdir().unwrap();
-        let scheduler_path = workspace.path().join("scheduler.db");
+        let instance_path = workspace.path().join("agena.db");
         let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
             workspace_root: Some(workspace.path().to_path_buf()),
             config_path: Some(workspace.path().join("global.json")),
-            database_url: Some("sqlite::memory:".to_owned()),
-            scheduler_database_path: Some(scheduler_path.clone()),
+            database_path: Some(instance_path.clone()),
             ..RuntimeBootstrapRequest::default()
         })
         .await
@@ -666,7 +665,7 @@ mod router_contract_tests {
         assert!(healthy.automation.enabled);
         let app = router(AppState::from_application(application));
         let db =
-            sea_orm::Database::connect(format!("sqlite://{}?mode=rw", scheduler_path.display()))
+            sea_orm::Database::connect(format!("sqlite://{}?mode=rw", instance_path.display()))
                 .await
                 .unwrap();
         db.execute(sea_orm::Statement::from_string(
@@ -2230,6 +2229,7 @@ mod router_contract_tests {
                             "enabled": true,
                             "models": {
                                 "fake-model": {
+                                    "input": {"supported": ["text", "image"]},
                                     "agena_tools": {"mode": "provider_protocol"}
                                 }
                             }
@@ -3092,12 +3092,58 @@ mod router_contract_tests {
         .await;
         let server = start_test_server(provider_url.as_str()).await;
         let client_a = AgenaClient::new(server.url.as_str()).expect("build submitting client");
-        let submitted = submit_test_run(
-            &client_a,
-            server.workspace_id,
-            "ask another client for permission",
-        )
-        .await;
+        let session = client_a
+            .create_session(server.workspace_id, "permission race", None)
+            .await
+            .expect("create permission session");
+        // The shipped <tmp> rule is more specific than the workspace default.
+        // Ask for this exact fixture, independently of the temporary directory.
+        let permission_path = server
+            ._workspace
+            .path()
+            .join("permission-fixture.txt")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        application_for_test(&server.runtime)
+            .set_session_permission(
+                session.id,
+                agena_domain::PermissionConfig {
+                    path: Some(agena_domain::PathPermissionConfig {
+                        rules: [(
+                            permission_path,
+                            agena_domain::PathAccessModes {
+                                read: Some(agena_domain::PermissionMode::Ask),
+                                write: None,
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("set explicit fixture permission");
+        let submitted = client_a
+            .submit_message(SubmitRunParams {
+                session_id: session.id,
+                options: RunOptions {
+                    model: Some(agena_api::resource::ModelRef::new_with_adapter(
+                        "fake",
+                        "openai_responses",
+                        "fake-model",
+                    )),
+                    ..Default::default()
+                },
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: "ask another client for permission".into(),
+                }]),
+            })
+            .await
+            .expect("submit permission test run");
         let session_id = submitted.session.id;
         tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
             .await

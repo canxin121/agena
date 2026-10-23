@@ -6,10 +6,7 @@ use agena_tui_components::{Editor, SearchPickerFocus};
 use agena_tui_session::{session_hub::HubPageTarget, session_view::SessionViewMode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
 
 fn session(id: i64) -> SessionResource {
     serde_json::from_value(json!({
@@ -173,9 +170,7 @@ async fn session_browser_marks_use_selected_id_and_shared_persistent_api() {
     let server = tokio::spawn(async move {
         for field in ["pinned", "favorite"] {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = vec![0; 16384];
-            let size = socket.read(&mut bytes).await.unwrap();
-            let request = String::from_utf8_lossy(&bytes[..size]);
+            let request = super::read_http_request(&mut socket).await;
             assert!(request.starts_with("PUT /api/v1/sessions/108 "));
             assert!(request.contains(&format!("\"{field}\":true")));
             let mut updated = session(108);

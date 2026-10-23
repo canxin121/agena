@@ -2,13 +2,12 @@ Param(
   [string]$Archive = "",
   [string]$Repo = "canxin121/agena",
   [string]$Version = "",
-  [string]$InstallDir = "$HOME\agena",
+  [string]$InstallDir = "",
+  [string]$DataDir = "",
   [string]$ListenHost = "127.0.0.1",
   [int]$Port = 3210,
   [string]$UiPassword = "",
   [string]$WorkspaceRoot = "",
-  [string]$DatabasePath = "",
-  [string]$DatabaseUrl = "",
   [string[]]$Set = @()
 )
 
@@ -16,12 +15,51 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
-function Quote-Arg([string]$Value) {
-  if ($Value -match '[\s"]') {
-    return '"' + ($Value -replace '"', '\"') + '"'
-  }
-  return $Value
+if (-not $InstallDir) {
+  $InstallDir = Join-Path $env:LOCALAPPDATA "Agena"
 }
+if (-not $DataDir) {
+  if ($env:AGENA_DATA_DIR) { $DataDir = $env:AGENA_DATA_DIR }
+  else { $DataDir = Join-Path $HOME "agena" }
+}
+
+function Resolve-Directory([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path)) { throw "directory must not be empty" }
+  return [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+}
+
+function Assert-StoragePaths([switch]$InstallOnly) {
+  $script:InstallDir = Resolve-Directory $InstallDir
+  $paths = @($InstallDir)
+  if (-not $InstallOnly) {
+    $script:DataDir = Resolve-Directory $DataDir
+    $paths += $DataDir
+  }
+  $blocked = @($HOME, $env:SystemRoot, $env:ProgramFiles, $env:LOCALAPPDATA, $env:TEMP) |
+    Where-Object { $_ } | ForEach-Object { Resolve-Directory $_ }
+  foreach ($path in $paths) {
+    if ($path -eq [IO.Path]::GetPathRoot($path).TrimEnd('\', '/') -or $blocked -contains $path) {
+      throw "unsafe Agena storage directory: $path"
+    }
+    $ancestor = $path
+    while ($ancestor) {
+      if ((Test-Path -LiteralPath $ancestor) -and ((Get-Item -LiteralPath $ancestor).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Agena storage directories must not traverse links or junctions: $ancestor"
+      }
+      $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+    }
+  }
+  if ($InstallOnly) { return }
+  $separator = [IO.Path]::DirectorySeparatorChar
+  $comparison = [StringComparison]::OrdinalIgnoreCase
+  if (($InstallDir + $separator).StartsWith($DataDir + $separator, $comparison) -or
+      ($DataDir + $separator).StartsWith($InstallDir + $separator, $comparison)) {
+    throw "application installation and instance data directories must be separate"
+  }
+}
+
+Assert-StoragePaths
+
 
 function Normalize-Version([string]$Raw) {
   if ($Raw.StartsWith("agena-v")) {
@@ -71,7 +109,7 @@ try {
   Expand-Archive -LiteralPath $ArchivePath -DestinationPath $StageDir -Force
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  foreach ($name in @("bin", "web-dist", "logs")) {
+  foreach ($name in @("bin", "web-dist")) {
     $path = Join-Path $InstallDir $name
     if (Test-Path -LiteralPath $path) {
       Remove-Item -LiteralPath $path -Recurse -Force
@@ -80,7 +118,6 @@ try {
 
   Copy-Item -LiteralPath (Join-Path $StageDir "bin") -Destination (Join-Path $InstallDir "bin") -Recurse -Force
   Copy-Item -LiteralPath (Join-Path $StageDir "web-dist") -Destination (Join-Path $InstallDir "web-dist") -Recurse -Force
-  New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "logs") | Out-Null
 
   $BinaryPath = Join-Path $InstallDir "bin\agena.exe"
   if (-not (Test-Path -LiteralPath $BinaryPath)) {
@@ -88,36 +125,24 @@ try {
   }
 
   $ArgList = @(
-    "server",
+    "--data-dir", $DataDir,
+    "server", "install",
     "--host", $ListenHost,
     "--port", "$Port",
     "--ui-dir", (Join-Path $InstallDir "web-dist")
   )
   if ($UiPassword) { $ArgList += @("--ui-password", $UiPassword) }
   if ($WorkspaceRoot) { $ArgList += @("--workspace", $WorkspaceRoot) }
-  if ($DatabasePath) { $ArgList += @("--database-path", $DatabasePath) }
-  if ($DatabaseUrl) { $ArgList += @("--database-url", $DatabaseUrl) }
   foreach ($item in $Set) {
     $ArgList += @("--set", $item)
   }
 
-  $ArgumentString = ($ArgList | ForEach-Object { Quote-Arg $_ }) -join " "
-  Set-Content -LiteralPath (Join-Path $InstallDir "launch-args.txt") -Value $ArgumentString
+  & $BinaryPath @ArgList
+  if ($LASTEXITCODE -ne 0) { throw "Agena native user service installation failed" }
+  @{ schema = 2; dataDir = $DataDir } | ConvertTo-Json |
+    Set-Content -LiteralPath (Join-Path $InstallDir "service-state.json") -Encoding UTF8
+  Write-Host "Installed Agena user service. Instance data: $DataDir"
 
-  $TaskName = "Agena"
-  try {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
-  }
-  catch {}
-
-  $Action = New-ScheduledTaskAction -Execute $BinaryPath -Argument $ArgumentString
-  $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-  $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
-  Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "Agena server"
-
-  Start-Process -FilePath $BinaryPath -ArgumentList $ArgList -WindowStyle Hidden
-
-  Write-Host "Installed Agena background task: $TaskName"
 }
 finally {
   if (Test-Path -LiteralPath $TempDir) {

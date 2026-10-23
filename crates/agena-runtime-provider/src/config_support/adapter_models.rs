@@ -81,12 +81,12 @@ pub fn draft_gitlab_provider_adapter_models_target(
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
         auth: ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
-            access: ProviderGitlabApiAccessConfig::ApiKey {
-                source: draft_secret_source(api_key, api_key_env).ok_or_else(|| {
-                    ConfigError::Validation(
-                        "gitlab draft adapter model listing requires an api key source".to_owned(),
-                    )
-                })?,
+            access: match draft_secret_source(api_key, api_key_env) {
+                Some(source) => ProviderGitlabApiAccessConfig::ApiKey { source },
+                None if optional_trimmed(provider_id).is_some() => ProviderGitlabApiAccessConfig::Managed,
+                None => return Err(ConfigError::Validation(
+                    "gitlab draft adapter model listing requires an api key source or an existing provider".to_owned(),
+                )),
             },
             instance_url: None,
             ai_gateway_url: None,

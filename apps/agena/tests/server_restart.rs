@@ -138,6 +138,7 @@ fn spawn_stdio_thin_client(
     kind: StdioThinClientKind,
     server_url: &str,
     workspace: &Path,
+    data_dir: &Path,
     audit_path: &Path,
     log_path: &Path,
 ) -> StdioThinClient {
@@ -149,6 +150,8 @@ fn spawn_stdio_thin_client(
     let stderr = log.try_clone().expect("clone stdio thin-client log");
     let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"));
     command
+        .arg("--data-dir")
+        .arg(data_dir)
         .arg("--server")
         .arg(server_url)
         .current_dir(workspace)
@@ -156,8 +159,6 @@ fn spawn_stdio_thin_client(
         .env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1")
         .env_remove("AGENA_SERVER_TOKEN")
         .env_remove("AGENA_SERVER_PASSWORD")
-        .env_remove("AGENA_DATABASE_URL")
-        .env_remove("AGENA_DATABASE_PATH")
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -219,6 +220,7 @@ impl Drop for PtyThinClient {
 fn spawn_remote_tui(
     server_url: &str,
     workspace: &Path,
+    data_dir: &Path,
     session_id: i64,
     audit_path: &Path,
 ) -> PtyThinClient {
@@ -231,6 +233,8 @@ fn spawn_remote_tui(
         })
         .expect("open TUI integration PTY");
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_agena"));
+    command.arg("--data-dir");
+    command.arg(data_dir);
     command.arg("--server");
     command.arg(server_url);
     command.arg("tui");
@@ -243,12 +247,7 @@ fn spawn_remote_tui(
     command.env("COLORTERM", "truecolor");
     command.env(RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path);
     command.env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1");
-    for name in [
-        "AGENA_SERVER_TOKEN",
-        "AGENA_SERVER_PASSWORD",
-        "AGENA_DATABASE_URL",
-        "AGENA_DATABASE_PATH",
-    ] {
+    for name in ["AGENA_SERVER_TOKEN", "AGENA_SERVER_PASSWORD"] {
         command.env_remove(name);
     }
     let child = pair
@@ -348,8 +347,6 @@ async fn wait_for_process_output(process: &mut StdioThinClient, needle: &str, la
 
 fn spawn_server(
     workspace: &Path,
-    database_path: &Path,
-    record_path: &Path,
     server_data_dir: &Path,
     log_path: &Path,
     port: u16,
@@ -363,8 +360,6 @@ fn spawn_server(
     let stderr = log.try_clone().expect("clone server integration log");
     let mut command = support::isolated_server_command(server_data_dir);
     command
-        .arg("--database-path")
-        .arg(database_path)
         .arg("server")
         .arg("--host")
         .arg("127.0.0.1")
@@ -372,8 +367,6 @@ fn spawn_server(
         .arg(port.to_string())
         .arg("--workspace")
         .arg(workspace)
-        .env("AGENA_SERVER_RECORD", record_path)
-        .env("AGENA_SERVER_DATA_DIR", server_data_dir)
         .env_remove("AGENA_SERVER_UI_PASSWORD")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
@@ -734,8 +727,8 @@ async fn killed_server_restores_queued_messages_in_order_without_a_connected_sen
     let fixture = tempfile::tempdir().unwrap();
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database_path = fixture.path().join("sessions.db");
-    let record_path = fixture.path().join("server.json");
+    let database_path = server_data.join("agena.db");
+    let record_path = server_data.join("run/server.json");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&server_data).unwrap();
@@ -758,15 +751,7 @@ async fn killed_server_restores_queued_messages_in_order_without_a_connected_sen
     )
     .await;
     write_isolated_project_config(&workspace, &provider_url);
-    let mut first_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut first_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (sender, _) = wait_for_server(&first_server, &record_path).await;
     let CommandResult::Workspace(resolved) = sender
         .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -821,15 +806,7 @@ async fn killed_server_restores_queued_messages_in_order_without_a_connected_sen
     );
     drop(sender);
     first_server.crash();
-    let mut second_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut second_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (observer, _) = wait_for_server(&second_server, &record_path).await;
     let first = tokio::time::timeout(Duration::from_secs(15), requests.recv())
         .await
@@ -873,8 +850,8 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     let fixture = tempfile::tempdir().expect("create server restart fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database_path = fixture.path().join("sessions.db");
-    let record_path = fixture.path().join("server.json");
+    let database_path = server_data.join("agena.db");
+    let record_path = server_data.join("run/server.json");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create process-test workspace");
     std::fs::create_dir_all(&server_data).expect("create process-test server data");
@@ -882,15 +859,7 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
 
-    let mut first_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut first_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (client_a, first_identity) = wait_for_server(&first_server, &record_path).await;
     let status = client_a
         .runtime_status()
@@ -941,7 +910,7 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     // durable fact is the entire recovery input: the process that opens this
     // data directory next terminalizes it (17.4). No clock is consulted, so
     // the regression is deterministic rather than time-dependent.
-    let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+    let database_url = format!("sqlite://{}?mode=rw", database_path.display());
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
         .expect("open killed server database");
@@ -960,17 +929,10 @@ async fn killed_server_restart_reconciles_the_abandoned_run_before_first_read() 
     );
     pool.close().await;
 
-    let mut second_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut second_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (client_b, second_identity) = wait_for_server(&second_server, &record_path).await;
     assert_ne!(first_identity.id, second_identity.id);
+    assert_eq!(first_identity.instance_id, second_identity.instance_id);
     assert_ne!(first_identity.pid, second_identity.pid);
 
     let overview = client_b
@@ -1068,8 +1030,8 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
     let fixture = tempfile::tempdir().expect("create native HTTP process fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database_path = fixture.path().join("sessions.db");
-    let record_path = fixture.path().join("server.json");
+    let database_path = server_data.join("agena.db");
+    let record_path = server_data.join("run/server.json");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create native process workspace");
     std::fs::create_dir_all(&server_data).expect("create native process server data");
@@ -1101,15 +1063,7 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
     )
     .await;
     write_isolated_project_config(&workspace, &provider_url);
-    let mut first_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut first_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (client, first_identity) = wait_for_server(&first_server, &record_path).await;
     let CommandResult::Workspace(directory) = client
         .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -1134,6 +1088,22 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
                         read: Some(PermissionMode::Ask),
                         write: Some(PermissionMode::Ask),
                     }),
+                    // The fixture lives under the system temp directory,
+                    // whose default rule is allowed. Gate this exact file.
+                    rules: [(
+                        workspace
+                            .join("permission-fixture.txt")
+                            .canonicalize()
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                        PathAccessModesResource {
+                            read: Some(PermissionMode::Ask),
+                            write: Some(PermissionMode::Ask),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1497,17 +1467,10 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
     drop(client);
     first_server.crash();
 
-    let mut second_server = spawn_server(
-        &workspace,
-        &database_path,
-        &record_path,
-        &server_data,
-        &log_path,
-        0,
-        &[],
-    );
+    let mut second_server = spawn_server(&workspace, &server_data, &log_path, 0, &[]);
     let (restarted, second_identity) = wait_for_server(&second_server, &record_path).await;
     assert_ne!(first_identity.id, second_identity.id);
+    assert_eq!(first_identity.instance_id, second_identity.instance_id);
     let restored_parent = wait_for_execution(&restarted, parent.id, |execution| {
         execution.session.state.active_execution().is_none()
     })
@@ -1571,7 +1534,7 @@ async fn native_permission_fork_cancel_and_sse_reconnect_survive_a_real_server_r
             .unwrap(),
         partial
     );
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rwc", database_path.display()))
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", database_path.display()))
         .await
         .expect("inspect native facts after restart");
     let phases=sqlx::query_as::<_,(i64,String)>("SELECT e.session_id,a.phase FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.session_id IN (?,?) ORDER BY e.session_id")
@@ -1598,9 +1561,8 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
     let fixture = tempfile::tempdir().expect("create process-ownership fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database_path = fixture.path().join("sessions.db");
-    let scheduler_database_path = fixture.path().join("scheduler.db");
-    let record_path = fixture.path().join("server.json");
+    let database_path = server_data.join("agena.db");
+    let record_path = server_data.join("run/server.json");
     let audit_path = fixture.path().join("runtime-ownership.jsonl");
     let server_log_path = fixture.path().join("server.log");
     let rpc_log_path = fixture.path().join("rpc-server.log");
@@ -1611,17 +1573,9 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
 
-    let server_environment = [
-        (RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path.as_path()),
-        (
-            "AGENA_SCHEDULER_DATABASE_PATH",
-            scheduler_database_path.as_path(),
-        ),
-    ];
+    let server_environment = [(RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path.as_path())];
     let mut server = spawn_server(
         &workspace,
-        &database_path,
-        &record_path,
         &server_data,
         &server_log_path,
         0,
@@ -1698,7 +1652,13 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         })
         .flatten()
         .expect("read ownership-test server URL");
-    let mut tui = spawn_remote_tui(server_url.as_str(), &workspace, session.id, &audit_path);
+    let mut tui = spawn_remote_tui(
+        server_url.as_str(),
+        &workspace,
+        &server_data,
+        session.id,
+        &audit_path,
+    );
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     tui.assert_running();
 
@@ -1706,6 +1666,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         StdioThinClientKind::RpcServer,
         server_url.as_str(),
         &workspace,
+        &server_data,
         &audit_path,
         &rpc_log_path,
     );
@@ -1721,6 +1682,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         StdioThinClientKind::McpServer,
         server_url.as_str(),
         &workspace,
+        &server_data,
         &audit_path,
         &mcp_log_path,
     );
@@ -1742,6 +1704,8 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
     }));
 
     let cli = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"))
+        .arg("--data-dir")
+        .arg(&server_data)
         .arg("--server")
         .arg(server_url.as_str())
         .arg("sessions")
@@ -1753,8 +1717,6 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1")
         .env_remove("AGENA_SERVER_TOKEN")
         .env_remove("AGENA_SERVER_PASSWORD")
-        .env_remove("AGENA_DATABASE_URL")
-        .env_remove("AGENA_DATABASE_PATH")
         .output()
         .expect("run one-shot CLI beside other clients");
     assert!(
@@ -1804,10 +1766,23 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         ]
     );
 
-    let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+    let database_url = format!("sqlite://{}?mode=rw", database_path.display());
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
         .expect("open live server database for ownership assertion");
+    let unified_tables = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agena_sessions','agena_scheduler_jobs','agena_server_state','agena_instance')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the runtime composes all durable domains in its one database");
+    assert_eq!(unified_tables, 4);
+    let instance_id =
+        sqlx::query_scalar::<_, String>("SELECT instance_id FROM agena_instance WHERE id=1")
+            .fetch_one(&pool)
+            .await
+            .expect("the instance identity is owned by the same database");
+    assert_eq!(instance_id, server_identity.instance_id);
     // Ownership is observable as the durable in-flight run itself: exactly one
     // marker exists, it belongs to the one session under execution, and it is
     // owned by the single server Runtime that is holding the provider request
@@ -1864,9 +1839,7 @@ async fn password_client_reauthenticates_after_server_restart_without_reconstruc
     let fixture = tempfile::tempdir().expect("create server reauthentication fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database_path = fixture.path().join("sessions.db");
-    let scheduler_database_path = fixture.path().join("scheduler.db");
-    let record_path = fixture.path().join("server.json");
+    let record_path = server_data.join("run/server.json");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create reauthentication workspace");
     std::fs::create_dir_all(&server_data).expect("create reauthentication server data");
@@ -1874,19 +1847,11 @@ async fn password_client_reauthenticates_after_server_restart_without_reconstruc
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
     let password = "server-restart-password-secret";
-    let server_environment = [
-        ("AGENA_SERVER_UI_PASSWORD", Path::new(password)),
-        (
-            "AGENA_SCHEDULER_DATABASE_PATH",
-            scheduler_database_path.as_path(),
-        ),
-    ];
+    let server_environment = [("AGENA_SERVER_UI_PASSWORD", Path::new(password))];
     let port = unused_loopback_port();
 
     let mut first_server = spawn_server(
         &workspace,
-        &database_path,
-        &record_path,
         &server_data,
         &log_path,
         port,
@@ -1910,8 +1875,6 @@ async fn password_client_reauthenticates_after_server_restart_without_reconstruc
     first_server.crash();
     let mut second_server = spawn_server(
         &workspace,
-        &database_path,
-        &record_path,
         &server_data,
         &log_path,
         port,
@@ -1919,6 +1882,7 @@ async fn password_client_reauthenticates_after_server_restart_without_reconstruc
     );
     let (_, second_identity) = wait_for_server(&second_server, &record_path).await;
     assert_ne!(second_identity.id, first_identity.id);
+    assert_eq!(second_identity.instance_id, first_identity.instance_id);
     assert_ne!(second_identity.pid, first_identity.pid);
 
     // The same client still holds the first process's now-invalid bearer. Its

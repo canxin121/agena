@@ -358,7 +358,9 @@ pub(super) async fn prepare(path: &Path, request: RequestId, workspace: i64) -> 
     if workspace <= 0 {
         return Err(invalid("workspace identity must be positive"));
     }
-    let root = tempfile::tempdir().map_err(storage)?;
+    let temporary = agena_storage_layout::StorageLayout::current().temp_dir();
+    agena_storage_layout::secure_directory(&temporary).map_err(storage)?;
+    let root = tempfile::tempdir_in(temporary).map_err(storage)?;
     let options = SqliteConnectOptions::new()
         .filename(root.path().join("archive.sqlite"))
         .create_if_missing(true)

@@ -23,9 +23,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn from_application(application: Application) -> Self {
+        let instance_id = application.instance_id().to_owned();
         Self {
             application,
             server: agena_api::resource::ServerIdentityResource {
+                instance_id,
                 id: uuid::Uuid::new_v4(),
                 pid: std::process::id(),
                 started_at: chrono::Utc::now(),

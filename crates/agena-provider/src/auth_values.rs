@@ -41,7 +41,7 @@ pub struct OAuthUserInfo {
     pub avatar_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 /// Credential material for a provider (API key or OAuth token).
@@ -71,6 +71,31 @@ pub enum AuthData {
         key: String,
         token: String,
     },
+}
+
+impl std::fmt::Debug for AuthData {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Api { .. } => formatter
+                .debug_struct("AuthData::Api")
+                .field("key", &"[REDACTED]")
+                .finish(),
+            Self::OAuth {
+                issuer,
+                expires_at_ms,
+                ..
+            } => formatter
+                .debug_struct("AuthData::OAuth")
+                .field("issuer", issuer)
+                .field("expires_at_ms", expires_at_ms)
+                .finish_non_exhaustive(),
+            Self::WellKnown { .. } => formatter
+                .debug_struct("AuthData::WellKnown")
+                .field("key", &"[REDACTED]")
+                .field("token", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 impl AuthData {
@@ -161,7 +186,7 @@ impl AuthData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// OAuth token response with refresh and access tokens.
 pub struct OAuthTokenResponse {
     pub refresh: String,
@@ -177,9 +202,40 @@ pub struct OAuthTokenResponse {
     pub user: Option<OAuthUserInfo>,
 }
 
+impl std::fmt::Debug for OAuthTokenResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthTokenResponse")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// GitHub Copilot deployment (GitHub.com or Enterprise).
 pub enum CopilotDeployment {
     GitHubCom,
     Enterprise { domain: String },
+}
+
+#[cfg(test)]
+mod secret_debug_tests {
+    use super::*;
+
+    #[test]
+    fn provider_credential_debug_output_redacts_secret_material() {
+        let api = AuthData::Api {
+            key: "sensitive-api-key".to_owned(),
+        };
+        let oauth = OAuthTokenResponse {
+            refresh: "sensitive-refresh-token".to_owned(),
+            access: "sensitive-access-token".to_owned(),
+            id_token: Some("sensitive-id-token".to_owned()),
+            expires_at_ms: 123,
+            account_id: None,
+            chatgpt_account_is_fedramp: false,
+            user: None,
+        };
+        assert!(!format!("{api:?} {oauth:?}").contains("sensitive"));
+    }
 }

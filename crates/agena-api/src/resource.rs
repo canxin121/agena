@@ -49,6 +49,8 @@ pub struct HealthResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Stable identity for one server process lifetime.
 pub struct ServerIdentityResource {
+    /// Persistent identity of the owning instance database.
+    pub instance_id: String,
     pub id: Uuid,
     pub pid: u32,
     pub started_at: DateTime<Utc>,

@@ -191,7 +191,9 @@ mod persistence_tests {
     #[tokio::test]
     async fn charged_response_is_not_lost_when_receipt_storage_fails() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".agena"), "blocks artifact directory").unwrap();
+        let artifacts = agena_storage_layout::StorageLayout::current().artifacts_dir(dir.path());
+        std::fs::create_dir_all(artifacts.parent().unwrap()).unwrap();
+        std::fs::write(artifacts, "blocks artifact directory").unwrap();
         let host: Arc<dyn HostClient> = Arc::new(agena_plugin_host::sdk::NoopHostClient);
         let response = ProviderHttpResponse {
             value: serde_json::json!({"id":"response_fixture","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"returned response"}]}],"usage":{"input_tokens":2,"output_tokens":3}}),

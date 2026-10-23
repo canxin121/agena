@@ -24,6 +24,9 @@
 //! }
 //! ```
 
+mod discovery;
+pub use discovery::resolve_server_url;
+
 pub mod error;
 pub mod http;
 pub mod ws;

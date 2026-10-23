@@ -38,10 +38,7 @@ use url::Url;
 
 use super::auth::{self, OAuthPasswordError, UiAuth};
 
-use super::persistence::db::{
-    KV_KEY_MCP_OAUTH_RUNTIME, KV_KEY_MCP_OAUTH_SIGNING_KEY, KV_KEY_MCP_SERVER_CONTROL,
-    ServerStateDb,
-};
+use super::persistence::db::{KV_KEY_MCP_OAUTH_RUNTIME, KV_KEY_MCP_SERVER_CONTROL, ServerStateDb};
 
 const MCP_SCOPE: &str = "agena:tools";
 const OFFLINE_ACCESS_SCOPE: &str = "offline_access";
@@ -328,12 +325,6 @@ struct PersistedMcpServerControl {
     oauth_issuer_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PersistedSigningKey {
-    secret_key: String,
-}
-
 #[derive(Clone)]
 struct OAuthSigningKey {
     signing_key: Arc<SigningKey>,
@@ -400,28 +391,24 @@ impl OAuthSigningKey {
 }
 
 async fn load_or_create_oauth_signing_key(
-    database: &Arc<ServerStateDb>,
+    store: agena_secret_store::FileSecretStore,
 ) -> Result<OAuthSigningKey, String> {
-    // Keep the signing key in Agena's private server-state database.
-    if let Some(persisted) = database
-        .get_json::<PersistedSigningKey>(KV_KEY_MCP_OAUTH_SIGNING_KEY)
-        .await?
-    {
-        let key = decode_persisted_signing_key(persisted.secret_key.as_str())?;
-        return Ok(key);
-    }
-
-    let key = OAuthSigningKey::generate()?;
-    let encoded = key.secret_key_b64();
-    database
-        .set_json(
-            KV_KEY_MCP_OAUTH_SIGNING_KEY,
-            PersistedSigningKey {
-                secret_key: encoded,
-            },
-        )
-        .await?;
-    Ok(key)
+    tokio::task::spawn_blocking(move || {
+        use agena_secret_store::SecretStore;
+        if let Some(encoded) = store
+            .get_secret("signing-key")
+            .map_err(|error| error.to_string())?
+        {
+            return decode_persisted_signing_key(&encoded);
+        }
+        let candidate = OAuthSigningKey::generate()?;
+        let encoded = store
+            .get_or_insert_secret("signing-key", &candidate.secret_key_b64())
+            .map_err(|error| error.to_string())?;
+        decode_persisted_signing_key(&encoded)
+    })
+    .await
+    .map_err(|_| "MCP signing-key storage worker failed".to_owned())?
 }
 
 fn decode_persisted_signing_key(value: &str) -> Result<OAuthSigningKey, String> {
@@ -580,7 +567,10 @@ impl McpServerState {
                 .unwrap_or(fallback_resource.as_str());
             validate_managed_oauth_identity(effective_resource, configured_issuer.as_deref())?;
         }
-        let signing_key = load_or_create_oauth_signing_key(&database).await?;
+        let signing_key = load_or_create_oauth_signing_key(
+            agena_secret_store::FileSecretStore::new("server.oauth"),
+        )
+        .await?;
         let persisted_runtime = database
             .get_json::<PersistedOAuthRuntime>(KV_KEY_MCP_OAUTH_RUNTIME)
             .await?;
@@ -3977,28 +3967,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_signing_key_is_persisted_and_reused_without_keychain_access() {
+    async fn oauth_signing_key_is_persisted_in_the_instance_secret_store() {
+        use agena_secret_store::{FileSecretStore, SecretStore};
         let fixture = tempfile::tempdir().expect("create OAuth signing-key fixture");
-        let database = Arc::new(
-            ServerStateDb::open_at_path(fixture.path().join("agena.db"))
-                .await
-                .expect("open server-state database"),
-        );
-
-        let first = load_or_create_oauth_signing_key(&database)
+        let store = FileSecretStore::at(fixture.path().join("secrets"), "server.oauth");
+        let first = load_or_create_oauth_signing_key(store.clone())
             .await
-            .expect("create OAuth signing key");
-        let second = load_or_create_oauth_signing_key(&database)
+            .expect("create key");
+        let second = load_or_create_oauth_signing_key(store.clone())
             .await
-            .expect("reload OAuth signing key");
-        let persisted = database
-            .get_json::<PersistedSigningKey>(KV_KEY_MCP_OAUTH_SIGNING_KEY)
-            .await
-            .expect("read persisted OAuth signing key")
-            .expect("persisted OAuth signing key");
-
+            .expect("reload key");
         assert_eq!(first.kid, second.kid);
-        assert_eq!(persisted.secret_key, first.secret_key_b64());
+        assert_eq!(
+            store.get_secret("signing-key").unwrap().unwrap(),
+            first.secret_key_b64()
+        );
     }
 
     #[test]

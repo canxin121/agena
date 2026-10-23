@@ -21,12 +21,10 @@ pub(super) fn auth_internal(
 
 pub(super) fn auth_manager_for_runtime(
     runtime: &AgenaRuntime,
-) -> crate::provider::auth::AuthManager<crate::config::ProviderConfigCredentialStore> {
+) -> crate::provider::auth::AuthManager<crate::config::ProviderSecretCredentialStore> {
     let snapshot = runtime.current_snapshot();
-    crate::provider::auth::AuthManager::new(crate::config::ProviderConfigCredentialStore::new(
-        snapshot.config_path().to_path_buf(),
-    ))
-    .with_client_identity(snapshot.client_identity().clone())
+    crate::provider::auth::AuthManager::new(crate::config::ProviderSecretCredentialStore::new())
+        .with_client_identity(snapshot.client_identity().clone())
 }
 
 pub(super) fn auth_provider_is_configured(
@@ -64,7 +62,17 @@ pub(super) fn auth_provider_projection(
     provider_id: &str,
     resolved: &agena_runtime::ResolvedProviderConfig,
 ) -> Result<agena_runtime::RuntimeAuthProvider, agena_runtime::RuntimeAuthenticationError> {
-    let auth = crate::config::provider_auth_data(resolved);
+    let auth = crate::config::managed_provider_auth_data(provider_id)
+        .map_err(auth_internal)?
+        .or_else(|| crate::config::provider_auth_data(resolved));
+    auth_provider_projection_with_auth(provider_id, resolved, auth)
+}
+
+fn auth_provider_projection_with_auth(
+    provider_id: &str,
+    resolved: &agena_runtime::ResolvedProviderConfig,
+    auth: Option<agena_provider::AuthData>,
+) -> Result<agena_runtime::RuntimeAuthProvider, agena_runtime::RuntimeAuthenticationError> {
     let credential_present = auth.is_some();
     let (
         credential_type,
@@ -133,7 +141,7 @@ pub(super) fn auth_provider_projection(
         Some(agena_provider::AuthData::WellKnown { key, .. }) => (
             Some(agena_runtime::RuntimeAuthCredentialType::WellKnown),
             None,
-            Some(key),
+            auth_secret_preview(&key),
             None,
             None,
             None,
@@ -226,10 +234,15 @@ pub(super) fn auth_issuer(
 pub(super) fn auth_secret_preview(secret: &str) -> Option<String> {
     let value = secret.trim();
     (!value.is_empty()).then(|| {
-        if value.len() <= 8 {
-            "*".repeat(value.len())
+        let characters = value.chars().collect::<Vec<_>>();
+        if characters.len() <= 8 {
+            "*".repeat(characters.len())
         } else {
-            format!("{}...{}", &value[..4], &value[value.len() - 4..])
+            let prefix = characters[..4].iter().collect::<String>();
+            let suffix = characters[characters.len() - 4..]
+                .iter()
+                .collect::<String>();
+            format!("{prefix}...{suffix}")
         }
     })
 }
@@ -314,5 +327,54 @@ pub(super) fn auth_copilot_deployment(domain: Option<String>) -> agena_provider:
     {
         Some(domain) => agena_provider::CopilotDeployment::Enterprise { domain },
         None => agena_provider::CopilotDeployment::GitHubCom,
+    }
+}
+
+#[cfg(test)]
+mod secret_projection_tests {
+    use super::{auth_provider_projection_with_auth, auth_secret_preview};
+
+    #[test]
+    fn well_known_credential_key_is_redacted_in_runtime_dto() {
+        let resolved = agena_runtime::ResolvedProviderConfig {
+            enabled: true,
+            auth: super::ProviderAuthConfig::Api(super::ProviderApiAuthConfig::custom(
+                None,
+                Default::default(),
+                None,
+            )),
+            network: Default::default(),
+            adapters: Default::default(),
+            models: Default::default(),
+        };
+        let key = "well-known-private-key-material";
+        let token = "well-known-private-token-material";
+        let projected = auth_provider_projection_with_auth(
+            "example",
+            &resolved,
+            Some(agena_provider::AuthData::WellKnown {
+                key: key.to_owned(),
+                token: token.to_owned(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(projected.key_preview.as_deref(), Some("well...rial"));
+        assert!(!format!("{projected:?}").contains(key));
+        assert!(!format!("{projected:?}").contains(token));
+    }
+
+    #[test]
+    fn credential_previews_mask_short_values_and_handle_unicode() {
+        assert_eq!(auth_secret_preview(" "), None);
+        assert_eq!(auth_secret_preview("secret"), Some("******".to_owned()));
+        assert_eq!(auth_secret_preview("甲乙丙"), Some("***".to_owned()));
+        assert_eq!(
+            auth_secret_preview("abcdefghij"),
+            Some("abcd...ghij".to_owned())
+        );
+        assert_eq!(
+            auth_secret_preview("甲乙丙丁戊己庚辛壬"),
+            Some("甲乙丙丁...己庚辛壬".to_owned())
+        );
     }
 }

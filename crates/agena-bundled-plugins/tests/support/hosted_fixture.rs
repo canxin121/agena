@@ -340,6 +340,7 @@ pub fn isolate(name: &str) -> bool {
         .args(["--exact", name, "--nocapture"])
         .env("AGENA_HOSTED_TEST_CHILD", name)
         .env("AGENA_HOSTED_TEST_KEY", "synthetic-provider-test-only")
+        .env("AGENA_DATA_DIR", home.path().join("agena"))
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .output()

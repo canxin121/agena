@@ -55,7 +55,6 @@ async fn start_server_with_options(
     let fixture = tempdir().expect("create MCP HTTP fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database = fixture.path().join("server.db");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create MCP HTTP workspace");
     std::fs::create_dir_all(&server_data).expect("create MCP HTTP server data");
@@ -63,7 +62,6 @@ async fn start_server_with_options(
     let (child, base_url) = spawn_server(
         &workspace,
         &server_data,
-        &database,
         &log_path,
         ui_password,
         environment,
@@ -80,7 +78,6 @@ async fn start_server_with_options(
 async fn spawn_server(
     workspace: &Path,
     server_data: &Path,
-    database: &Path,
     log_path: &Path,
     ui_password: Option<&str>,
     environment: &[(&str, &str)],
@@ -88,12 +85,9 @@ async fn spawn_server(
     // Let the server bind port 0 itself. Reserving an ephemeral port in the
     // test process and releasing it before spawning the child leaves a TOCTOU
     // window where parallel tests (or another local process) can claim the
-    // port. A unique endpoint record gives us the actual bound port without
-    // that race.
-    let record_path = server_data.join(format!(
-        "mcp-http-server-{}.json",
-        uuid::Uuid::new_v4().simple()
-    ));
+    // port. Each fixture owns an instance directory; its endpoint record
+    // reports the actual bound port.
+    let record_path = server_data.join("run/server.json");
 
     let log = OpenOptions::new()
         .create(true)
@@ -103,8 +97,6 @@ async fn spawn_server(
     let stderr = log.try_clone().expect("clone MCP HTTP server log");
     let mut command = support::isolated_server_command(server_data);
     command
-        .arg("--database-path")
-        .arg(database)
         .arg("server")
         .arg("--host")
         .arg("127.0.0.1")
@@ -112,8 +104,6 @@ async fn spawn_server(
         .arg("0")
         .arg("--workspace")
         .arg(workspace)
-        .env("AGENA_SERVER_DATA_DIR", server_data)
-        .env("AGENA_SERVER_RECORD", &record_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
@@ -148,6 +138,7 @@ async fn spawn_server(
     let base_url = loop {
         if let Ok(bytes) = std::fs::read(&record_path)
             && let Ok(record) = serde_json::from_slice::<Value>(&bytes)
+            && record.get("pid").and_then(Value::as_u64) == Some(u64::from(child.id()))
             && let Some(url) = record.get("url").and_then(Value::as_str)
             && let Ok(response) = client.get(format!("{url}/health")).send().await
             && response.status().is_success()
@@ -173,6 +164,7 @@ async fn spawn_server(
 
 fn test_client() -> Client {
     Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("build MCP HTTP test client")
@@ -970,22 +962,14 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     let fixture = tempdir().expect("create restartable MCP HTTP fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
-    let database = fixture.path().join("server.db");
     let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create restartable workspace");
     std::fs::create_dir_all(&server_data).expect("create restartable server data");
 
     let ui_password = "Agena-restart-management-password-2026";
     let client = test_client();
-    let (mut first_child, first_base_url) = spawn_server(
-        &workspace,
-        &server_data,
-        &database,
-        &log_path,
-        Some(ui_password),
-        &[],
-    )
-    .await;
+    let (mut first_child, first_base_url) =
+        spawn_server(&workspace, &server_data, &log_path, Some(ui_password), &[]).await;
     let first_token = login_ui(&client, &first_base_url, ui_password).await;
     let (status, _, persisted) = response_json(
         client
@@ -1018,7 +1002,6 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     let (mut second_child, second_base_url) = spawn_server(
         &workspace,
         &server_data,
-        &database,
         &log_path,
         Some(ui_password),
         &environment,

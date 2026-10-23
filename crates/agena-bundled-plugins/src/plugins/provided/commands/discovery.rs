@@ -378,22 +378,12 @@ pub(crate) fn default_command_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
     roots
 }
 
-fn user_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        })
-}
-
 fn agena_home_dir() -> Option<PathBuf> {
-    std::env::var_os("AGENA_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| user_home_dir().map(|home| home.join("agena")))
+    Some(
+        agena_storage_layout::StorageLayout::current()
+            .root()
+            .to_path_buf(),
+    )
 }
 
 /// Scan skill packages: every `SKILL.md` under the given roots.

@@ -31,29 +31,61 @@ schema 改变后使用新的数据库路径。程序不转换、修补或自动�
 
 正文与历史读取受字节和并发预算约束。缓存容量回收只移除可重建条目，不撤销调用方已持有的只读视图，也不改变读取权限的 generation；提交围栏、显式失效和关闭仍会阻止旧 snapshot 回填。缓存记账不是进程 RSS 硬上限，调用方长期持有的视图仍计入各自预算。
 
-### Scheduler SQLite
+### 同一个实例数据库
 
-Scheduler 使用独立数据库，但采用相同原则：
+每个数据目录只有一个 `agena.db`。会话内核、workspace/permission 仓储、Scheduler job/history、`agena_server_state` 和 `agena_instance` 由同一个完整 schema 统一声明、初始化和验证。Scheduler 与 ServerState 接收已有连接或仓储 trait，不再另开独立数据库，也不在启动时各自修补表结构。未使用的 attachment-cache 表已删除。
 
-- 空库创建当前表和索引；
-- 非空库必须精确匹配；
-- 不保存 schema version；
-- 不迁移或修补旧结构。
+小型应用状态仍通过有类型的 JSON wrapper 读写，落在 `agena_server_state`；凭据不放在这个表中。调度器与应用状态的写入复用同一实例的写入协调，不改变会话内核的事务、receipt、不可变正文块、blob pin、引用与恢复语义。
+
+`agena_instance` 在新库创建事务中生成持久 UUID。API 的 `server.instance_id` 标识数据库实例，跨服务重启保持稳定；`server.id` 继续标识单次服务进程，用于端点记录和生命周期校验。TUI 草稿与输入历史在客户端按持久实例 ID 和远端工作区身份分目录，避免不同服务的数字 session ID 混用。
 
 Scheduler 的 job/history JSON 同样只接受当前字段集合。当前 writer 总会写出的 policy/status 字段是必填项；未知字段直接拒绝。
 
-### Server-state SQLite
+## 统一数据目录
 
-Server state 使用唯一当前目录和 `agena.db`，没有旧目录候选选择。
+进程入口在启动异步任务前选择一次 `StorageLayout`。唯一存储位置参数是 `--data-dir DIR`，对应环境变量 `AGENA_DATA_DIR`，命令行优先，默认 `~/agena`。旧数据库、Scheduler、ServerState、插件、客户端和运行状态的独立位置变量及命令行参数已经移除，不保留 alias。
 
-数据库只包含当前 server-state / attachment-cache 表与索引；非空数据库定义不匹配时拒绝启动。
+```text
+<data-dir>/
+  agena.db                       # 全实例 SQLite，含调度和 ServerState
+  agena.json                     # 用户全局配置
+  installation_id               # 安装身份
+  secrets/                       # 应用自管的加密凭据与私有主密钥
+  workspaces/<workspace-key>/
+    memory/                      # 文件记忆的权威内容
+    uploads/                     # 用户上传附件
+    artifacts/                   # 工具、浏览器等生成物
+    generated_images/<session>/  # 受会话访问边界约束的生成图片
+  cache/memory/<workspace-key>/   # 可重建记忆索引
+  marketplace/                   # 安装记录及插件缓存
+  plugin-data/                   # 插件非敏感持久数据
+  clients/<scope-key>/            # 本地客户端草稿、输入历史
+  run/server.json                # 服务发现记录
+  logs/                          # 服务日志
+  tmp/                           # 实例临时 staging
+  terminal-ui.json               # Terminal UI 状态
+```
+
+workspace key 使用规范化绝对路径的完整 BLAKE3 摘要；已存在的符号链接别名归一化，不使用有碰撞的字符替换或截断散列。远端工作区路径只作为资源身份使用，不在客户端机器上 canonicalize。
+
+项目内用户维护的 `.agena/agena.json`、`.agena/skills` 等继续属于项目配置。应用产生的记忆、上传、工具记录及插件数据使用统一根目录。工具权限中的 `<state>` 仅指向当前工作区的 managed 目录，不授予整个实例数据根访问权限；workspace 附件接口只授权当前工作区的 uploads/artifacts，生成图片保留 session 边界。
+
+## SecretStore
+
+只有一个应用自管 `FileSecretStore`，位于当前实例 `secrets/`。Provider 管理凭据、MCP 客户端 OAuth、插件 secret 和 MCP 服务端签名私钥通过它读写。不使用系统钥匙串，也不提供回退存储或旧凭据搬运逻辑。显式用户配置的 inline/env 凭据仍是外部输入；通过认证流程管理的凭据不会复制回普通配置或配置 DTO。
+
+命名空间在持有独立文件锁时整体读写，使用 ChaCha20-Poly1305 认证加密、随机 nonce 和命名空间 AAD。主密钥由应用随机生成，私有文件原子创建；凭据更新通过同目录临时文件、fsync、原子替换完成。已有密文而主密钥丢失、密文损坏、认证失败时明确报错，禁止重建密钥覆盖数据。文件名不拼接用户提供的 secret key。
+
+Unix 私有目录为 `0700`，文件为 `0600`；Windows 使用私有 ACL。读写拒绝符号链接及非普通文件，在 Unix 上还拒绝多硬链接和非当前用户所有的凭据文件。错误和 Debug 输出不得包含凭据内容。异步调用通过 blocking worker 进入同步文件后端。
+
+加密主密钥同样由应用存储，需要保留并保护。持有整份目录（包括主密钥）或拥有当前账户权限的程序仍能解密；此实现不声称抵御已控制当前账户的进程。备份密文与主密钥时应把它们作为敏感数据管理，丢失主密钥后重新认证。
 
 ## 本地持久化状态
 
 以下状态只接受当前 shape：
 
 - installation id；
-- MCP server control / OAuth signing key / OAuth runtime；
+- MCP server control / OAuth runtime；
 - terminal session registry；
 - terminal UI state；
 - workspace preview registry；
@@ -145,14 +177,14 @@ session / execution / background-activity / notification 的状态类型只有�
 
 ## 当前格式归档与新数据库启动
 
-内部 schema 改变后，启动时显式选择一个新的空主库路径，例如：
+内部 schema 改变后，启动时显式选择一个新的空数据目录，例如：
 
 ```sh
-agena --database-path /absolute/new-data/session-kernel.db server \
+agena --data-dir /absolute/new-data server \
   --host 127.0.0.1 --port 3211 --workspace /absolute/workspace
 ```
 
-该参数选择主会话库，不是所有本地状态的隔离开关。原主库保持原样；不要删除原文件来绕过格式检查。旧数据库和旧 archive 不提供转换入口。当前格式 archive 用于当前内核之间复制会话，不是完整数据库备份。
+该参数统一选择配置、数据库、凭据、workspace 管理文件和本地客户端状态的位置。原数据目录保持原样；不要删除原文件来绕过格式检查。旧数据库和旧 archive 不提供转换入口。当前格式 archive 用于当前内核之间复制会话，不是完整数据库备份。
 
 CLI 通过服务端流式传输 JSONL；导出核对完整 footer、记录数量、字节数、SHA-256 和 EOF，导入成功只返回已提交的新会话身份：
 

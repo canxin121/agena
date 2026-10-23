@@ -54,8 +54,8 @@ pub struct WorkspaceFileUploadRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// A file uploaded into a workspace. `path` is relative to the workspace root
-/// and is the value clients should reference as a workspace attachment.
+/// A file staged in the selected instance for one workspace. `path` is the
+/// absolute managed path clients should reference as a workspace attachment.
 pub struct WorkspaceFileUploadResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,

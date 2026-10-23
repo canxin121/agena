@@ -19,5 +19,6 @@ pub fn isolated_server_command(test_home: &Path) -> Command {
         }
     }
     command.env("HOME", test_home);
+    command.env("AGENA_DATA_DIR", test_home);
     command
 }

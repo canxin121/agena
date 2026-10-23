@@ -8,14 +8,14 @@ description = "Agena plugin runtime and provided plugins"
 
 [dependencies]
 agena-failure = { workspace = true }
-agena-keyring-store = { workspace = true }
+agena-secret-store = { workspace = true }
+agena-storage-layout = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-tools = { workspace = true }
 async-trait = { workspace = true }
-blake3 = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

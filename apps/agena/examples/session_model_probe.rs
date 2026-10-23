@@ -21,8 +21,6 @@ async fn main() -> anyhow::Result<()> {
         config_override_expressions: Vec::new(),
         database_url: None,
         database_path: Some(probe_root.join("probe.db")),
-        scheduler_database_url: None,
-        scheduler_database_path: Some(probe_root.join("probe-scheduler.db")),
         tracing_reload_handle: None,
     })
     .await?;

@@ -168,15 +168,14 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                     }
                     ResourceReference::WorkspacePath { path } if path.trim().is_empty() => {
                         return Err(ApplicationError::bad_request(
-                            "The workspace attachment needs a relative path.",
+                            "The workspace attachment needs a file path.",
                         ));
                     }
                     ResourceReference::WorkspacePath { path }
-                        if std::path::Path::new(path).is_absolute()
-                            || path.split('/').any(|part| part == "..") =>
+                        if !valid_workspace_attachment_path(path) =>
                     {
                         return Err(ApplicationError::bad_request(
-                            "The workspace attachment path must be relative and normalized.",
+                            "The attachment path must be a normalized workspace-relative path or a managed upload/artifact path.",
                         ));
                     }
                     ResourceReference::Url { url } if url.trim().is_empty() => {
@@ -231,4 +230,45 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
         ));
     }
     Ok(())
+}
+
+/// This validates the reference format, not authority to read the file. The
+/// session manager resolves the canonical target against the active workspace
+/// and its managed attachment roots, then applies read permission before I/O.
+fn valid_workspace_attachment_path(raw: &str) -> bool {
+    use path_clean::PathClean as _;
+    use std::path::{Component, Path};
+
+    let path = Path::new(raw);
+    if path.clean().as_os_str() != path.as_os_str() {
+        return false;
+    }
+    if !path.is_absolute() {
+        return path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)));
+    }
+    let layout = agena_storage_layout::StorageLayout::current();
+    let workspace_roots = layout.root().join("workspaces");
+    let Ok(relative) = path.strip_prefix(&workspace_roots) else {
+        return false;
+    };
+    let mut parts = relative.components();
+    let Some(Component::Normal(key)) = parts.next() else {
+        return false;
+    };
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    if key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    let Some(Component::Normal(bucket)) = parts.next() else {
+        return false;
+    };
+    if bucket != "uploads" && bucket != "artifacts" {
+        return false;
+    }
+    let mut remaining = parts.peekable();
+    remaining.peek().is_some() && remaining.all(|part| matches!(part, Component::Normal(_)))
 }

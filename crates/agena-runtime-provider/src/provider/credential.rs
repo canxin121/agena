@@ -1,6 +1,5 @@
 use std::{
     fmt,
-    path::{Path, PathBuf},
     sync::{Arc, atomic::Ordering},
 };
 
@@ -11,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     ProviderError,
-    config_support::ProviderConfigCredentialStore,
+    config_support::ProviderSecretCredentialStore,
     provider::{
         auth::{AuthStore, refresh_gitlab_token},
         utils,
@@ -54,7 +53,7 @@ enum CredentialSource {
         auth: Arc<Mutex<AuthData>>,
         selector: AuthSecretSelector,
         refresh: AuthRefreshStrategy,
-        config_path: Option<PathBuf>,
+        persist: bool,
     },
     GoogleAdc {
         provider_id: String,
@@ -114,18 +113,17 @@ impl ManagedCredential {
                 auth,
                 selector,
                 refresh,
-                config_path: None,
+                persist: false,
             },
         )
     }
 
-    pub fn auth_data_shared_with_store(
+    pub fn auth_data_shared_persistent(
         label: impl Into<String>,
         provider_id: impl Into<String>,
         auth: Arc<Mutex<AuthData>>,
         selector: AuthSecretSelector,
         refresh: AuthRefreshStrategy,
-        config_path: impl Into<PathBuf>,
     ) -> Self {
         Self::new(
             label.into(),
@@ -134,7 +132,7 @@ impl ManagedCredential {
                 auth,
                 selector,
                 refresh,
-                config_path: Some(config_path.into()),
+                persist: true,
             },
         )
     }
@@ -280,7 +278,7 @@ impl CredentialSource {
                 auth,
                 selector,
                 refresh,
-                config_path: _,
+                persist: _,
             } => {
                 let mut scope = format!(
                     "auth_data:{provider_id}:{}:{}",
@@ -344,7 +342,7 @@ impl CredentialSource {
                 auth,
                 selector,
                 refresh,
-                config_path,
+                persist,
             } => {
                 resolve_inline_auth_credential(
                     identity,
@@ -352,7 +350,7 @@ impl CredentialSource {
                     provider_id.as_str(),
                     *selector,
                     refresh,
-                    config_path.as_deref(),
+                    *persist,
                     force_refresh,
                 )
                 .await
@@ -646,13 +644,18 @@ async fn resolve_inline_auth_credential(
     provider_id: &str,
     selector: AuthSecretSelector,
     refresh: &AuthRefreshStrategy,
-    config_path: Option<&Path>,
+    persist: bool,
     force_refresh: bool,
 ) -> Result<CachedCredential, ProviderError> {
     let mut current = auth.lock().await.clone();
-    if let Some(config_path) = config_path
-        && let Some(stored) = load_auth_data_from_store(config_path, provider_id).await?
-    {
+    if persist {
+        let stored = load_auth_data_from_store(provider_id)
+            .await?
+            .ok_or_else(|| {
+                ProviderError::Config(format!(
+                    "managed credential is missing for provider {provider_id}"
+                ))
+            })?;
         if stored != current {
             *auth.lock().await = stored.clone();
         }
@@ -706,7 +709,7 @@ async fn resolve_inline_auth_credential(
                 enterprise_url,
                 user,
             };
-            write_auth_data(auth, provider_id, config_path, updated.clone()).await?;
+            write_auth_data(auth, provider_id, persist, updated.clone()).await?;
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
@@ -735,28 +738,24 @@ async fn resolve_inline_auth_credential(
                 enterprise_url,
                 user,
             };
-            write_auth_data(auth, provider_id, config_path, updated.clone()).await?;
+            write_auth_data(auth, provider_id, persist, updated.clone()).await?;
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => selected,
     }
 }
 
-async fn load_auth_data_from_store(
-    config_path: &Path,
-    provider_id: &str,
-) -> Result<Option<AuthData>, ProviderError> {
-    let store = ProviderConfigCredentialStore::new(config_path.to_path_buf());
+async fn load_auth_data_from_store(provider_id: &str) -> Result<Option<AuthData>, ProviderError> {
+    let store = ProviderSecretCredentialStore::new();
     let provider_id = provider_id.to_owned();
     crate::provider::auth::run_auth_store_operation(move || store.get(&provider_id)).await
 }
 
 async fn persist_auth_data_to_store(
-    config_path: &Path,
     provider_id: &str,
     auth: &AuthData,
 ) -> Result<(), ProviderError> {
-    let store = ProviderConfigCredentialStore::new(config_path.to_path_buf());
+    let store = ProviderSecretCredentialStore::new();
     let provider_id = provider_id.to_owned();
     let auth = auth.clone();
     crate::provider::auth::run_auth_store_operation(move || store.set(&provider_id, auth)).await
@@ -765,11 +764,11 @@ async fn persist_auth_data_to_store(
 async fn write_auth_data(
     auth: &Mutex<AuthData>,
     provider_id: &str,
-    config_path: Option<&Path>,
+    persist: bool,
     updated: AuthData,
 ) -> Result<(), ProviderError> {
-    if let Some(config_path) = config_path {
-        persist_auth_data_to_store(config_path, provider_id, &updated).await?;
+    if persist {
+        persist_auth_data_to_store(provider_id, &updated).await?;
     }
     *auth.lock().await = updated;
     Ok(())

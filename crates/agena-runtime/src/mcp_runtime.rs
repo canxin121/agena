@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use agena_mcp_client::{KeyringTokenStore, McpConnectionManager, ReconnectPolicy, ServerSpec};
+use agena_mcp_client::{FileTokenStore, McpConnectionManager, ReconnectPolicy, ServerSpec};
 use agena_plugin_host::{PluginPackage, PluginsConfig};
 use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig};
 
@@ -32,7 +32,7 @@ pub async fn build_mcp_manager(
     let mut manager = McpConnectionManager::new(client_name.into(), client_version.into())
         .with_roots([workspace_root.to_path_buf()]);
     if config.runtime.token_store.enabled {
-        manager.set_token_store(Arc::new(KeyringTokenStore::new()));
+        manager.set_token_store(Arc::new(FileTokenStore::new()));
     }
 
     let manager = Arc::new(manager);

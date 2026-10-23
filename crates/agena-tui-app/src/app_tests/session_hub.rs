@@ -4,10 +4,7 @@ use agena_api::resource::{SessionResource, WorkspaceResource};
 use agena_tui_session::session_hub::{HubRow, SessionHubSectionKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::json;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
 
 fn session(id: i64, workspace: i64, pinned: bool) -> SessionResource {
     serde_json::from_value(json!({
@@ -145,9 +142,7 @@ async fn hub_fetches_only_requested_pages_and_creates_in_the_selected_workspace_
         let mut paths = Vec::new();
         for _ in 0..8 {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buffer = vec![0; 16384];
-            let count = socket.read(&mut buffer).await.unwrap();
-            let request = String::from_utf8_lossy(&buffer[..count]);
+            let request = super::read_http_request(&mut socket).await;
             let path = request
                 .lines()
                 .next()

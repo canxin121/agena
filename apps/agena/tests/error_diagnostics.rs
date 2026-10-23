@@ -5,12 +5,16 @@ fn server_bootstrap_prints_the_complete_configuration_error_chain() {
     let root = tempfile::tempdir().expect("temporary isolated home");
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(home.join("agena")).expect("create config directory");
+    let data_dir = root.path().join("instance");
+    std::fs::create_dir_all(&home).expect("create isolated home");
+    std::fs::create_dir_all(&data_dir).expect("create config directory");
     std::fs::create_dir_all(&workspace).expect("create workspace");
-    std::fs::write(home.join("agena/agena.json"), r#"{"obsolete":true}"#)
+    std::fs::write(data_dir.join("agena.json"), r#"{"obsolete":true}"#)
         .expect("write deliberately invalid configuration");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agena"))
+        .arg("--data-dir")
+        .arg(&data_dir)
         .args([
             "server",
             "--host",
@@ -25,8 +29,6 @@ fn server_bootstrap_prints_the_complete_configuration_error_chain() {
         .env_remove("RUST_LOG")
         .env_remove("AGENA_SERVER_TOKEN")
         .env_remove("AGENA_SERVER_PASSWORD")
-        .env_remove("AGENA_DATABASE_URL")
-        .env_remove("AGENA_DATABASE_PATH")
         .output()
         .expect("run agena server");
 

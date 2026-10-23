@@ -46,7 +46,8 @@ pub fn managed_process_id(session_id: i64, call_id: i64) -> String {
 pub use project_paths::{
     MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
     agena_home_dir, generated_image_artifact_path, generated_media_extension,
-    parse_base64_image_data_url, persist_generated_image_artifact, project_state_dir,
+    managed_attachment_root, parse_base64_image_data_url, persist_generated_image_artifact,
+    project_state_dir,
 };
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Request to execute a tool.

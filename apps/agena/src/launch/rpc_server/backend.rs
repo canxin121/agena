@@ -20,12 +20,6 @@ use agena_client::{AgenaClient, ClientError};
 use async_trait::async_trait;
 
 pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessError> {
-    if request.database_url.is_some() || request.database_path.is_some() {
-        return Err(AgenaProcessError::Configuration(
-            "--database-url/--database-path belong to the server and cannot be used by rpc-server"
-                .to_owned(),
-        ));
-    }
     if !request.config_override_expressions.is_empty() {
         return Err(AgenaProcessError::Configuration(
             "--set overrides belong to the server and cannot be used by rpc-server".to_owned(),
@@ -420,11 +414,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rpc_server_rejects_database_ownership_instead_of_bootstrapping_runtime() {
+    async fn rpc_server_rejects_server_configuration_instead_of_bootstrapping_runtime() {
         let error = run(RpcServerRequest {
-            config_override_expressions: Vec::new(),
-            database_url: Some("sqlite::memory:".to_owned()),
-            database_path: None,
+            config_override_expressions: vec!["tracing.filter=debug".to_owned()],
+            data_dir: None,
             args: agena_cli::RpcServerArgs {
                 server: Some("http://127.0.0.1:3210".to_owned()),
                 server_token: None,
@@ -434,7 +427,7 @@ mod tests {
             },
         })
         .await
-        .expect_err("database ownership must stay at the server");
+        .expect_err("configuration ownership must stay at the server");
         assert!(error.to_string().contains("belong to the server"));
     }
 }

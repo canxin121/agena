@@ -25,6 +25,7 @@ static DATABASE_FILES: agena_async::BlockingPool = agena_async::BlockingPool::ne
 
 struct DatabaseOwner {
     _lock: File,
+    path: PathBuf,
 }
 
 fn database_error(error: impl std::fmt::Display) -> DbErr {
@@ -72,33 +73,120 @@ fn canonical_database_path(path: &Path) -> Result<PathBuf, DbErr> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent).map_err(database_error)?;
+    create_private_parents(parent).map_err(database_error)?;
     let file = path
         .file_name()
         .ok_or_else(|| database_error("database filename is missing"))?;
     Ok(parent.canonicalize().map_err(database_error)?.join(file))
 }
 
-fn acquire_owner(path: &Path) -> Result<(PathBuf, Arc<DatabaseOwner>), DbErr> {
+fn create_private_parents(path: &Path) -> std::io::Result<()> {
+    let mut missing = Vec::new();
+    let mut next = path;
+    while !next.exists() {
+        missing.push(next.to_path_buf());
+        let Some(parent) = next
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            break;
+        };
+        next = parent;
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    // Never change an existing shared ancestor, including /tmp and a caller's
+    // workspace. Only newly created application directories become private.
+    for directory in missing.into_iter().rev() {
+        agena_storage_layout::secure_directory(&directory)?;
+    }
+    Ok(())
+}
+
+fn private_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.nlink() != 1 {
+            return Err(std::io::Error::other(
+                "hard-linked SQLite files are unsupported",
+            ));
+        }
+    }
+    agena_storage_layout::secure_file(path)
+}
+
+fn secure_database_files(path: &Path) -> std::io::Result<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        match private_file(Path::new(&file)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn acquire_owner(path: &Path, create: bool) -> Result<(PathBuf, Arc<DatabaseOwner>), DbErr> {
     let canonical = canonical_database_path(path)?;
     let mut name = canonical.as_os_str().to_owned();
     name.push(".owner-lock");
     let lock_path = PathBuf::from(name);
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .map_err(database_error)?;
-    match file.try_lock() {
-        Ok(()) => Ok((canonical, Arc::new(DatabaseOwner { _lock: file }))),
-        Err(std::fs::TryLockError::WouldBlock) => Err(database_error(format!(
-            "database {} already has a service owner; connect to that service",
-            canonical.display()
-        ))),
-        Err(error) => Err(database_error(error)),
+    if let Ok(metadata) = std::fs::symlink_metadata(&lock_path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(database_error("SQLite owner lock is not a regular file"));
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path).map_err(database_error)?;
+    private_file(&lock_path).map_err(database_error)?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(database_error(format!(
+                "database {} already has a service owner; connect to that service",
+                canonical.display()
+            )));
+        }
+        Err(error) => return Err(database_error(error)),
+    };
+    if create && !canonical.exists() {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&canonical) {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(database_error(error)),
+        }
+    }
+    secure_database_files(&canonical).map_err(database_error)?;
+    Ok((
+        canonical.clone(),
+        Arc::new(DatabaseOwner {
+            _lock: file,
+            path: canonical,
+        }),
+    ))
     // Never unlink the lock file: unlinking would let a racing owner lock a
     // different inode while a previous process still holds this one.
 }
@@ -116,8 +204,12 @@ async fn prepare(
         None
     } else {
         let path = options.get_filename().to_owned();
+        let create = options
+            .to_url_lossy()
+            .query_pairs()
+            .any(|(key, value)| key == "mode" && value == "rwc");
         let (path, owner) = DATABASE_FILES
-            .run(move || acquire_owner(&path))
+            .run(move || acquire_owner(&path, create))
             .await
             .map_err(database_error)??;
         options = options.filename(path);
@@ -153,7 +245,11 @@ async fn pool(
         Some(owner) => pool.after_connect(move |_, _| {
             let owner = owner.clone();
             Box::pin(async move {
-                drop(owner);
+                DATABASE_FILES
+                    .run(move || secure_database_files(&owner.path))
+                    .await
+                    .map_err(|error| sea_orm::sqlx::Error::Io(std::io::Error::other(error)))?
+                    .map_err(sea_orm::sqlx::Error::Io)?;
                 Ok(())
             })
         }),
@@ -171,8 +267,9 @@ async fn pool(
     Ok(Arc::new(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)))
 }
 
-/// Infrastructure repositories, including scheduler/server state, use one
-/// owned pool. The session kernel uses `KernelDatabase`'s dedicated writer.
+/// Open an independently owned pool for standalone infrastructure fixtures or
+/// embedders. The service runtime uses `KernelDatabase` and injects its writer
+/// into every durable repository, including scheduler and server state.
 pub async fn connect_owned_database(
     url: &str,
     level: log::LevelFilter,

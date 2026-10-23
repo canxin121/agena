@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 usage() {
   cat <<'EOF'
@@ -9,13 +10,12 @@ Options:
   --archive PATH_OR_URL    Backend package archive (.tar.gz)
   --repo OWNER/REPO        GitHub repo for release downloads (default: canxin121/agena)
   --version VERSION        Beta release version, e.g. 0.1.0-beta.1
-  --install-dir DIR        Install directory (default: ~/agena)
+  --install-dir DIR        Binary/Web directory (default: ~/.local/share/agena)
+  --data-dir DIR           Instance data root (default: AGENA_DATA_DIR or ~/agena)
   --host HOST              Backend host (default: 127.0.0.1)
   --port PORT              Backend port (default: 3210)
   --ui-password PASSWORD   Optional UI password
   --workspace-root PATH    Optional workspace root
-  --database-path PATH     Optional SQLite database path
-  --database-url URL       Optional database URL
   --set KEY=VALUE          Additional Agena overrides (repeatable)
   -h, --help               Show help
 EOF
@@ -24,13 +24,12 @@ EOF
 REPO="canxin121/agena"
 VERSION=""
 ARCHIVE=""
-INSTALL_DIR="${HOME}/agena"
+INSTALL_DIR="${AGENA_INSTALL_DIR:-$HOME/.local/share/agena}"
+DATA_DIR="${AGENA_DATA_DIR:-$HOME/agena}"
 HOST="127.0.0.1"
 PORT="3210"
 UI_PASSWORD=""
 WORKSPACE_ROOT=""
-DATABASE_PATH=""
-DATABASE_URL=""
 SETS=()
 
 while [[ $# -gt 0 ]]; do
@@ -39,17 +38,56 @@ while [[ $# -gt 0 ]]; do
     --repo) REPO="${2:-}"; shift 2 ;;
     --version) VERSION="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
+    --data-dir) DATA_DIR="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
     --port) PORT="${2:-}"; shift 2 ;;
     --ui-password) UI_PASSWORD="${2:-}"; shift 2 ;;
     --workspace-root) WORKSPACE_ROOT="${2:-}"; shift 2 ;;
-    --database-path) DATABASE_PATH="${2:-}"; shift 2 ;;
-    --database-url) DATABASE_URL="${2:-}"; shift 2 ;;
     --set) SETS+=("${2:-}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+absolute_directory() {
+  local path="$1" parent name
+  [[ -n "$path" ]] || { echo "ERROR: directory must not be empty" >&2; return 2; }
+  if [[ -d "$path" ]]; then
+    (cd "$path" && pwd -P)
+    return
+  fi
+  parent="$(absolute_directory "$(dirname "$path")")" || return
+  name="$(basename "$path")"
+  case "$name" in
+    .) printf '%s' "$parent" ;;
+    ..) dirname "$parent" ;;
+    *) printf '%s/%s' "${parent%/}" "$name" ;;
+  esac
+}
+
+validate_storage_paths() {
+  INSTALL_DIR="$(absolute_directory "$INSTALL_DIR")"
+  local account_home
+  account_home="$(absolute_directory "$HOME")"
+  case "$INSTALL_DIR" in
+    /|"$account_home"|/bin|/usr|/usr/local|/etc|/var|/opt|/tmp)
+      echo "ERROR: unsafe application install directory: $INSTALL_DIR" >&2; return 2 ;;
+  esac
+  # Lifecycle actions select the installed data root from their manifest.
+  # Do not interpret an unrelated inherited AGENA_DATA_DIR before loading it.
+  [[ "${1:-}" == "install-only" ]] && return 0
+  DATA_DIR="$(absolute_directory "$DATA_DIR")"
+  case "$DATA_DIR" in
+    /|"$account_home"|/bin|/usr|/usr/local|/etc|/var|/opt|/tmp)
+      echo "ERROR: unsafe instance data directory: $DATA_DIR" >&2; return 2 ;;
+  esac
+  if [[ "$INSTALL_DIR/" == "$DATA_DIR/"* || "$DATA_DIR/" == "$INSTALL_DIR/"* ]]; then
+    echo "ERROR: application installation and instance data directories must be separate" >&2
+    return 2
+  fi
+}
+
+validate_storage_paths
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -105,78 +143,23 @@ mkdir -p "$STAGE_DIR"
 tar -C "$STAGE_DIR" -xzf "$ARCHIVE_PATH"
 
 mkdir -p "$INSTALL_DIR"
-rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/web-dist" "$INSTALL_DIR/logs"
+rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/web-dist"
 cp -R "$STAGE_DIR/bin" "$INSTALL_DIR/bin"
 cp -R "$STAGE_DIR/web-dist" "$INSTALL_DIR/web-dist"
-mkdir -p "$INSTALL_DIR/logs"
-
-LAUNCHER="$INSTALL_DIR/bin/run-agena.sh"
+SERVICE_ARGS=(--data-dir "$DATA_DIR" server install --host "$HOST" --port "$PORT" --ui-dir "$INSTALL_DIR/web-dist")
+[[ -n "$UI_PASSWORD" ]] && SERVICE_ARGS+=(--ui-password "$UI_PASSWORD")
+[[ -n "$WORKSPACE_ROOT" ]] && SERVICE_ARGS+=(--workspace "$WORKSPACE_ROOT")
+for item in "${SETS[@]}"; do
+  SERVICE_ARGS+=(--set "$item")
+done
+"$INSTALL_DIR/bin/agena" "${SERVICE_ARGS[@]}"
 {
-  printf '#!/usr/bin/env bash\n'
-  printf 'set -euo pipefail\n'
-  printf 'exec %q server' "$INSTALL_DIR/bin/agena"
-  printf ' --host %q --port %q --ui-dir %q' "$HOST" "$PORT" "$INSTALL_DIR/web-dist"
-  if [[ -n "$UI_PASSWORD" ]]; then
-    printf ' --ui-password %q' "$UI_PASSWORD"
-  fi
-  if [[ -n "$WORKSPACE_ROOT" ]]; then
-    printf ' --workspace %q' "$WORKSPACE_ROOT"
-  fi
-  if [[ -n "$DATABASE_PATH" ]]; then
-    printf ' --database-path %q' "$DATABASE_PATH"
-  fi
-  if [[ -n "$DATABASE_URL" ]]; then
-    printf ' --database-url %q' "$DATABASE_URL"
-  fi
-  for item in "${SETS[@]}"; do
-    printf ' --set %q' "$item"
-  done
-  printf '\n'
-} > "$LAUNCHER"
-chmod +x "$LAUNCHER"
-
-if [[ "$OS" == "Linux" ]]; then
-  SERVICE_DIR="$HOME/.config/systemd/user"
-  SERVICE_FILE="$SERVICE_DIR/agena.service"
-  mkdir -p "$SERVICE_DIR"
-  cat > "$SERVICE_FILE" <<EOF
-[Unit]
-Description=Agena server
-After=network.target
-
-[Service]
-ExecStart=$LAUNCHER
-Restart=on-failure
-RestartSec=5
-WorkingDirectory=$INSTALL_DIR
-StandardOutput=append:$INSTALL_DIR/logs/stdout.log
-StandardError=append:$INSTALL_DIR/logs/stderr.log
-
-[Install]
-WantedBy=default.target
-EOF
-
-  systemctl --user daemon-reload
-  systemctl --user enable --now agena.service
-  echo "Installed Agena user service."
-  echo "Status: systemctl --user status agena"
-elif [[ "$OS" == "Darwin" ]]; then
-  # Migrate the legacy shell launch agent to the native lifecycle. Both public
-  # installers must use the same persistent macOS permission host.
-  LEGACY_PLIST="$HOME/Library/LaunchAgents/cn.cxits.agena.plist"
-  if [[ -f "$LEGACY_PLIST" ]]; then
-    launchctl bootout "gui/$(id -u)" "$LEGACY_PLIST" >/dev/null 2>&1 || true
-    rm -f "$LEGACY_PLIST"
-  fi
-  SERVICE_ARGS=(server install --host "$HOST" --port "$PORT" --ui-dir "$INSTALL_DIR/web-dist")
-  [[ -n "$UI_PASSWORD" ]] && SERVICE_ARGS+=(--ui-password "$UI_PASSWORD")
-  [[ -n "$WORKSPACE_ROOT" ]] && SERVICE_ARGS+=(--workspace "$WORKSPACE_ROOT")
-  [[ -n "$DATABASE_PATH" ]] && SERVICE_ARGS+=(--database-path "$DATABASE_PATH")
-  [[ -n "$DATABASE_URL" ]] && SERVICE_ARGS+=(--database-url "$DATABASE_URL")
-  for item in "${SETS[@]}"; do
-    SERVICE_ARGS+=(--set "$item")
-  done
-  "$INSTALL_DIR/bin/agena" "${SERVICE_ARGS[@]}"
-  echo "Status: agena server status"
-  echo "macOS file access setup: agena server permissions"
+  printf 'SERVICE_STATE_SCHEMA=2\n'
+  printf 'DATA_DIR=%q\n' "$DATA_DIR"
+} > "$INSTALL_DIR/service-state.env"
+chmod 600 "$INSTALL_DIR/service-state.env"
+echo "Installed Agena user service. Instance data: $DATA_DIR"
+printf 'Status: %q --data-dir %q server status\n' "$INSTALL_DIR/bin/agena" "$DATA_DIR"
+if [[ "$OS" == "Darwin" ]]; then
+  printf 'macOS file access setup: %q --data-dir %q server permissions\n' "$INSTALL_DIR/bin/agena" "$DATA_DIR"
 fi

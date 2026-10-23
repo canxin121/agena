@@ -29,7 +29,18 @@ pub fn write_config_file_atomically(path: &Path, bytes: &[u8]) -> io::Result<()>
             format!("configuration path has no parent: {}", path.display()),
         )
     })?;
-    fs::create_dir_all(parent)?;
+    let managed = path.starts_with(agena_storage_layout::StorageLayout::current().root());
+    if managed {
+        agena_storage_layout::secure_directory(parent)?;
+        if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "managed configuration cannot be a symbolic link",
+            ));
+        }
+    } else {
+        fs::create_dir_all(parent)?;
+    }
     let permissions = match fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
         Ok(_) => {
@@ -59,6 +70,9 @@ pub fn write_config_file_atomically(path: &Path, bytes: &[u8]) -> io::Result<()>
     if let Some(permissions) = permissions {
         staged.as_file().set_permissions(permissions)?;
         staged.as_file().sync_all()?;
+    }
+    if managed {
+        agena_storage_layout::secure_file(staged.path())?;
     }
     staged
         .persist(path)

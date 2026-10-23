@@ -493,15 +493,23 @@ async fn logs(
 mod tests {
     use super::*;
 
-    async fn manager(path: &std::path::Path) -> InteractiveApps {
+    async fn manager(
+        path: &std::path::Path,
+    ) -> (agena_storage_sqlite::SqliteKernel, InteractiveApps) {
+        let kernel = agena_storage_sqlite::open_kernel_runtime(&format!(
+            "sqlite://{}?mode=rwc",
+            path.join("agena.db").display()
+        ))
+        .await
+        .unwrap();
         let db = Arc::new(
-            ServerStateDb::open_at_path(path.join("state.sqlite"))
+            ServerStateDb::from_store(kernel.instance_state.clone())
                 .await
                 .unwrap(),
         );
         let registry = Arc::new(WorkspacePreviewRegistry::new(db.clone()));
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
-        InteractiveApps::new(db, registry, runtime)
+        (kernel, InteractiveApps::new(db, registry, runtime))
     }
 
     fn manifest(path: &std::path::Path) -> AppManifest {
@@ -565,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn real_backend_lifecycle_is_idempotent_and_preserves_data_and_widget_state() {
         let temp = tempfile::tempdir().unwrap();
-        let apps = manager(temp.path()).await;
+        let (kernel, apps) = manager(temp.path()).await;
         let app = manifest(temp.path());
         let request = SaveApp {
             directory: temp.path().to_string_lossy().into_owned(),
@@ -629,7 +637,10 @@ mod tests {
                 .iter()
                 .any(|task| task["id"] == id && task["done"] == true)
         );
-        let reloaded = manager(temp.path()).await;
+        drop(apps);
+        kernel.ports.clone().shutdown().await.unwrap();
+        drop(kernel);
+        let (_reopened_kernel, reloaded) = manager(temp.path()).await;
         assert_eq!(
             reloaded
                 .record("session", "tasks")
@@ -650,7 +661,7 @@ mod tests {
     #[tokio::test]
     async fn partial_start_rolls_back_new_services_and_rejects_workspace_escape() {
         let temp = tempfile::tempdir().unwrap();
-        let apps = manager(temp.path()).await;
+        let (_kernel, apps) = manager(temp.path()).await;
         let mut app = manifest(temp.path());
         let mut invalid = app.services[0].clone();
         invalid.name = "broken".into();
@@ -692,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn rejected_configuration_change_keeps_every_existing_service() {
         let temp = tempfile::tempdir().unwrap();
-        let apps = manager(temp.path()).await;
+        let (_kernel, apps) = manager(temp.path()).await;
         let mut app = manifest(temp.path());
         let mut second = app.services[0].clone();
         second.name = "second".into();

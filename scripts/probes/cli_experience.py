@@ -66,8 +66,7 @@ def run_cli(
     directory = output / name
     directory.mkdir()
     command = [str(binary), "--server", f"http://127.0.0.1:{api.port}", *arguments]
-    child_environment = {**environment, "AGENA_RUNTIME_BOOTSTRAP_FORBIDDEN": "1",
-                         "AGENA_STATE_DIR": str(directory / "client-state")}
+    child_environment = {**environment, "AGENA_RUNTIME_BOOTSTRAP_FORBIDDEN": "1"}
     expected_bytes = expected.encode("utf-8")
     record: dict[str, Any] = {
         "name": name, "status": "running", "argv": command, "cwd": str(workspace),
@@ -199,7 +198,7 @@ def main() -> int:
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
-        command = [str(binary), "--database-path", str(output / "sessions.db"),
+        command = [str(binary), "--data-dir", str(output / "data"),
                    "server", "--host", "127.0.0.1", "--port", str(port), "--workspace", str(workspace)]
         result["process"] = {"argv": command, "cwd": str(output / "process-cwd"), "env": environment,
                              "spawn_started_ns": fixture.now_ns()}
@@ -208,7 +207,7 @@ def main() -> int:
                                    start_new_session=True)
         result["process"].update(pid=process.pid, spawned_ns=fixture.now_ns())
         api = fixture.Api(f"http://127.0.0.1:{port}", args.timeout, trace)
-        result["identity"] = fixture.wait_server(process, api, output / "server.json")
+        result["identity"] = fixture.wait_server(process, api, output / "data" / "run" / "server.json")
         workspace_id = api.call("POST", "/api/v1/workspaces/resolve",
                                 {"path": str(workspace), "create_if_missing": True})[0]["id"]
 

@@ -2,7 +2,6 @@ use portable_atomic::AtomicU64;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
-    hash::{Hash, Hasher},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, atomic::Ordering},
@@ -26,7 +25,6 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast};
 const DEFAULT_FOLDER_ID: &str = "terminal-default";
 const DEFAULT_FOLDER_NAME: &str = "Default";
 const TERMINAL_UI_STATE_FILENAME: &str = "terminal-ui-state.json";
-const MAX_WORKSPACE_KEY_LEN: usize = 80;
 const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
 static STATE_READS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static STATE_WRITES: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -171,7 +169,7 @@ impl TerminalUiStateStore {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-            options.custom_flags(libc::O_NONBLOCK);
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let file = match options.open(&self.path) {
             Ok(file) => file,
@@ -216,26 +214,24 @@ impl TerminalUiStateStore {
     }
 
     fn persist_to_disk(&self, state: &TerminalUiState) -> Result<(), String> {
-        // Preserve existing file aliases: atomically replace their target.
-        let destination = match std::fs::canonicalize(&self.path) {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.path.clone(),
-            Err(error) => return Err(format!("resolve terminal UI state: {error}")),
-        };
+        let destination = self.path.clone();
         let parent = destination
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        std::fs::create_dir_all(parent)
+        agena_storage_layout::secure_directory(parent)
             .map_err(|error| format!("create terminal UI state dir: {error}"))?;
         let bytes = serde_json::to_vec_pretty(state)
             .map_err(|error| format!("serialize terminal UI state: {error}"))?;
         if bytes.len() > MAX_STATE_BYTES {
             return Err("terminal UI state exceeds the 8 MiB limit".to_owned());
         }
-        let permissions = match std::fs::metadata(&self.path) {
+        let permissions = match std::fs::symlink_metadata(&self.path) {
             Ok(metadata) => {
-                if !metadata.is_file() || metadata.permissions().readonly() {
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || metadata.permissions().readonly()
+                {
                     return Err("terminal UI state must be a writable regular file".to_owned());
                 }
                 Some(metadata.permissions())
@@ -253,6 +249,8 @@ impl TerminalUiStateStore {
                 .set_permissions(permissions)
                 .map_err(|error| format!("set terminal UI state permissions: {error}"))?;
         }
+        agena_storage_layout::secure_file(staged.path())
+            .map_err(|error| format!("secure terminal UI state permissions: {error}"))?;
         staged
             .write_all(&bytes)
             .map_err(|error| format!("write terminal UI state: {error}"))?;
@@ -332,56 +330,10 @@ fn now_millis() -> u64 {
 }
 
 fn workspace_terminal_ui_state_path(workspace_root: &Path) -> PathBuf {
-    project_state_dir(workspace_root)
+    agena_storage_layout::StorageLayout::current()
+        .workspace_dir(workspace_root)
         .join("server")
         .join(TERMINAL_UI_STATE_FILENAME)
-}
-
-fn project_state_dir(workspace_root: &Path) -> PathBuf {
-    agena_home_dir()
-        .join("projects")
-        .join(workspace_key(workspace_root))
-}
-
-fn agena_home_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("agena")
-}
-
-fn workspace_key(workspace_root: &Path) -> String {
-    let normalized = workspace_root.to_string_lossy().replace('\\', "/");
-    sanitize_path(&normalized)
-}
-
-fn sanitize_path(value: &str) -> String {
-    let mut sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-
-    while sanitized.contains("--") {
-        sanitized = sanitized.replace("--", "-");
-    }
-    sanitized = sanitized.trim_matches('-').to_string();
-    if sanitized.is_empty() {
-        sanitized = "workspace".to_string();
-    }
-    if sanitized.len() <= MAX_WORKSPACE_KEY_LEN {
-        return sanitized;
-    }
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    let hash = format!("{:x}", hasher.finish());
-    format!("{}-{hash}", &sanitized[..MAX_WORKSPACE_KEY_LEN])
 }
 
 fn store_for_workspace(workspace_root: &Path) -> Arc<TerminalUiStateStore> {

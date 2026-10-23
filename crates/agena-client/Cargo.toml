@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
+agena-storage-layout = { workspace = true }
 portable-atomic = { workspace = true }
 agena-domain = { workspace = true }
 agena-api = { workspace = true }

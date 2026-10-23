@@ -637,8 +637,14 @@ mod tests {
     #[tokio::test]
     async fn stop_terminates_server_children_even_when_they_ignore_sigterm() {
         let temp = tempfile::tempdir().unwrap();
+        let kernel = agena_storage_sqlite::open_kernel_runtime(&format!(
+            "sqlite://{}?mode=rwc",
+            temp.path().join("agena.db").display()
+        ))
+        .await
+        .unwrap();
         let db = Arc::new(
-            ServerStateDb::open_at_path(temp.path().join("state.sqlite"))
+            ServerStateDb::from_store(kernel.instance_state.clone())
                 .await
                 .unwrap(),
         );

@@ -24,6 +24,7 @@ static APPLICATION_FILE_WORKERS: agena_async::BlockingPool = agena_async::Blocki
 #[derive(Clone)]
 pub struct Application {
     workspace_root: PathBuf,
+    instance_id: String,
     provider_catalog: Arc<dyn ProviderCatalog>,
     model_catalog_runtime: Arc<dyn agena_runtime::ModelCatalogRuntimeService>,
     plugin_runtime: Arc<dyn agena_runtime::PluginRuntimeService>,
@@ -118,6 +119,8 @@ impl Application {
         })?;
         let agena_runtime::RuntimeApplicationServices {
             workspace_root,
+            instance_id,
+            instance_state: _,
             repositories: _,
             provider_catalog,
             model_catalog,
@@ -139,6 +142,9 @@ impl Application {
             plugin_commands,
         } = runtime;
         let application = Self {
+            instance_id: instance_id.ok_or_else(|| {
+                ApplicationError::internal("runtime instance identity is unavailable")
+            })?,
             provider_catalog,
             model_catalog_runtime: model_catalog,
             plugin_runtime: plugins,
@@ -174,6 +180,10 @@ impl Application {
         };
         application.spawn_notification_aggregator();
         Ok(application)
+    }
+
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     /// Provider catalog port used by application-facing provider queries.

@@ -3480,14 +3480,14 @@ impl WebPlugin {
                         plugin_internal_error_with_context("invalid screenshot data", &error)
                     })
             })?;
-        let relative = input
-            .path
-            .clone()
-            .unwrap_or_else(|| format!(".agena/artifacts/browser/{}.png", uuid::Uuid::new_v4()));
-        let path = if Path::new(relative.as_str()).is_absolute() {
-            PathBuf::from(relative.as_str())
-        } else {
-            self.workspace_root()?.join(relative.as_str())
+        let workspace = self.workspace_root()?;
+        let path = match input.path.as_deref() {
+            Some(path) if Path::new(path).is_absolute() => PathBuf::from(path),
+            Some(path) => workspace.join(path),
+            None => agena_storage_layout::StorageLayout::current()
+                .artifacts_dir(&workspace)
+                .join("browser")
+                .join(format!("{}.png", uuid::Uuid::new_v4())),
         };
         let size_bytes = bytes.len() as u64;
         crate::artifact_file::persist_replace_or_create(path.clone(), bytes, "browser screenshot")
@@ -3592,9 +3592,9 @@ impl WebPlugin {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.validate_network_target(&url).await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
-        let download_dir = self
-            .workspace_root()?
-            .join(".agena/artifacts/browser/downloads")
+        let download_dir = agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(&self.workspace_root()?)
+            .join("browser/downloads")
             .join(uuid::Uuid::new_v4().simple().to_string());
         let endpoint = self.browser_endpoint().await?;
         let browser_context_id = self

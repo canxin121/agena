@@ -947,8 +947,14 @@ mod preview_delta_tests {
     #[tokio::test]
     async fn concurrent_mutations_preserve_sessions_and_exact_arguments() {
         let directory = tempfile::tempdir().unwrap();
+        let kernel = agena_storage_sqlite::open_kernel_runtime(&format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("agena.db").display()
+        ))
+        .await
+        .unwrap();
         let db = Arc::new(
-            db::ServerStateDb::open_at_path(directory.path().join("state.sqlite"))
+            db::ServerStateDb::from_store(kernel.instance_state.clone())
                 .await
                 .unwrap(),
         );
@@ -997,8 +1003,14 @@ mod preview_delta_tests {
     #[tokio::test]
     async fn preview_delta_failed_reads_do_not_cache_an_empty_registry() {
         let directory = tempfile::tempdir().unwrap();
+        let kernel = agena_storage_sqlite::open_kernel_runtime(&format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("agena.db").display()
+        ))
+        .await
+        .unwrap();
         let db = Arc::new(
-            db::ServerStateDb::open_at_path(directory.path().join("state.sqlite"))
+            db::ServerStateDb::from_store(kernel.instance_state.clone())
                 .await
                 .unwrap(),
         );

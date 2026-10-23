@@ -1,15 +1,13 @@
 //! MCP credential stores.
 //!
-//! [`KeyringTokenStore`] is the default durable store used by the runtime.
-//! It keeps the bearer value in the platform credential manager under the
-//! dedicated `agena.mcp` service. Server identifiers are SHA-256 derived
-//! before becoming keyring account names so arbitrary config identifiers do
-//! not create invalid platform account strings or expose server names in the
-//! credential index.
+//! [`FileTokenStore`] is the default durable store used by the runtime.
+//! It keeps the bearer value in the private secret store under the
+//! dedicated `agena.mcp` namespace. Server identifiers are SHA-256 derived
+//! before becoming secret-store keys, keeping identifiers out of the index.
 
 use std::sync::Arc;
 
-use agena_keyring_store::{KeyringSecretStore, SecretStore, SecretStoreError};
+use agena_secret_store::{FileSecretStore, SecretStore, SecretStoreError};
 use async_trait::async_trait;
 use oauth2::TokenResponse;
 use rmcp::transport::{AuthError, CredentialStore, StoredCredentials};
@@ -18,25 +16,26 @@ use thiserror::Error;
 
 use crate::{McpCredentialState, TokenStore};
 
-pub const MCP_KEYRING_SERVICE: &str = "agena.mcp";
-const KEYRING_KEY_PREFIX: &str = "mcp-bearer-";
-const OAUTH_KEYRING_KEY_PREFIX: &str = "mcp-oauth-";
-pub(crate) static KEYRING_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
+pub const MCP_SECRET_NAMESPACE: &str = "agena.mcp";
+const BEARER_SECRET_KEY_PREFIX: &str = "mcp-bearer-";
+const OAUTH_SECRET_KEY_PREFIX: &str = "mcp-oauth-";
+pub(crate) static SECRET_STORE_WORKERS: agena_async::BlockingPool =
+    agena_async::BlockingPool::new(4);
 /// Keep this aligned with rmcp's refresh threshold. The health projection is
 /// intentionally read-only: it tells callers that a connection is likely to
 /// refresh soon, but never performs that refresh itself.
 const OAUTH_REFRESH_BUFFER_SECS: u64 = 30;
 
 /// Redacted state of the single OAuth credential record associated with an
-/// MCP server. No variant conveys a client id, token, scope, keyring account,
+/// MCP server. No variant conveys a client id, token, scope, secret-store key,
 /// or error payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthCredentialState {
-    /// No non-empty record exists in the dedicated OAuth keyring slot.
+    /// No non-empty record exists in the dedicated OAuth secret-store slot.
     Missing,
     /// A record parsed as `rmcp::transport::StoredCredentials`.
     Configured,
-    /// The keyring could not be read or its value was not a valid credential
+    /// The secret store could not be read or its value was not a valid credential
     /// record. The underlying error is deliberately not surfaced in status.
     Unreadable,
 }
@@ -108,36 +107,36 @@ impl OAuthCredentialHealth {
 pub enum TokenStoreError {
     #[error("invalid token-store input: {0}")]
     InvalidInput(String),
-    #[error("keyring error: {0}")]
-    Keyring(#[from] SecretStoreError),
+    #[error("secret store error: {0}")]
+    SecretStore(#[from] SecretStoreError),
 }
 
-/// System-keyring-backed MCP bearer store. The public methods make it usable
+/// Application-managed MCP bearer store. The public methods make it usable
 /// by future login/refresh/logout flows; the [`TokenStore`] implementation is
 /// deliberately read-only because connection setup only needs bearer lookup.
 #[derive(Clone)]
-pub struct KeyringTokenStore {
+pub struct FileTokenStore {
     store: Arc<dyn SecretStore>,
 }
 
-impl std::fmt::Debug for KeyringTokenStore {
+impl std::fmt::Debug for FileTokenStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("KeyringTokenStore")
-            .field("service", &MCP_KEYRING_SERVICE)
+            .debug_struct("FileTokenStore")
+            .field("namespace", &MCP_SECRET_NAMESPACE)
             .finish_non_exhaustive()
     }
 }
 
-impl Default for KeyringTokenStore {
+impl Default for FileTokenStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl KeyringTokenStore {
+impl FileTokenStore {
     pub fn new() -> Self {
-        Self::with_secret_store(Arc::new(KeyringSecretStore::new(MCP_KEYRING_SERVICE)))
+        Self::with_secret_store(Arc::new(FileSecretStore::new(MCP_SECRET_NAMESPACE)))
     }
 
     pub fn with_secret_store(store: Arc<dyn SecretStore>) -> Self {
@@ -149,29 +148,29 @@ impl KeyringTokenStore {
         let server = normalized_server_name(server)?;
         let token = normalized_token(token)?;
         self.store
-            .set_secret(keyring_key(server.as_str()).as_str(), token.as_str())
+            .set_secret(bearer_secret_key(server.as_str()).as_str(), token.as_str())
             .map_err(TokenStoreError::from)
     }
 
     /// Remove the durable bearer token. Deleting a missing value is
-    /// intentionally idempotent, matching keyring-store semantics.
+    /// intentionally idempotent, matching secret-store semantics.
     pub fn delete(&self, server: &str) -> Result<(), TokenStoreError> {
         let server = normalized_server_name(server)?;
         self.store
-            .delete_secret(keyring_key(server.as_str()).as_str())
+            .delete_secret(bearer_secret_key(server.as_str()).as_str())
             .map_err(TokenStoreError::from)
     }
 
     pub fn bearer_result(&self, server: &str) -> Result<Option<String>, TokenStoreError> {
         let server = normalized_server_name(server)?;
         self.store
-            .get_secret(keyring_key(server.as_str()).as_str())
+            .get_secret(bearer_secret_key(server.as_str()).as_str())
             .map_err(TokenStoreError::from)
             .map(|token| token.filter(|value| !value.trim().is_empty()))
     }
 }
 
-impl TokenStore for KeyringTokenStore {
+impl TokenStore for FileTokenStore {
     fn bearer(&self, server: &str) -> Option<String> {
         match self.bearer_result(server) {
             Ok(token) => token,
@@ -179,7 +178,7 @@ impl TokenStore for KeyringTokenStore {
                 tracing::warn!(
                     server,
                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to read the MCP bearer token from the system keyring",
+                        "failed to read the MCP bearer token from the private secret store",
                         &error,
                     ),
                     "MCP bearer token is unavailable"
@@ -208,33 +207,30 @@ impl TokenStore for KeyringTokenStore {
     }
 }
 
-/// System-keyring credential store for one MCP OAuth server. OAuth client
+/// Application-managed credential store for one MCP OAuth server. OAuth client
 /// registration, access tokens and refresh tokens are one JSON payload owned
 /// by `rmcp`; they are never copied into normal configuration, status
 /// responses, or logs. The key has a separate versioned prefix from manual
 /// bearer credentials, so one logout cannot silently remove the other.
 #[derive(Clone)]
-pub struct KeyringOAuthCredentialStore {
+pub struct FileOAuthCredentialStore {
     store: Arc<dyn SecretStore>,
     server: String,
 }
 
-impl std::fmt::Debug for KeyringOAuthCredentialStore {
+impl std::fmt::Debug for FileOAuthCredentialStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("KeyringOAuthCredentialStore")
-            .field("service", &MCP_KEYRING_SERVICE)
+            .debug_struct("FileOAuthCredentialStore")
+            .field("namespace", &MCP_SECRET_NAMESPACE)
             .field("server", &"[HASHED]")
             .finish_non_exhaustive()
     }
 }
 
-impl KeyringOAuthCredentialStore {
+impl FileOAuthCredentialStore {
     pub fn new(server: impl AsRef<str>) -> Result<Self, TokenStoreError> {
-        Self::with_secret_store(
-            server,
-            Arc::new(KeyringSecretStore::new(MCP_KEYRING_SERVICE)),
-        )
+        Self::with_secret_store(server, Arc::new(FileSecretStore::new(MCP_SECRET_NAMESPACE)))
     }
 
     pub fn with_secret_store(
@@ -249,7 +245,7 @@ impl KeyringOAuthCredentialStore {
 
     pub fn delete(&self) -> Result<(), TokenStoreError> {
         self.store
-            .delete_secret(oauth_keyring_key(self.server.as_str()).as_str())
+            .delete_secret(oauth_secret_key(self.server.as_str()).as_str())
             .map_err(TokenStoreError::from)
     }
 
@@ -260,7 +256,7 @@ impl KeyringOAuthCredentialStore {
     pub fn health(&self) -> OAuthCredentialHealth {
         let raw = match self
             .store
-            .get_secret(oauth_keyring_key(self.server.as_str()).as_str())
+            .get_secret(oauth_secret_key(self.server.as_str()).as_str())
         {
             Ok(Some(value)) if !value.trim().is_empty() => value,
             Ok(Some(_)) | Ok(None) => return OAuthCredentialHealth::missing(),
@@ -268,7 +264,7 @@ impl KeyringOAuthCredentialStore {
                 tracing::warn!(
                     server = %self.server,
                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to inspect MCP OAuth credentials in the system keyring",
+                        "failed to inspect MCP OAuth credentials in the private secret store",
                         &error,
                     ),
                     "MCP OAuth credential is unreadable"
@@ -278,15 +274,9 @@ impl KeyringOAuthCredentialStore {
         };
         let credentials = match serde_json::from_str::<StoredCredentials>(raw.as_str()) {
             Ok(credentials) => credentials,
-            Err(error) => {
-                tracing::warn!(
-                    server = %self.server,
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "failed to decode MCP OAuth credentials from the system keyring",
-                        &error,
-                    ),
-                    "MCP OAuth credential is unreadable"
-                );
+            Err(_) => {
+                // Deserializer errors can contain raw credential fragments.
+                tracing::warn!(server = %self.server, "MCP OAuth credential document is invalid");
                 return OAuthCredentialHealth::unreadable();
             }
         };
@@ -329,15 +319,21 @@ impl KeyringOAuthCredentialStore {
 }
 
 #[async_trait]
-impl CredentialStore for KeyringOAuthCredentialStore {
+impl CredentialStore for FileOAuthCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
         let store = Arc::clone(&self.store);
-        let key = oauth_keyring_key(&self.server);
-        KEYRING_WORKERS
+        let key = oauth_secret_key(&self.server);
+        SECRET_STORE_WORKERS
             .run(move || {
                 let raw = store.get_secret(&key).map_err(Self::auth_error)?;
                 raw.filter(|value| !value.trim().is_empty())
-                    .map(|value| serde_json::from_str(value.as_str()).map_err(Self::auth_error))
+                    .map(|value| {
+                        serde_json::from_str(value.as_str()).map_err(|_| {
+                            AuthError::InternalError(
+                                "invalid MCP OAuth credential document".to_owned(),
+                            )
+                        })
+                    })
                     .transpose()
             })
             .await
@@ -346,8 +342,8 @@ impl CredentialStore for KeyringOAuthCredentialStore {
 
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
         let store = Arc::clone(&self.store);
-        let key = oauth_keyring_key(&self.server);
-        KEYRING_WORKERS
+        let key = oauth_secret_key(&self.server);
+        SECRET_STORE_WORKERS
             .run(move || {
                 let raw = serde_json::to_string(&credentials).map_err(Self::auth_error)?;
                 store.set_secret(&key, &raw).map_err(Self::auth_error)
@@ -358,8 +354,8 @@ impl CredentialStore for KeyringOAuthCredentialStore {
 
     async fn clear(&self) -> Result<(), AuthError> {
         let store = Arc::clone(&self.store);
-        let key = oauth_keyring_key(&self.server);
-        KEYRING_WORKERS
+        let key = oauth_secret_key(&self.server);
+        SECRET_STORE_WORKERS
             .run(move || store.delete_secret(&key).map_err(Self::auth_error))
             .await
             .map_err(Self::auth_error)?
@@ -386,10 +382,10 @@ fn normalized_token(token: &str) -> Result<String, TokenStoreError> {
     Ok(token.to_owned())
 }
 
-fn keyring_key(server: &str) -> String {
+fn bearer_secret_key(server: &str) -> String {
     let digest = Sha256::digest(server.as_bytes());
-    let mut key = String::with_capacity(KEYRING_KEY_PREFIX.len() + digest.len() * 2);
-    key.push_str(KEYRING_KEY_PREFIX);
+    let mut key = String::with_capacity(BEARER_SECRET_KEY_PREFIX.len() + digest.len() * 2);
+    key.push_str(BEARER_SECRET_KEY_PREFIX);
     for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(key, "{byte:02x}");
@@ -397,10 +393,10 @@ fn keyring_key(server: &str) -> String {
     key
 }
 
-fn oauth_keyring_key(server: &str) -> String {
+fn oauth_secret_key(server: &str) -> String {
     let digest = Sha256::digest(server.as_bytes());
-    let mut key = String::with_capacity(OAUTH_KEYRING_KEY_PREFIX.len() + digest.len() * 2);
-    key.push_str(OAUTH_KEYRING_KEY_PREFIX);
+    let mut key = String::with_capacity(OAUTH_SECRET_KEY_PREFIX.len() + digest.len() * 2);
+    key.push_str(OAUTH_SECRET_KEY_PREFIX);
     for byte in digest {
         use std::fmt::Write as _;
         let _ = write!(key, "{byte:02x}");
@@ -414,15 +410,15 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use agena_keyring_store::{SecretStore, SecretStoreError};
+    use agena_secret_store::{SecretStore, SecretStoreError};
     use oauth2::{AccessToken, RefreshToken, basic::BasicTokenType};
 
     use rmcp::transport::auth::OAuthTokenResponse;
     use rmcp::transport::{CredentialStore, StoredCredentials};
 
     use super::{
-        KeyringOAuthCredentialStore, KeyringTokenStore, OAuthCredentialState, OAuthExpiryState,
-        TokenStore, keyring_key, oauth_keyring_key,
+        FileOAuthCredentialStore, FileTokenStore, OAuthCredentialState, OAuthExpiryState,
+        TokenStore, bearer_secret_key, oauth_secret_key,
     };
 
     #[derive(Default)]
@@ -448,9 +444,9 @@ mod tests {
     }
 
     #[test]
-    fn keyring_store_uses_hashed_server_keys_and_has_a_full_lifecycle() {
+    fn file_store_uses_hashed_server_keys_and_has_a_full_lifecycle() {
         let backing = std::sync::Arc::new(InMemorySecretStore::default());
-        let store = KeyringTokenStore::with_secret_store(backing.clone());
+        let store = FileTokenStore::with_secret_store(backing.clone());
 
         store
             .put_bearer("example-server", " bearer-value ")
@@ -464,7 +460,7 @@ mod tests {
                 .0
                 .lock()
                 .expect("lock")
-                .contains_key(keyring_key("example-server").as_str())
+                .contains_key(bearer_secret_key("example-server").as_str())
         );
         assert!(
             !backing
@@ -481,9 +477,8 @@ mod tests {
     #[tokio::test]
     async fn oauth_store_is_separate_hashed_key_and_clears_its_full_record() {
         let backing = std::sync::Arc::new(InMemorySecretStore::default());
-        let store =
-            KeyringOAuthCredentialStore::with_secret_store("example-server", backing.clone())
-                .expect("oauth store");
+        let store = FileOAuthCredentialStore::with_secret_store("example-server", backing.clone())
+            .expect("oauth store");
         let credentials = StoredCredentials::new(
             "registered-client".to_owned(),
             None,
@@ -497,8 +492,8 @@ mod tests {
         assert_eq!(loaded.granted_scopes, ["mcp:read"]);
         {
             let guard = backing.0.lock().expect("lock");
-            assert!(guard.contains_key(oauth_keyring_key("example-server").as_str()));
-            assert!(!guard.contains_key(keyring_key("example-server").as_str()));
+            assert!(guard.contains_key(oauth_secret_key("example-server").as_str()));
+            assert!(!guard.contains_key(bearer_secret_key("example-server").as_str()));
             assert!(!guard.contains_key("example-server"));
         }
 
@@ -509,9 +504,8 @@ mod tests {
     #[test]
     fn oauth_health_is_redacted_and_classifies_missing_unreadable_and_known_expiry() {
         let backing = std::sync::Arc::new(InMemorySecretStore::default());
-        let store =
-            KeyringOAuthCredentialStore::with_secret_store("example-server", backing.clone())
-                .expect("oauth store");
+        let store = FileOAuthCredentialStore::with_secret_store("example-server", backing.clone())
+            .expect("oauth store");
 
         let missing = store.health();
         assert_eq!(missing.credential_state, OAuthCredentialState::Missing);
@@ -520,7 +514,7 @@ mod tests {
 
         backing
             .set_secret(
-                oauth_keyring_key("example-server").as_str(),
+                oauth_secret_key("example-server").as_str(),
                 "not valid json",
             )
             .expect("write malformed record");
@@ -553,7 +547,7 @@ mod tests {
         let encoded_valid = serde_json::to_string(&valid).expect("serialize credential");
         backing
             .set_secret(
-                oauth_keyring_key("example-server").as_str(),
+                oauth_secret_key("example-server").as_str(),
                 encoded_valid.as_str(),
             )
             .expect("write credential");
@@ -581,7 +575,7 @@ mod tests {
         let encoded_expiring = serde_json::to_string(&expiring).expect("serialize credential");
         backing
             .set_secret(
-                oauth_keyring_key("example-server").as_str(),
+                oauth_secret_key("example-server").as_str(),
                 encoded_expiring.as_str(),
             )
             .expect("write expiring credential");
@@ -607,7 +601,7 @@ mod tests {
         let encoded_expired = serde_json::to_string(&expired).expect("serialize credential");
         backing
             .set_secret(
-                oauth_keyring_key("example-server").as_str(),
+                oauth_secret_key("example-server").as_str(),
                 encoded_expired.as_str(),
             )
             .expect("write expired credential");

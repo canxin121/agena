@@ -7,7 +7,7 @@ pub(super) fn stage(path: &Path, bytes: &[u8]) -> io::Result<tempfile::NamedTemp
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "memory path has no parent"))?;
-    fs::create_dir_all(parent)?;
+    agena_storage_layout::secure_directory(parent)?;
     let permissions = match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => Some(meta.permissions()),
         Ok(_) => {
@@ -32,6 +32,7 @@ pub(super) fn stage(path: &Path, bytes: &[u8]) -> io::Result<tempfile::NamedTemp
     if let Some(permissions) = permissions {
         staged.as_file().set_permissions(permissions)?;
     }
+    agena_storage_layout::secure_file(staged.path())?;
     staged.as_file().sync_all()?;
     Ok(staged)
 }

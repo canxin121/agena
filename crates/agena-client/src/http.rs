@@ -3600,6 +3600,7 @@ mod sse_contract_tests {
             "loaded_at": "2026-08-16T00:00:00Z",
             "database_connected": true,
             "server": {
+                "instance_id": "f7f6202d-18f8-4a91-950c-5d11ef148358",
                 "id": "b6cb9914-e388-4e90-8b40-9be12e65ecdb",
                 "pid": 4242,
                 "started_at": "2026-08-16T00:00:00Z",
@@ -3893,6 +3894,7 @@ mod sse_contract_tests {
             "loaded_at": "2026-08-15T01:02:03Z",
             "database_connected": true,
             "server": {
+                "instance_id": "f7f6202d-18f8-4a91-950c-5d11ef148358",
                 "id": server_id,
                 "pid": 4242,
                 "started_at": "2026-08-15T00:00:00Z",

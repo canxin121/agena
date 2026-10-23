@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Agena runtime configuration loading and resolution"
 
 [dependencies]
+agena-storage-layout = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 portable-atomic = { workspace = true }

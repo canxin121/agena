@@ -71,7 +71,7 @@ pub struct RuntimeMcpServerStatus {
     pub oauth_health: Option<RuntimeMcpOAuthHealth>,
     /// Redacted credential conflict for coexisting, separately scoped bearer
     /// and OAuth records. It never changes which credential a connection
-    /// uses and contains no token or keyring detail.
+    /// uses and contains no token or secret-store detail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_conflict: Option<RuntimeMcpCredentialConflict>,
 }

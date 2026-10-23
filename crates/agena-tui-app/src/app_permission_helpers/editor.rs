@@ -808,8 +808,8 @@ mod tests {
             rules
                 .items
                 .iter()
-                .any(|item| item.label == access_read("<home>/agena/projects")
-                    || item.label == access_read("<home>/agena/projects/**")),
+                .any(|item| item.label == access_read("<state>")
+                    || item.label == access_read("<state>/**")),
             "the runtime state paths are `path.rules` entries"
         );
     }

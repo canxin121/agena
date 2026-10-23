@@ -52,7 +52,6 @@ async fn main() -> anyhow::Result<()> {
         workspace_root: Some(args.workspace.canonicalize()?),
         config_path: args.config,
         database_path: Some(probe_root.path().join("sessions.db")),
-        scheduler_database_path: Some(probe_root.path().join("scheduler.db")),
         ..Default::default()
     })
     .await?;

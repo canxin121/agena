@@ -38,11 +38,10 @@ const INFO: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 pub(super) fn bundle_path() -> Result<PathBuf> {
-    let record = super::server_record::record_path();
-    let parent = record
-        .parent()
-        .context("server record path has no parent")?;
-    Ok(parent.join("macos").join("Agena.app"))
+    Ok(agena_storage_layout::StorageLayout::current()
+        .root()
+        .join("macos")
+        .join("Agena.app"))
 }
 
 fn executable(bundle: &Path) -> PathBuf {

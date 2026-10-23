@@ -109,7 +109,19 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
     Ok(Some(PathBuf::from(lock_path)))
 }
 
-/// Create or validate the durable scheduler schema and add missing derived indexes.
+/// All scheduler declarations, composed into the service instance schema by
+/// its database owner. Runtime consumers only receive an initialized pool.
+pub fn declarations() -> impl Iterator<Item = &'static str> {
+    TABLES
+        .iter()
+        .chain(INDEXES)
+        .chain(PERFORMANCE_INDEXES)
+        .copied()
+}
+
+/// Initialize an isolated scheduler database for fixtures and standalone
+/// embedders. The Agena service composes [`declarations`] into its one schema
+/// instead of invoking a second module-specific initializer.
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
     let objects = schema_objects(db).await?;

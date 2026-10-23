@@ -40,14 +40,13 @@ where
         .map(|tools| tools.map(ToolPermissionConfig::with_canonical_tool_names))
 }
 
-/// The path patterns of the runtime's own per-workspace state directory
-/// (`~/.agena/projects/<workspace-key>/`), shared with `agena-runtime-tools`'
-/// `project_state_dir`. The `<home>` alias resolves to the same `HOME` /
-/// `USERPROFILE` the runtime's `agena_home_dir()` reads.
-pub const RUNTIME_STATE_PATH: &str = "<home>/agena/projects";
+/// The selected instance's managed directory for the current workspace.
+/// The permission matcher resolves this alias per request; the instance's
+/// credentials and other workspaces are outside this grant.
+pub const RUNTIME_STATE_PATH: &str = "<state>";
 /// The same directory and everything under it. The alias itself matches only
 /// the root, so the contents need their own entry.
-pub const RUNTIME_STATE_PATH_GLOB: &str = "<home>/agena/projects/**";
+pub const RUNTIME_STATE_PATH_GLOB: &str = "<state>/**";
 
 /// The command-class keywords a `tools.rules.<tool>` entry may use instead of a
 /// command pattern.

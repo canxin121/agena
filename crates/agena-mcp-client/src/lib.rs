@@ -24,6 +24,6 @@ pub use protocol::{
     ToolDescriptor,
 };
 pub use token_store::{
-    KeyringOAuthCredentialStore, KeyringTokenStore, MCP_KEYRING_SERVICE, OAuthCredentialHealth,
+    FileOAuthCredentialStore, FileTokenStore, MCP_SECRET_NAMESPACE, OAuthCredentialHealth,
     OAuthCredentialState, OAuthExpiryState, TokenStoreError,
 };

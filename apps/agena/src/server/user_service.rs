@@ -15,17 +15,42 @@ use std::{
 use agena_cli::ServerArgs;
 use anyhow::{Context, Result, bail};
 
+fn service_name_for(root: &Path, prefix: &str, suffix: &str) -> String {
+    let key = agena_storage_layout::workspace_key(root);
+    format!("{prefix}{key}{suffix}")
+}
+
 #[cfg(target_os = "macos")]
-const SERVICE_LABEL: &str = "com.agena.server";
+fn service_label() -> String {
+    service_name_for(
+        agena_storage_layout::StorageLayout::current().root(),
+        "com.agena.server.",
+        "",
+    )
+}
+
 #[cfg(target_os = "linux")]
-const SYSTEMD_UNIT_NAME: &str = "agena-server.service";
-#[cfg(target_os = "windows")]
-const WINDOWS_TASK_NAME: &str = "Agena Server";
+fn systemd_unit_name() -> String {
+    service_name_for(
+        agena_storage_layout::StorageLayout::current().root(),
+        "agena-server-",
+        ".service",
+    )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_task_name() -> String {
+    service_name_for(
+        agena_storage_layout::StorageLayout::current().root(),
+        "Agena Server ",
+        "",
+    )
+}
 
 #[cfg(target_os = "windows")]
 fn windows_task_exists() -> bool {
     Command::new("schtasks.exe")
-        .args(["/Query", "/TN", WINDOWS_TASK_NAME])
+        .args(["/Query", "/TN", windows_task_name().as_str()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -51,19 +76,12 @@ pub(crate) fn is_installed() -> bool {
 pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let path = service_file_path()?;
     let executable = std::env::current_exe().context("failed to resolve Agena executable")?;
-    let record_path = super::server_record::record_path();
-    let state_dir = record_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let log_path = state_dir.join("logs").join("server-service.log");
+    let log_path = agena_storage_layout::StorageLayout::current()
+        .logs_dir()
+        .join("server-service.log");
     if let Some(parent) = log_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create service log directory {}",
-                parent.display()
-            )
-        })?;
+        agena_storage_layout::secure_directory(parent)
+            .context("failed to create private service log directory")?;
     }
     let arguments = server_arguments(args)?;
 
@@ -80,7 +98,6 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let contents = launchd_plist(
         executable.as_os_str(),
         arguments.as_slice(),
-        record_path.as_path(),
         log_path.as_path(),
         args.ui_password.as_deref(),
     )?;
@@ -88,7 +105,6 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let contents = systemd_unit(
         executable.as_os_str(),
         arguments.as_slice(),
-        record_path.as_path(),
         args.ui_password.as_deref(),
     )?;
     #[cfg(target_os = "windows")]
@@ -164,14 +180,13 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--set".into());
         arguments.push(expression.into());
     }
-    if let Some(database_url) = &args.database_url {
-        arguments.push("--database-url".into());
-        arguments.push(database_url.into());
-    }
-    if let Some(database_path) = &args.database_path {
-        arguments.push("--database-path".into());
-        arguments.push(database_path.as_os_str().to_owned());
-    }
+    arguments.push("--data-dir".into());
+    arguments.push(
+        agena_storage_layout::StorageLayout::current()
+            .root()
+            .as_os_str()
+            .to_owned(),
+    );
     arguments.push("server".into());
     arguments.push("--host".into());
     arguments.push(args.host.as_str().into());
@@ -233,7 +248,7 @@ fn service_file_path() -> Result<PathBuf> {
         Ok(home_dir()?
             .join("Library")
             .join("LaunchAgents")
-            .join(format!("{SERVICE_LABEL}.plist")))
+            .join(format!("{}.plist", service_label())))
     }
     #[cfg(target_os = "linux")]
     {
@@ -241,7 +256,10 @@ fn service_file_path() -> Result<PathBuf> {
             .map(PathBuf::from)
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(home_dir()?.join(".config"));
-        Ok(base.join("systemd").join("user").join(SYSTEMD_UNIT_NAME))
+        Ok(base
+            .join("systemd")
+            .join("user")
+            .join(systemd_unit_name().as_str()))
     }
     #[cfg(target_os = "windows")]
     {
@@ -314,7 +332,6 @@ fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
 fn launchd_plist(
     executable: &OsStr,
     arguments: &[OsString],
-    record_path: &Path,
     log_path: &Path,
     ui_password: Option<&str>,
 ) -> Result<String> {
@@ -323,10 +340,7 @@ fn launchd_plist(
     for argument in arguments {
         program_arguments.push(os_text(argument.as_os_str(), "service argument")?);
     }
-    let mut environment = vec![(
-        "AGENA_SERVER_RECORD",
-        path_text(record_path, "server record path")?,
-    )];
+    let mut environment = Vec::new();
     if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
         environment.push(("AGENA_SERVER_UI_PASSWORD", password.to_owned()));
     }
@@ -347,13 +361,14 @@ fn launchd_plist(
         .collect::<Vec<_>>()
         .join("\n");
     let log_path = path_text(log_path, "service log path")?;
+    let service_label = service_label();
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
 <plist version=\"1.0\">\n\
   <dict>\n\
     <key>Label</key>\n\
-    <string>{SERVICE_LABEL}</string>\n\
+    <string>{service_label}</string>\n\
     <key>AssociatedBundleIdentifiers</key>\n\
     <array><string>{}</string></array>\n\
     <key>ProgramArguments</key>\n\
@@ -397,7 +412,6 @@ fn windows_task_file_bytes(contents: &str) -> Vec<u8> {
 fn systemd_unit(
     executable: &OsStr,
     arguments: &[OsString],
-    record_path: &Path,
     ui_password: Option<&str>,
 ) -> Result<String> {
     let mut command = vec![systemd_quote(
@@ -408,16 +422,7 @@ fn systemd_unit(
             os_text(argument.as_os_str(), "service argument")?.as_str(),
         )?);
     }
-    let mut environment = vec![format!(
-        "Environment={}",
-        systemd_quote(
-            format!(
-                "AGENA_SERVER_RECORD={}",
-                path_text(record_path, "server record path")?
-            )
-            .as_str()
-        )?
-    )];
+    let mut environment = Vec::new();
     if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
         environment.push(format!(
             "Environment={}",
@@ -449,6 +454,7 @@ fn os_text(value: &OsStr, label: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{label} is not valid UTF-8"))
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn path_text(path: &Path, label: &str) -> Result<String> {
     os_text(path.as_os_str(), label)
 }
@@ -545,6 +551,7 @@ fn windows_task_xml_for_user(
 <Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n\
   <RegistrationInfo>\n\
     <Description>Agena server</Description>\n\
+    <URI>\\{}</URI>\n\
   </RegistrationInfo>\n\
   <Triggers>\n\
     <LogonTrigger>\n\
@@ -580,6 +587,7 @@ fn windows_task_xml_for_user(
     </Exec>\n\
   </Actions>\n\
 </Task>\n",
+        xml_escape(windows_task_name().as_str()),
         xml_escape(user_id),
         xml_escape(user_id),
         xml_escape(executable.as_str()),
@@ -632,7 +640,8 @@ fn reload_and_start(path: &Path) -> Result<()> {
         "launchctl bootstrap",
     )?;
     run_command(
-        Command::new("launchctl").args(["enable", format!("{domain}/{SERVICE_LABEL}").as_str()]),
+        Command::new("launchctl")
+            .args(["enable", format!("{domain}/{}", service_label()).as_str()]),
         "launchctl enable",
     )
 }
@@ -640,7 +649,7 @@ fn reload_and_start(path: &Path) -> Result<()> {
 #[cfg(target_os = "macos")]
 fn start_service(path: &Path) -> Result<()> {
     let domain = launchd_domain();
-    let target = format!("{domain}/{SERVICE_LABEL}");
+    let target = format!("{domain}/{}", service_label());
     let bootstrap = Command::new("launchctl")
         .args(["bootstrap", domain.as_str()])
         .arg(path)
@@ -681,18 +690,18 @@ fn disable_before_uninstall() -> Result<()> {
 #[cfg(target_os = "linux")]
 fn reload_and_start(_path: &Path) -> Result<()> {
     run_systemctl(["daemon-reload"])?;
-    run_systemctl(["enable", "--now", SYSTEMD_UNIT_NAME])
+    run_systemctl(["enable", "--now", systemd_unit_name().as_str()])
 }
 
 #[cfg(target_os = "linux")]
 fn start_service(_path: &Path) -> Result<()> {
-    run_systemctl(["start", SYSTEMD_UNIT_NAME])
+    run_systemctl(["start", systemd_unit_name().as_str()])
 }
 
 #[cfg(target_os = "linux")]
 fn stop_service(_path: &Path) -> Result<()> {
     let status = Command::new("systemctl")
-        .args(["--user", "stop", SYSTEMD_UNIT_NAME])
+        .args(["--user", "stop", systemd_unit_name().as_str()])
         .status()
         .context("failed to execute systemctl --user stop")?;
     if !status.success() && super::server_record::record_path().exists() {
@@ -705,21 +714,21 @@ fn stop_service(_path: &Path) -> Result<()> {
 fn reload_after_uninstall() -> Result<()> {
     run_systemctl(["daemon-reload"])?;
     let _ = Command::new("systemctl")
-        .args(["--user", "reset-failed", SYSTEMD_UNIT_NAME])
+        .args(["--user", "reset-failed", systemd_unit_name().as_str()])
         .status();
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 fn disable_before_uninstall() -> Result<()> {
-    run_systemctl(["disable", SYSTEMD_UNIT_NAME])
+    run_systemctl(["disable", systemd_unit_name().as_str()])
 }
 
 #[cfg(target_os = "windows")]
 fn reload_and_start(path: &Path) -> Result<()> {
     run_command(
         Command::new("schtasks.exe")
-            .args(["/Create", "/TN", WINDOWS_TASK_NAME, "/XML"])
+            .args(["/Create", "/TN", windows_task_name().as_str(), "/XML"])
             .arg(path)
             .arg("/F"),
         "schtasks /Create",
@@ -730,7 +739,7 @@ fn reload_and_start(path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn start_service(_path: &Path) -> Result<()> {
     run_command(
-        Command::new("schtasks.exe").args(["/Run", "/TN", WINDOWS_TASK_NAME]),
+        Command::new("schtasks.exe").args(["/Run", "/TN", windows_task_name().as_str()]),
         "schtasks /Run",
     )
 }
@@ -738,7 +747,7 @@ fn start_service(_path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn stop_service(_path: &Path) -> Result<()> {
     let status = Command::new("schtasks.exe")
-        .args(["/End", "/TN", WINDOWS_TASK_NAME])
+        .args(["/End", "/TN", windows_task_name().as_str()])
         .status()
         .context("failed to execute schtasks /End")?;
     if !status.success() && windows_task_exists() && super::server_record::record_path().exists() {
@@ -755,7 +764,7 @@ fn reload_after_uninstall() -> Result<()> {
 #[cfg(target_os = "windows")]
 fn disable_before_uninstall() -> Result<()> {
     let status = Command::new("schtasks.exe")
-        .args(["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"])
+        .args(["/Delete", "/TN", windows_task_name().as_str(), "/F"])
         .status()
         .context("failed to execute schtasks /Delete")?;
     if !status.success() && windows_task_exists() {
@@ -787,13 +796,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_service_names_are_scoped_to_the_full_normalized_instance_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        for (prefix, suffix) in [
+            ("com.agena.server.", ""),
+            ("agena-server-", ".service"),
+            ("Agena Server ", ""),
+        ] {
+            let name = service_name_for(&first, prefix, suffix);
+            assert_ne!(name, service_name_for(&second, prefix, suffix));
+            assert_eq!(name.len(), prefix.len() + 64 + suffix.len());
+            assert_eq!(name, service_name_for(&first.join("."), prefix, suffix));
+        }
+    }
+
+    #[test]
     fn service_arguments_preserve_the_web_frontend_directory() {
         let workspace = tempfile::tempdir().expect("temporary Agena workspace");
         let args = ServerArgs {
             action: None,
             overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
+            data_dir: None,
             host: "127.0.0.1".to_owned(),
             port: 3210,
             ui_password: None,
@@ -835,7 +860,6 @@ mod tests {
         let plist = launchd_plist(
             OsStr::new("/Applications/Agena & Tools/agena"),
             &[OsString::from("server"), OsString::from("--workspace=a&b")],
-            Path::new("/tmp/agena & state/server.json"),
             Path::new("/tmp/agena.log"),
             Some("p<&>\"'"),
         )
@@ -867,7 +891,6 @@ mod tests {
         let unit = systemd_unit(
             OsStr::new("/opt/Agena Tools/agena"),
             &[OsString::from("server"), OsString::from("100%")],
-            Path::new("/tmp/agena state/server.json"),
             Some("secret value"),
         )
         .expect("render systemd unit");

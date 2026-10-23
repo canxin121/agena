@@ -7,8 +7,16 @@ fn persist_atomically(path: &Path, raw: &[u8]) -> UiResult<()> {
             path.display()
         ))
     })?;
-    let permissions = match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+    agena_storage_layout::secure_directory(parent).map_err(crate::UiFailure::internal)?;
+    let permissions = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            Some(metadata.permissions())
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(crate::UiFailure::message(
+                "persistent TUI state cannot be a symbolic link",
+            ));
+        }
         Ok(_) => None,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(crate::UiFailure::internal(error)),
@@ -35,6 +43,7 @@ fn persist_atomically(path: &Path, raw: &[u8]) -> UiResult<()> {
             .set_permissions(permissions)
             .map_err(crate::UiFailure::internal)?;
     }
+    agena_storage_layout::secure_file(staged.path()).map_err(crate::UiFailure::internal)?;
     staged
         .persist(path)
         .map_err(|error| crate::UiFailure::internal(error.error))?;
@@ -69,7 +78,7 @@ impl DraftStore {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).map_err(crate::UiFailure::internal)?;
+            agena_storage_layout::secure_directory(parent).map_err(crate::UiFailure::internal)?;
         }
 
         let raw = serde_json::to_string_pretty(&persistent).map_err(crate::UiFailure::internal)?;
@@ -156,7 +165,7 @@ impl PromptHistory {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).map_err(crate::UiFailure::internal)?;
+            agena_storage_layout::secure_directory(parent).map_err(crate::UiFailure::internal)?;
         }
 
         let mut raw = String::new();

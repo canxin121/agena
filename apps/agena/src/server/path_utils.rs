@@ -44,23 +44,9 @@ pub(crate) fn home_dir_env() -> Option<String> {
         })
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn home_dir_path() -> Option<PathBuf> {
     home_dir_env().map(PathBuf::from)
-}
-
-pub(crate) fn config_home_dir() -> PathBuf {
-    if cfg!(windows)
-        && let Ok(dir) = std::env::var("APPDATA")
-    {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    home_dir_path()
-        .map(|v| v.join(".config"))
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub(crate) fn normalize_directory_path(input: &str) -> String {

@@ -430,21 +430,35 @@ fn read_workspace_file_sync(
         ));
     }
 
-    let relative_path = clean_workspace_relative_path(Some(query.path.as_str()))?;
-    if relative_path.as_os_str().is_empty() {
-        return Err(ApplicationError::bad_request(
-            "workspace file path cannot be empty",
-        ));
-    }
-    let unresolved_target = root.join(&relative_path).clean();
-    let target = unresolved_target
-        .canonicalize()
-        .map_err(|error| workspace_fs_error(unresolved_target.as_path(), error))?;
-    if !target.starts_with(&root) {
-        return Err(ApplicationError::bad_request(
-            "workspace file path escapes workspace root",
-        ));
-    }
+    let requested = PathBuf::from(query.path.trim());
+    let (target, relative_path) = if requested.is_absolute() {
+        let target = requested
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(&requested, error))?;
+        if agena_runtime_tools::managed_attachment_root(&root, &target).is_none() {
+            return Err(ApplicationError::bad_request(
+                "workspace download path is outside this workspace's managed attachments",
+            ));
+        }
+        (target, requested)
+    } else {
+        let relative = clean_workspace_relative_path(Some(query.path.as_str()))?;
+        if relative.as_os_str().is_empty() {
+            return Err(ApplicationError::bad_request(
+                "workspace file path cannot be empty",
+            ));
+        }
+        let unresolved = root.join(&relative).clean();
+        let target = unresolved
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(&unresolved, error))?;
+        if !target.starts_with(&root) {
+            return Err(ApplicationError::bad_request(
+                "workspace file path escapes workspace root",
+            ));
+        }
+        (target, relative)
+    };
     let metadata = fs::metadata(target.as_path())
         .map_err(|error| workspace_fs_error(target.as_path(), error))?;
     if !metadata.is_file() {
@@ -491,9 +505,15 @@ fn read_session_media_file_sync(
 ) -> ApplicationResult<(String, Vec<u8>)> {
     const MAX_SESSION_MEDIA_BYTES: u64 = 20 * 1024 * 1024;
 
-    let managed_root = managed_root
+    let canonical_root = managed_root
         .canonicalize()
         .map_err(|error| workspace_fs_error(managed_root.as_path(), error))?;
+    if canonical_root != managed_root {
+        return Err(ApplicationError::bad_request(
+            "session media path escapes the managed artifact directory",
+        ));
+    }
+    let managed_root = canonical_root;
     let requested = PathBuf::from(query.path.trim());
     if requested.as_os_str().is_empty() {
         return Err(ApplicationError::bad_request(
@@ -586,30 +606,22 @@ fn upload_workspace_file_sync(
         ));
     }
 
-    let upload_dir = root.join(".agena").join("uploads");
-    for directory in [root.join(".agena"), upload_dir.clone()] {
-        match fs::symlink_metadata(&directory) {
-            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-                return Err(ApplicationError::bad_request(
-                    "attachment staging directory must be a real workspace directory, not a symlink",
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&directory)
-                    .map_err(|error| workspace_fs_error(&directory, error))?;
-            }
-            Err(error) => return Err(workspace_fs_error(&directory, error)),
-        }
-        if directory
-            .canonicalize()
-            .map_err(|error| workspace_fs_error(&directory, error))?
-            != directory
-        {
-            return Err(ApplicationError::bad_request(
-                "attachment staging directory changed during validation",
-            ));
-        }
+    let layout = agena_storage_layout::StorageLayout::current();
+    let upload_dir = layout.uploads_dir(&root);
+    agena_storage_layout::secure_directory(&upload_dir).map_err(|error| {
+        ApplicationError::bad_request_with_diagnostic(
+            "attachment staging directory must be a real private directory, not a symlink",
+            error.to_string(),
+        )
+    })?;
+    if upload_dir
+        .canonicalize()
+        .map_err(|error| workspace_fs_error(&upload_dir, error))?
+        != upload_dir
+    {
+        return Err(ApplicationError::bad_request(
+            "attachment staging directory changed during validation",
+        ));
     }
     let stored_name = format!("{}-{}", Uuid::new_v4().simple(), filename);
     let target = upload_dir.join(&stored_name);
@@ -622,6 +634,8 @@ fn upload_workspace_file_sync(
     }
     let mut file = options
         .open(&target)
+        .map_err(|error| workspace_fs_error(&target, error))?;
+    agena_storage_layout::secure_file(&target)
         .map_err(|error| workspace_fs_error(&target, error))?;
     use std::io::Write as _;
     if let Err(error) = file.write_all(&decoded).and_then(|()| file.sync_all()) {
@@ -638,7 +652,7 @@ fn upload_workspace_file_sync(
                 .collect(),
         ),
         workspace_id,
-        path: format!(".agena/uploads/{stored_name}"),
+        path: target.to_string_lossy().into_owned(),
         name: filename,
         mime: non_empty(request.mime.as_deref()).map(ToOwned::to_owned),
         size_bytes: decoded.len() as u64,
@@ -648,7 +662,25 @@ fn upload_workspace_file_sync(
 fn read_bounded_workspace_file(path: &Path, limit: u64) -> ApplicationResult<Vec<u8>> {
     use std::io::Read as _;
 
-    let file = fs::File::open(path).map_err(|error| workspace_fs_error(path, error))?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| workspace_fs_error(path, error))?;
+    if !file
+        .metadata()
+        .map_err(|error| workspace_fs_error(path, error))?
+        .is_file()
+    {
+        return Err(ApplicationError::bad_request(
+            "selected path is not a regular file",
+        ));
+    }
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)

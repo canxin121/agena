@@ -28,8 +28,8 @@ impl App {
         );
         let (tx, rx) = tokio::sync::mpsc::channel(APP_MESSAGE_QUEUE_CAPACITY);
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
-        let draft_store_path = default_draft_store_path();
-        let prompt_history_path = default_prompt_history_path();
+        let draft_store_path = default_draft_store_path(&application.persistence_scope());
+        let prompt_history_path = default_prompt_history_path(&application.persistence_scope());
         // Unit-test applications must never load or persist the developer's
         // actual drafts/history, including the final save in App::drop.
         #[cfg(test)]

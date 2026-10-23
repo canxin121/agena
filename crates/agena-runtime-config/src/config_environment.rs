@@ -4,6 +4,11 @@
 pub trait ConfigEnvironment: Send + Sync {
     fn var(&self, key: &str) -> Option<String>;
     fn vars(&self) -> Vec<(String, String)>;
+
+    /// Embedders can resolve an isolated layout through their injected environment.
+    fn storage_layout(&self) -> agena_storage_layout::StorageLayout {
+        agena_storage_layout::StorageLayout::from_lookup(|name| self.var(name).map(Into::into))
+    }
 }
 
 /// Process environment implementation for normal application startup.
@@ -17,5 +22,9 @@ impl ConfigEnvironment for ProcessEnvironment {
 
     fn vars(&self) -> Vec<(String, String)> {
         std::env::vars().collect()
+    }
+
+    fn storage_layout(&self) -> agena_storage_layout::StorageLayout {
+        agena_storage_layout::StorageLayout::current()
     }
 }

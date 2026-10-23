@@ -8,7 +8,7 @@ rust-version.workspace = true
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 agena-failure = { workspace = true }
-agena-keyring-store = { workspace = true }
+agena-secret-store = { workspace = true }
 agena-process = { workspace = true }
 async-trait.workspace = true
 http = { workspace = true }

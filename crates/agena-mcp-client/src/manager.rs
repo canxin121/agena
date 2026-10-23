@@ -37,7 +37,7 @@ use crate::protocol::{
     ListResourcesResult, ReadResourceResult, ResourceContents, ResourceDescriptor,
     ResourceTemplateDescriptor, ToolDescriptor,
 };
-use crate::{KeyringOAuthCredentialStore, OAuthCredentialHealth};
+use crate::{FileOAuthCredentialStore, OAuthCredentialHealth};
 
 static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -164,12 +164,12 @@ impl ServerSpec {
                 auth: Some(HttpAuth::OAuth { .. }),
                 ..
             } => Some(
-                KeyringOAuthCredentialStore::new(server)
+                FileOAuthCredentialStore::new(server)
                     .map(|store| store.health())
                     // Server names are validated when specifications are
                     // installed. If that invariant is ever violated, report
                     // a deliberately opaque unreadable projection instead of
-                    // bubbling an identifier/keyring error into status.
+                    // bubbling an identifier/storage error into status.
                     .unwrap_or(OAuthCredentialHealth {
                         credential_state: crate::OAuthCredentialState::Unreadable,
                         expiry_state: None,
@@ -194,7 +194,7 @@ impl ServerSpec {
         }
         let spec = self.clone();
         let name = server.to_owned();
-        match crate::token_store::KEYRING_WORKERS
+        match crate::token_store::SECRET_STORE_WORKERS
             .run(move || {
                 (
                     spec.oauth_health(&name),
@@ -249,7 +249,7 @@ impl ServerSpec {
             Self::Http {
                 auth: Some(HttpAuth::BearerFromStore),
                 ..
-            } => match KeyringOAuthCredentialStore::new(server)
+            } => match FileOAuthCredentialStore::new(server)
                 .map(|store| store.health().credential_state)
                 .unwrap_or(crate::OAuthCredentialState::Unreadable)
             {
@@ -308,7 +308,7 @@ impl McpServerAuthMode {
 
 /// Redacted presence state for a manual bearer credential.  It is separate
 /// from OAuth health so a status caller can detect a stale credential after a
-/// deliberate auth-mode switch without receiving a secret or keyring
+/// deliberate auth-mode switch without receiving a secret or storage
 /// diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpCredentialState {
@@ -640,7 +640,7 @@ pub struct McpServerStatus {
     pub reconnect_supervisor_running: bool,
     pub auth_mode: McpServerAuthMode,
     /// Present only for servers configured with standard MCP OAuth. It is a
-    /// local keyring inspection and never triggers a refresh or HTTP request.
+    /// local secret-store inspection and never triggers a refresh or HTTP request.
     pub oauth_health: Option<OAuthCredentialHealth>,
     /// Optional, redacted advisory that a distinct bearer and OAuth record
     /// coexist across an explicit auth-mode boundary.  It never changes the
@@ -1523,11 +1523,11 @@ async fn connect_http(
     if oauth_scopes.is_none()
         && let Some(auth) = auth
     {
-        // TokenStore is a synchronous port and may access the OS keyring.
+        // TokenStore is a synchronous port and may access the private secret store.
         // Its wait must be outside Tokio workers for connect_timeout to work.
         if matches!(auth, HttpAuth::BearerFromStore) {
             let server_name = server_name.to_owned();
-            headers = crate::token_store::KEYRING_WORKERS
+            headers = crate::token_store::SECRET_STORE_WORKERS
                 .run(move || {
                     apply_http_auth(&server_name, auth, &mut headers, token_store.as_deref());
                     headers
@@ -1561,7 +1561,7 @@ async fn connect_http(
                 "OAuth MCP configuration must not also supply an Authorization header".to_owned(),
             ));
         }
-        let store = KeyringOAuthCredentialStore::new(server_name)
+        let store = FileOAuthCredentialStore::new(server_name)
             .map_err(|error| McpError::auth_error(&error))?;
         let mut manager = AuthorizationManager::new(url.clone())
             .await
@@ -1990,7 +1990,7 @@ pub trait TokenStore: Send + Sync {
     fn bearer(&self, server: &str) -> Option<String>;
 
     /// Redacted local-presence check.  Implementations that can distinguish a
-    /// keyring/file failure from an absent token should override this rather
+    /// secret-store failure from an absent token should override this rather
     /// than collapsing it to `Missing`.
     fn credential_state(&self, server: &str) -> McpCredentialState {
         if self.bearer(server).is_some() {

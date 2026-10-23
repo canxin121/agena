@@ -20,6 +20,7 @@ on:
       - "scripts/agena/install-service.ps1"
       - "scripts/agena/uninstall-service.sh"
       - "scripts/agena/uninstall-service.ps1"
+      - "scripts/agena/tests/**"
       - "scripts/agena/package-backend.sh"
       - "scripts/agena/package-backend.ps1"
       - "Cargo.toml"
@@ -66,6 +67,8 @@ jobs:
       - name: Validate Unix installer syntax
         shell: bash
         run: bash -n scripts/agena/install.sh scripts/agena/install-service.sh scripts/agena/uninstall-service.sh
+      - name: Verify installer roots, rollback and purge without system services
+        run: python3 scripts/agena/tests/test_installer_storage.py
       - name: Verify every published target has installer support
         run: python3 scripts/agena/verify-target-coverage.py
 
@@ -98,6 +101,7 @@ jobs:
         shell: pwsh
         env:
           INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
+          AGENA_DATA_DIR: ${{ runner.temp }}\agena-remote-data
           WORKSPACE_DIR: ${{ runner.temp }}\agena-remote-workspace
           TEST_PORT: "43211"
         run: |
@@ -109,6 +113,7 @@ jobs:
           & $installer -Action Install `
             -Repo $env:GITHUB_REPOSITORY `
             -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
             -Workspace $env:WORKSPACE_DIR `
             -Port ([int]$env:TEST_PORT) `
             -ServiceMode native `
@@ -135,6 +140,7 @@ jobs:
         shell: pwsh
         env:
           INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
+          AGENA_DATA_DIR: ${{ runner.temp }}\agena-remote-data
         run: |
           $installer = Join-Path $PWD 'scripts\agena\install.ps1'
           if ((Test-Path -LiteralPath $installer) -and (Test-Path -LiteralPath $env:INSTALL_DIR)) {
@@ -241,6 +247,7 @@ jobs:
         env:
           TEST_HOME: ${{ runner.temp }}/agena-installer-home
           INSTALL_DIR: ${{ runner.temp }}/agena-install
+          AGENA_DATA_DIR: ${{ runner.temp }}/agena-data
           WORKSPACE_DIR: ${{ runner.temp }}/agena-workspace
           TEST_PORT: "43210"
           SERVICE_MODE: ${{ matrix.service_mode }}
@@ -259,17 +266,21 @@ jobs:
             --archive "$archive" \
             --checksum "$checksum" \
             --install-dir "$INSTALL_DIR" \
+            --data-dir "$AGENA_DATA_DIR" \
             --no-path-update \
             --workspace "$WORKSPACE_DIR" \
             --port "$TEST_PORT" \
             --service-mode "$SERVICE_MODE"
           "$INSTALL_DIR/bin/agena" --version
           if [[ "$(uname -s)" == "Darwin" ]]; then
-            permission_host="$TEST_HOME/agena/macos/Agena.app"
+            permission_host="$AGENA_DATA_DIR/macos/Agena.app"
             codesign --verify --strict "$permission_host"
             permission_hash="$(shasum -a 256 "$permission_host/Contents/MacOS/Agena" "$permission_host/Contents/Info.plist" "$permission_host/Contents/_CodeSignature/CodeResources")"
           fi
           "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
+          # The installed root remains authoritative even when the current
+          # shell points AGENA_DATA_DIR at an overlapping, invalid alternative.
+          AGENA_DATA_DIR="$INSTALL_DIR" "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
 
           "${install[@]}" stop --install-dir "$INSTALL_DIR" --no-path-update
@@ -288,6 +299,7 @@ jobs:
             --archive "$archive" \
             --checksum "$checksum" \
             --install-dir "$INSTALL_DIR" \
+            --data-dir "$AGENA_DATA_DIR" \
             --no-path-update
           "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
@@ -299,6 +311,7 @@ jobs:
             --archive "$archive" \
             --checksum "$checksum" \
             --install-dir "$INSTALL_DIR" \
+            --data-dir "$AGENA_DATA_DIR" \
             --no-path-update
           if curl -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null 2>&1; then
             echo "stopped service was unexpectedly started by upgrade" >&2
@@ -332,6 +345,7 @@ jobs:
             --archive "$bad.tar.gz" \
             --checksum "$bad.tar.gz.sha256" \
             --install-dir "$INSTALL_DIR" \
+            --data-dir "$AGENA_DATA_DIR" \
             --no-path-update
           bad_upgrade_rc=$?
           set -e
@@ -350,6 +364,21 @@ jobs:
 
           "${install[@]}" uninstall --install-dir "$INSTALL_DIR" --no-path-update
           test ! -e "$INSTALL_DIR"
+          test -f "$AGENA_DATA_DIR/agena.db"
+          mkdir -p "$HOME/agena"
+          printf 'preserve default directory\n' > "$HOME/agena/purge-sentinel"
+          "${install[@]}" install \
+            --archive "$archive" \
+            --checksum "$checksum" \
+            --install-dir "$INSTALL_DIR" \
+            --data-dir "$AGENA_DATA_DIR" \
+            --workspace "$WORKSPACE_DIR" \
+            --port "$TEST_PORT" \
+            --service-mode "$SERVICE_MODE" \
+            --no-path-update
+          "${install[@]}" uninstall --install-dir "$INSTALL_DIR" --purge-data --no-path-update
+          test ! -e "$AGENA_DATA_DIR"
+          test -f "$HOME/agena/purge-sentinel"
           if curl -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null 2>&1; then
             echo "server remained reachable after uninstall" >&2
             exit 1
@@ -360,14 +389,14 @@ jobs:
         shell: pwsh
         env:
           INSTALL_DIR: ${{ runner.temp }}\agena-install
+          AGENA_DATA_DIR: ${{ runner.temp }}\agena-data
           WORKSPACE_DIR: ${{ runner.temp }}\agena-workspace
           TEST_PORT: "43210"
           TARGET: ${{ matrix.target }}
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:WORKSPACE_DIR | Out-Null
-          schtasks.exe /Delete /TN 'Agena Server' /F 2>$null | Out-Null
-          Remove-Item -LiteralPath (Join-Path $HOME 'agena\server.json') -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath (Join-Path $env:AGENA_DATA_DIR 'run\server.json') -Force -ErrorAction SilentlyContinue
 
           $archive = Get-ChildItem artifacts/agena -Filter "agena-backend-$env:TARGET-v*.zip" | Select-Object -First 1
           if (-not $archive) { throw 'release archive not found' }
@@ -378,12 +407,20 @@ jobs:
             -Archive $archive.FullName `
             -Checksum $checksum `
             -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
             -Workspace $env:WORKSPACE_DIR `
             -Port ([int]$env:TEST_PORT) `
             -ServiceMode native `
             -NoPathUpdate
           & (Join-Path $env:INSTALL_DIR 'bin\agena.exe') --version
           & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          $selectedDataDir = $env:AGENA_DATA_DIR
+          try {
+            $env:AGENA_DATA_DIR = $env:INSTALL_DIR
+            & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          } finally {
+            $env:AGENA_DATA_DIR = $selectedDataDir
+          }
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
 
           & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
@@ -405,6 +442,7 @@ jobs:
             -Archive $archive.FullName `
             -Checksum $checksum `
             -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
             -NoPathUpdate
           & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
@@ -414,6 +452,7 @@ jobs:
             -Archive $archive.FullName `
             -Checksum $checksum `
             -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
             -NoPathUpdate
           Start-Sleep -Seconds 1
           try {
@@ -458,6 +497,7 @@ jobs:
               -Archive $badArchive `
               -Checksum $badChecksum `
               -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
               -NoPathUpdate
           } catch {
             $failedAsExpected = $true
@@ -469,18 +509,26 @@ jobs:
           & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
 
+          $taskDefinition = [xml](Get-Content -LiteralPath (Join-Path $env:AGENA_DATA_DIR 'run\agena-server-task.xml') -Raw)
+          $taskName = ([string]$taskDefinition.Task.RegistrationInfo.URI).TrimStart('\')
+          if (-not $taskName.StartsWith('Agena Server ') -or $taskName.Length -ne 77) { throw 'native task name does not include the full instance key' }
           & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
           if (Test-Path -LiteralPath $env:INSTALL_DIR) { throw 'install directory survived uninstall' }
-          schtasks.exe /Query /TN 'Agena Server' *> $null
+          schtasks.exe /Query /TN $taskName *> $null
           $taskQueryExit = $LASTEXITCODE
           if ($taskQueryExit -eq 0) { throw 'Agena Server scheduled task survived uninstall' }
           $global:LASTEXITCODE = 0
 
+          if (-not (Test-Path -LiteralPath (Join-Path $env:AGENA_DATA_DIR 'agena.db'))) { throw 'normal uninstall removed instance data' }
+          $defaultData = Join-Path $HOME 'agena'
+          New-Item -ItemType Directory -Force -Path $defaultData | Out-Null
+          Set-Content -LiteralPath (Join-Path $defaultData 'purge-sentinel') -Value 'preserve default directory'
           Write-Host '[detached-current] install'
           & $installer -Action Install `
             -Archive $archive.FullName `
             -Checksum $checksum `
             -InstallDir $env:INSTALL_DIR `
+            -DataDir $env:AGENA_DATA_DIR `
             -Workspace $env:WORKSPACE_DIR `
             -Port ([int]$env:TEST_PORT) `
             -ServiceMode detached `
@@ -500,9 +548,11 @@ jobs:
           & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
 
-          Write-Host '[detached-current] uninstall'
-          & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Write-Host '[detached-current] uninstall with selected-root purge'
+          & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -PurgeData -NoPathUpdate
           if (Test-Path -LiteralPath $env:INSTALL_DIR) { throw 'detached install directory survived uninstall' }
+          if (Test-Path -LiteralPath $env:AGENA_DATA_DIR) { throw 'selected data root survived purge' }
+          if (-not (Test-Path -LiteralPath (Join-Path $defaultData 'purge-sentinel'))) { throw 'purge removed the unselected default data directory' }
           exit 0
 
       - name: Cleanup native user service after failure (macOS)
@@ -511,12 +561,12 @@ jobs:
         env:
           TEST_HOME: ${{ runner.temp }}/agena-installer-home
           INSTALL_DIR: ${{ runner.temp }}/agena-install
+          AGENA_DATA_DIR: ${{ runner.temp }}/agena-data
         run: |
           export HOME="$TEST_HOME"
           if [[ -x "$INSTALL_DIR/bin/agena" ]]; then
-            "$INSTALL_DIR/bin/agena" server uninstall >/dev/null 2>&1 || true
+            "$INSTALL_DIR/bin/agena" --data-dir "$AGENA_DATA_DIR" server uninstall >/dev/null 2>&1 || true
           fi
-          launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.agena.server.plist" >/dev/null 2>&1 || true
 
       - name: Cleanup detached server after failure (Linux)
         if: always() && runner.os == 'Linux'
@@ -524,17 +574,31 @@ jobs:
         env:
           TEST_HOME: ${{ runner.temp }}/agena-installer-home
           INSTALL_DIR: ${{ runner.temp }}/agena-install
+          AGENA_DATA_DIR: ${{ runner.temp }}/agena-data
         run: |
           export HOME="$TEST_HOME"
           if [[ -x "$INSTALL_DIR/bin/agena" ]]; then
-            "$INSTALL_DIR/bin/agena" server stop >/dev/null 2>&1 || true
+            "$INSTALL_DIR/bin/agena" --data-dir "$AGENA_DATA_DIR" server stop >/dev/null 2>&1 || true
           fi
 
       - name: Cleanup native user service after failure (Windows)
         if: always() && runner.os == 'Windows'
         shell: pwsh
+        env:
+          INSTALL_DIR: ${{ runner.temp }}\agena-install
+          AGENA_DATA_DIR: ${{ runner.temp }}\agena-data
         run: |
-          schtasks.exe /End /TN 'Agena Server' 2>$null | Out-Null
-          schtasks.exe /Delete /TN 'Agena Server' /F 2>$null | Out-Null
-          Get-Process agena -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          $binary = Join-Path $env:INSTALL_DIR 'bin\agena.exe'
+          if (Test-Path -LiteralPath $binary) {
+            & $binary --data-dir $env:AGENA_DATA_DIR server uninstall *> $null
+          }
+          $definition = Join-Path $env:AGENA_DATA_DIR 'run\agena-server-task.xml'
+          if (Test-Path -LiteralPath $definition) {
+            $task = [xml](Get-Content -LiteralPath $definition -Raw)
+            $taskName = ([string]$task.Task.RegistrationInfo.URI).TrimStart('\')
+            if ($taskName.StartsWith('Agena Server ')) {
+              schtasks.exe /End /TN $taskName 2>$null | Out-Null
+              schtasks.exe /Delete /TN $taskName /F 2>$null | Out-Null
+            }
+          }
           exit 0

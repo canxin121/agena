@@ -102,7 +102,7 @@ cargo test -p agena-runtime-contracts identity::tests
 cargo test -p agena-tui-transcript
 ```
 
-Browser regressions live in `packages/agena-web/tests/browser/`. They mount real production components and exercise real local API/database/Git operations. Use an isolated server/data directory on a different port from your running Agena instance, plus a Vite proxy to that port. For example, run `agena server --port 3228 --database-path /tmp/agena-ui/runtime.sqlite` with `AGENA_SERVER_DATA_DIR=/tmp/agena-ui/state`; configure the verification Vite server on 5179 to proxy `/api`, `/auth`, `/health` to 3228. Do not point these tests at a shared production server.
+Browser regressions live in `packages/agena-web/tests/browser/`. They mount real production components and exercise real local API/database/Git operations. Use an isolated server/data directory on a different port from your running Agena instance, plus a Vite proxy to that port. For example, run `agena --data-dir /tmp/agena-ui server --port 3228`; configure the verification Vite server on 5179 to proxy `/api`, `/auth`, `/health` to 3228. Do not point these tests at a shared production server.
 
 With Playwright Core and its browser installed, run:
 

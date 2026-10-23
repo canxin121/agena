@@ -69,4 +69,4 @@ the server, then run the TUI.)
 ## Requirements
 
 - Rust (see `rust-toolchain.toml`)
-- SQLite (default database at `~/agena/agena.db`)
+- One instance data directory: `--data-dir DIR` / `AGENA_DATA_DIR` (default `~/agena`), containing the shared SQLite database, configuration, app-managed encrypted secrets, workspace files and client state. See [the current storage contract](docs/current-data-contract.md#统一数据目录).

@@ -17,36 +17,16 @@ pub(crate) fn composer_draft_with_text_prefix_stripped(
     draft
 }
 
-pub(crate) fn default_draft_store_path() -> PathBuf {
-    let mut base = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|error| {
-            tracing::error!(
-                diagnostic = %error,
-                "TUI draft-store home is unavailable; using the current-directory fallback path"
-            );
-            PathBuf::from(".")
-        });
-    base.push("agena");
-    base.push("tui-drafts.json");
-    base
+pub(crate) fn default_draft_store_path(scope: &str) -> PathBuf {
+    agena_storage_layout::StorageLayout::current()
+        .client_scope_dir(scope)
+        .join("tui-drafts.json")
 }
 
-pub(crate) fn default_prompt_history_path() -> PathBuf {
-    let mut base = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|error| {
-            tracing::error!(
-                diagnostic = %error,
-                "TUI prompt-history home is unavailable; using the current-directory fallback path"
-            );
-            PathBuf::from(".")
-        });
-    base.push("agena");
-    base.push("tui-prompt-history.jsonl");
-    base
+pub(crate) fn default_prompt_history_path(scope: &str) -> PathBuf {
+    agena_storage_layout::StorageLayout::current()
+        .client_scope_dir(scope)
+        .join("tui-prompt-history.jsonl")
 }
 
 pub(crate) fn non_empty_owned(value: String) -> Option<String> {
@@ -66,4 +46,4 @@ pub(crate) fn permission_mode_name(mode: PermissionMode) -> &'static str {
         PermissionMode::Deny => "deny",
     }
 }
-use crate::{ComposerDraft, PathBuf, PermissionMode, env};
+use crate::{ComposerDraft, PathBuf, PermissionMode};

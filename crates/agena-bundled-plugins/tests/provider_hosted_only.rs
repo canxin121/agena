@@ -212,9 +212,9 @@ async fn invalid_modes_and_callback_histories_fail_before_network() {
         "invalid boundary performed a provider request"
     );
     assert!(
-        !f.dir
-            .path()
-            .join(".agena/artifacts/provider-tools")
+        !agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(f.dir.path())
+            .join("provider-tools")
             .exists()
     );
     let (output,_)=f.call("chatgpt.cloud_shell",json!({"prompt":"fixture","tool_options":{"environment":{"type":"container_reference","container_id":"cntr_fixture"}}})).await.unwrap();
@@ -583,9 +583,9 @@ async fn ai_adapter_gate_rejects_unresolved_and_nonmatching_protocols_without_up
     }
     assert!(f.requests().is_empty());
     assert!(
-        !f.dir
-            .path()
-            .join(".agena/artifacts/provider-tools")
+        !agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(f.dir.path())
+            .join("provider-tools")
             .exists(),
         "blocked upload must not create provider artifacts"
     );
@@ -648,9 +648,9 @@ async fn ai_adapter_gate_covers_every_configured_adapter_against_all_cloud_tools
         "the coverage matrix must not send requests or upload inputs"
     );
     assert!(
-        !f.dir
-            .path()
-            .join(".agena/artifacts/provider-tools")
+        !agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(f.dir.path())
+            .join("provider-tools")
             .exists()
     );
 }

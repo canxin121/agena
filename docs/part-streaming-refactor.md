@@ -292,8 +292,8 @@ ContentHub 探针每条记录约 1 KiB。建立 Part/资源引用、初始化 ba
 可复现命令：
 
 ```sh
-AGENA_STATE_DIR=/private/tmp/agena-part-tests-state cargo run --locked -p agena-storage-sqlite --example content_stream_probe
-AGENA_STATE_DIR=/private/tmp/agena-part-tests-state cargo run --locked -p agena-api-server --example content_delivery_probe
+AGENA_DATA_DIR=/private/tmp/agena-part-tests-state cargo run --locked -p agena-storage-sqlite --example content_stream_probe
+AGENA_DATA_DIR=/private/tmp/agena-part-tests-state cargo run --locked -p agena-api-server --example content_delivery_probe
 ```
 
 日志：`/tmp/agena-part-source-performance-counted.log`、`/tmp/agena-part-delivery-performance.log`。浏览器指标：`/tmp/agena-part-visual/part-streaming-browser.json`。
@@ -334,7 +334,7 @@ cargo run --locked -p agena-tui-transcript --example content_frame > /tmp/agena-
 
 ```sh
 cargo fmt --all -- --check
-AGENA_STATE_DIR=/private/tmp/agena-part-tests-state cargo test --workspace --locked --no-fail-fast
+AGENA_DATA_DIR=/private/tmp/agena-part-tests-state cargo test --workspace --locked --no-fail-fast
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/ci/verify-runtime-capabilities.py
 python3 -m unittest discover -s scripts/refactors/tests

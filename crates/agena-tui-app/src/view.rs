@@ -50,11 +50,11 @@ mod permission_path_display_tests {
     #[test]
     fn compact_path_rules_keep_distinguishing_suffixes_visible() {
         let generated = compact_permission_path_pattern(
-            "/home/canxin/agena/projects/home-canxin-Git-ai/generated/client/**",
+            "/home/demo/agena/workspaces/2ed7f643/generated/client/**",
             34,
         );
         let fixtures = compact_permission_path_pattern(
-            "/home/canxin/agena/projects/home-canxin-Git-ai/fixtures/mcp/**",
+            "/home/demo/agena/workspaces/2ed7f643/fixtures/mcp/**",
             34,
         );
 

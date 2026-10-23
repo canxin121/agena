@@ -2,8 +2,8 @@
 //!
 //! Storage contracts shared by application services and concrete backends.
 //!
-//! This crate intentionally has no database, filesystem, or runtime-specific
-//! implementation dependency. Concrete SQLite adapters
+//! This crate keeps database and runtime implementations behind contracts.
+//! Workspace memory documents have a portable filesystem backend. SQLite adapters
 //! (`agena_storage_sqlite`) implement these contracts in their infrastructure
 //! layer.
 //!
@@ -14,14 +14,12 @@
 //! - [`ModelCatalogRepository`] — model catalog cache records.
 //! - [`PermissionRuleRepository`] — permission rules and transactions.
 //!
-//! [`MemoryStore`] provides an in-memory implementation of most contracts for
-//! tests and small deployments; [`StorageConfig`] carries store configuration.
+//! [`MemoryStore`] persists workspace memory as private Markdown documents;
+//! [`StorageConfig`] carries database configuration.
 
-use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use agena_domain::{PermissionMode, PermissionScope};
@@ -33,6 +31,7 @@ mod memory_store;
 pub use memory_store::MemoryStore;
 
 pub mod backend;
+pub mod instance_state;
 pub mod kernel;
 pub mod store;
 
@@ -53,17 +52,11 @@ pub struct StorageConfig {
 pub enum StorageConfigError {
     #[error("failed to prepare database directory: {0}")]
     Io(#[from] io::Error),
+    #[error("database path must be valid Unicode")]
+    InvalidPath,
 }
 
 impl StorageConfig {
-    /// Build from `AGENA_DATABASE_URL` / `AGENA_DATABASE_PATH`.
-    pub fn from_env() -> Self {
-        Self {
-            database_url: std::env::var("AGENA_DATABASE_URL").ok(),
-            database_path: std::env::var("AGENA_DATABASE_PATH").ok().map(PathBuf::from),
-        }
-    }
-
     pub fn resolve_url(&self) -> Result<String, StorageConfigError> {
         if let Some(url) = self.database_url.as_deref() {
             return Ok(url.to_owned());
@@ -72,7 +65,11 @@ impl StorageConfig {
             .database_path
             .clone()
             .unwrap_or_else(Self::default_path);
-        Ok(format!("sqlite://{}?mode=rwc", path.display()))
+        let path = path.to_str().ok_or(StorageConfigError::InvalidPath)?;
+        let encoded = urlencoding::encode(path)
+            .replace("%2F", "/")
+            .replace("%3A", ":");
+        Ok(format!("sqlite://{encoded}?mode=rwc"))
     }
 
     pub fn ensure_parent(url: &str) -> Result<(), StorageConfigError> {
@@ -88,19 +85,7 @@ impl StorageConfig {
     }
 
     pub fn default_path() -> PathBuf {
-        let mut base = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|error| {
-                tracing::error!(
-                    diagnostic = %error,
-                    "storage home is unavailable; using the current-directory fallback path"
-                );
-                PathBuf::from(".")
-            });
-        base.push("agena");
-        base.push("agena.db");
-        base
+        agena_storage_layout::StorageLayout::current().database_path()
     }
 
     pub fn display_location(url: &str) -> String {
@@ -122,7 +107,13 @@ fn sqlite_file_path(url: &str) -> Option<PathBuf> {
     }
     let raw = url.strip_prefix("sqlite://")?;
     let path = raw.split('?').next().unwrap_or(raw);
-    (!path.is_empty() && path != ":memory:").then(|| Path::new(path).to_path_buf())
+    (!path.is_empty() && path != ":memory:")
+        .then(|| {
+            urlencoding::decode(path)
+                .ok()
+                .map(|decoded| PathBuf::from(decoded.into_owned()))
+        })
+        .flatten()
 }
 
 #[cfg(test)]
@@ -539,45 +530,18 @@ mod tests {
     }
 }
 
-const MAX_MEMORY_PATH_LENGTH: usize = 200;
-
-fn sanitize_memory_path(path: &str) -> String {
-    let sanitized: String = path
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    if sanitized.len() <= MAX_MEMORY_PATH_LENGTH {
-        return sanitized;
-    }
-    let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    format!(
-        "{}-{:x}",
-        &sanitized[..MAX_MEMORY_PATH_LENGTH],
-        hasher.finish()
-    )
-}
-
-fn memory_base_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("agena")
-}
-
 /// Filesystem location contract for workspace-scoped memory documents.
 pub struct MemoryDir {
     path: PathBuf,
+    index_path: PathBuf,
 }
 
 impl MemoryDir {
     pub fn from_workspace(workspace_root: &std::path::Path) -> Self {
-        let normalized = workspace_root.to_string_lossy().replace('\\', "/");
+        let layout = agena_storage_layout::StorageLayout::current();
         Self {
-            path: memory_base_dir()
-                .join("projects")
-                .join(sanitize_memory_path(&normalized))
-                .join("memory"),
+            path: layout.memory_dir(workspace_root),
+            index_path: layout.memory_index_dir(workspace_root),
         }
     }
 
@@ -590,11 +554,11 @@ impl MemoryDir {
     }
 
     pub fn index_dir(&self) -> PathBuf {
-        self.path.join(".index")
+        self.index_path.clone()
     }
 
     pub fn ensure_exists(&self) -> io::Result<()> {
-        std::fs::create_dir_all(&self.path)
+        agena_storage_layout::secure_directory(&self.path)
     }
 }
 

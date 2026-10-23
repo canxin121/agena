@@ -442,8 +442,6 @@ impl Fixture {
             bootstrap_preflight: None,
             database_url: Some("sqlite::memory:".into()),
             database_path: None,
-            scheduler_database_url: Some("sqlite::memory:".into()),
-            scheduler_database_path: None,
             tracing_reload_handle: None,
         }
     }

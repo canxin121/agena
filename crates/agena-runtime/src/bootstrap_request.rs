@@ -108,13 +108,6 @@ pub struct RuntimeBootstrapRequest {
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
     pub database_path: Option<PathBuf>,
-    /// Optional dedicated scheduler database URL. When unset the scheduler
-    /// uses `AGENA_SCHEDULER_DATABASE_URL`/`AGENA_SCHEDULER_DATABASE_PATH`, or
-    /// a conventional `~/.agena/scheduler.db` sibling of the chat database
-    /// when the chat database is file-backed. In-memory chat databases (tests,
-    /// ephemeral deployments) default to the in-memory scheduler store.
-    pub scheduler_database_url: Option<String>,
-    pub scheduler_database_path: Option<PathBuf>,
     pub tracing_reload_handle: Option<crate::TracingFilterReloadHandle>,
 }
 
@@ -133,8 +126,6 @@ impl RuntimeBootstrapRequest {
             workspace_root,
             database_url,
             database_path,
-            scheduler_database_url,
-            scheduler_database_path,
             tracing_reload_handle,
             ..
         } = self;
@@ -144,8 +135,6 @@ impl RuntimeBootstrapRequest {
             bootstrap_preflight: Some(bootstrap_preflight),
             database_url,
             database_path,
-            scheduler_database_url,
-            scheduler_database_path,
             tracing_reload_handle,
         })
     }

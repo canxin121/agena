@@ -165,6 +165,8 @@ async fn completed_artifact(
             "completed download is not a bounded regular file",
         ));
     }
+    agena_storage_layout::secure_file(&path)
+        .map_err(|error| PluginError::internal_error(&error))?;
     Ok(Some(DownloadResult {
         path,
         size: metadata.len(),
@@ -211,8 +213,10 @@ async fn receive(
     let (tx, mut events) = mpsc::channel(512);
     let root = CdpClient::connect(endpoint, None, Some(tx)).await?;
     state.root = Some(root.clone());
-    tokio::fs::create_dir_all(&state.dir)
+    let directory = state.dir.clone();
+    tokio::task::spawn_blocking(move || agena_storage_layout::secure_directory(&directory))
         .await
+        .map_err(|error| PluginError::internal_error(&error))?
         .map_err(|error| PluginError::internal_error(&error))?;
     state.changed_behavior = true;
     root.command("Browser.setDownloadBehavior",with_context(serde_json::json!({"behavior":"allowAndName","downloadPath":state.dir,"eventsEnabled":true}),state.browser_context_id.as_deref())).await?;

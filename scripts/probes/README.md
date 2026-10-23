@@ -68,20 +68,23 @@ source revisions for the uninterrupted Application→SSE delivery comparison.
 
 ## Isolation and process provenance
 
-The parent environment is never modified. The child receives a small
-allowlist of OS process variables and explicit owned paths for
-`--database-path`, `AGENA_SCHEDULER_DATABASE_PATH`, `AGENA_STATE_DIR`,
-`AGENA_PLUGIN_STORAGE_DIR`, `AGENA_SERVER_DATA_DIR` and `AGENA_SERVER_RECORD`.
-Only the child process environment receives `HOME=<run>/owned-home`, a new
-directory created by this run. Its global config is
-`owned-home/agena/agena.json`; the project config is `.agena/agena.json` in the
-owned workspace. The parent environment and the user's actual home/config
-are never changed or inherited. The shipped `<home>` permission rules require
-a resolvable home even when every runtime state path is explicit. Other conventional fallbacks are
-also relative to the owned cwd. There are no inherited proxy settings, provider
-keys, credentials, password, shell profile or server discovery record.
-The owned global config disables provider client-version automatic updates,
-so no npm refresh competes with the measurement.
+The parent environment is never modified. Each probe creates one private
+`<run>/data` directory and selects it through `AGENA_DATA_DIR` and
+`--data-dir`. The server and its thin CLI/TUI clients share that root. The
+configuration is `data/agena.json`, the only SQLite database is `data/agena.db`,
+and discovery uses `data/run/server.json`. Workspace memory, artifacts,
+credentials and client state follow the same root. The project config remains
+`.agena/agena.json` in the owned source workspace.
+
+The child receives a small allowlist of OS process variables, including the
+unchanged home and temporary-directory locations. Agena isolation does not
+redirect `HOME` or `USERPROFILE`; the selected data directory determines every
+application-managed path. There are no inherited proxy settings, provider
+keys, credentials, passwords, shell profiles or server discovery records.
+The optional Runtime ownership audit is recorded at
+`data/run/runtime-ownership.jsonl`. The owned global config disables provider
+client-version automatic updates, so no npm refresh competes with the
+measurement.
 
 Before any public mutation, the server record and `/health` must agree on the
 launched child PID, server ID, start timestamp and protocol version. Results

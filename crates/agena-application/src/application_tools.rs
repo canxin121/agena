@@ -507,7 +507,6 @@ mod media_presentation_tests {
                 workspace_root: Some(workspace.path().to_path_buf()),
                 config_path: Some(workspace.path().join("global.json")),
                 database_url: Some("sqlite::memory:".into()),
-                scheduler_database_path: Some(workspace.path().join("scheduler.db")),
                 ..Default::default()
             })
             .await

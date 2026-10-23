@@ -661,30 +661,23 @@ def summarize(trials: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def clean_environment(directory: Path) -> dict[str, str]:
-    owned_home = directory / "owned-home"
-    require(owned_home.is_dir(), "owned child home must be created by this run")
-    env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "RUST_MIN_STACK")
+    data_dir = directory / "data"
+    require(data_dir.is_dir(), "owned Agena data directory must be created by this run")
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "USERPROFILE", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "RUST_MIN_STACK")
            if key in os.environ}
-    env.update({"HOME": str(owned_home), "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8", "NO_PROXY": "127.0.0.1,localhost",
-                "AGENA_SERVER_DATA_DIR": str(directory / "server-data"),
-                "AGENA_SERVER_RECORD": str(directory / "server.json"),
-                "AGENA_SCHEDULER_DATABASE_PATH": str(directory / "scheduler.db"),
-                "AGENA_STATE_DIR": str(directory / "runtime-state"),
-                "AGENA_PLUGIN_STORAGE_DIR": str(directory / "plugin-storage"),
-                "AGENA_RUNTIME_OWNERSHIP_AUDIT_PATH": str(directory / "runtime-ownership.jsonl")})
-    require(env["HOME"] == str(owned_home) and "USERPROFILE" not in env,
-            "child home must belong to this run and never inherit the user's home")
+    env.update({"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8", "NO_PROXY": "127.0.0.1,localhost",
+                "AGENA_DATA_DIR": str(data_dir),
+                "AGENA_RUNTIME_OWNERSHIP_AUDIT_PATH": str(data_dir / "run" / "runtime-ownership.jsonl")})
     return env
 
 
 def prepare_configuration(directory: Path, provider_url: str) -> Path:
     workspace = directory / "workspace"
     (workspace / ".agena").mkdir(parents=True)
-    # The shipped permission rules resolve <home>, so an absent HOME cannot
-    # bootstrap. Only the child environment receives this newly owned path;
-    # neither os.environ nor the user's actual home/config is changed.
-    global_config = directory / "owned-home" / "agena" / "agena.json"
-    global_config.parent.mkdir(parents=True)
+    # One owned data root isolates config, database, credentials, artifacts and
+    # discovery records without redirecting the user's operating-system home.
+    global_config = directory / "data" / "agena.json"
+    global_config.parent.mkdir(parents=True, mode=0o700)
     (directory / "process-cwd").mkdir()
     write_json(global_config, {"ui": {"locale": "en-US"},
                                "runtime": {"providers": {"client_versions": {"auto_update": False}}}})
@@ -771,7 +764,7 @@ def main() -> int:
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
         env = clean_environment(output)
-        command = [str(binary), "--database-path", str(output / "sessions.db"),
+        command = [str(binary), "--data-dir", str(output / "data"),
                    "server", "--host", "127.0.0.1", "--port", str(port), "--workspace", str(workspace)]
         result["process"] = {"argv": command, "cwd": str(output / "process-cwd"), "env": env,
                              "spawn_started_ns": now_ns(), "spawn_started_at": utc_now()}
@@ -779,7 +772,7 @@ def main() -> int:
                                    stdout=process_log, stderr=subprocess.STDOUT, start_new_session=True)
         result["process"].update(pid=process.pid, spawn_completed_ns=now_ns())
         api = Api(f"http://127.0.0.1:{port}", args.timeout, trace)
-        result["identity"] = wait_server(process, api, output / "server.json")
+        result["identity"] = wait_server(process, api, output / "data" / "run" / "server.json")
         workspace_response = api.call("POST", "/api/v1/workspaces/resolve",
                                       {"path": str(workspace), "create_if_missing": True})[0]
         workspace_id = workspace_response["id"]

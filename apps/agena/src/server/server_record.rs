@@ -15,16 +15,9 @@ pub(crate) struct PublishedServerRecord {
 }
 
 pub(crate) fn record_path() -> PathBuf {
-    if let Some(path) = env::var_os("AGENA_SERVER_RECORD") {
-        return PathBuf::from(path);
-    }
-    let mut base = env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.push("agena");
-    base.push("server.json");
-    base
+    agena_storage_layout::StorageLayout::current()
+        .run_dir()
+        .join("server.json")
 }
 
 pub(crate) fn read_record(path: &Path) -> Result<ServerEndpointRecord> {
@@ -146,6 +139,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("server.json");
         let identity = ServerIdentityResource {
+            instance_id: uuid::Uuid::new_v4().to_string(),
             id: uuid::Uuid::new_v4(),
             pid: std::process::id(),
             started_at: chrono::Utc::now(),

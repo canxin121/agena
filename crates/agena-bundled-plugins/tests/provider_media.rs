@@ -183,9 +183,9 @@ async fn cloud_file_upload_status_analyze_and_delete_form_a_complete_owned_lifec
             assert!(capture.authenticated);
             assert!(String::from_utf8_lossy(&capture.raw).contains("expires"));
         }
-        let record = f.dir.path().join(format!(
-            ".agena/artifacts/provider-tools/media/{handle}.json"
-        ));
+        let record = agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(f.dir.path())
+            .join(format!("provider-tools/media/{handle}.json"));
         let serialized = std::fs::read_to_string(&record).unwrap();
         assert!(!serialized.contains(PNG));
         assert!(!serialized.contains("synthetic-provider-test-only"));
@@ -273,9 +273,9 @@ async fn cloud_handles_reject_cross_session_provider_and_tampered_manifest_befor
         .await
         .is_err()
     );
-    let path = f.dir.path().join(format!(
-        ".agena/artifacts/provider-tools/media/{handle}.json"
-    ));
+    let path = agena_storage_layout::StorageLayout::current()
+        .artifacts_dir(f.dir.path())
+        .join(format!("provider-tools/media/{handle}.json"));
     let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     record["remote_id"] = json!("file_other");
     std::fs::write(path, record.to_string()).unwrap();

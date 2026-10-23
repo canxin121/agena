@@ -93,39 +93,11 @@ impl AgenaRuntime {
             load_request,
             database_url,
             database_path,
-            scheduler_database_url,
-            scheduler_database_path,
             tracing_reload_handle,
-            bootstrap_preflight,
+            bootstrap_preflight: _,
             workspace_root: _,
         } = config;
         let loader = ConfigLoader::new(ProcessEnvironment);
-        let initial_resolution = match &bootstrap_preflight {
-            None => {
-                let loader = loader.clone();
-                let request = load_request.clone();
-                Some(
-                    crate::blocking::FILE_OPERATIONS
-                        .run(move || loader.load(&request))
-                        .await
-                        .map_err(|error| {
-                            AppError::Internal(format!("config load worker failed: {error}"))
-                        })??,
-                )
-            }
-            Some(_) => None,
-        };
-        let tracing = match (&bootstrap_preflight, &initial_resolution) {
-            (Some(preflight), _) => &preflight.tracing,
-            (None, Some(resolution)) => &resolution.config.tracing,
-            (None, None) => {
-                return Err(AppError::Internal(
-                    "runtime bootstrap tracing preflight was not resolved".to_owned(),
-                ));
-            }
-        };
-        let chat_database_url = database_url.clone();
-        let chat_database_path = database_path.clone();
         let database =
             agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
                 database_url,
@@ -134,33 +106,8 @@ impl AgenaRuntime {
             .await
             .map_err(runtime_database_error)?;
 
-        // The scheduler owns a dedicated database, separate from the chat
-        // database. When the caller (or the scheduler env vars) configure one
-        // explicitly it is used as-is. Otherwise, when the chat database is
-        // in-memory (tests, ephemeral deployments), the scheduler degrades to
-        // its in-memory store instead of creating an unexpected file; a
-        // file-backed chat database uses the conventional scheduler default.
-        let scheduler_database = {
-            let explicitly_configured = scheduler_database_url.is_some()
-                || scheduler_database_path.is_some()
-                || std::env::var("AGENA_SCHEDULER_DATABASE_URL").is_ok()
-                || std::env::var("AGENA_SCHEDULER_DATABASE_PATH").is_ok();
-            let chat_url =
-                agena_runtime::resolve_runtime_database_url(chat_database_url, chat_database_path)
-                    .map_err(agena_runtime::RuntimeDatabaseCompositionError::from)
-                    .map_err(runtime_database_error)?;
-            if !explicitly_configured && agena_runtime::is_in_memory_database(&chat_url) {
-                None
-            } else {
-                agena_runtime::connect_scheduler_database(
-                    scheduler_database_url,
-                    scheduler_database_path,
-                    tracing,
-                )
-                .await
-                .map_err(runtime_database_error)?
-            }
-        };
+        // Every durable service shares the owned instance database.
+        let scheduler_database = database.as_ref().map(|kernel| kernel.database.clone());
 
         // Publish directly to the bounded signal hub. Its synchronous clock
         // observers see every mutation; slow clients receive an explicit lag.
@@ -2447,6 +2394,16 @@ impl AgenaRuntime {
         agena_runtime::compose_runtime_application_services(
             agena_runtime::RuntimeApplicationServiceCompositionInputs {
                 workspace_root: self.workspace_root().to_path_buf(),
+                instance_id: self
+                    .inner
+                    .session_kernel
+                    .as_ref()
+                    .map(|kernel| kernel.instance_id.clone()),
+                instance_state: self
+                    .inner
+                    .session_kernel
+                    .as_ref()
+                    .map(|kernel| kernel.instance_state.clone()),
                 repositories,
                 provider_catalog: Arc::new(self.clone()),
                 model_catalog: Arc::new(self.clone()),

@@ -1,10 +1,9 @@
 //! `agena-scheduler` — persistent cron + one-shot job scheduler.
 //!
-//! The scheduler owns a dedicated SQLite database (separate from the chat
-//! database) whose schema lives in [`schema`]; [`SqliteJobStore`] provides
-//! restart-safe durability against it. [`InMemoryJobStore`] remains available
-//! for tests and embedded callers (and as a fallback when no scheduler
-//! database is configured).
+//! [`SqliteJobStore`] receives the owning service instance's initialized
+//! SQLite connection. Its declarations in [`schema`] are composed with the
+//! session and application tables into one exact database schema.
+//! [`InMemoryJobStore`] remains available for tests and embedded callers.
 //!
 //! At runtime, [`Scheduler`] waits for the next fire, retry, or claim-expiry
 //! deadline. Committed changes interrupt that wait immediately. Reads and

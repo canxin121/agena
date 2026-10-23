@@ -125,10 +125,12 @@ impl Service<'_> {
         {
             return Err(PluginError::invalid_params("invalid cloud media handle"));
         }
-        Ok(self
-            .root
-            .join(".agena/artifacts/provider-tools/media")
-            .join(format!("{handle}.json")))
+        Ok(self.record_root().join(format!("{handle}.json")))
+    }
+    fn record_root(&self) -> PathBuf {
+        agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(self.root)
+            .join("provider-tools/media")
     }
     /// Exclusive gate over this provider's record store for the workspace.
     ///
@@ -139,10 +141,8 @@ impl Service<'_> {
     /// [`Service::send`] both rely on.
     async fn gate(&self) -> SdkResult<tokio::sync::OwnedMutexGuard<()>> {
         let root = self
-            .root
-            .canonicalize()
-            .map_err(|e| PluginError::internal_error(&e))?
-            .join(format!(".agena/cloud-media-lock-{}", self.provider));
+            .record_root()
+            .join(format!("provider-{}", self.provider));
         let gate = {
             let mut gates = GATES
                 .lock()
@@ -160,45 +160,31 @@ impl Service<'_> {
     }
     async fn save(&self, record: &Record, create: bool) -> SdkResult<()> {
         let path = self.record_path(&record.handle)?;
-        let root = self.root.to_owned();
+        let root = self.record_root();
         let bytes = serde_json::to_vec(record).map_err(|e| PluginError::internal_error(&e))?;
         tokio::task::spawn_blocking(move || {
-            let root = root.canonicalize()?;
-            let relative = path
-                .strip_prefix(&root)
-                .map_err(|_| std::io::Error::other("media record outside workspace"))?;
-            let mut directory = root.clone();
-            for component in relative.parent().unwrap().components() {
-                directory.push(component);
-                match std::fs::symlink_metadata(&directory) {
-                    Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
-                    Ok(_) => {
-                        return Err(std::io::Error::other(
-                            "media record directory is not a regular directory",
-                        ));
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        std::fs::create_dir(&directory)?;
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            std::fs::set_permissions(
-                                &directory,
-                                std::fs::Permissions::from_mode(0o700),
-                            )?;
-                        }
-                    }
-                    Err(e) => return Err(e),
-                }
+            agena_storage_layout::secure_directory(&root)?;
+            if root.canonicalize()? != root || !path.starts_with(&root) {
+                return Err(std::io::Error::other(
+                    "media record escapes its managed directory",
+                ));
             }
             if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
                 return Err(std::io::Error::other("media record cannot be a symlink"));
             }
             if create {
-                agena_runtime_tools::atomic_create_file(&path, &bytes, None)
+                #[cfg(unix)]
+                let permissions = {
+                    use std::os::unix::fs::PermissionsExt;
+                    Some(std::fs::Permissions::from_mode(0o600))
+                };
+                #[cfg(not(unix))]
+                let permissions = None;
+                agena_runtime_tools::atomic_create_file(&path, &bytes, permissions)?;
             } else {
-                agena_runtime_tools::atomic_write_file(&path, &bytes)
+                agena_runtime_tools::atomic_write_file(&path, &bytes)?;
             }
+            agena_storage_layout::secure_file(&path)
         })
         .await
         .map_err(|e| PluginError::internal(format!("media record worker failed: {e}")))?
@@ -211,14 +197,14 @@ impl Service<'_> {
         key: &str,
     ) -> SdkResult<Record> {
         let path = self.record_path(handle)?;
-        let root = self
-            .root
-            .canonicalize()
-            .map_err(|e| PluginError::internal_error(&e))?;
+        let root = self.record_root();
         let data = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+            let canonical_root = root.canonicalize()?;
             let target = path.canonicalize()?;
-            if !target.starts_with(&root) {
-                return Err(std::io::Error::other("cloud record escapes workspace"));
+            if canonical_root != root || !target.starts_with(&canonical_root) {
+                return Err(std::io::Error::other(
+                    "cloud record escapes its managed directory",
+                ));
             }
             let mut options = std::fs::OpenOptions::new();
             options.read(true);

@@ -92,9 +92,11 @@ impl SessionManager {
                     let target = root.join(path).canonicalize().map_err(|error| {
                         AppError::Config(format!("selected attachment is unavailable: {error}"))
                     })?;
-                    if !target.starts_with(&root) {
+                    if !target.starts_with(&root)
+                        && agena_runtime_tools::managed_attachment_root(&root, &target).is_none()
+                    {
                         return Err(AppError::Config(
-                            "selected attachment escapes the active workspace".into(),
+                            "selected attachment escapes the active workspace and its managed attachments".into(),
                         ));
                     }
                     if !matches!(

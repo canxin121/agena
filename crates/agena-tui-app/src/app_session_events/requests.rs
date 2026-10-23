@@ -1163,6 +1163,13 @@ mod rewind_tests {
 
     #[test]
     fn rewind_restores_media_paths_and_message_scoped_command_references() {
+        let layout = agena_storage_layout::StorageLayout::current();
+        let fixture_workspace = std::path::Path::new("/fixture-workspace");
+        let managed_path = layout
+            .uploads_dir(fixture_workspace)
+            .join("image.png")
+            .to_string_lossy()
+            .into_owned();
         let parts = vec![
             part(
                 1,
@@ -1179,7 +1186,7 @@ mod rewind_tests {
                 "completed",
                 Some(1),
                 json!({
-                    "path": ".agena/uploads/image.png", "name": "image.png", "mime": "image/png",
+                    "path": managed_path, "name": "image.png", "mime": "image/png",
                     "sha": "input-hash", "delivery": "model_input",
                     "attachments": [{"kind": "image", "mime": "image/png", "source": {
                         "source": "provider_data", "route": "original-route", "data": "aGVsbG8="
@@ -1220,7 +1227,7 @@ mod rewind_tests {
         assert_eq!(
             resource.reference,
             ResourceReference::WorkspacePath {
-                path: ".agena/uploads/image.png".to_owned()
+                path: managed_path.clone()
             }
         );
         assert_eq!(resource.delivery, ResourceDelivery::ModelInput);
@@ -1247,5 +1254,28 @@ mod rewind_tests {
             }
         );
         agena_application::session::validate_input_document(&targets[0].message_document).unwrap();
+        for forbidden in [
+            layout.secrets_dir().join("namespace.json"),
+            layout.memory_dir(fixture_workspace).join("private.md"),
+            layout.root().join("other.txt"),
+            layout
+                .uploads_dir(fixture_workspace)
+                .join("../memory/private.md"),
+        ] {
+            let mut invalid = targets[0].message_document.clone();
+            let ComposerNode::Activity { activity } = &mut invalid.0[0] else {
+                panic!("media");
+            };
+            let ActivityPayload::Resource(resource) = &mut activity.payload else {
+                panic!("resource");
+            };
+            resource.reference = ResourceReference::WorkspacePath {
+                path: forbidden.to_string_lossy().into_owned(),
+            };
+            assert!(
+                agena_application::session::validate_input_document(&invalid).is_err(),
+                "non-attachment paths must fail input validation"
+            );
+        }
     }
 }

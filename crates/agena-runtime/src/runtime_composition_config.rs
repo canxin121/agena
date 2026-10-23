@@ -16,8 +16,6 @@ pub(crate) struct RuntimeCompositionConfig {
     pub(crate) bootstrap_preflight: Option<RuntimeBootstrapPreflight>,
     pub(crate) database_url: Option<String>,
     pub(crate) database_path: Option<PathBuf>,
-    pub(crate) scheduler_database_url: Option<String>,
-    pub(crate) scheduler_database_path: Option<PathBuf>,
     pub(crate) tracing_reload_handle: Option<TracingFilterReloadHandle>,
 }
 

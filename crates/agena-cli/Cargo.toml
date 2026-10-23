@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Agena command-line argument schema, command dispatch, and output formatting"
 
 [dependencies]
+agena-storage-layout = { workspace = true }
 agena-api = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }

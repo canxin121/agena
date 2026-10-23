@@ -404,7 +404,7 @@ async fn frozen_heads_exclude_uncommitted_events_and_report_retention_and_wrong_
         .create(root.path().to_string_lossy().into_owned())
         .await
         .unwrap();
-    let ports = kernel.ports;
+    let ports = kernel.ports.clone();
     let (session, _round, tool) = event_tests::tool(&ports).await;
     let text = tool.begin_text(RequestId::new()).await.unwrap().value;
     let terminal = tool.begin_terminal(RequestId::new()).await.unwrap().value;
@@ -459,18 +459,11 @@ async fn frozen_heads_exclude_uncommitted_events_and_report_retention_and_wrong_
         Err(KernelError::ContentGap { .. })
     ));
     let terminal_id = terminal.id();
-    drop((
-        tool,
-        text,
-        terminal,
-        _round,
-        kernel.workspaces,
-        kernel.permissions,
-        kernel.model_catalog,
-        kernel.maintenance,
-        kernel.database,
-    ));
+    drop((tool, text, terminal, _round));
     ports.shutdown().await.unwrap();
+    // Every infrastructure repository retains the owned pool. Release the
+    // complete composition, including instance state, before a new owner opens.
+    drop(kernel);
     let reopened = open_session_kernel(&url).await.unwrap();
     // Graceful shutdown seals this capture without changing the meaning of
     // its old committed cursor. A kill/reopen reset is tested in the real

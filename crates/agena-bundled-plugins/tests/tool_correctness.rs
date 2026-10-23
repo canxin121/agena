@@ -517,8 +517,8 @@ async fn audit_memory_index_uses_exact_names_and_quotes_yaml_scalars() {
     assert!(index.contains("(ba.md)"));
 }
 
-/// Memory's production location is HOME/agena/projects/<workspace>. Give only
-/// the child test process an isolated HOME; never mutate the test process env.
+/// Give the child process an isolated managed data root; never mutate the
+/// parent test process environment or persist into a developer's real store.
 fn isolated_memory_test(name: &str) -> bool {
     if std::env::var("AGENA_AUDIT_MEMORY_CHILD").as_deref() == Ok(name) {
         return false;
@@ -526,6 +526,7 @@ fn isolated_memory_test(name: &str) -> bool {
     let home = tempfile::tempdir().unwrap();
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture"])
+        .env("AGENA_DATA_DIR", home.path().join("agena"))
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
         .env("AGENA_AUDIT_MEMORY_CHILD", name)

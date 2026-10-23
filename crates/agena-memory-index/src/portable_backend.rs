@@ -26,7 +26,7 @@ impl MemoryIndex {
         &self,
         documents: &[MemorySearchDocument],
     ) -> Result<(), MemoryIndexError> {
-        fs::create_dir_all(&self.dir)?;
+        agena_storage_layout::secure_directory(&self.dir)?;
         let bytes = serde_json::to_vec(documents)?;
         let target = self.dir.join(INDEX_FILE);
         if fs::read(&target).is_ok_and(|current| current == bytes) {

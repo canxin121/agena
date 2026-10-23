@@ -753,7 +753,7 @@ impl McpPlugin {
 }
 
 /// Render only redacted operational state. Do not add credential values or
-/// keyring errors here: this string is visible to the model and terminal UI.
+/// secret-store errors here: this string is visible to the model and terminal UI.
 fn status_summary_suffix(status: &agena_mcp_client::McpServerStatus) -> String {
     let mut parts = vec![format!("; auth={}", status.auth_mode.as_str())];
     if let Some(health) = status.oauth_health.as_ref() {

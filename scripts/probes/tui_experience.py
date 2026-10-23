@@ -201,7 +201,6 @@ class Pty:
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
         self.environment = {**environment, "TERM": "xterm-256color", "COLORTERM": "truecolor",
-                            "AGENA_STATE_DIR": str(directory / "state"),
                             "AGENA_RUNTIME_BOOTSTRAP_FORBIDDEN": "1",
                             "AGENA_TUI_NATIVE_CLIPBOARD": "false", "AGENA_TUI_OSC52": "true"}
         self.command = [str(binary), "--server", f"http://127.0.0.1:{api.port}", "tui",

@@ -64,7 +64,6 @@ mod bootstrap_error;
 mod bootstrap_request;
 mod bootstrap_result;
 mod composition;
-mod connect;
 mod control_state;
 mod invocation_guard;
 mod live_signal;
@@ -244,7 +243,6 @@ pub(crate) use composition::{
     SessionCompositionInputs, ToolCompositionInputs, compose_runtime_snapshot_state,
     session_build_config_from_resolved, spawn_runtime_maintenance_loops,
 };
-pub(crate) use connect::connect_or_initialize;
 pub(crate) use control_state::RuntimeControlState;
 pub(crate) use invocation_guard::try_enter_invocation;
 pub(crate) use live_signal::LiveSignalHub;
@@ -344,8 +342,6 @@ pub(crate) use agena_bundled_plugins::tool::{new_web_plugin, web_plugin_id};
 pub(crate) use agena_runtime_session::{UsageStatRecord, summarize_usage_records};
 pub(crate) use tracing_config::{
     RuntimeDatabaseCompositionError, apply_runtime_tracing_filter, connect_runtime_database,
-    connect_scheduler_database, is_in_memory_database, resolve_runtime_database_url,
-    resolve_scheduler_database_url,
 };
 pub use tracing_config::{RuntimeTracingConfiguration, runtime_env_filter};
 pub(crate) use watch::{capture_watch_path_stamps, diff_watch_path_stamps};
@@ -414,9 +410,8 @@ mod tests {
         RuntimeBackgroundTaskRegistry, RuntimeBackgroundTaskSpec, RuntimeBackgroundTaskState,
         RuntimeBackgroundTaskStatus, RuntimeControlState, RuntimeSchedulingPolicy,
         RuntimeSnapshotState, RuntimeTaskState, SnapshotMetadata, SnapshotStore, TaskControl,
-        WatchPathSet, build_app_runtime, capture_watch_path_stamps, connect_or_initialize,
-        diff_watch_path_stamps, is_stale, run_cancellable_refresh, run_periodic, should_refresh,
-        wait_for_tick_or_shutdown,
+        WatchPathSet, build_app_runtime, capture_watch_path_stamps, diff_watch_path_stamps,
+        is_stale, run_cancellable_refresh, run_periodic, should_refresh, wait_for_tick_or_shutdown,
     };
     use crate::optional::build_optional;
     use crate::watch::WatchPathStamp;
@@ -453,26 +448,6 @@ mod tests {
         assert!(state.background_tasks().list().is_empty());
         state.task_control().shutdown();
         assert!(state.task_control().is_shutdown());
-    }
-
-    #[tokio::test]
-    async fn connect_or_initialize_reuses_and_initializes_connection() {
-        let initialized = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let initialized_for_init = Arc::clone(&initialized);
-        let connection = connect_or_initialize(
-            Some(Arc::new(7_u32)),
-            true,
-            || async { Ok::<_, ()>(99_u32) },
-            move |value| {
-                initialized_for_init
-                    .fetch_add(*value as usize, std::sync::atomic::Ordering::SeqCst);
-                async { Ok::<_, ()>(()) }
-            },
-        )
-        .await
-        .expect("connection should initialize");
-        assert_eq!(*connection.expect("connection"), 7);
-        assert_eq!(initialized.load(std::sync::atomic::Ordering::SeqCst), 7);
     }
 
     #[tokio::test]

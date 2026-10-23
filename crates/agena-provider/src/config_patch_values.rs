@@ -140,6 +140,7 @@ pub enum ProviderSecretSourceOverlay {
 #[allow(clippy::large_enum_variant)]
 /// GitLab API access overlay.
 pub enum ProviderGitlabApiAccessOverlay {
+    Managed,
     ApiKey { source: ProviderSecretSourceOverlay },
     Credential { credential: AuthData },
 }

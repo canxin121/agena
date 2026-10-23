@@ -1312,8 +1312,9 @@ async fn persist_response_receipt(
             }
         })
         .collect::<String>();
-    let path = workspace_root
-        .join(".agena/artifacts/provider-tools/receipts")
+    let path = agena_storage_layout::StorageLayout::current()
+        .artifacts_dir(workspace_root)
+        .join("provider-tools/receipts")
         .join(provider)
         .join(format!(
             "{}-{}.json",
@@ -1533,8 +1534,9 @@ async fn persist_images(
             continue;
         }
         let extension = extension_for_mime(candidate.mime.as_str());
-        let path = workspace_root
-            .join(".agena/artifacts/provider-tools")
+        let path = agena_storage_layout::StorageLayout::current()
+            .artifacts_dir(workspace_root)
+            .join("provider-tools")
             .join(provider)
             .join(format!("{}.{}", uuid::Uuid::new_v4().simple(), extension));
         let size_bytes = bytes.len() as u64;

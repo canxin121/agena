@@ -147,7 +147,7 @@ pub(super) fn resolve_managed_project_path_alias(
     workspace_root: &Path,
 ) -> Option<PathBuf> {
     let normalized = raw_path.trim().replace('\\', "/");
-    let prefix = "~/agena/projects/<workspace>";
+    let prefix = "agena://workspace";
     let rest = normalized.strip_prefix(prefix)?;
     let rest = rest.trim_start_matches('/');
     let mut resolved = crate::project_state_dir(workspace_root);

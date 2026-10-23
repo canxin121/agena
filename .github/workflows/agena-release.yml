@@ -492,6 +492,7 @@ jobs:
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       RELEASE_VERSION: ${{ needs.metadata.outputs.release_version }}
       TEST_PORT: "43220"
+      AGENA_DATA_DIR: ${{ runner.temp }}/agena-published-data
     steps:
       - name: Smoke published installer (Unix)
         if: matrix.shell_kind == 'bash'
@@ -511,6 +512,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --version "$RELEASE_VERSION" \
             --install-dir "$install_dir" \
+            --data-dir "$AGENA_DATA_DIR" \
             --workspace "$workspace" \
             --port "$TEST_PORT" \
             --service-mode detached \
@@ -524,6 +526,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --version "$RELEASE_VERSION" \
             --install-dir "$install_dir" \
+            --data-dir "$AGENA_DATA_DIR" \
             --no-path-update
           bash "$installer" uninstall --install-dir "$install_dir" --no-path-update
           test ! -e "$install_dir"
@@ -559,6 +562,7 @@ jobs:
             -Repo $env:GITHUB_REPOSITORY `
             -Version $env:RELEASE_VERSION `
             -InstallDir $installDir `
+            -DataDir $env:AGENA_DATA_DIR `
             -Workspace $workspace `
             -Port ([int]$env:TEST_PORT) `
             -ServiceMode detached `
@@ -575,6 +579,7 @@ jobs:
             -Repo $env:GITHUB_REPOSITORY `
             -Version $env:RELEASE_VERSION `
             -InstallDir $installDir `
+            -DataDir $env:AGENA_DATA_DIR `
             -NoPathUpdate
           Write-Host "[published-smoke] uninstall"
           & $installer -Action Uninstall -InstallDir $installDir -NoPathUpdate

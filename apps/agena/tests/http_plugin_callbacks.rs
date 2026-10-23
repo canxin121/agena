@@ -100,13 +100,11 @@ async fn authenticated_application_bootstrap_and_reload_serve_plugin_callbacks()
         .unwrap();
     };
     write_config("en-US");
-    let record_path = state.join("endpoint.json");
+    let record_path = state.join("run/server.json");
     let log_path = directory.path().join("application.log");
     let log = std::fs::File::create(&log_path).unwrap();
     let mut command = support::isolated_server_command(&state);
     let application = command
-        .arg("--database-path")
-        .arg(directory.path().join("chat.db"))
         .arg("server")
         .arg("--host")
         .arg("127.0.0.1")
@@ -118,8 +116,6 @@ async fn authenticated_application_bootstrap_and_reload_serve_plugin_callbacks()
         // This fixture owns each reload. A remote startup catalog refresh
         // would rotate callback credentials before the explicit auth checks.
         .env("AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES", "1")
-        .env("AGENA_SERVER_DATA_DIR", &state)
-        .env("AGENA_SERVER_RECORD", &record_path)
         .stdin(Stdio::null())
         .stderr(log.try_clone().unwrap())
         .stdout(log)

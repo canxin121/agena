@@ -463,13 +463,11 @@ fn a_narrowed_temp_rule_reaches_the_model() {
 
 #[test]
 fn the_runtime_state_directory_is_covered_by_its_own_rule() {
-    // The rule is written against the `<home>` alias, which resolves to the same
-    // `HOME` the runtime's `agena_home_dir()` reads, so a path under it is
-    // allowed without the session layer injecting anything.
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_owned());
-    let state_file = format!("{home}/agena/projects/-work/snapshots/tree.bin");
+    let state_file = agena_storage_layout::StorageLayout::current()
+        .workspace_dir(std::path::Path::new("/work"))
+        .join("snapshots/tree.bin")
+        .display()
+        .to_string();
     let config = shipped(|_| {});
     for access in [AccessKind::Read, AccessKind::Write] {
         assert_eq!(

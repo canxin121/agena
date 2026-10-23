@@ -14,7 +14,6 @@ async fn settings_reload_after_shutdown_returns_unavailability_without_a_complet
         workspace_root: Some(workspace.path().to_path_buf()),
         config_path: Some(config_path.clone()),
         database_url: Some("sqlite::memory:".into()),
-        scheduler_database_url: Some("sqlite::memory:".into()),
         ..RuntimeBootstrapRequest::default()
     })
     .await
@@ -110,7 +109,6 @@ async fn reload_and_catalog_routes_preserve_capacity_and_shutdown_failures() {
         workspace_root: Some(workspace.path().to_path_buf()),
         config_path: Some(workspace.path().join("global.json")),
         database_url: Some("sqlite::memory:".into()),
-        scheduler_database_url: Some("sqlite::memory:".into()),
         ..RuntimeBootstrapRequest::default()
     })
     .await

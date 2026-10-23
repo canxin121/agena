@@ -1,5 +1,5 @@
-//! Local marketplace cache layout under `~/agena/marketplace/` (override via
-//! `AGENA_MARKETPLACE_DIR`). Provides path helpers, atomic write, secure
+//! Local marketplace cache layout under the instance data directory's
+//! `marketplace/`. Provides path helpers, atomic write, secure
 //! permissions, and persistence for `installed.json`.
 
 use std::collections::BTreeMap;
@@ -110,20 +110,7 @@ impl MarketplaceCache {
 }
 
 fn ensure_dir(path: &Path) -> Result<(), MarketplaceError> {
-    if !path.exists() {
-        fs::create_dir_all(path)?;
-        secure_directory(path)?;
-    }
-    Ok(())
-}
-
-fn secure_directory(path: &Path) -> Result<(), MarketplaceError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    let _ = path;
+    agena_storage_layout::secure_directory(path)?;
     Ok(())
 }
 
@@ -145,6 +132,7 @@ pub fn write_secure_file(path: &Path, contents: &[u8]) -> Result<(), Marketplace
     let mut staged = builder.tempfile_in(parent)?;
     staged.write_all(contents)?;
     staged.flush()?;
+    agena_storage_layout::secure_file(staged.path())?;
     staged.as_file().sync_all()?;
     staged.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -216,22 +204,7 @@ pub struct InstalledRecord {
     pub archive_extracted: bool,
 }
 
-/// Default cache root: `$AGENA_MARKETPLACE_DIR` or `~/agena/marketplace`.
+/// Marketplace state for the selected Agena data directory.
 pub fn default_cache_root() -> PathBuf {
-    if let Ok(path) = std::env::var("AGENA_MARKETPLACE_DIR") {
-        return PathBuf::from(path);
-    }
-    let mut base = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|error| {
-            tracing::error!(
-                diagnostic = %error,
-                "plugin marketplace home is unavailable; using the current-directory fallback path"
-            );
-            PathBuf::from(".")
-        });
-    base.push("agena");
-    base.push("marketplace");
-    base
+    agena_storage_layout::StorageLayout::current().marketplace_dir()
 }

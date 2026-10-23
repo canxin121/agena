@@ -10,6 +10,9 @@ authors.workspace = true
 test-support = []
 
 [dependencies]
+urlencoding = { workspace = true }
+libc = { workspace = true }
+agena-storage-layout = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 async-trait = { workspace = true }

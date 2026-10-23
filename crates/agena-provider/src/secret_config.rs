@@ -50,6 +50,7 @@ impl fmt::Debug for ProviderSecretSourceConfig {
 #[allow(clippy::large_enum_variant)]
 /// GitLab API access configuration.
 pub enum ProviderGitlabApiAccessConfig {
+    Managed,
     ApiKey { source: ProviderSecretSourceConfig },
     Credential { credential: AuthData },
 }
@@ -58,13 +59,13 @@ impl ProviderGitlabApiAccessConfig {
     pub fn api_key_source(&self) -> Option<&ProviderSecretSourceConfig> {
         match self {
             Self::ApiKey { source } => Some(source),
-            Self::Credential { .. } => None,
+            Self::Managed | Self::Credential { .. } => None,
         }
     }
 
     pub fn credential(&self) -> Option<&AuthData> {
         match self {
-            Self::ApiKey { .. } => None,
+            Self::Managed | Self::ApiKey { .. } => None,
             Self::Credential { credential } => Some(credential),
         }
     }
@@ -73,6 +74,7 @@ impl ProviderGitlabApiAccessConfig {
 impl fmt::Debug for ProviderGitlabApiAccessConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Managed => f.write_str("ProviderGitlabApiAccessConfig::Managed"),
             Self::ApiKey { source } => f
                 .debug_struct("ProviderGitlabApiAccessConfig::ApiKey")
                 .field("source", source)

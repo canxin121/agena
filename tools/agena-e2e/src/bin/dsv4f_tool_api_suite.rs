@@ -58,7 +58,7 @@ struct Args {
     #[arg(long, default_value = ".")]
     repo_root: PathBuf,
 
-    /// Home config to copy into the isolated test HOME. Defaults to $HOME/agena/agena.json.
+    /// Config to copy into an isolated data root. Defaults to the selected Agena data root/agena.json.
     #[arg(long)]
     config_source: Option<PathBuf>,
 
@@ -74,7 +74,7 @@ struct Args {
     #[arg(long, default_value_t = 600)]
     agent_timeout_secs: u64,
 
-    /// Keep the isolated HOME/workspace fixture for postmortem inspection.
+    /// Keep the isolated data directory and workspace for postmortem inspection.
     #[arg(long)]
     keep_fixture: bool,
 
@@ -94,9 +94,6 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let original_home = std_env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is required to locate the configured Cline credentials")?;
     let repo_root = args
         .repo_root
         .canonicalize()
@@ -104,7 +101,7 @@ async fn async_main() -> anyhow::Result<()> {
     let config_source = args
         .config_source
         .clone()
-        .unwrap_or_else(|| original_home.join("agena/agena.json"));
+        .unwrap_or_else(|| agena_storage_layout::StorageLayout::current().config_path());
     ensure!(
         config_source.is_file(),
         "Cline configuration source does not exist: {}",
@@ -116,17 +113,17 @@ async fn async_main() -> anyhow::Result<()> {
         .with_context(|| format!("parse model reference `{}`", args.model))?;
 
     let fixture = Fixture::create(&repo_root, &config_source, args.keep_fixture)?;
-    configure_isolated_environment(&fixture)?;
+    initialize_fixture_storage(&fixture)?;
+    require_explicit_fixture_auth(&config_source, &model)?;
 
     let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
         workspace_root: Some(fixture.workspace.clone()),
         config_override_expressions: Vec::new(),
-        database_url: Some("sqlite::memory:".to_string()),
         tracing_reload_handle: None,
         ..Default::default()
     })
     .await
-    .context("start isolated dsv4f suite runtime")?;
+    .context("start isolated dsv4f suite runtime; its SecretStore is independent, so provide --config-source with explicit inline or environment credentials for this fixture")?;
     let services = runtime.application_services();
     assert_tool_api_surface(services.tools.as_ref()).await?;
     let application =
@@ -212,18 +209,25 @@ async fn assert_tool_api_surface(tools: &dyn RuntimeToolExecutionService) -> any
     Ok(())
 }
 
-/// The suite changes process-wide variables exactly once before the Tokio
-/// runtime is constructed and before any child/plugin task is spawned.
-fn configure_isolated_environment(fixture: &Fixture) -> anyhow::Result<()> {
-    fs::create_dir_all(&fixture.plugin_storage)
-        .with_context(|| format!("create {}", fixture.plugin_storage.display()))?;
-    // SAFETY: this function runs in `async_main` before composing the Runtime,
-    // its Tokio worker threads, or any plugin child process. No concurrent
-    // environment access exists yet, and the values remain fixed thereafter.
-    unsafe {
-        std_env::set_var("HOME", &fixture.home);
-        std_env::set_var("AGENA_PLUGIN_STORAGE_DIR", &fixture.plugin_storage);
+/// Select one immutable Agena data root without changing HOME, the parent
+/// environment, or the host toolchain's configuration directories.
+fn initialize_fixture_storage(fixture: &Fixture) -> anyhow::Result<()> {
+    agena_storage_layout::StorageLayout::initialize_process(&fixture.data_dir)?.prepare()?;
+    Ok(())
+}
+
+fn require_explicit_fixture_auth(config_source: &Path, model: &ModelRef) -> anyhow::Result<()> {
+    if model.provider_id.as_ref() != "cline" {
+        return Ok(());
     }
+    let configuration: Value = serde_json::from_slice(&fs::read(config_source)?)
+        .context("parse fixture source configuration")?;
+    let auth = &configuration["providers"][model.provider_id.as_ref()]["auth"];
+    ensure!(
+        auth.get("api_key").is_some_and(|value| !value.is_null())
+            || auth.get("credential").is_some_and(|value| !value.is_null()),
+        "the isolated Cline fixture cannot use credentials managed by another Agena instance; supply --config-source with explicit inline or environment authentication; the source SecretStore is never copied"
+    );
     Ok(())
 }
 
@@ -323,9 +327,8 @@ impl ToolApiOutcome {
 struct Fixture {
     temp: Option<TempDir>,
     root: PathBuf,
-    home: PathBuf,
+    data_dir: PathBuf,
     workspace: PathBuf,
-    plugin_storage: PathBuf,
     web: LocalWebServer,
     keep: bool,
 }
@@ -336,18 +339,18 @@ impl Fixture {
             .prefix("agena-dsv4f-suite-")
             .tempdir()?;
         let root = temp.path().to_path_buf();
-        let home = root.join("home");
+        let data_dir = root.join("data");
         let workspace = root.join("workspace");
-        let plugin_storage = root.join("plugin-storage");
-        fs::create_dir_all(home.join("agena"))?;
+        agena_storage_layout::secure_directory(&data_dir)?;
         fs::create_dir_all(workspace.join(".agena"))?;
         fs::create_dir_all(workspace.join("src"))?;
-        fs::copy(config_source, home.join("agena/agena.json")).with_context(|| {
+        fs::copy(config_source, data_dir.join("agena.json")).with_context(|| {
             format!(
-                "copy configured Cline home config from {} into isolated HOME",
+                "copy configured Cline configuration from {} into isolated Agena data directory",
                 config_source.display()
             )
         })?;
+        agena_storage_layout::secure_file(&data_dir.join("agena.json"))?;
 
         fs::write(
             workspace.join("Cargo.toml"),
@@ -365,9 +368,8 @@ impl Fixture {
         Ok(Self {
             temp: Some(temp),
             root,
-            home,
+            data_dir,
             workspace,
-            plugin_storage,
             web,
             keep,
         })
@@ -461,16 +463,12 @@ fn rust_analyzer_path() -> anyhow::Result<PathBuf> {
         .context("no installed rust-analyzer binary was found in RUSTUP_HOME")
 }
 
-/// The suite isolates `HOME` so its model credentials, database, and plugin
-/// state cannot leak into the developer's normal agena installation. Rust
-/// Analyzer invokes the `cargo`/`rustc` rustup proxies, however, and those
-/// proxies locate their selected toolchain through `RUSTUP_HOME` (which
-/// otherwise follows the now-isolated `HOME`). Preserve just the host's Rust
-/// toolchain roots for the fixture language-server process.
+/// Explicit toolchain roots keep the language server tied to the installed
+/// host Rust toolchain while Agena state uses its own selected data directory.
 fn rust_toolchain_environment() -> anyhow::Result<BTreeMap<String, String>> {
     let host_home = std_env::var_os("HOME")
         .map(PathBuf::from)
-        .context("HOME is required to configure rust-analyzer for the isolated fixture")?;
+        .context("HOME is required to locate the host rust-analyzer toolchain")?;
     Ok(rust_toolchain_environment_for(
         &host_home,
         std_env::var_os("RUSTUP_HOME").map(PathBuf::from),
@@ -657,7 +655,7 @@ mod tests {
     use super::{Path, PathBuf, rust_toolchain_environment_for};
 
     #[test]
-    fn rust_analyzer_environment_keeps_host_toolchain_when_fixture_home_isolated() {
+    fn rust_analyzer_environment_keeps_host_toolchain_with_isolated_agena_data() {
         let environment = rust_toolchain_environment_for(Path::new("/host/home"), None, None);
 
         assert_eq!(

@@ -1,189 +1,82 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::sync::Arc;
 
 use agena_provider::{AuthData, OpenAiResponsesBackendConfig, ProviderCredentialAuthConfig};
-use serde_json::{Map as JsonMap, Value as JsonValue};
-
-use crate::{ProviderError, provider::auth::AuthStore};
-use agena_runtime_config::ProcessEnvironment;
-
-use agena_runtime_config::config::raw::{RawConfig, RawConfigFile};
 use agena_runtime_config::{
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderGitlabAuthConfig, ResolvedProviderConfig,
 };
+use agena_secret_store::{FileSecretStore, SecretStore};
 
-#[derive(Debug, Clone)]
-/// Credential store backed by the provider config file.
-pub struct ProviderConfigCredentialStore {
-    config_path: PathBuf,
+use crate::{ProviderError, provider::auth::AuthStore};
+
+pub const PROVIDER_SECRET_NAMESPACE: &str = "agena.provider";
+
+/// Managed API keys and OAuth records use the same private secret backend as
+/// MCP and plugins. Saving or refreshing a credential never rewrites config.
+#[derive(Clone)]
+pub struct ProviderSecretCredentialStore {
+    secrets: Arc<dyn SecretStore>,
 }
 
-impl ProviderConfigCredentialStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            config_path: path.into(),
-        }
-    }
-
-    pub fn all_provider_configs(
-        &self,
-    ) -> Result<HashMap<String, ResolvedProviderConfig>, ProviderError> {
-        load_provider_configs(self.config_path.as_path())
-    }
-
-    fn read_doc(&self) -> Result<JsonValue, ProviderError> {
-        if self.config_path.exists() {
-            let text = fs::read_to_string(&self.config_path)?;
-            let doc = serde_json::from_str::<JsonValue>(text.as_str()).map_err(|err| {
-                ProviderError::Config(format!("parse {}: {err}", self.config_path.display()))
-            })?;
-            Ok(normalize_root_object(doc))
-        } else {
-            Ok(JsonValue::Object(JsonMap::new()))
-        }
-    }
-
-    fn write_doc(&self, doc: &JsonValue) -> Result<(), ProviderError> {
-        let bytes = serde_json::to_vec_pretty(doc)?;
-        agena_runtime_config::write_config_file_atomically(&self.config_path, &bytes)?;
-        Ok(())
-    }
-
-    fn ensure_provider_auth_table<'a>(
-        &self,
-        doc: &'a mut JsonValue,
-        provider_id: &str,
-    ) -> &'a mut JsonMap<String, JsonValue> {
-        if !doc.is_object() {
-            *doc = JsonValue::Object(JsonMap::new());
-        }
-
-        let root = doc.as_object_mut().expect("root object");
-        let providers = root
-            .entry("providers".to_owned())
-            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
-        if !providers.is_object() {
-            *providers = JsonValue::Object(JsonMap::new());
-        }
-        let providers = providers.as_object_mut().expect("providers object");
-
-        let provider = providers
-            .entry(provider_id.to_owned())
-            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
-        if !provider.is_object() {
-            *provider = JsonValue::Object(JsonMap::new());
-        }
-        let provider = provider.as_object_mut().expect("provider object");
-
-        let auth = provider
-            .entry("auth".to_owned())
-            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
-        if !auth.is_object() {
-            *auth = JsonValue::Object(JsonMap::new());
-        }
-        auth.as_object_mut().expect("provider auth object")
+impl std::fmt::Debug for ProviderSecretCredentialStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderSecretCredentialStore")
+            .finish_non_exhaustive()
     }
 }
 
-impl AuthStore for ProviderConfigCredentialStore {
+impl Default for ProviderSecretCredentialStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderSecretCredentialStore {
+    pub fn new() -> Self {
+        Self::with_secret_store(Arc::new(FileSecretStore::new(PROVIDER_SECRET_NAMESPACE)))
+    }
+
+    pub fn with_secret_store(secrets: Arc<dyn SecretStore>) -> Self {
+        Self { secrets }
+    }
+}
+
+impl AuthStore for ProviderSecretCredentialStore {
     fn get(&self, provider_id: &str) -> Result<Option<AuthData>, ProviderError> {
-        Ok(self
-            .all_provider_configs()?
-            .remove(provider_id)
-            .and_then(|resolved| provider_auth_data(&resolved)))
+        self.secrets
+            .get_secret(provider_id)
+            .map_err(|error| ProviderError::Config(error.to_string()))?
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|_| {
+                    ProviderError::Config("invalid managed provider credential".to_owned())
+                })
+            })
+            .transpose()
     }
 
     fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), ProviderError> {
-        agena_runtime_config::with_config_file_write_lock(|| {
-            let mut doc = self.read_doc()?;
-            let auth_table = self.ensure_provider_auth_table(&mut doc, provider_id);
-            auth_table.remove("mode");
-            auth_table.remove("credential");
-            auth_table.remove("issuer");
-            auth_table.remove("access");
-
-            match auth {
-                AuthData::Api { key } => {
-                    auth_table.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
-                    auth_table.insert(
-                        "api_key".to_owned(),
-                        serde_json::json!({
-                            "kind": "inline",
-                            "value": key,
-                        }),
-                    );
-                }
-                AuthData::OAuth { .. } => {
-                    let issuer = auth.issuer().ok_or_else(|| {
-                        ProviderError::Config(format!(
-                            "{provider_id} oauth credential must include an issuer"
-                        ))
-                    })?;
-                    auth_table.insert(
-                        "mode".to_owned(),
-                        JsonValue::String("credential".to_owned()),
-                    );
-                    auth_table.insert(
-                        "issuer".to_owned(),
-                        JsonValue::String(credential_issuer_value(issuer).to_owned()),
-                    );
-                    auth_table.insert("credential".to_owned(), auth_data_item(auth));
-                }
-                AuthData::WellKnown { .. } => {
-                    auth_table.insert(
-                        "mode".to_owned(),
-                        JsonValue::String("credential".to_owned()),
-                    );
-                    auth_table.insert("credential".to_owned(), auth_data_item(auth));
-                }
-            }
-            self.write_doc(&doc)
-        })
+        if matches!(auth, AuthData::OAuth { issuer: None, .. }) {
+            return Err(ProviderError::Config(
+                "managed OAuth credential requires an issuer".to_owned(),
+            ));
+        }
+        let encoded = serde_json::to_string(&auth).map_err(|_| {
+            ProviderError::Config("cannot encode managed provider credential".to_owned())
+        })?;
+        self.secrets
+            .set_secret(provider_id, &encoded)
+            .map_err(|error| ProviderError::Config(error.to_string()))
     }
 
     fn remove(&self, provider_id: &str) -> Result<(), ProviderError> {
-        agena_runtime_config::with_config_file_write_lock(|| {
-            if !self.config_path.exists() {
-                return Ok(());
-            }
-
-            let mut doc = self.read_doc()?;
-            let Some(providers) = doc
-                .as_object_mut()
-                .and_then(|root| root.get_mut("providers"))
-                .and_then(JsonValue::as_object_mut)
-            else {
-                return Ok(());
-            };
-            let Some(provider) = providers
-                .get_mut(provider_id)
-                .and_then(JsonValue::as_object_mut)
-            else {
-                return Ok(());
-            };
-            let Some(auth) = provider.get_mut("auth").and_then(JsonValue::as_object_mut) else {
-                return Ok(());
-            };
-
-            auth.remove("credential");
-            auth.remove("issuer");
-            auth.remove("api_key");
-            auth.remove("access");
-
-            if auth_table_has_no_sources(auth) {
-                auth.remove("mode");
-            }
-
-            if auth.is_empty() {
-                provider.remove("auth");
-            }
-
-            self.write_doc(&doc)
-        })
+        self.secrets
+            .delete_secret(provider_id)
+            .map_err(|error| ProviderError::Config(error.to_string()))
     }
+}
+
+/// Resolve a managed record without exposing the secret backend to adapters.
+pub fn managed_provider_auth_data(provider_id: &str) -> Result<Option<AuthData>, ProviderError> {
+    ProviderSecretCredentialStore::new().get(provider_id)
 }
 
 pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData> {
@@ -353,25 +246,6 @@ pub fn resolve_provider_device_auth_target(
     }
 }
 
-fn load_provider_configs(
-    path: &Path,
-) -> Result<HashMap<String, ResolvedProviderConfig>, ProviderError> {
-    let env = ProcessEnvironment;
-    let file_state = RawConfigFile::read(path)?;
-    let env_overlay = RawConfig::from_env(&env)?;
-
-    let mut merged = if file_state.found {
-        file_state.config
-    } else {
-        RawConfig::default()
-    };
-    if !env_overlay.is_empty() {
-        merged.merge_from(env_overlay);
-    }
-
-    Ok(merged.resolve()?.providers.into_iter().collect())
-}
-
 fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {
     if let Some(key) = normalize_text(secret.api_key()) {
         return Some(AuthData::Api { key });
@@ -403,109 +277,45 @@ fn normalize_text(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn auth_table_has_no_sources(table: &JsonMap<String, JsonValue>) -> bool {
-    let source_keys = [
-        "credential",
-        "api_key",
-        "access",
-        "service_key_env",
-        "profile",
-        "access_key_id",
-        "secret_access_key",
-        "session_token",
-    ];
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    !source_keys.iter().any(|key| table.contains_key(*key))
-}
-
-fn credential_issuer_value(issuer: agena_provider::CredentialIssuer) -> &'static str {
-    match issuer {
-        agena_provider::CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
-        agena_provider::CredentialIssuer::GithubCopilot => "github_copilot",
-        agena_provider::CredentialIssuer::Gitlab => "gitlab",
-        agena_provider::CredentialIssuer::GoogleAdc => "google_adc",
-        agena_provider::CredentialIssuer::SapAiCore => "sap_ai_core",
+    #[test]
+    fn managed_credentials_round_trip_and_remain_separate_from_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("agena.json");
+        let config = r#"{"providers":{"example":{"auth":{"mode":"api"}}}}"#;
+        std::fs::write(&config_path, config).unwrap();
+        let backend = Arc::new(FileSecretStore::at(
+            directory.path().join("secrets"),
+            PROVIDER_SECRET_NAMESPACE,
+        ));
+        let store = ProviderSecretCredentialStore::with_secret_store(backend.clone());
+        let auth = AuthData::Api {
+            key: "managed-api-key".to_owned(),
+        };
+        store.set("example", auth.clone()).unwrap();
+        let reopened = ProviderSecretCredentialStore::with_secret_store(backend);
+        assert_eq!(reopened.get("example").unwrap(), Some(auth));
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), config);
+        reopened.remove("example").unwrap();
+        assert_eq!(store.get("example").unwrap(), None);
+        assert!(!format!("{store:?}").contains("managed-api-key"));
     }
-}
 
-fn auth_data_item(auth: AuthData) -> JsonValue {
-    let mut table = JsonMap::new();
-    match auth {
-        AuthData::Api { key } => {
-            table.insert("type".to_owned(), JsonValue::String("api".to_owned()));
-            table.insert("key".to_owned(), JsonValue::String(key));
-        }
-        AuthData::OAuth {
-            issuer,
-            refresh,
-            access,
-            id_token,
-            expires_at_ms,
-            account_id,
-            chatgpt_account_is_fedramp,
-            enterprise_url,
-            user,
-        } => {
-            table.insert("type".to_owned(), JsonValue::String("oauth".to_owned()));
-            if let Some(issuer) = issuer {
-                table.insert(
-                    "issuer".to_owned(),
-                    JsonValue::String(credential_issuer_value(issuer).to_owned()),
-                );
-            }
-            table.insert("refresh".to_owned(), JsonValue::String(refresh));
-            table.insert("access".to_owned(), JsonValue::String(access));
-            if let Some(id_token) = normalize_text(id_token.as_deref()) {
-                table.insert("id_token".to_owned(), JsonValue::String(id_token));
-            }
-            table.insert("expires_at_ms".to_owned(), JsonValue::from(expires_at_ms));
-            if let Some(account_id) = normalize_text(account_id.as_deref()) {
-                table.insert("account_id".to_owned(), JsonValue::String(account_id));
-            }
-            if chatgpt_account_is_fedramp {
-                table.insert(
-                    "chatgpt_account_is_fedramp".to_owned(),
-                    JsonValue::Bool(true),
-                );
-            }
-            if let Some(enterprise_url) = normalize_text(enterprise_url.as_deref()) {
-                table.insert(
-                    "enterprise_url".to_owned(),
-                    JsonValue::String(enterprise_url),
-                );
-            }
-            if let Some(user) = user {
-                let mut user_table = JsonMap::new();
-                user_table.insert("id".to_owned(), JsonValue::String(user.id));
-                user_table.insert("username".to_owned(), JsonValue::String(user.username));
-                if let Some(name) = normalize_text(user.name.as_deref()) {
-                    user_table.insert("name".to_owned(), JsonValue::String(name));
-                }
-                if let Some(email) = normalize_text(user.email.as_deref()) {
-                    user_table.insert("email".to_owned(), JsonValue::String(email));
-                }
-                if let Some(avatar_url) = normalize_text(user.avatar_url.as_deref()) {
-                    user_table.insert("avatar_url".to_owned(), JsonValue::String(avatar_url));
-                }
-                table.insert("user".to_owned(), JsonValue::Object(user_table));
-            }
-        }
-        AuthData::WellKnown { key, token } => {
-            table.insert(
-                "type".to_owned(),
-                JsonValue::String("well_known".to_owned()),
-            );
-            table.insert("key".to_owned(), JsonValue::String(key));
-            table.insert("token".to_owned(), JsonValue::String(token));
-        }
-    }
-    JsonValue::Object(table)
-}
-
-fn normalize_root_object(value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Null => JsonValue::Object(JsonMap::new()),
-        JsonValue::Object(_) => value,
-        other => other,
+    #[test]
+    fn invalid_credential_errors_do_not_disclose_the_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = Arc::new(FileSecretStore::at(
+            directory.path(),
+            PROVIDER_SECRET_NAMESPACE,
+        ));
+        backend
+            .set_secret("example", r#"{"type":"sensitive-unknown-value"}"#)
+            .unwrap();
+        let store = ProviderSecretCredentialStore::with_secret_store(backend);
+        let error = store.get("example").unwrap_err().to_string();
+        assert!(!error.contains("sensitive-unknown-value"));
     }
 }

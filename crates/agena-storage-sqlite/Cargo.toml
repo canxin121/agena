@@ -11,7 +11,9 @@ agena-async = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-provider = { workspace = true }
+agena-scheduler = { workspace = true }
 agena-storage = { workspace = true }
+agena-storage-layout = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
@@ -27,6 +29,7 @@ thiserror = { workspace = true }
 tempfile = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 agena-runtime-session-core = { workspace = true }

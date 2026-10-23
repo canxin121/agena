@@ -160,6 +160,8 @@ pub struct SqliteKernel {
     pub workspaces: Arc<dyn agena_storage::WorkspaceRepository>,
     pub permissions: Arc<dyn agena_storage::PermissionRuleRepository>,
     pub model_catalog: Arc<dyn agena_storage::ModelCatalogRepository>,
+    pub instance_state: Arc<dyn agena_storage::instance_state::InstanceStateRepository>,
+    pub instance_id: String,
     pub diagnostics: KernelDiagnostics,
     pub maintenance: port::KernelMaintenance,
 }
@@ -173,6 +175,14 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     let model_catalog = Arc::new(crate::SeaModelCatalogRepository::new(
         database.writer.clone(),
     ));
+    let instance_id = schema::instance_id(&database.writer)
+        .await
+        .map_err(storage)?;
+    let instance_state = Arc::new(
+        crate::ServerStateRepository::new(database.writer.clone())
+            .await
+            .map_err(storage)?,
+    );
     let diagnostics = KernelDiagnostics::default();
     let repository_database = database.writer.clone();
     let (ports, maintenance) = compose_database(database, diagnostics.clone()).await?;
@@ -182,6 +192,8 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
         workspaces,
         permissions,
         model_catalog,
+        instance_state,
+        instance_id,
         diagnostics,
         maintenance,
     })

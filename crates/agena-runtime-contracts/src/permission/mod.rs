@@ -1169,6 +1169,7 @@ impl RuleMatcher {
 #[derive(Debug, Clone)]
 enum PathPattern {
     Workspace(WildcardPattern),
+    ManagedWorkspace(WildcardPattern),
     Absolute(WildcardPattern),
     /// One alias that resolves to several roots. The pattern matches when any
     /// of them matches, which is what `<tmp>` needs: the private per-user temp
@@ -1186,6 +1187,11 @@ impl PathPattern {
             .or_else(|| strip_path_alias(&normalized, "workspace"))
         {
             return Ok(Self::Workspace(WildcardPattern::new(
+                workspace_alias_pattern(rest),
+            )));
+        }
+        if let Some(rest) = strip_path_alias(&normalized, "state") {
+            return Ok(Self::ManagedWorkspace(WildcardPattern::new(
                 workspace_alias_pattern(rest),
             )));
         }
@@ -1216,6 +1222,10 @@ impl PathPattern {
         match self {
             Self::Workspace(pattern) => ctx
                 .workspace_relative_norm
+                .as_deref()
+                .is_some_and(|relative| pattern.matches(relative)),
+            Self::ManagedWorkspace(pattern) => ctx
+                .managed_relative_norm
                 .as_deref()
                 .is_some_and(|relative| pattern.matches(relative)),
             Self::Absolute(pattern) => pattern.matches(&ctx.absolute_norm),
@@ -1316,6 +1326,7 @@ fn home_dir() -> Option<PathBuf> {
 struct MatchContext {
     absolute_norm: String,
     workspace_relative_norm: Option<String>,
+    managed_relative_norm: Option<String>,
     in_workspace: bool,
 }
 
@@ -1364,8 +1375,19 @@ impl MatchContext {
             None
         };
 
+        let managed_root =
+            agena_storage_layout::StorageLayout::current().workspace_dir(&root_absolute);
+        let managed_norm = normalize_path_string(&managed_root);
+        let managed_relative_norm = if absolute_norm == managed_norm {
+            Some(".".to_owned())
+        } else {
+            absolute_norm
+                .strip_prefix(&format!("{managed_norm}/"))
+                .map(str::to_owned)
+        };
         Self {
             absolute_norm,
+            managed_relative_norm,
             workspace_relative_norm,
             in_workspace,
         }

@@ -138,7 +138,8 @@ impl SessionManager {
                             continue;
                         }
                     };
-                    if !target.starts_with(&root)
+                    if (!target.starts_with(&root)
+                        && agena_runtime_tools::managed_attachment_root(&root, &target).is_none())
                         || !matches!(
                             executor.principal().authorize_path_access(
                                 agena_domain::AccessKind::Read,

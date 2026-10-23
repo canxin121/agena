@@ -144,10 +144,9 @@ pub struct AgenaCli {
         conflicts_with = "server_token"
     )]
     pub server_password: Option<String>,
-    #[arg(long, env = "AGENA_DATABASE_URL", global = true)]
-    pub database_url: Option<String>,
-    #[arg(long, env = "AGENA_DATABASE_PATH", global = true)]
-    pub database_path: Option<PathBuf>,
+    /// Root directory for all local Agena instance data.
+    #[arg(long, env = "AGENA_DATA_DIR", global = true, value_name = "DIR")]
+    pub data_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<AgenaCommand>,
 }
@@ -213,8 +212,7 @@ pub struct TuiLaunchRequest {
 /// Launch parameters for the JSON-RPC server.
 pub struct RpcServerRequest {
     pub config_override_expressions: Vec<String>,
-    pub database_url: Option<String>,
-    pub database_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
     pub args: RpcServerArgs,
 }
 
@@ -222,8 +220,7 @@ pub struct RpcServerRequest {
 /// Common server launch parameters.
 pub struct ServerLaunchRequest {
     pub config_override_expressions: Vec<String>,
-    pub database_url: Option<String>,
-    pub database_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
     pub args: ServerArgs,
 }
 
@@ -256,19 +253,16 @@ impl AgenaCli {
                 args.server_password = self.server_password.clone();
                 LaunchMode::RpcServer(RpcServerRequest {
                     config_override_expressions,
-                    database_url: self.database_url.clone(),
-                    database_path: self.database_path.clone(),
+                    data_dir: self.data_dir.clone(),
                     args,
                 })
             }
             Some(AgenaCommand::Server(args)) => LaunchMode::Server(ServerLaunchRequest {
                 config_override_expressions,
-                database_url: self.database_url.clone(),
-                database_path: self.database_path.clone(),
+                data_dir: self.data_dir.clone(),
                 args: ServerArgs {
                     overrides: self.overrides,
-                    database_url: self.database_url,
-                    database_path: self.database_path,
+                    data_dir: self.data_dir,
                     ..args
                 },
             }),
@@ -853,9 +847,7 @@ pub struct ServerArgs {
     #[arg(skip)]
     pub overrides: Vec<String>,
     #[arg(skip)]
-    pub database_url: Option<String>,
-    #[arg(skip)]
-    pub database_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
     #[arg(long, env = "AGENA_SERVER_HOST", default_value = "127.0.0.1")]
     pub host: String,
     #[arg(short, long, env = "AGENA_SERVER_PORT", default_value_t = 3210)]
@@ -1594,8 +1586,7 @@ struct DiagnosticsConfigOutput {
 
 #[derive(Debug, Serialize)]
 struct DiagnosticsEnvironmentOutput {
-    agena_database_url_set: bool,
-    agena_database_path_set: bool,
+    agena_data_dir_set: bool,
     agena_adapter_log_set: bool,
 }
 

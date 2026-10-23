@@ -17,7 +17,7 @@ pub(crate) struct RuntimeProcessState<Loader, Request, Snapshot, Error> {
     pub(crate) workspace_root: PathBuf,
     pub(crate) database: Option<Arc<DatabaseConnection>>,
     pub(crate) session_kernel: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
-    /// Dedicated scheduler database connection retained for snapshot reloads.
+    /// Shared instance connection retained for scheduler snapshot reloads.
     pub(crate) scheduler_database: Option<Arc<DatabaseConnection>>,
     pub(crate) control_state: RuntimeControlState<Snapshot, Error>,
 }

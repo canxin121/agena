@@ -347,10 +347,7 @@ impl RuntimeSnapshot {
     pub(crate) fn plugin_secret_store(
         &self,
     ) -> Arc<dyn crate::plugins::storage::PluginSecretStore> {
-        Arc::new(crate::plugins::storage::PluginKeyringSecretStore::system(
-            crate::plugins::storage::default_storage_root(),
-            true,
-        ))
+        Arc::new(crate::plugins::storage::PluginFileSecretStore::new())
     }
 
     pub(crate) fn config_value(&self) -> Result<serde_json::Value, serde_json::Error> {

@@ -15,6 +15,53 @@ mod session_hub;
 mod transcript_paging;
 mod ui;
 
+/// HTTP fixture requests may arrive in separate TCP reads for headers and
+/// JSON. Read the declared body before assertions or sending the response.
+async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt as _;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        const LIMIT: usize = 64 * 1024;
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 4096];
+        let header_end = loop {
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+            assert!(
+                request.len() < LIMIT,
+                "fixture request headers exceed limit"
+            );
+            let count = socket.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "fixture request ended before complete headers");
+            request.extend_from_slice(&buffer[..count]);
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(
+            !headers
+                .lines()
+                .any(|line| line.to_ascii_lowercase().starts_with("transfer-encoding:")),
+            "these JSON fixtures require Content-Length"
+        );
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .map(|(_, length)| length.trim().parse::<usize>().unwrap())
+            .unwrap_or(0);
+        let total = header_end.checked_add(content_length).unwrap();
+        assert!(total <= LIMIT, "fixture request body exceeds limit");
+        while request.len() < total {
+            let remaining = (total - request.len()).min(buffer.len());
+            let count = socket.read(&mut buffer[..remaining]).await.unwrap();
+            assert!(count > 0, "fixture request ended before its declared body");
+            request.extend_from_slice(&buffer[..count]);
+        }
+        String::from_utf8(request).unwrap()
+    })
+    .await
+    .expect("fixture request timed out")
+}
+
 /// Shared parts fixtures for app tests. The wire transcript is an ordered
 /// part list; these helpers build the small
 /// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Every

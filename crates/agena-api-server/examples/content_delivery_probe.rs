@@ -27,7 +27,6 @@ async fn measure(observers: usize) -> Result<(), Box<dyn Error>> {
         workspace_root: Some(directory.path().to_path_buf()),
         config_path: Some(directory.path().join("global.json")),
         database_path: Some(directory.path().join("sessions.db")),
-        scheduler_database_path: Some(directory.path().join("scheduler.db")),
         ..Default::default()
     })
     .await?;

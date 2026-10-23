@@ -634,10 +634,8 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         workspace_root: Some(workspace_root),
         config_path: None,
         config_override_expressions: args.overrides.clone(),
-        database_url: args.database_url.clone(),
-        database_path: args.database_path.clone(),
-        scheduler_database_url: None,
-        scheduler_database_path: None,
+        database_url: None,
+        database_path: None,
         tracing_reload_handle: None,
     })
     .await
@@ -647,9 +645,14 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     let server_state_db = Arc::new(
-        crate::server::persistence::db::ServerStateDb::open()
-            .await
-            .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
+        crate::server::persistence::db::ServerStateDb::from_store(
+            runtime
+                .application_services()
+                .instance_state
+                .ok_or_else(|| anyhow!("runtime instance-state repository is unavailable"))?,
+        )
+        .await
+        .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
     );
     let terminal = Arc::new(
         crate::server::terminal::manager::TerminalManager::new(server_state_db.clone())

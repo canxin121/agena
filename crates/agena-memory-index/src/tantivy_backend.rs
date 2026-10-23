@@ -1,7 +1,6 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+#[cfg(test)]
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use agena_storage::MemoryDir;
 use tantivy::{
@@ -36,7 +35,7 @@ impl MemoryIndex {
         &self,
         documents: &[MemorySearchDocument],
     ) -> Result<(), MemoryIndexError> {
-        fs::create_dir_all(&self.dir)?;
+        agena_storage_layout::secure_directory(&self.dir)?;
         let (schema, fields) = build_schema();
         let directory = MmapDirectory::open(&self.dir).map_err(tantivy::TantivyError::from)?;
         let index = Index::open_or_create(directory, schema)?;

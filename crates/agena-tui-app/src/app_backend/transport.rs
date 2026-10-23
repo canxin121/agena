@@ -113,6 +113,7 @@ pub struct TuiBackend {
     inner: Arc<RemoteBackend>,
     /// Server-owned workspace path used only as a resource identity.
     workspace_root: Arc<PathBuf>,
+    instance_id: Arc<str>,
     /// Empty client-local confinement root for media that has not been
     /// fetched through the authenticated workspace API.
     media_workspace: Arc<tempfile::TempDir>,
@@ -328,6 +329,10 @@ impl TuiBackend {
             AgenaClient::connect_server(server_url.as_ref(), server_token, server_password)
                 .await
                 .context("server readiness/authentication handshake failed")?;
+        let identity = client
+            .server_identity()
+            .await
+            .context("failed to load persistent server identity")?;
         let runtime_status = client
             .runtime_status()
             .await
@@ -417,6 +422,7 @@ impl TuiBackend {
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(workspace_root),
+            instance_id: identity.instance_id.into(),
             media_workspace: Arc::new(
                 tempfile::tempdir().context("failed to prepare the TUI media cache")?,
             ),
@@ -459,6 +465,12 @@ impl TuiBackend {
 
     pub fn is_remote(&self) -> bool {
         true
+    }
+
+    /// Remote paths are resource identities; never canonicalize them against
+    /// the client machine when selecting durable client state.
+    pub(crate) fn persistence_scope(&self) -> String {
+        format!("{}\0{}", self.instance_id, self.workspace_root.display())
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -1066,6 +1078,15 @@ impl TuiBackend {
             if let Ok(download) = self.download_workspace_file(relative.as_str()).await {
                 return Ok(download);
             }
+        }
+        // Managed uploads and tool artifacts live outside the source tree.
+        // The server authorizes the absolute path against this workspace's
+        // attachment roots; the client must not infer those server locations.
+        if requested.is_absolute()
+            && workspace_relative.is_none()
+            && let Ok(download) = self.download_workspace_file(path).await
+        {
+            return Ok(download);
         }
         self.inner
             .client
@@ -2782,6 +2803,7 @@ impl TuiBackend {
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(std::env::temp_dir()),
+            instance_id: "mock-instance".into(),
             media_workspace: Arc::new(tempfile::tempdir().expect("mock media workspace")),
         }
     }
@@ -3011,6 +3033,7 @@ mod tests {
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(PathBuf::from("/workspace")),
+            instance_id: "mock-instance".into(),
             media_workspace: Arc::new(tempfile::tempdir().expect("test media workspace")),
         };
         *backend

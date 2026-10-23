@@ -39,7 +39,21 @@ fn write_memory_file_atomically(path: &Path, contents: &[u8]) -> io::Result<()> 
 }
 
 fn read_bounded(path: &Path) -> MemoryResult<Vec<u8>> {
-    let file = fs::File::open(path)?;
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "memory file cannot be a symbolic link",
+        )
+        .into());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -86,7 +100,7 @@ fn refers_to(line: &str, name: &str) -> bool {
 }
 
 #[derive(Debug, Clone)]
-/// In-memory implementation of the storage contracts for tests and small deployments.
+/// Private filesystem implementation of the workspace memory contract.
 pub struct MemoryStore {
     dir: PathBuf,
 }
@@ -106,7 +120,7 @@ impl MemoryStore {
         &self.dir
     }
     pub fn ensure_exists(&self) -> io::Result<()> {
-        fs::create_dir_all(&self.dir)
+        agena_storage_layout::secure_directory(&self.dir)
     }
 
     pub fn ensure_index(&self) -> MemoryResult<PathBuf> {
@@ -154,10 +168,7 @@ impl MemoryStore {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        Ok(fs::read_to_string(path)?
-            .lines()
-            .map(str::to_string)
-            .collect())
+        Ok(read_text(&path)?.lines().map(str::to_string).collect())
     }
     pub fn forget(&self, name: &str) -> MemoryResult<()> {
         self.forget_checked(name, None)

@@ -23,6 +23,9 @@ use crate::{
 #[derive(Clone)]
 pub struct RuntimeApplicationServices {
     pub workspace_root: PathBuf,
+    /// Persistent database identity, independent of server process restarts.
+    pub instance_id: Option<String>,
+    pub instance_state: Option<Arc<dyn agena_storage::instance_state::InstanceStateRepository>>,
     /// Contract-backed repositories assembled with the concrete Runtime.
     /// Upper layers receive these ports without constructing SQLite adapters.
     pub repositories: Option<RuntimeApplicationRepositories>,
@@ -64,6 +67,9 @@ pub struct RuntimeApplicationRepositories {
 /// owns the stable assembly consumed by entrypoints.
 pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) workspace_root: PathBuf,
+    pub(crate) instance_id: Option<String>,
+    pub(crate) instance_state:
+        Option<Arc<dyn agena_storage::instance_state::InstanceStateRepository>>,
     pub(crate) repositories: Option<RuntimeApplicationRepositories>,
     pub(crate) provider_catalog: Arc<dyn ProviderCatalog>,
     pub(crate) model_catalog: Arc<dyn ModelCatalogRuntimeService>,
@@ -90,6 +96,8 @@ pub(crate) fn compose_runtime_application_services(
 ) -> RuntimeApplicationServices {
     RuntimeApplicationServices {
         workspace_root: inputs.workspace_root,
+        instance_id: inputs.instance_id,
+        instance_state: inputs.instance_state,
         repositories: inputs.repositories,
         provider_catalog: inputs.provider_catalog,
         model_catalog: inputs.model_catalog,

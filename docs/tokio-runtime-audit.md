@@ -11,12 +11,12 @@ evidence of a problem.
 
 | Area | Previous behavior | Repair |
 | --- | --- | --- |
-| Plugin storage and secrets | Async host callbacks directly entered synchronous storage, file locks and OS credential operations. | Resolve the task-local plugin/session/workspace identity first, then execute the synchronous port on bounded workers. |
+| Plugin storage and secrets | Async host callbacks directly entered synchronous storage, file locks and private secret-store operations. | Resolve the task-local plugin/session/workspace identity first, then execute the synchronous port on bounded workers. |
 | Configuration | Startup, reload and watch metadata scans performed synchronous file access on the async task. | Offload complete load/scan operations. Watch admission observes shutdown while waiting. |
 | Settings and Provider Studio | HTTP/settings/save paths called synchronous reads, JSON validation and atomic edits directly. | Application-owned worker boundary covers file reads and edits. Reload is awaited after the edit finishes. |
-| Provider authentication | OAuth completion/refresh and credential resolution synchronously read and rewrote configuration files. | Share a bounded credential-store worker pool; keep the store alive with `Arc`. |
+| Provider authentication | OAuth completion/refresh and credential resolution synchronously read and rewrote configuration files. | Share a bounded credential-store worker pool; keep the store alive with `Arc`. Managed API keys and OAuth records now persist in the encrypted application secret store, separately from configuration. |
 | Provider cache identity | Google ADC prompt-cache identity could synchronously inspect and read credential files each time a session prepared a request or projected usage. | Async provider-shape projection moves adapter identity computation to bounded workers without changing its fingerprint rules. |
-| MCP credentials | Async OAuth load/save/clear, connection setup and status projection invoked synchronous Keychain ports. | Bound and offload Keychain work, after releasing manager registry locks. Connection timeouts can continue to be scheduled. |
+| MCP credentials | Async OAuth load/save/clear, connection setup and status projection invoked synchronous credential-store ports. | Bound and offload encrypted file-store work, after releasing manager registry locks. Connection timeouts can continue to be scheduled. |
 | Password authentication | Login verification and password setup performed Argon2 on the Tokio task. | Separate two-slot password pool. Worker errors fail closed; lockout and session activity timestamps use completion time. |
 | OAuth callback waiting | Application held a blocking-pool thread while a synchronous adapter launched and joined another runtime thread for a potentially minutes-long callback wait. | Runtime authentication port awaits the existing Tokio/Axum listener directly. An abort-on-drop handle owns the callback server. |
 | Concurrent session tools | Dropping a vector of `JoinHandle`s detached existing tools when permit acquisition was cancelled or a join failed. Detached work could continue to occupy shared tool permits. | A `JoinSet` owns all children through cancellation, early return and panic. Children await permits asynchronously. Results are restored to input order. |
@@ -70,7 +70,7 @@ Initial limits are deliberately small for expensive CPU work:
 | Prompt output preparation/spill | 2 |
 | Provider credential store | 8 |
 | Provider prompt identity | 4 |
-| MCP Keychain / plugin secret store | 4 per class |
+| MCP secret store / plugin secret store | 4 per class |
 | Runtime files / application files / plugin storage / LSP root lookup / sandbox policy / preview files | 8 per class |
 | Host/activity long log reads | 16 |
 | UI terminal lifecycle / stop-control / writes-resizes | 8 / 4 / 16 |

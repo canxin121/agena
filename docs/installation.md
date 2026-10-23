@@ -36,6 +36,39 @@ Scheduler logon task, and Linux uses a systemd user service when one is
 available. Linux environments without a user systemd session automatically use
 Agena's detached server lifecycle instead.
 
+The executable and Web assets have a separate installation directory from the
+instance's data. Unix defaults to `~/.local/share/agena` for application files;
+Windows defaults to `%LOCALAPPDATA%\Agena`. Instance data defaults to `~/agena`
+on every platform. Set `AGENA_DATA_DIR`, or pass `--data-dir` to the Unix
+installer / `-DataDir` to the PowerShell installer, to choose another root:
+
+```bash
+bash scripts/agena/install.sh install --data-dir /path/to/agena-data
+```
+
+```powershell
+& $installer -Action Install -DataDir 'D:\AgenaData'
+```
+
+The chosen root contains `agena.db` for sessions, Scheduler and server state,
+`agena.json` for user configuration, `secrets/` for the application-managed
+encrypted SecretStore, `workspaces/` for workspace data, `logs/` for logs, and
+`run/server.json` for the live endpoint record. A single instance has one root;
+database and server-state paths have no separate environment overrides.
+
+Installers save the selected root in their installation state. Start, stop,
+upgrade, rollback and uninstall continue to address that installed root even
+when the invoking shell has a different `AGENA_DATA_DIR`. Native service
+definitions explicitly pass `--data-dir` to the executable. Keep the
+installation and data directories separate; neither may contain the other.
+Native service labels, systemd unit names and Windows task names include the
+full hash of the selected data root, so installing or stopping one instance
+does not address another instance's service.
+With the normal shell/environment update enabled, Unix exports the root from
+its private client environment file and Windows sets the user
+`AGENA_DATA_DIR`. With `--no-path-update` / `-NoPathUpdate`, set that variable
+yourself or run clients with `agena --data-dir /path/to/agena-data ...`.
+
 When `--ui-password` (or `AGENA_SERVER_UI_PASSWORD`) is used on macOS/Linux,
 the installer also writes a private client environment file under the install
 directory and sources it from the shell profile. The same operator credential
@@ -170,10 +203,24 @@ binary.
 ## Uninstalling data
 
 Normal uninstall removes the installed executable, Web frontend, and user
-service, while preserving Agena's runtime data. `--purge-data` on Unix or
-`-PurgeData` on Windows additionally removes `~/agena`.
+service, while preserving the selected instance's data. `--purge-data` on Unix
+or `-PurgeData` on Windows additionally removes the actual data root saved in
+the installation state. A custom root is purged directly; the default
+`~/agena` is left alone when another root was selected.
+
+Purge refuses filesystem roots, the account home, shared system locations,
+overlapping installation/data directories, and directories without an Agena
+instance database. It removes configuration and credentials as well as
+sessions. Installer state and databases from older storage layouts are not
+migrated by this version.
 
 ## Installer CI
+
+`python3 scripts/agena/tests/test_installer_storage.py` runs offline installer
+contracts with temporary homes, local archives and a stub executable. It covers
+saved-root precedence, paths with spaces, upgrade rollback, stopped instances,
+purge boundaries and service-helper arguments without installing a system
+service.
 
 `.github/workflows/installer-ci.yml` builds the real release archive format on
 GitHub-hosted Linux, macOS, and Windows runners. Each runner then executes the
@@ -185,6 +232,11 @@ full lifecycle against that archive:
 4. start and restart;
 5. upgrade through the installer again;
 6. uninstall and verify both the process/service and install directory are gone.
+
+The current-package lifecycle fixtures select a custom data root. They verify
+that a normal uninstall preserves it, then reinstall and verify that explicit
+purge removes that root while preserving a sentinel in the unselected default
+directory.
 
 The release workflow publishes `install.sh` and `install.ps1` next to every
 versioned Agena archive, together with `install.sh.sha256` and

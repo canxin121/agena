@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Agena product use cases and application-facing runtime handle"
 
 [dependencies]
+agena-storage-layout = { workspace = true }
 agena-async = { workspace = true }
 sha2 = { workspace = true }
 agena-process = { workspace = true }
@@ -24,6 +25,7 @@ agena-api = { workspace = true }
 agena-notification = { workspace = true }
 agena-runtime-notifications = { workspace = true }
 agena-scheduler = { workspace = true }
+libc.workspace = true
 base64.workspace = true
 chrono.workspace = true
 path-clean.workspace = true

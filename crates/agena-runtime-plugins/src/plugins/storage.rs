@@ -5,13 +5,13 @@
 //! for plugins while keeping private/plugin-owned data separate from
 //! intentionally shared data.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agena_keyring_store::{KeyringSecretStore, SecretStore, SecretStoreError};
 use agena_plugin_sdk::PluginKey;
+use agena_secret_store::{FileSecretStore, SecretStore, SecretStoreError};
 
 use agena_plugin_host::sdk::host_api::{HostStorageScope, HostStorageVisibility};
 
@@ -133,29 +133,12 @@ pub trait PluginSecretStore: Send + Sync {
     fn list(&self, plugin_id: &PluginKey) -> Result<Vec<String>, PluginStorageError>;
 }
 
-/// Default keyring service for plugin secrets. Kept distinct from the agena
-/// provider auth service so the two surfaces don't collide on the same key.
-pub const PLUGIN_SECRETS_KEYRING_SERVICE: &str = "agena.plugin";
+/// A separate namespace keeps plugin credentials isolated from other secrets.
+pub const PLUGIN_SECRETS_NAMESPACE: &str = "agena.plugin";
 
-/// Default plugin storage root: `$HOME/agena/plugin-storage` unless
-/// `AGENA_PLUGIN_STORAGE_DIR` overrides it.
+/// Plugin state belongs to the selected Agena instance.
 pub fn default_storage_root() -> PathBuf {
-    if let Ok(path) = std::env::var("AGENA_PLUGIN_STORAGE_DIR") {
-        return PathBuf::from(path);
-    }
-    let mut base = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|error| {
-            tracing::error!(
-                diagnostic = %error,
-                "plugin storage home is unavailable; using the current-directory fallback path"
-            );
-            PathBuf::from(".")
-        });
-    base.push("agena");
-    base.push("plugin-storage");
-    base
+    agena_storage_layout::StorageLayout::current().plugin_storage_dir()
 }
 
 fn validate_namespace(namespace: &str) -> Result<(), PluginStorageError> {
@@ -179,20 +162,7 @@ fn validate_key(key: &str) -> Result<(), PluginStorageError> {
 }
 
 fn ensure_dir(path: &Path) -> Result<(), PluginStorageError> {
-    if !path.exists() {
-        fs::create_dir_all(path)?;
-        secure_directory(path)?;
-    }
-    Ok(())
-}
-
-fn secure_directory(path: &Path) -> Result<(), PluginStorageError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    let _ = path;
+    agena_storage_layout::secure_directory(path)?;
     Ok(())
 }
 
@@ -204,7 +174,7 @@ fn write_secure_file_unlocked(path: &Path, contents: &[u8]) -> Result<(), Plugin
         )
     })?;
     ensure_dir(parent)?;
-    match fs::metadata(path) {
+    match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => {
             agena_runtime_tools::atomic_replace_file(path, contents)?;
         }
@@ -226,11 +196,7 @@ fn write_secure_file_unlocked(path: &Path, contents: &[u8]) -> Result<(), Plugin
         }
         Err(error) => return Err(error.into()),
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
+    agena_storage_layout::secure_file(path)?;
     Ok(())
 }
 
@@ -245,25 +211,6 @@ fn read_namespace_map(path: &Path) -> Result<BTreeMap<String, String>, PluginSto
     serde_json::from_str(&text).map_err(|error| {
         PluginStorageError::data_error("failed to decode the plugin storage namespace", &error)
     })
-}
-
-fn read_index(path: &Path) -> Result<BTreeSet<String>, PluginStorageError> {
-    if !path.exists() {
-        return Ok(BTreeSet::new());
-    }
-    let text = fs::read_to_string(path)?;
-    if text.trim().is_empty() {
-        return Ok(BTreeSet::new());
-    }
-    serde_json::from_str(&text).map_err(|error| {
-        PluginStorageError::data_error("failed to decode the plugin storage index", &error)
-    })
-}
-
-fn plugin_dir(root: &Path, plugin_id: &PluginKey) -> PathBuf {
-    let mut p = root.to_path_buf();
-    p.push(plugin_id.to_string());
-    p
 }
 
 fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, PluginStorageError> {
@@ -283,9 +230,9 @@ fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, P
                 .filter(|value| !value.trim().is_empty())
                 .ok_or(PluginStorageError::MissingWorkspaceRoot)?;
             p.push("workspace");
-            p.push(hex::encode(
-                blake3::hash(workspace_root.as_bytes()).as_bytes(),
-            ));
+            p.push(agena_storage_layout::workspace_key(Path::new(
+                workspace_root,
+            )));
         }
         HostStorageScope::Global => {
             p.push("global");
@@ -311,18 +258,6 @@ fn namespace_path(
     let mut p = storage_scope_dir(root, locator)?;
     p.push(format!("{namespace}.json"));
     Ok(p)
-}
-
-fn secrets_index_path(root: &Path, plugin_id: &PluginKey) -> PathBuf {
-    let mut p = plugin_dir(root, plugin_id);
-    p.push("secrets.json");
-    p
-}
-
-fn secrets_fallback_path(root: &Path, plugin_id: &PluginKey) -> PathBuf {
-    let mut p = plugin_dir(root, plugin_id);
-    p.push("secrets-store.json");
-    p
 }
 
 /// JSON-on-disk plugin storage. Each storage bucket lives under:
@@ -464,168 +399,60 @@ impl PluginStorage for FilePluginStorage {
     }
 }
 
-/// Plugin secret store backed by an OS keyring with optional file fallback.
-///
-/// Keyring keys are namespaced as `plugin/{plugin_id}/{name}` under the
-/// `agena.plugin` service. The on-disk index lists secret names for `list()`,
-/// and the optional fallback file holds raw values when the keyring is
-/// unavailable.
+/// Plugin credentials share the application-managed secret store. Names and
+/// values are committed together, so listings cannot drift from stored values.
 #[derive(Clone)]
-pub struct PluginKeyringSecretStore {
+pub struct PluginFileSecretStore {
     inner: Arc<dyn SecretStore>,
-    root: PathBuf,
-    fallback_to_file: bool,
 }
 
-impl std::fmt::Debug for PluginKeyringSecretStore {
+impl std::fmt::Debug for PluginFileSecretStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PluginKeyringSecretStore")
-            .field("root", &self.root)
-            .field("fallback_to_file", &self.fallback_to_file)
-            .finish()
+        f.debug_struct("PluginFileSecretStore")
+            .finish_non_exhaustive()
     }
 }
 
-impl PluginKeyringSecretStore {
-    pub fn new(
-        inner: Arc<dyn SecretStore>,
-        root: impl Into<PathBuf>,
-        fallback_to_file: bool,
-    ) -> Self {
-        Self {
-            inner,
-            root: root.into(),
-            fallback_to_file,
-        }
+impl Default for PluginFileSecretStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PluginFileSecretStore {
+    pub fn new() -> Self {
+        Self::with_secret_store(Arc::new(FileSecretStore::new(PLUGIN_SECRETS_NAMESPACE)))
     }
 
-    pub fn system(root: impl Into<PathBuf>, fallback_to_file: bool) -> Self {
-        Self::new(
-            Arc::new(KeyringSecretStore::new(PLUGIN_SECRETS_KEYRING_SERVICE)),
-            root,
-            fallback_to_file,
-        )
+    pub fn with_secret_store(inner: Arc<dyn SecretStore>) -> Self {
+        Self { inner }
     }
 
-    fn keyring_key(plugin_id: &PluginKey, name: &str) -> String {
-        format!("plugin/{}/{name}", plugin_id)
+    fn prefix(plugin_id: &PluginKey) -> String {
+        // Encode the entire plugin identity, including separators. A plugin
+        // can never impersonate another plugin by choosing a secret name.
+        format!("plugin/{}/", hex::encode(plugin_id.to_string().as_bytes()))
     }
 
-    fn read_fallback(
-        &self,
-        plugin_id: &PluginKey,
-    ) -> Result<BTreeMap<String, String>, PluginStorageError> {
-        let path = secrets_fallback_path(&self.root, plugin_id);
-        if !path.exists() {
-            return Ok(BTreeMap::new());
-        }
-        let text = fs::read_to_string(&path)?;
-        if text.trim().is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        serde_json::from_str(&text).map_err(|error| {
-            PluginStorageError::data_error(
-                "failed to decode the plugin secret fallback file",
-                &error,
-            )
-        })
+    fn secret_key(plugin_id: &PluginKey, name: &str) -> String {
+        format!("{}{name}", Self::prefix(plugin_id))
     }
 
-    fn update_fallback(
-        &self,
-        plugin_id: &PluginKey,
-        update: impl FnOnce(&mut BTreeMap<String, String>),
-    ) -> Result<(), PluginStorageError> {
-        let path = secrets_fallback_path(&self.root, plugin_id);
-        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-            let mut map = self.read_fallback(plugin_id)?;
-            update(&mut map);
-            if map.is_empty() {
-                if path.exists() {
-                    fs::remove_file(&path)?;
-                }
-                return Ok(());
-            }
-            let json = serde_json::to_string_pretty(&map).map_err(|error| {
-                PluginStorageError::data_error(
-                    "failed to encode the plugin secret fallback file",
-                    &error,
-                )
-            })?;
-            write_secure_file_unlocked(&path, json.as_bytes())
-        })?
-    }
-
-    fn record_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
-        let path = secrets_index_path(&self.root, plugin_id);
-        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-            let mut names = read_index(&path)?;
-            if names.insert(name.to_string()) {
-                let json = serde_json::to_string_pretty(&names).map_err(|error| {
-                    PluginStorageError::data_error(
-                        "failed to encode the plugin secret index",
-                        &error,
-                    )
-                })?;
-                write_secure_file_unlocked(&path, json.as_bytes())?;
-            }
-            Ok(())
-        })?
-    }
-
-    fn forget_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
-        let path = secrets_index_path(&self.root, plugin_id);
-        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-            let mut names = read_index(&path)?;
-            if names.remove(name) {
-                if names.is_empty() {
-                    fs::remove_file(&path)?;
-                } else {
-                    let json = serde_json::to_string_pretty(&names).map_err(|error| {
-                        PluginStorageError::data_error(
-                            "failed to encode the plugin secret index after deletion",
-                            &error,
-                        )
-                    })?;
-                    write_secure_file_unlocked(&path, json.as_bytes())?;
-                }
-            }
-            Ok(())
-        })?
-    }
-
-    fn map_secret_err(&self, err: SecretStoreError) -> PluginStorageError {
-        if err.is_unavailable() {
-            PluginStorageError::SecretUnavailable(
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    "plugin secret store is unavailable",
-                    &err,
-                ),
-            )
+    fn map_secret_error(error: SecretStoreError) -> PluginStorageError {
+        if error.is_unavailable() {
+            PluginStorageError::SecretUnavailable(error.to_string())
         } else {
-            PluginStorageError::Secret(agena_failure::diagnostic::format_error_chain_with_context(
-                "plugin secret store operation failed",
-                &err,
-            ))
+            PluginStorageError::Secret(error.to_string())
         }
     }
 }
 
-impl PluginSecretStore for PluginKeyringSecretStore {
+impl PluginSecretStore for PluginFileSecretStore {
     fn get(&self, plugin_id: &PluginKey, name: &str) -> Result<Option<String>, PluginStorageError> {
         validate_key(name)?;
-        let key = Self::keyring_key(plugin_id, name);
-        match self.inner.get_secret(&key) {
-            Ok(value) => Ok(value),
-            Err(err) if err.is_unavailable() => {
-                if self.fallback_to_file {
-                    Ok(self.read_fallback(plugin_id)?.get(name).cloned())
-                } else {
-                    Err(self.map_secret_err(err))
-                }
-            }
-            Err(err) => Err(self.map_secret_err(err)),
-        }
+        self.inner
+            .get_secret(&Self::secret_key(plugin_id, name))
+            .map_err(Self::map_secret_error)
     }
 
     fn set(
@@ -635,51 +462,27 @@ impl PluginSecretStore for PluginKeyringSecretStore {
         value: &str,
     ) -> Result<(), PluginStorageError> {
         validate_key(name)?;
-        let key = Self::keyring_key(plugin_id, name);
-        match self.inner.set_secret(&key, value) {
-            Ok(()) => {
-                self.record_name(plugin_id, name)?;
-                Ok(())
-            }
-            Err(err) if err.is_unavailable() => {
-                if self.fallback_to_file {
-                    self.update_fallback(plugin_id, |map| {
-                        map.insert(name.to_string(), value.to_string());
-                    })?;
-                    self.record_name(plugin_id, name)?;
-                    Ok(())
-                } else {
-                    Err(self.map_secret_err(err))
-                }
-            }
-            Err(err) => Err(self.map_secret_err(err)),
-        }
+        self.inner
+            .set_secret(&Self::secret_key(plugin_id, name), value)
+            .map_err(Self::map_secret_error)
     }
 
     fn delete(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         validate_key(name)?;
-        let key = Self::keyring_key(plugin_id, name);
-        match self.inner.delete_secret(&key) {
-            Ok(()) => {}
-            Err(err) if err.is_unavailable() => {
-                if !self.fallback_to_file {
-                    return Err(self.map_secret_err(err));
-                }
-            }
-            Err(err) => return Err(self.map_secret_err(err)),
-        }
-        if self.fallback_to_file {
-            self.update_fallback(plugin_id, |map| {
-                map.remove(name);
-            })?;
-        }
-        self.forget_name(plugin_id, name)?;
-        Ok(())
+        self.inner
+            .delete_secret(&Self::secret_key(plugin_id, name))
+            .map_err(Self::map_secret_error)
     }
 
     fn list(&self, plugin_id: &PluginKey) -> Result<Vec<String>, PluginStorageError> {
-        let path = secrets_index_path(&self.root, plugin_id);
-        Ok(read_index(&path)?.into_iter().collect())
+        let prefix = Self::prefix(plugin_id);
+        Ok(self
+            .inner
+            .list_secret_keys()
+            .map_err(Self::map_secret_error)?
+            .into_iter()
+            .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
+            .collect())
     }
 }
 
@@ -735,5 +538,25 @@ mod tests {
                 .as_deref(),
             Some("two")
         );
+    }
+    #[test]
+    fn plugin_secrets_list_the_same_committed_records_and_isolate_plugins() {
+        use super::{PluginFileSecretStore, PluginSecretStore};
+        let directory = tempfile::tempdir().unwrap();
+        let backend = Arc::new(agena_secret_store::FileSecretStore::at(
+            directory.path(),
+            "plugin-test",
+        ));
+        let store = PluginFileSecretStore::with_secret_store(backend);
+        let first = PluginKey::new("test", "one").unwrap();
+        let second = PluginKey::new("test", "two").unwrap();
+        store
+            .set(&first, "token/with/separators", "sensitive")
+            .unwrap();
+        assert_eq!(store.list(&first).unwrap(), vec!["token/with/separators"]);
+        assert!(store.list(&second).unwrap().is_empty());
+        assert_eq!(store.get(&second, "token/with/separators").unwrap(), None);
+        store.delete(&first, "token/with/separators").unwrap();
+        assert!(store.list(&first).unwrap().is_empty());
     }
 }

@@ -30,18 +30,6 @@ async fn persist(
     purpose: &'static str,
     replace: bool,
 ) -> SdkResult<()> {
-    let parent = path.parent().ok_or_else(|| {
-        PluginError::internal(format!(
-            "{purpose} path has no parent directory: {}",
-            path.display()
-        ))
-    })?;
-    tokio::fs::create_dir_all(parent).await.map_err(|error| {
-        PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-            format!("cannot create {purpose} directory"),
-            &error,
-        ))
-    })?;
     let display_path = path.display().to_string();
     let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
         .acquire()
@@ -54,13 +42,36 @@ async fn persist(
         })?;
     tokio::task::spawn_blocking(move || {
         let _worker_permit = worker_permit;
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "artifact path has no parent directory",
+            )
+        })?;
+        let managed = path.starts_with(agena_storage_layout::StorageLayout::current().root());
+        if managed {
+            agena_storage_layout::secure_directory(parent)?;
+            if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "managed artifact cannot be a symbolic link",
+                ));
+            }
+        } else {
+            std::fs::create_dir_all(parent)?;
+        }
         let path = agena_runtime_tools::canonicalize_mutation_path(&path);
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-            if replace && path.exists() {
+            let result = if replace && path.exists() {
                 agena_runtime_tools::atomic_replace_file(&path, &bytes)
             } else {
-                agena_runtime_tools::atomic_create_file(&path, &bytes, None)
+                agena_runtime_tools::atomic_create_file(&path, &bytes, private_permissions(managed))
+            };
+            result?;
+            if managed {
+                agena_storage_layout::secure_file(&path)?;
             }
+            Ok(())
         })?
     })
     .await
@@ -76,6 +87,16 @@ async fn persist(
             &error,
         ))
     })
+}
+
+#[cfg(unix)]
+fn private_permissions(managed: bool) -> Option<std::fs::Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    managed.then(|| std::fs::Permissions::from_mode(0o600))
+}
+#[cfg(not(unix))]
+fn private_permissions(_managed: bool) -> Option<std::fs::Permissions> {
+    None
 }
 
 #[cfg(test)]

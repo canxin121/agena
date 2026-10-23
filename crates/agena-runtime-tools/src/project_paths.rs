@@ -1,13 +1,8 @@
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
-const MAX_WORKSPACE_KEY_LEN: usize = 80;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 pub const MAX_GENERATED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 static GENERATED_IMAGE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -34,9 +29,37 @@ pub enum ManagedGeneratedImageError {
 
 /// Stable, per-workspace directory for runtime-managed state.
 pub fn project_state_dir(workspace_root: &Path) -> PathBuf {
-    agena_home_dir()
-        .join("projects")
-        .join(workspace_key(workspace_root))
+    agena_storage_layout::StorageLayout::current().workspace_dir(workspace_root)
+}
+
+/// Resolve a file inside this workspace's managed attachment stores. Returning
+/// the canonical boundary lets callers keep their ordinary workspace policy
+/// without permitting arbitrary files from the instance data directory.
+pub fn managed_attachment_root(workspace_root: &Path, target: &Path) -> Option<PathBuf> {
+    managed_attachment_root_in(
+        &agena_storage_layout::StorageLayout::current(),
+        workspace_root,
+        target,
+    )
+}
+
+fn managed_attachment_root_in(
+    layout: &agena_storage_layout::StorageLayout,
+    workspace_root: &Path,
+    target: &Path,
+) -> Option<PathBuf> {
+    [
+        layout.uploads_dir(workspace_root),
+        layout.artifacts_dir(workspace_root),
+    ]
+    .into_iter()
+    .filter_map(|root| {
+        let canonical = root.canonicalize().ok()?;
+        // A replaced managed directory must never grant access to its
+        // external symlink target, even when that target contains a file.
+        (canonical == root).then_some(canonical)
+    })
+    .find(|root| target.starts_with(root))
 }
 
 /// Stable location for a generated image that belongs to one tool call.
@@ -138,11 +161,19 @@ fn persist_generated_image_artifact_sync(
         extension.as_str(),
     );
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        agena_storage_layout::secure_directory(parent)?;
     }
     let size_bytes = bytes.len() as u64;
     let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "generated image target cannot be a symbolic link",
+        )
+        .into());
+    }
     crate::atomic_write_file(&path, bytes.as_slice())?;
+    agena_storage_layout::secure_file(&path)?;
 
     let filename = path
         .file_name()
@@ -188,45 +219,9 @@ pub fn generated_media_extension(filename_hint: Option<&str>, mime_type: &str) -
 
 /// Root directory for Agena's process-managed local state.
 pub fn agena_home_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("AGENA_STATE_DIR").filter(|path| !path.is_empty()) {
-        return PathBuf::from(path);
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("agena")
-}
-
-fn workspace_key(workspace_root: &Path) -> String {
-    let normalized = workspace_root.to_string_lossy().replace('\\', "/");
-    let mut sanitized = normalized
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    while sanitized.contains("--") {
-        sanitized = sanitized.replace("--", "-");
-    }
-    sanitized = sanitized.trim_matches('-').to_string();
-    if sanitized.is_empty() {
-        sanitized = "workspace".to_string();
-    }
-    if sanitized.len() <= MAX_WORKSPACE_KEY_LEN {
-        return sanitized;
-    }
-
-    let mut hasher = DefaultHasher::new();
-    normalized.hash(&mut hasher);
-    format!(
-        "{}-{:x}",
-        &sanitized[..MAX_WORKSPACE_KEY_LEN],
-        hasher.finish()
-    )
+    agena_storage_layout::StorageLayout::current()
+        .root()
+        .to_path_buf()
 }
 
 fn sanitize_component(value: &str, fallback: &str) -> String {
@@ -306,5 +301,53 @@ mod tests {
         );
         assert_eq!(generated_media_extension(None, "image/webp"), "webp");
         assert_eq!(generated_media_extension(Some("."), "image/png"), "png");
+    }
+    #[test]
+    fn managed_attachments_are_confined_to_one_workspace_without_exposing_instance_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let layout = agena_storage_layout::StorageLayout::new(directory.path());
+        let first = directory.path().join("first-project");
+        let second = directory.path().join("second-project");
+        let allowed = layout.uploads_dir(&first);
+        std::fs::create_dir_all(&allowed).unwrap();
+        let upload = allowed.join("user.txt");
+        std::fs::write(&upload, b"selected content").unwrap();
+        let upload = upload.canonicalize().unwrap();
+        assert_eq!(
+            super::managed_attachment_root_in(&layout, &first, &upload),
+            Some(allowed)
+        );
+        assert!(super::managed_attachment_root_in(&layout, &second, &upload).is_none());
+        assert!(
+            super::managed_attachment_root_in(
+                &layout,
+                &first,
+                &layout.secrets_dir().join("master.key")
+            )
+            .is_none()
+        );
+        assert!(
+            super::managed_attachment_root_in(
+                &layout,
+                &first,
+                &layout.memory_dir(&first).join("private.md")
+            )
+            .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_attachment_directory_cannot_be_redirected_by_a_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let layout = agena_storage_layout::StorageLayout::new(directory.path());
+        let workspace = directory.path().join("project");
+        let upload = layout.uploads_dir(&workspace);
+        std::fs::create_dir_all(upload.parent().unwrap()).unwrap();
+        let target = outside.path().join("private.txt");
+        std::fs::write(&target, b"not an attachment").unwrap();
+        std::os::unix::fs::symlink(outside.path(), &upload).unwrap();
+        assert!(super::managed_attachment_root_in(&layout, &workspace, &target).is_none());
     }
 }

@@ -222,6 +222,7 @@ async fn measure(root: &Path, token: &str) -> AnyResult<Value> {
             workspaces,
             permissions,
             model_catalog,
+            ..
         } = open_kernel_runtime(&url(root)).await?;
         let open_ms = now.elapsed().as_secs_f64() * 1000.0;
         drop((database, workspaces, permissions, model_catalog));

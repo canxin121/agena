@@ -93,7 +93,7 @@ AGENA_MCP_OAUTH_ISSUER_URL=https://auth.example.com
 Run Agena as a dedicated unprivileged user and bind it only to loopback:
 
 ```bash
-agena --database-path /var/lib/agena/agena.db server \
+agena --data-dir /var/lib/agena server \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace /srv/agena/workspace
@@ -111,7 +111,7 @@ Wants=network-online.target
 User=agena
 Group=agena
 EnvironmentFile=/etc/agena/agena.env
-ExecStart=/usr/local/bin/agena --database-path /var/lib/agena/agena.db server --host 127.0.0.1 --port 3210 --workspace /srv/agena/workspace
+ExecStart=/usr/local/bin/agena --data-dir /var/lib/agena server --host 127.0.0.1 --port 3210 --workspace /srv/agena/workspace
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -130,9 +130,21 @@ chmod 600 /etc/agena/agena.env
 chown agena:agena /var/lib/agena /srv/agena/workspace
 ```
 
-Back up the Agena database. It contains the durable OAuth signing key, hashed
-credentials, registered clients, refresh-token records, and revocations. It
-does not store plaintext OAuth passwords or plaintext refresh tokens.
+Back up the selected Agena data directory, including `agena.db` and `secrets/`.
+The database contains hashed credentials, registered clients, refresh-token
+records, and revocations. The durable OAuth signing key lives in the unified
+application-managed secret store instead of the database or an OS keychain.
+
+Secret namespaces are encrypted with ChaCha20-Poly1305, random nonces, and
+namespace-bound authentication. Agena creates its own random `secrets/master.key`;
+protect it and include it in a secure backup. Directories are private to the
+service account and secret files are restricted to that account. Losing the
+master key makes the encrypted secrets unrecoverable, and Agena refuses to
+replace a missing key while encrypted records exist. Encryption protects a
+copied namespace file; an attacker who obtains both `master.key` and the
+encrypted records, or runs as the service account, can access the secrets.
+Neither plaintext OAuth passwords nor plaintext refresh tokens are stored in
+the database.
 
 ## 4. Reverse proxy
 

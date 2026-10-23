@@ -30,7 +30,6 @@ async fn active_session(fixture: &Fixture, runtime: &AgenaRuntime) -> i64 {
 }
 
 async fn finish_sessions(fixture: &Fixture, runtime: &AgenaRuntime, sessions: &[i64]) {
-    fixture.observed.session_end_release.cancel();
     let manager = runtime.session_manager().unwrap();
     for &session_id in sessions {
         manager
@@ -38,6 +37,9 @@ async fn finish_sessions(fixture: &Fixture, runtime: &AgenaRuntime, sessions: &[
             .await
             .unwrap();
     }
+    // Keep shutdown's hook barrier held until cleanup commands have committed;
+    // releasing it first lets shutdown close the pool before cancellation.
+    fixture.observed.session_end_release.cancel();
     fixture.observed.prompt_release.cancel();
 }
 

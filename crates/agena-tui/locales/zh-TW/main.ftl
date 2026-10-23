@@ -3058,3 +3058,25 @@ session-search-results-hints = ↑↓ 選擇 · ←→ / PgUp/Dn 翻頁 · / 搜
 session-page-status = 第 { $page }/{ $pages }{ $more } 頁 · 已載入 { $count } 個工作階段
 session-bucket-page = 第 { $page } 頁
 session-search-compact-hints = ↑↓ · ←→ 翻頁 · Enter 開啟 · Esc 返回
+
+# Backend-owned message queue controls
+command-queue-summary = 管理待傳送訊息：編輯、刪除、清空、暫停或繼續
+queue-title = 待傳送訊息佇列
+queue-paused = 佇列已暫停
+queue-paused-hint = 訊息已保留，繼續後才會傳送。新訊息也會留在佇列中。
+queue-running-hint = 目前回覆結束後，依序傳送。
+queue-resume = 繼續傳送
+queue-pause = 暫停佇列
+queue-clear = 清空佇列
+queue-clear-hint = 移除所有待傳送訊息，保留執行中的回覆。
+queue-message = 待傳送訊息
+queue-item-hint = 選擇訊息後可以取回編輯或刪除。
+queue-restore = 取回輸入框編輯
+queue-restore-hint = 從佇列取出並合併至現有草稿，保留文字與附件。
+queue-remove = 刪除此訊息
+queue-back = 返回佇列
+queue-stopped-title = 目前回覆已停止
+queue-stopped-prompt = 傳送下一則，還是保持停止並保留佇列？
+queue-keep-stopped = 保持停止，保留佇列
+queue-send-next = 傳送下一則
+queue-updated = 待傳送訊息佇列已更新

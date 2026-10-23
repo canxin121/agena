@@ -72,6 +72,10 @@ pub enum KernelError {
     Conflict(String),
     #[error("execution {0} has pending guidance to consume before successful completion")]
     PendingDelivery(ExecutionId),
+    #[error("the message queue is paused")]
+    QueuePaused,
+    #[error("an earlier input or a running execution still owns the queue")]
+    QueueOutOfOrder,
     #[error("kernel capacity exhausted; operation was not admitted")]
     Busy,
     #[error("command was not committed: {0}")]
@@ -623,6 +627,25 @@ impl SessionCommands {
                 .await?,
         )
     }
+    /// Atomically removes all inputs that have not started. A concurrent claim
+    /// either wins first and is preserved, or observes the cancelled attempt.
+    pub async fn clear_queued(
+        &self,
+        request: RequestId,
+        session: SessionId,
+    ) -> Result<CommitReceipt<u64>> {
+        let receipt = self
+            .0
+            .command(request, Command::ClearQueued { session })
+            .await?;
+        match receipt.value {
+            Mutation::ClearedQueued(value) => Ok(CommitReceipt {
+                position: receipt.position,
+                value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
     pub async fn retry(
         &self,
         request: RequestId,
@@ -682,18 +705,39 @@ impl ExecutorCommands {
         session: SessionId,
         execution: ExecutionId,
     ) -> Result<CommitReceipt<AttemptHandle>> {
-        let result = execution_receipt(
-            self.0
-                .command(
-                    request,
-                    Command::Claim {
-                        session,
-                        execution,
-                        epoch: self.0.epoch,
-                    },
-                )
-                .await?,
-        )?;
+        self.claim_ordered(request, session, execution, false).await
+    }
+    /// Claim only the FIFO head, with no concurrent running owner. This writer
+    /// fence also covers resume while an old paused supervisor is settling.
+    pub async fn claim_next(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+    ) -> Result<CommitReceipt<AttemptHandle>> {
+        self.claim_ordered(request, session, execution, true).await
+    }
+    async fn claim_ordered(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        ordered: bool,
+    ) -> Result<CommitReceipt<AttemptHandle>> {
+        let command = if ordered {
+            Command::ClaimNext {
+                session,
+                execution,
+                epoch: self.0.epoch,
+            }
+        } else {
+            Command::Claim {
+                session,
+                execution,
+                epoch: self.0.epoch,
+            }
+        };
+        let result = execution_receipt(self.0.command(request, command).await?)?;
         let scope = Scope {
             session,
             execution,

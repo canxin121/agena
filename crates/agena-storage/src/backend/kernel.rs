@@ -143,6 +143,11 @@ pub enum Command {
         execution: ExecutionId,
         epoch: KernelEpoch,
     },
+    ClaimNext {
+        session: SessionId,
+        execution: ExecutionId,
+        epoch: KernelEpoch,
+    },
     Cancel {
         session: SessionId,
         execution: ExecutionId,
@@ -150,6 +155,9 @@ pub enum Command {
     CancelQueued {
         session: SessionId,
         execution: ExecutionId,
+    },
+    ClearQueued {
+        session: SessionId,
     },
     Retry {
         session: SessionId,
@@ -383,6 +391,7 @@ pub enum Mutation {
     Delivery(DeliveryView),
     Session(Box<SessionMetadata>),
     Execution(ExecutionView),
+    ClearedQueued(u64),
     StopDecision(StopDecision),
     Round(RoundId),
     Checkpoint(EntryId),

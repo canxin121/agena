@@ -362,6 +362,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-activities-summary",
     },
     BuiltInCommand {
+        action: "queue",
+        slash: "/queue",
+        aliases: &[],
+        usage: None,
+        summary_key: "command-queue-summary",
+    },
+    BuiltInCommand {
         action: "background",
         slash: "/background",
         aliases: &[],

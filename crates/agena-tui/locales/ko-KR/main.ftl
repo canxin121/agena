@@ -3003,3 +3003,25 @@ session-search-results-hints = ↑↓ 선택 · ←→ / PgUp/Dn 페이지 · / 
 session-page-status = { $page }/{ $pages }{ $more } 페이지 · { $count }개 로드됨
 session-bucket-page = { $page } 페이지
 session-search-compact-hints = ↑↓ · ←→ 페이지 · Enter 열기 · Esc 뒤로
+
+# Backend-owned message queue controls
+command-queue-summary = 대기 메시지 편집, 삭제, 비우기, 일시 중지 또는 재개
+queue-title = 메시지 대기열
+queue-paused = 대기열 일시 중지됨
+queue-paused-hint = 재개할 때까지 메시지를 보관합니다. 새 메시지도 대기합니다.
+queue-running-hint = 현재 응답이 끝나면 순서대로 전송합니다.
+queue-resume = 대기열 재개
+queue-pause = 대기열 일시 중지
+queue-clear = 대기열 비우기
+queue-clear-hint = 대기 메시지를 모두 삭제하고 실행 중인 응답은 유지합니다.
+queue-message = 대기 메시지
+queue-item-hint = 메시지를 선택하여 편집하거나 삭제합니다.
+queue-restore = 입력창으로 가져와 편집
+queue-restore-hint = 대기열에서 꺼내 첨부 파일과 함께 현재 초안에 추가합니다.
+queue-remove = 이 메시지 삭제
+queue-back = 대기열로 돌아가기
+queue-stopped-title = 응답이 중지됨
+queue-stopped-prompt = 다음 메시지를 보낼까요, 아니면 중지한 채 대기열을 보관할까요?
+queue-keep-stopped = 중지 유지 및 대기열 보관
+queue-send-next = 다음 메시지 보내기
+queue-updated = 메시지 대기열을 업데이트했습니다

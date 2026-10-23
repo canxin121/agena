@@ -447,6 +447,14 @@ pub fn router(state: AppState) -> Router {
                 post(rest::take_queued_message),
             )
             .route(
+                "/api/v1/sessions/{session_id}/queue/pause",
+                post(rest::set_message_queue_paused),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/queue/clear",
+                post(rest::clear_message_queue),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/cancel",
                 post(rest::cancel_run),
             )

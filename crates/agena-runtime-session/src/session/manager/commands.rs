@@ -409,6 +409,46 @@ impl SessionManager {
         &self,
         id: i64,
     ) -> Result<CancellationOutcome, AppError> {
+        self.cancel_session_tree(id, false).await
+    }
+
+    pub async fn set_message_queue_paused(&self, id: i64, paused: bool) -> Result<(), AppError> {
+        let session = session_id(id)?;
+        let dispatch = self.session_dispatch(session);
+        let _submission = dispatch.submission.lock().await;
+        self.persist_message_queue_pause(session, paused).await?;
+        if !paused {
+            self.restore_queued_executions(session).await?;
+        }
+        Ok(())
+    }
+
+    async fn persist_message_queue_pause(
+        &self,
+        session: SessionId,
+        paused: bool,
+    ) -> Result<(), AppError> {
+        let request = RequestId::new();
+        persist(|| {
+            self.kernel().sessions.configure(
+                request,
+                session,
+                SessionConfigurationChange {
+                    message_queue_paused: Some(paused),
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .map_err(kernel_error)?;
+        Ok(())
+    }
+
+    async fn cancel_session_tree(
+        &self,
+        id: i64,
+        preserve_queue: bool,
+    ) -> Result<CancellationOutcome, AppError> {
         let root = session_id(id)?;
         let mut sessions = std::collections::VecDeque::from([root]);
         let mut visited = std::collections::BTreeSet::new();
@@ -422,6 +462,11 @@ impl SessionManager {
                     "cancellation task tree exceeds its bound".into(),
                 ));
             }
+            // Fence all future claims before signalling a running task. Its
+            // completion/cancellation can otherwise release the next input.
+            let dispatch = self.session_dispatch(session);
+            let _submission = dispatch.submission.lock().await;
+            self.persist_message_queue_pause(session, true).await?;
             let mut after = None;
             loop {
                 let page = self
@@ -432,6 +477,9 @@ impl SessionManager {
                     .map_err(kernel_error)?;
                 for execution in &page.executions {
                     found = true;
+                    if preserve_queue && execution.phase == ExecutionPhase::Queued {
+                        continue;
+                    }
                     self.cancel_execution_with_outcome(session.get(), execution.id)
                         .await?;
                 }
@@ -840,6 +888,15 @@ impl SessionExecutionCommandService for SessionManager {
 }
 #[async_trait::async_trait]
 impl crate::SessionExecutionControl for SessionManager {
+    async fn set_message_queue_paused(
+        &self,
+        id: i64,
+        paused: bool,
+    ) -> Result<(), crate::SessionExecutionControlError> {
+        SessionManager::set_message_queue_paused(self, id, paused)
+            .await
+            .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
+    }
     async fn active_execution(&self, id: i64) -> Option<agena_domain::ExecutionLifecycle> {
         SessionManager::active_execution(self, id).await
     }
@@ -848,6 +905,9 @@ impl crate::SessionExecutionControl for SessionManager {
         id: i64,
         e: ExecutionId,
     ) -> Result<CancellationOutcome, crate::SessionExecutionControlError> {
+        self.set_message_queue_paused(id, true)
+            .await
+            .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))?;
         SessionManager::cancel_execution_with_outcome(self, id, e)
             .await
             .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
@@ -856,7 +916,7 @@ impl crate::SessionExecutionControl for SessionManager {
         &self,
         id: i64,
     ) -> Result<CancellationOutcome, crate::SessionExecutionControlError> {
-        self.cancel_active_execution_with_outcome(id)
+        self.cancel_session_tree(id, true)
             .await
             .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
     }

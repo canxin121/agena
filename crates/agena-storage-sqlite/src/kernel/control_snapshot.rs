@@ -81,6 +81,7 @@ pub(super) async fn read_on(
             .map_err(storage)?,
             false,
         )),
+        None if configuration.message_queue_paused => None,
         None => active_executions
             .executions
             .iter()

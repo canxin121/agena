@@ -206,6 +206,11 @@ const {
 
   // Usage + primary action.
   queuedMessages,
+  queuePaused,
+  queueBusy,
+  queueStopChoiceOpen,
+  queueAction,
+  keepQueueStopped,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,
@@ -575,7 +580,18 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               </IconButton>
             </div>
           </div>
-          <QueuedMessages :messages="queuedMessages" />
+          <QueuedMessages
+            :messages="queuedMessages"
+            :paused="queuePaused"
+            :busy="queueBusy"
+            :stop-choice-open="queueStopChoiceOpen"
+            @restore="queueAction('restore', $event)"
+            @remove="queueAction('remove', $event)"
+            @clear="queueAction('clear')"
+            @pause="queueAction('pause')"
+            @resume="queueAction('resume')"
+            @keep-stopped="keepQueueStopped"
+          />
         </div>
       </template>
 

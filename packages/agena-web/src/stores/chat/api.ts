@@ -107,6 +107,7 @@ export type QueuedMessage = { execution_id: string; message_id: number }
 
 export type AgenaExecutionState = {
   queued_messages?: QueuedMessage[]
+  queue_paused?: boolean
   session: AgenaSession
   parts: AgenaPart[]
   part_page: { returned: number; has_more: boolean; next_cursor?: string | null } | null
@@ -117,6 +118,7 @@ export type AgenaExecutionState = {
   background_activities?: SessionActivity[] | null
   execution?: {
     queued_messages?: QueuedMessage[]
+    queue_paused?: boolean
     provider_retry?: { attempt: number; max_retries: number; next_at_ms: number; message: string }
     agent_id?: string
     model_provider_id?: string | null
@@ -184,8 +186,9 @@ export type TranscriptMessageListResponse = MessageListResponse & {
 function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
   return page.runs.flatMap((run) => {
     const hiddenCount = Math.max(0, run.part_count - run.page.returned)
-    const anchor = page.parts.find((part) => part.run_id === run.run_id && part.part_id !== run.run_id)
-      || page.parts.find((part) => part.run_id === run.run_id)
+    const anchor =
+      page.parts.find((part) => part.run_id === run.run_id && part.part_id !== run.run_id) ||
+      page.parts.find((part) => part.run_id === run.run_id)
     if (!hiddenCount || !anchor) return []
     return [
       {
@@ -201,6 +204,7 @@ function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
 
 export type SessionExecutionStatus = {
   queuedMessages?: QueuedMessage[]
+  queuePaused?: boolean
   observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
   session: Session
   state: SessionState
@@ -498,7 +502,7 @@ export function normalizeAgenaPart(
 
   switch (kind) {
     case 'text': {
-      const text = typeof asObject(content).text === 'string' ? asObject(content).text as string : ''
+      const text = typeof asObject(content).text === 'string' ? (asObject(content).text as string) : ''
       return { ...base, type: 'text', text }
     }
     case 'think': {
@@ -1216,6 +1220,38 @@ export async function compactSession(sessionId: string, options?: RunOptionsPayl
   return state
 }
 
+/** Conditional backend queue mutations; clients never dispatch pending items. */
+export async function takeQueuedMessage(sessionId: string, executionId: string): Promise<JsonValue> {
+  const scope = sessionRoutingScope()
+  const document = await apiJson<JsonValue>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}/take`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ request_id: crypto.randomUUID() }),
+    },
+  )
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return document
+}
+
+export async function updateMessageQueue(
+  sessionId: string,
+  action: 'pause' | 'resume' | 'clear',
+): Promise<AgenaExecutionState> {
+  const scope = sessionRoutingScope()
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${action === 'clear' ? 'clear' : 'pause'}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(action === 'clear' ? { request_id: crypto.randomUUID() } : { paused: action === 'pause' }),
+    },
+  )
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
+}
+
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
 export async function cancelSession(sessionId: string, executionId?: string | null): Promise<CancellationOutcome> {
   const scope = sessionRoutingScope()
@@ -1424,6 +1460,7 @@ export async function getSessionExecutionStatus(
     backgroundActivityKinds,
     backgroundActivities: raw.background_activities || [],
     queuedMessages: raw.queued_messages || [],
+    queuePaused: Boolean(raw.queue_paused),
     observation,
   }
 }

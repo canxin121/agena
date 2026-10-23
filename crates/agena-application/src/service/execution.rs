@@ -332,6 +332,7 @@ impl ApplicationService {
         Ok(SessionExecutionResource {
             receipt: None,
             queued_messages,
+            queue_paused: snapshot.configuration.message_queue_paused,
             session: session_resource,
             parts: transcript,
             part_page,

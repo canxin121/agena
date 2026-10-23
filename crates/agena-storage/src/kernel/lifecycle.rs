@@ -11,6 +11,9 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionConfiguration {
+    /// A user stop fences queued claims until an explicit resume, including
+    /// after reconnecting or reopening the database.
+    pub message_queue_paused: bool,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: SessionRelationKind,
     pub conversation: Option<SessionConversation>,
@@ -31,6 +34,7 @@ pub struct SessionTaskConfiguration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionConfigurationChange {
+    pub message_queue_paused: Option<bool>,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: Option<SessionRelationKind>,
     pub conversation: Option<Option<SessionConversation>>,

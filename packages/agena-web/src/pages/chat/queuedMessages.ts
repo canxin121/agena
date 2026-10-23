@@ -4,6 +4,7 @@ import { isQueuedUserMessage } from './conversationMessages'
 
 export type QueuedMessagePreview = {
   messageId: string
+  executionId: string
   preview: string
 }
 
@@ -46,6 +47,9 @@ export function queuedMessagePreviews(
     .sort((left, right) => Number(left) - Number(right))
     .map((messageId) => ({
       messageId,
+      executionId:
+        queue.find((item) => String(item.message_id) === messageId)?.execution_id ||
+        String(record(byId.get(messageId)?.info.runContent).execution_id || ''),
       preview: messagePreview(byId.get(messageId)),
     }))
 }

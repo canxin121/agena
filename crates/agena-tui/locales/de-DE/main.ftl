@@ -3153,3 +3153,25 @@ session-search-results-hints = ↑↓ Auswahl · ←→ / PgUp/Dn Seite · / Suc
 session-page-status = Seite { $page }/{ $pages }{ $more } · { $count } geladen
 session-bucket-page = Seite { $page }
 session-search-compact-hints = ↑↓ · ←→ Seite · Enter öffnen · Esc
+
+# Backend-owned message queue controls
+command-queue-summary = Nachrichten bearbeiten, löschen, leeren, pausieren oder fortsetzen
+queue-title = Nachrichtenwarteschlange
+queue-paused = Warteschlange pausiert
+queue-paused-hint = Nachrichten bleiben bis zur Fortsetzung gespeichert. Neue Nachrichten warten ebenfalls.
+queue-running-hint = Nachrichten werden nach der aktuellen Antwort der Reihe nach gesendet.
+queue-resume = Warteschlange fortsetzen
+queue-pause = Warteschlange pausieren
+queue-clear = Warteschlange leeren
+queue-clear-hint = Alle wartenden Nachrichten entfernen; die laufende Antwort bleibt erhalten.
+queue-message = Wartende Nachricht
+queue-item-hint = Nachricht zum Bearbeiten oder Löschen auswählen.
+queue-restore = Zurück ins Eingabefeld
+queue-restore-hint = Aus der Warteschlange nehmen und mit Anhängen zum aktuellen Entwurf hinzufügen.
+queue-remove = Diese Nachricht löschen
+queue-back = Zurück zur Warteschlange
+queue-stopped-title = Antwort angehalten
+queue-stopped-prompt = Nächste Nachricht senden oder angehalten bleiben und die Warteschlange behalten?
+queue-keep-stopped = Angehalten bleiben und Warteschlange behalten
+queue-send-next = Nächste Nachricht senden
+queue-updated = Nachrichtenwarteschlange aktualisiert

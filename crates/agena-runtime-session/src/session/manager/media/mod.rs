@@ -61,37 +61,64 @@ impl SessionManager {
                     "at most eight media resources may be sent in one message".into(),
                 ));
             }
-            let ResourceReference::WorkspacePath { path } = &resource.reference else {
-                return Err(AppError::Config(
-                    "model input must be an explicitly selected workspace file".into(),
-                ));
+            let prepared = match &resource.reference {
+                ResourceReference::WorkspacePath { path } => {
+                    let target = root.join(path).canonicalize().map_err(|error| {
+                        AppError::Config(format!("selected attachment is unavailable: {error}"))
+                    })?;
+                    if !target.starts_with(&root) {
+                        return Err(AppError::Config(
+                            "selected attachment escapes the active workspace".into(),
+                        ));
+                    }
+                    if !matches!(
+                        executor.principal().authorize_path_access(AccessKind::Read, &root, &target),
+                        PermissionDecision::Allow
+                    ) {
+                        return Err(AppError::Config(
+                            "attachment read requires permission; no content was sent".into(),
+                        ));
+                    }
+                    let root = root.clone();
+                    let path = path.clone();
+                    let expected = activity.provenance.content_hash.clone();
+                    MEDIA_WORKERS
+                        .run(move || media_input::read_local(&root, &path, expected.as_deref()))
+                        .await
+                        .map_err(|error| AppError::Internal(error.to_string()))?
+                        .map_err(AppError::Config)?
+                }
+                ResourceReference::Artifact { uri, sha256 } => {
+                    // Editing queued input preserves its frozen bytes, even
+                    // after the original file moved. Session membership gates
+                    // access; a URI alone cannot grant another session a blob.
+                    let binding = crate::session::kernel::media::decode_binding(uri)
+                        .map_err(AppError::Config)?;
+                    if binding.version != 1 || binding.attachment.sha256.as_ref() != Some(sha256) {
+                        return Err(AppError::Config("invalid stored attachment binding".into()));
+                    }
+                    let reader = self.kernel().reader.open_blob(session, binding.blob)
+                        .await.map_err(kernel_error)?;
+                    if reader.descriptor().byte_len > media_input::MAX_MEDIA_BYTES as u64
+                        || hex::encode(reader.descriptor().sha256) != *sha256
+                    {
+                        return Err(AppError::Config(
+                            "stored attachment size or checksum does not match".into(),
+                        ));
+                    }
+                    let mut stored = Vec::with_capacity(reader.descriptor().byte_len as usize);
+                    reader.copy_to(&mut stored).await.map_err(kernel_error)?;
+                    let name = resource.name.clone();
+                    MEDIA_WORKERS
+                        .run(move || media_input::from_bytes(&name, stored, None))
+                        .await
+                        .map_err(|error| AppError::Internal(error.to_string()))?
+                        .map_err(AppError::Config)?
+                }
+                _ => return Err(AppError::Config(
+                    "model input must be a selected workspace file or a stored attachment in this session".into(),
+                )),
             };
-            let target = root.join(path).canonicalize().map_err(|e| {
-                AppError::Config(format!("selected attachment is unavailable: {e}"))
-            })?;
-            if !target.starts_with(&root) {
-                return Err(AppError::Config(
-                    "selected attachment escapes the active workspace".into(),
-                ));
-            }
-            if !matches!(
-                executor
-                    .principal()
-                    .authorize_path_access(AccessKind::Read, &root, &target),
-                PermissionDecision::Allow
-            ) {
-                return Err(AppError::Config(
-                    "attachment read requires permission; no content was sent".into(),
-                ));
-            }
-            let root = root.clone();
-            let path = path.clone();
-            let expected = activity.provenance.content_hash.clone();
-            let prepared = MEDIA_WORKERS
-                .run(move || media_input::read_local(&root, &path, expected.as_deref()))
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
-                .map_err(AppError::Config)?;
             bytes = bytes.saturating_add(prepared.bytes.len());
             if bytes > media_input::MAX_MEDIA_BATCH_BYTES {
                 return Err(AppError::Config(

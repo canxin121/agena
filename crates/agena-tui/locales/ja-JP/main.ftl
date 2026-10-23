@@ -3007,3 +3007,25 @@ session-search-results-hints = ↑↓ 選択 · ←→ / PgUp/Dn ページ · / 
 session-page-status = { $page }/{ $pages }{ $more } ページ · { $count } 件読み込み済み
 session-bucket-page = { $page } ページ
 session-search-compact-hints = ↑↓ · ←→ ページ · Enter 開く · Esc 戻る
+
+# Backend-owned message queue controls
+command-queue-summary = 待機メッセージの編集・削除・一括削除・一時停止・再開
+queue-title = メッセージキュー
+queue-paused = キューは一時停止中
+queue-paused-hint = 再開するまでメッセージを保持します。新しいメッセージも待機します。
+queue-running-hint = 現在の応答が終わると順番に送信します。
+queue-resume = キューを再開
+queue-pause = キューを一時停止
+queue-clear = キューを空にする
+queue-clear-hint = 待機中の全メッセージを削除し、実行中の応答は保持します。
+queue-message = 待機メッセージ
+queue-item-hint = メッセージを選択して編集または削除します。
+queue-restore = 入力欄に戻して編集
+queue-restore-hint = キューから取り出し、添付ファイルとともに現在の下書きへ追加します。
+queue-remove = このメッセージを削除
+queue-back = キューに戻る
+queue-stopped-title = 応答を停止しました
+queue-stopped-prompt = 次のメッセージを送信しますか？停止したままキューを保持しますか？
+queue-keep-stopped = 停止したままキューを保持
+queue-send-next = 次のメッセージを送信
+queue-updated = メッセージキューを更新しました

@@ -799,6 +799,7 @@ impl App {
         }
         match result {
             Ok(outcome) => {
+                self.request_message_queue(session_id, true);
                 self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
                 if let Some(run_id) = outcome.restored_user_run_id {
                     self.transcript.remove_run_parts(run_id);

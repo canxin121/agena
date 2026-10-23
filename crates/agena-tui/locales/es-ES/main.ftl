@@ -3009,3 +3009,25 @@ session-search-results-hints = ↑↓ elegir · ←→ / PgUp/Dn página · / bu
 session-page-status = Página { $page }/{ $pages }{ $more } · { $count } cargadas
 session-bucket-page = página { $page }
 session-search-compact-hints = ↑↓ · ←→ página · Enter abrir · Esc
+
+# Backend-owned message queue controls
+command-queue-summary = Gestionar mensajes: editar, eliminar, vaciar, pausar o reanudar
+queue-title = Cola de mensajes
+queue-paused = Cola en pausa
+queue-paused-hint = Los mensajes se conservan hasta reanudar. Los nuevos también quedan en cola.
+queue-running-hint = Se enviarán en orden después de la respuesta actual.
+queue-resume = Reanudar cola
+queue-pause = Pausar cola
+queue-clear = Vaciar cola
+queue-clear-hint = Eliminar mensajes pendientes y conservar la respuesta en curso.
+queue-message = Mensaje pendiente
+queue-item-hint = Selecciona un mensaje para editarlo o eliminarlo.
+queue-restore = Volver al editor
+queue-restore-hint = Quitar de la cola y añadir al borrador actual con sus adjuntos.
+queue-remove = Eliminar este mensaje
+queue-back = Volver a la cola
+queue-stopped-title = Respuesta detenida
+queue-stopped-prompt = ¿Enviar el siguiente mensaje o mantener la pausa y conservar la cola?
+queue-keep-stopped = Mantener pausa y conservar cola
+queue-send-next = Enviar siguiente mensaje
+queue-updated = Cola de mensajes actualizada

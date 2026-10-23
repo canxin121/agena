@@ -42,6 +42,12 @@ impl std::error::Error for SessionExecutionControlError {}
 #[async_trait]
 /// Control interface for session execution.
 pub trait SessionExecutionControl: Send + Sync {
+    /// Persistently pauses claims or explicitly resumes the backend FIFO.
+    async fn set_message_queue_paused(
+        &self,
+        session_id: i64,
+        paused: bool,
+    ) -> Result<(), SessionExecutionControlError>;
     /// Current provider backoff, cleared as soon as the stream progresses.
     async fn provider_retry(&self, _session_id: i64) -> Option<agena_domain::ProviderRetryStatus> {
         None
@@ -101,6 +107,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionExecutionControl for FakeControl {
+        async fn set_message_queue_paused(
+            &self,
+            _: i64,
+            _: bool,
+        ) -> Result<(), SessionExecutionControlError> {
+            Ok(())
+        }
         async fn active_execution(&self, session_id: i64) -> Option<ExecutionLifecycle> {
             (session_id == 7).then_some(ExecutionLifecycle::Active {
                 execution_id: ExecutionId(Uuid::nil()),

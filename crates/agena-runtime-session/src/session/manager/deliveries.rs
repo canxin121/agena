@@ -153,6 +153,16 @@ impl SessionManager {
             {
                 continue;
             }
+            if self
+                .kernel()
+                .reader
+                .configuration(summary.id)
+                .await
+                .map_err(kernel_error)?
+                .message_queue_paused
+            {
+                continue;
+            }
             if summary.queued_executions > 0 {
                 // A missing route must not starve recovery of other sessions.
                 match self.restore_queued_executions(summary.id).await {
@@ -257,6 +267,9 @@ impl SessionManager {
             .control_snapshot(session, 128)
             .await
             .map_err(kernel_error)?;
+        if snapshot.configuration.message_queue_paused {
+            return Ok(0);
+        }
         let mut queued = snapshot
             .active_executions
             .executions

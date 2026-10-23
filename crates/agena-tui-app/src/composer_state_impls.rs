@@ -80,7 +80,9 @@ fn resource_display_path(resource: &agena_domain::ResourceActivity) -> std::path
     match &resource.reference {
         agena_domain::ResourceReference::WorkspacePath { path } => std::path::PathBuf::from(path),
         agena_domain::ResourceReference::Url { url } => std::path::PathBuf::from(url),
-        agena_domain::ResourceReference::Artifact { uri, .. } => std::path::PathBuf::from(uri),
+        agena_domain::ResourceReference::Artifact { .. } => {
+            std::path::PathBuf::from(&resource.name)
+        }
         agena_domain::ResourceReference::ProviderFile { file_id, .. } => {
             std::path::PathBuf::from(file_id)
         }

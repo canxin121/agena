@@ -96,6 +96,7 @@ client_command_actions! {
     Status => "status", "/status";
     Usage => "usage", "/usage";
     Activities => "activities", "/activities";
+    Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";
     Side => "side", "/side";

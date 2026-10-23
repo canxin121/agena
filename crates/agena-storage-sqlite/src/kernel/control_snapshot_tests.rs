@@ -437,3 +437,314 @@ async fn control_snapshot_pages_stay_bounded_and_retained_views_release_sql_and_
         ports.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn paused_queue_survives_reopen_and_fences_claims_and_listing_state() {
+    let (ports, admin, _root, url) = super::tests::fixture(false).await;
+    let session = ports
+        .sessions
+        .create(RequestId::new(), 1, "paused queue".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let running = ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            super::tests::document("interrupted before reopening"),
+        )
+        .await
+        .unwrap()
+        .value;
+    ports
+        .executor
+        .claim(RequestId::new(), session, running.id)
+        .await
+        .unwrap();
+    let queued = ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            super::tests::document("keep this input"),
+        )
+        .await
+        .unwrap()
+        .value;
+    ports
+        .sessions
+        .configure(
+            RequestId::new(),
+            session,
+            SessionConfigurationChange {
+                message_queue_paused: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    ports.shutdown().await.unwrap();
+    drop(admin);
+    let reopened = crate::open_kernel_runtime(&url).await.unwrap();
+    let ports = &reopened.ports;
+    let snapshot = ports.reader.control_snapshot(session, 128).await.unwrap();
+    assert!(snapshot.configuration.message_queue_paused);
+    assert!(snapshot.active_execution.is_none());
+    assert_eq!(
+        snapshot.summary.state,
+        agena_domain::SessionStateKind::Ready
+    );
+    assert_eq!(snapshot.summary.queued_executions, 1);
+    assert!(matches!(
+        ports
+            .executor
+            .claim(RequestId::new(), session, queued.id)
+            .await,
+        Err(KernelError::QueuePaused)
+    ));
+    assert_eq!(
+        ports
+            .reader
+            .execution(session, queued.id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
+    let ready = ports
+        .reader
+        .query_summaries(SummaryQuery {
+            states: vec![agena_domain::SessionStateKind::Ready],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ready.sessions.len(), 1);
+    let stats = ports.reader.workspace_statistics(&[1]).await.unwrap();
+    assert_eq!(stats[&1].running, 0);
+    ports
+        .sessions
+        .configure(
+            RequestId::new(),
+            session,
+            SessionConfigurationChange {
+                message_queue_paused: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    ports
+        .executor
+        .claim(RequestId::new(), session, queued.id)
+        .await
+        .unwrap();
+    let clear = ports
+        .sessions
+        .clear_queued(RequestId::new(), session)
+        .await
+        .unwrap();
+    assert_eq!(clear.value, 0);
+    assert_eq!(
+        ports
+            .reader
+            .execution(session, queued.id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Running
+    );
+    ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ordered_claim_cannot_overtake_a_head_left_by_a_settling_paused_supervisor() {
+    for memory in [true, false] {
+        let (ports, _admin, _root, _url) = super::tests::fixture(memory).await;
+        let session = ports
+            .sessions
+            .create(RequestId::new(), 1, "ordered resume".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let first = ports
+            .sessions
+            .send(RequestId::new(), session, document("first retained"))
+            .await
+            .unwrap()
+            .value;
+        let second = ports
+            .sessions
+            .send(RequestId::new(), session, document("second retained"))
+            .await
+            .unwrap()
+            .value;
+        assert!(matches!(
+            ports
+                .executor
+                .claim_next(RequestId::new(), session, second.id)
+                .await,
+            Err(KernelError::QueueOutOfOrder)
+        ));
+        let first = ports
+            .executor
+            .claim_next(RequestId::new(), session, first.id)
+            .await
+            .unwrap()
+            .value;
+        assert!(matches!(
+            ports
+                .executor
+                .claim_next(RequestId::new(), session, second.id)
+                .await,
+            Err(KernelError::QueueOutOfOrder)
+        ));
+        first
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        ports
+            .executor
+            .claim_next(RequestId::new(), session, second.id)
+            .await
+            .unwrap();
+        ports.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn paused_admission_is_bounded_and_clear_replay_keeps_later_input() {
+    let (ports, _admin, _root, _url) = super::tests::fixture(true).await;
+    let session = ports
+        .sessions
+        .create(RequestId::new(), 1, "bounded pause".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let running = ports
+        .sessions
+        .send(RequestId::new(), session, document("current work"))
+        .await
+        .unwrap()
+        .value;
+    let _running = ports
+        .executor
+        .claim_next(RequestId::new(), session, running.id)
+        .await
+        .unwrap();
+    ports
+        .sessions
+        .configure(
+            RequestId::new(),
+            session,
+            SessionConfigurationChange {
+                message_queue_paused: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let original_request = RequestId::new();
+    let original = ports
+        .sessions
+        .send(original_request, session, document("first"))
+        .await
+        .unwrap();
+    for _ in 1..127 {
+        ports
+            .sessions
+            .send(RequestId::new(), session, document("more input"))
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                document("running work also occupies capacity")
+            )
+            .await,
+        Err(KernelError::Busy)
+    ));
+    let full = ports.reader.control_snapshot(session, 128).await.unwrap();
+    assert!(!full.active_executions.has_more);
+    assert_eq!(full.active_executions.executions.len(), 128);
+    assert_eq!(full.summary.queued_executions, 127);
+    ports
+        .sessions
+        .cancel(RequestId::new(), session, running.id)
+        .await
+        .unwrap();
+    ports
+        .sessions
+        .send(RequestId::new(), session, document("last available place"))
+        .await
+        .unwrap();
+    assert_eq!(
+        ports
+            .sessions
+            .send(original_request, session, document("first"))
+            .await
+            .unwrap(),
+        original
+    );
+    assert!(matches!(
+        ports
+            .sessions
+            .send(RequestId::new(), session, document("beyond capacity"))
+            .await,
+        Err(KernelError::Busy)
+    ));
+    assert_eq!(
+        ports
+            .reader
+            .control_snapshot(session, 128)
+            .await
+            .unwrap()
+            .active_executions
+            .executions
+            .len(),
+        128
+    );
+    let request = RequestId::new();
+    assert_eq!(
+        ports
+            .sessions
+            .clear_queued(request, session)
+            .await
+            .unwrap()
+            .value,
+        128
+    );
+    let newer = ports
+        .sessions
+        .send(RequestId::new(), session, document("later input"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        ports
+            .sessions
+            .clear_queued(request, session)
+            .await
+            .unwrap()
+            .value,
+        128
+    );
+    assert_eq!(
+        ports
+            .reader
+            .execution(session, newer.id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
+    ports.shutdown().await.unwrap();
+}

@@ -345,7 +345,10 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
             "overlay-choice-clear-permission-override-detail",
             &agena_tui::fl_args!("field" => permission_studio_mode_target_label(i18n, target)),
         ),
-        ChoiceOverlayAction::PermissionStudioAddEntries(_)
+        ChoiceOverlayAction::MessageQueue { .. }
+        | ChoiceOverlayAction::QueuedMessage { .. }
+        | ChoiceOverlayAction::StoppedMessageQueue { .. }
+        | ChoiceOverlayAction::PermissionStudioAddEntries(_)
         | ChoiceOverlayAction::PermissionStudioAddEntriesMode { .. } => String::new(),
     }
 }

@@ -212,6 +212,11 @@ export type ChatPageViewContext = {
 
   sessionUsage: MaybeRef<SessionUsageLike | null>
   queuedMessages: MaybeRef<QueuedMessagePreview[]>
+  queuePaused: MaybeRef<boolean>
+  queueBusy: MaybeRef<boolean>
+  queueStopChoiceOpen: MaybeRef<boolean>
+  queueAction: (action: 'pause' | 'resume' | 'clear' | 'restore' | 'remove', executionId?: string) => Promise<void>
+  keepQueueStopped: () => void
   showComposerStopAction: MaybeRef<boolean>
   composerStopDisabled: MaybeRef<boolean>
   composerPrimaryDisabled: MaybeRef<boolean>

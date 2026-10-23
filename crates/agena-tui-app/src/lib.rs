@@ -223,6 +223,7 @@ mod app_help;
 mod app_hub;
 mod app_input;
 mod app_lifecycle;
+mod app_message_queue;
 mod app_mouse;
 mod app_navigation;
 mod app_overlays;

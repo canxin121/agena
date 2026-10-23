@@ -2287,6 +2287,29 @@ impl AgenaClient {
         .await
     }
 
+    pub async fn set_message_queue_paused(
+        &self,
+        session_id: i64,
+        paused: bool,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/queue/pause"),
+            serde_json::json!({"paused": paused}),
+        )
+        .await
+    }
+
+    pub async fn clear_message_queue(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/queue/clear"),
+            serde_json::json!({"request_id": agena_domain::CommandId::new()}),
+        )
+        .await
+    }
+
     pub async fn cancel_run(
         &self,
         session_id: i64,

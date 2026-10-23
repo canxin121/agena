@@ -668,6 +668,37 @@ pub struct TakeQueuedMessageRequest {
     pub request_id: agena_domain::CommandId,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MessageQueuePauseRequest {
+    pub paused: bool,
+}
+
+pub async fn set_message_queue_paused(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(request): Json<MessageQueuePauseRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .set_message_queue_paused(session_id, request.paused)
+            .await?,
+    ))
+}
+
+pub async fn clear_message_queue(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(request): Json<TakeQueuedMessageRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .clear_message_queue(request.request_id, session_id)
+            .await?,
+    ))
+}
+
 pub async fn take_queued_message(
     State(state): State<AppState>,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,

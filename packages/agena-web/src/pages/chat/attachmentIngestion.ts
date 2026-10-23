@@ -1,5 +1,6 @@
 /** Local staging only. This module never contacts a model provider. */
 import { i18n } from '@/i18n'
+import type { JsonValue } from '@/types/json'
 export type AttachmentDelivery = 'reference' | 'model_input'
 /**
  * Preparation state of one composer attachment. It is the only difference
@@ -16,6 +17,7 @@ export type ComposerAttachment = {
   url?: string
   blob?: Blob
   serverPath?: string
+  composerNode?: JsonValue
   delivery?: AttachmentDelivery
   state: AttachmentState
   pastePreview?: string

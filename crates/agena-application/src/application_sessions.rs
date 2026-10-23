@@ -504,6 +504,32 @@ impl Application {
         Ok(document.clone())
     }
 
+    pub async fn set_message_queue_paused(
+        &self,
+        session_id: i64,
+        paused: bool,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        self.session_execution_services()?
+            .execution_control
+            .set_message_queue_paused(session_id, paused)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(session_id).await
+    }
+
+    pub async fn clear_message_queue(
+        &self,
+        request: agena_domain::CommandId,
+        session_id: i64,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        self.session_kernel()?
+            .sessions
+            .clear_queued(request, crate::kernel_session_id(session_id)?)
+            .await
+            .map_err(crate::kernel_error)?;
+        self.session_execution_resource(session_id).await
+    }
+
     /// Cancel the active run of `session_id`.
     pub async fn cancel_run(
         &self,

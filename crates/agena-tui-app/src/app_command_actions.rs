@@ -83,6 +83,7 @@ impl App {
                 self.flash_success(self.current_runtime_status_summary());
             }
             ClientCommandAction::Usage => self.open_usage_dashboard(),
+            ClientCommandAction::Queue => self.open_message_queue(),
             ClientCommandAction::Activities => self.open_activities_panel(),
             ClientCommandAction::Background => {
                 // Return to the session hub and leave the TUI. The server owns

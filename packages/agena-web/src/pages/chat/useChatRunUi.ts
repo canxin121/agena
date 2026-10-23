@@ -144,7 +144,7 @@ export function useChatRunUi(opts: {
   renderBlocks: ComputedRef<RenderBlock[]>
 
   onSend: () => Promise<void>
-  onCancellation?: (outcome: CancellationOutcome) => void | Promise<void>
+  onCancellation?: (outcome: CancellationOutcome, sessionId: string) => void | Promise<void>
   collapseAllActivities: () => void
   activityAutoCollapseOnIdle: ComputedRef<boolean>
   compacting?: ComputedRef<boolean>
@@ -323,7 +323,7 @@ export function useChatRunUi(opts: {
     try {
       const outcome = await chat.abortSession(sid)
       if (outcome) {
-        await onCancellation?.(outcome)
+        await onCancellation?.(outcome, sid)
         toasts.push('success', i18n.global.t('chat.toasts.abortedRun'))
       } else {
         toasts.push('error', i18n.global.t('chat.toasts.failedToAbortRun'))

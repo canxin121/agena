@@ -347,6 +347,9 @@ async function withRuntime(
   } finally {
     for (const app of apps) app.unmount()
     disposePinia(pinia)
+    // A shared revision probe can outlive its last disposed subscriber. Drain
+    // its short timer before discarding this test's clock and fetch fixture.
+    await advance(1000)
     runtimeClock = now + 1000
     Date.now = original.now
     Object.assign(globalThis, {
@@ -1097,9 +1100,12 @@ test('an unchanged representation is reused at the newer resource revision after
           status: 304,
           headers: { etag, 'x-resource-revision': tokens.get(resource)! },
         })
-      return Response.json({ files: [{ path: 'a.ts', revision: 'a1' }] }, {
-        headers: { etag, 'x-resource-revision': tokens.get(resource)! },
-      })
+      return Response.json(
+        { files: [{ path: 'a.ts', revision: 'a1' }] },
+        {
+          headers: { etag, 'x-resource-revision': tokens.get(resource)! },
+        },
+      )
     })
     const first = await conditionalJson(resource, endpoint)
     tokens.set(resource, 'granularity-http:16')
@@ -1120,16 +1126,21 @@ test('a newer server revision observed during a file read schedules one catch-up
     setFetch(() => {
       const old = first
       first = false
-      return Response.json({ files: [], total_files: old ? 1 : 2, offset: 0, has_more: false, recording_incomplete: false }, {
-        headers: {
-          etag: old ? 'W/"old-summary"' : 'W/"new-summary"',
-          'x-resource-revision': old ? 'granularity-http:70' : 'granularity-http:71',
-          'x-resource-current-revision': 'granularity-http:71',
+      return Response.json(
+        { files: [], total_files: old ? 1 : 2, offset: 0, has_more: false, recording_incomplete: false },
+        {
+          headers: {
+            etag: old ? 'W/"old-summary"' : 'W/"new-summary"',
+            'x-resource-revision': old ? 'granularity-http:70' : 'granularity-http:71',
+            'x-resource-current-revision': 'granularity-http:71',
+          },
         },
-      })
+      )
     })
     let state!: ReturnType<typeof useWorkspaceChanges>
-    mount(() => { state = useWorkspaceChanges({ sessionId: ref('9953'), busy: ref(true) }) })
+    mount(() => {
+      state = useWorkspaceChanges({ sessionId: ref('9953'), busy: ref(true) })
+    })
     await advance(1000)
     expect(state.total.value).toBe(2)
     expect(state.status.error.value).toBe('')
@@ -1146,7 +1157,10 @@ test('conflict recovery validates retained file content without needing a newer 
     setFetch((_url, init) => {
       requests++
       if (requests === 2 || requests === 3)
-        return Response.json({ error: 'The session changed. Refresh and retry.' }, { status: requests === 2 ? 409 : 412 })
+        return Response.json(
+          { error: 'The session changed. Refresh and retry.' },
+          { status: requests === 2 ? 409 : 412 },
+        )
       if (requests > 1) expect(new Headers(init?.headers).get('if-none-match')).toBe('W/"retained-summary"')
       if (requests === 4)
         return new Response(null, {
@@ -1159,7 +1173,9 @@ test('conflict recovery validates retained file content without needing a newer 
       )
     })
     let state!: ReturnType<typeof useWorkspaceChanges>
-    mount(() => { state = useWorkspaceChanges({ sessionId: ref('9954'), busy: ref(true) }) })
+    mount(() => {
+      state = useWorkspaceChanges({ sessionId: ref('9954'), busy: ref(true) })
+    })
     await advance(1000)
     const retained = state.current.value
     await state.status.refresh()
@@ -1678,7 +1694,8 @@ test('a settled transcript refresh keeps rendered identities and skips the page 
           parts: [
             {
               part_id: 997001,
-              message_boundary: true, kind: 'run',
+              message_boundary: true,
+              kind: 'run',
               role: 'assistant',
               state: 'in_progress',
               content: {},
@@ -1741,4 +1758,106 @@ test('a settled transcript refresh keeps rendered identities and skips the page 
     } finally {
       release()
     }
+  }))
+
+test('stop pauses the backend queue once, and queue management preserves documents for the right composer', () =>
+  withRuntime(async ({ tokens, calls, reply, setFetch, advance }) => {
+    const sid = '99783'
+    const key = `session:${sid}:state`
+    let paused = false
+    let version = 1
+    let queue = [
+      { execution_id: '00000000-0000-0000-0000-000000000002', message_id: 20 },
+      { execution_id: '00000000-0000-0000-0000-000000000003', message_id: 30 },
+    ]
+    const recovered = [
+      { type: 'text', text: 'edit this input' },
+      {
+        type: 'activity',
+        activity: {
+          id: 'attachment',
+          payload: { activity_type: 'resource', name: 'report.pdf', reference: { path: '/workspace/report.pdf' } },
+        },
+      },
+    ]
+    const shell = () => ({
+      session: {
+        id: Number(sid),
+        workspace_id: 1,
+        title: 'Queue controls',
+        version,
+        created_at: 1,
+        updated_at: version,
+        state: { kind: 'ready', data: {} },
+      },
+      execution: { agent_id: 'default' },
+      queue_paused: paused,
+      queued_messages: queue,
+      parts: [],
+      part_page: null,
+    })
+    tokens.set(key, 'queue-controls:1')
+    setFetch((url, init) => {
+      const path = `/api/v1/sessions/${sid}`
+      if ((init?.method || 'GET') === 'POST') {
+        const body = JSON.parse(String(init?.body || '{}'))
+        version++
+        tokens.set(key, `queue-controls:${version}`)
+        if (url.pathname === `${path}/cancel`) {
+          expect(body.execution_id).toBeNull()
+          paused = true
+          return reply(key, { result: 'cancellation_requested' })
+        }
+        if (url.pathname === `${path}/queue/${queue[0]?.execution_id}/take`) {
+          expect(typeof body.request_id).toBe('string')
+          queue = queue.slice(1)
+          return reply(key, recovered)
+        }
+        if (url.pathname === `${path}/queue/pause`) paused = body.paused
+        else if (url.pathname === `${path}/queue/clear`) queue = []
+        else throw new Error(`Unexpected queue write ${url}`)
+        return reply(key, shell())
+      }
+      if (url.pathname === `${path}/state`) return reply(key, shell())
+      if (url.pathname === `${path}/parts`) {
+        return reply(key, { session_id: Number(sid), version, parts: [], runs: [] })
+      }
+      throw new Error(`Unexpected queue read ${url}`)
+    })
+    const chat = useChatStore()
+    const complete = async <T>(request: Promise<T>): Promise<T> => {
+      let settled = false
+      void request.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      for (let attempts = 0; !settled && attempts < 20; attempts++) await advance(1000)
+      if (!settled) throw new Error(`Queue operation did not settle: ${calls.map((url) => url.pathname).join(', ')}`)
+      return request
+    }
+    await complete(chat.refreshExecutionStatus(sid))
+    await complete(chat.abortSession(sid))
+    expect(calls.filter((url) => url.pathname.endsWith('/cancel'))).toHaveLength(1)
+    expect(chat.getSessionExecution(sid)?.queue_paused).toBe(true)
+    expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(2)
+    chat.setComposerDraft(sid, 'newer draft')
+    await complete(chat.takeQueuedMessage(sid, queue[0]!.execution_id, true))
+    expect(chat.getQueuedComposerDocuments(sid)).toEqual([recovered])
+    expect(chat.getQueuedComposerDocuments('different-session')).toEqual([])
+    expect(chat.getComposerDraft(sid)).toBe('newer draft')
+    expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(1)
+    await complete(chat.updateMessageQueue(sid, 'resume'))
+    expect(chat.getSessionExecution(sid)?.queue_paused).toBe(false)
+    await complete(chat.updateMessageQueue(sid, 'pause'))
+    await complete(chat.updateMessageQueue(sid, 'clear'))
+    expect(chat.getSessionExecution(sid)?.queue_paused).toBe(true)
+    expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(0)
+    expect(chat.getQueuedComposerDocuments(sid)).toEqual([recovered])
+    chat.consumeQueuedComposerDocuments(sid)
+    expect(chat.getQueuedComposerDocuments(sid)).toEqual([])
+    expect(calls.some((url) => /\/(messages|continue)$/.test(url.pathname))).toBe(false)
   }))

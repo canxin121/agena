@@ -2638,3 +2638,25 @@ session-search-results-hints = ↑↓ move · ←→ / PgUp/Dn page · / search 
 session-page-status = Page { $page }/{ $pages }{ $more } · { $count } loaded
 session-bucket-page = page { $page }
 session-search-compact-hints = ↑↓ · ←→ page · Enter open · Esc back
+
+# Backend-owned message queue controls
+command-queue-summary = Manage queued messages: edit, delete, clear, pause or resume
+queue-title = Message queue
+queue-paused = Queue paused
+queue-paused-hint = Messages are saved until you resume. New messages also stay queued.
+queue-running-hint = Messages run in order after the current response.
+queue-resume = Resume queue
+queue-pause = Pause queue
+queue-clear = Clear queue
+queue-clear-hint = Remove all pending messages; keep the running response.
+queue-message = Queued message
+queue-item-hint = Select a message to edit or delete.
+queue-restore = Return to composer
+queue-restore-hint = Remove from queue and merge with your current draft, including attachments.
+queue-remove = Delete this message
+queue-back = Back to queue
+queue-stopped-title = Response stopped
+queue-stopped-prompt = Send the next message or stay stopped and keep the queue?
+queue-keep-stopped = Stay stopped, keep queue
+queue-send-next = Send next message
+queue-updated = Message queue updated

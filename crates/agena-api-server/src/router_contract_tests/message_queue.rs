@@ -175,3 +175,107 @@ async fn server_queues_messages_across_clients_and_dequeue_cannot_cancel_a_start
     );
     provider.await.unwrap();
 }
+
+#[tokio::test]
+async fn stopping_with_pending_input_keeps_the_queue_across_clients_until_resume_or_clear() {
+    let (release, release_rx) = oneshot::channel();
+    let (provider_url, mut requests, provider) = spawn_fake_responses_provider(vec![
+        FakeProviderPlan {
+            events: terminal_response_events("stopped answer", "stop-active"),
+            release: Some(release_rx),
+        },
+        FakeProviderPlan {
+            events: terminal_response_events("resumed answer", "resumed-next"),
+            release: None,
+        },
+    ])
+    .await;
+    let server = start_test_server(&provider_url).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let first = submit_test_run(&client, server.workspace_id, "active input").await;
+    let session = first.session.id;
+    tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    for prompt in ["take this input back", "send this retained input"] {
+        client
+            .submit_message(SubmitRunParams {
+                session_id: session,
+                options: RunOptions::default(),
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: prompt.into(),
+                }]),
+            })
+            .await
+            .unwrap();
+    }
+    client.cancel_run(session, None).await.unwrap();
+    drop(client);
+    let observer = AgenaClient::new(&server.url).unwrap();
+    let stopped = wait_for_execution(&observer, session, |state| {
+        state.session.state.active_execution().is_none()
+    })
+    .await;
+    assert!(stopped.queue_paused);
+    assert_eq!(stopped.queued_messages.len(), 2);
+    assert!(
+        requests.try_recv().is_err(),
+        "stopping must not drain the queue"
+    );
+    let conversation = observer
+        .session_run_window(session, 10, 16, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        conversation.runs.len(),
+        1,
+        "pending inputs must not become unanswered conversation turns"
+    );
+    let restored = observer
+        .take_queued_message(
+            session,
+            agena_domain::ExecutionId(stopped.queued_messages[0].execution_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.text(), "take this input back");
+    let _ = release.send(());
+    let resumed = observer
+        .set_message_queue_paused(session, false)
+        .await
+        .unwrap();
+    assert!(!resumed.queue_paused);
+    let request = tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let prompt = serde_json::to_string(&request).unwrap();
+    assert!(prompt.contains("send this retained input"));
+    assert!(!prompt.contains("take this input back"));
+    let finished = wait_for_execution(&observer, session, |state| {
+        state.session.state.active_execution().is_none()
+    })
+    .await;
+    assert!(finished.queued_messages.is_empty());
+    observer
+        .set_message_queue_paused(session, true)
+        .await
+        .unwrap();
+    observer
+        .submit_message(SubmitRunParams {
+            session_id: session,
+            options: RunOptions::default(),
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "clear without sending".into(),
+            }]),
+        })
+        .await
+        .unwrap();
+    let cleared = observer.clear_message_queue(session).await.unwrap();
+    assert!(cleared.queue_paused);
+    assert!(cleared.queued_messages.is_empty());
+    assert!(requests.try_recv().is_err());
+    server.server.abort();
+    provider.abort();
+}

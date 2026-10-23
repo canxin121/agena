@@ -218,7 +218,7 @@ async fn hydrate_uri(
 }
 /// Decode the immutable binding embedded in a media reference. Every failure is
 /// a per-attachment degradation reason, never a request-level error.
-fn decode_binding(uri: &str) -> std::result::Result<MediaBinding, String> {
+pub(crate) fn decode_binding(uri: &str) -> std::result::Result<MediaBinding, String> {
     let value = uri
         .strip_prefix(PREFIX)
         .ok_or("its recorded reference is not an immutable media binding")?;

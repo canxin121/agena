@@ -1306,6 +1306,9 @@ pub struct SessionExecutionResource {
     /// references to durable user messages, not client-local composer drafts.
     #[serde(default)]
     pub queued_messages: Vec<QueuedMessageResource>,
+    /// Paused inputs remain durable and require an explicit backend resume.
+    #[serde(default)]
+    pub queue_paused: bool,
     pub session: SessionResource,
     /// The session's parts (ordered parts, including `run` markers).
     pub parts: Vec<crate::part::PartResource>,

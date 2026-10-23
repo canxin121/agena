@@ -3006,3 +3006,25 @@ session-search-results-hints = ↑↓ choisir · ←→ / PgUp/Dn page · / cher
 session-page-status = Page { $page }/{ $pages }{ $more } · { $count } chargées
 session-bucket-page = page { $page }
 session-search-compact-hints = ↑↓ · ←→ page · Enter ouvrir · Esc
+
+# Backend-owned message queue controls
+command-queue-summary = Gérer les messages : modifier, supprimer, vider, suspendre ou reprendre
+queue-title = File de messages
+queue-paused = File en pause
+queue-paused-hint = Les messages sont conservés jusqu’à la reprise. Les nouveaux restent aussi en attente.
+queue-running-hint = Les messages seront envoyés dans l’ordre après la réponse actuelle.
+queue-resume = Reprendre la file
+queue-pause = Suspendre la file
+queue-clear = Vider la file
+queue-clear-hint = Supprimer les messages en attente et conserver la réponse en cours.
+queue-message = Message en attente
+queue-item-hint = Choisir un message à modifier ou supprimer.
+queue-restore = Remettre dans la saisie
+queue-restore-hint = Retirer de la file et ajouter au brouillon actuel avec les pièces jointes.
+queue-remove = Supprimer ce message
+queue-back = Retour à la file
+queue-stopped-title = Réponse arrêtée
+queue-stopped-prompt = Envoyer le message suivant ou rester en pause et conserver la file ?
+queue-keep-stopped = Rester en pause et garder la file
+queue-send-next = Envoyer le suivant
+queue-updated = File de messages mise à jour

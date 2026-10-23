@@ -692,14 +692,21 @@ impl App {
     pub(crate) fn transcript_footer_text(&self) -> String {
         let mut parts = Vec::new();
         if let Some(execution) = &self.transcript.execution
-            && !execution.queued_messages.is_empty()
+            && (!execution.queued_messages.is_empty() || execution.queue_paused)
         {
             let count = execution.queued_messages.len();
             let preview = self
                 .transcript
                 .parts
                 .iter()
-                .find(|part| part.part_id == execution.queued_messages[0].message_id)
+                .find(|part| {
+                    part.part_id
+                        == execution
+                            .queued_messages
+                            .first()
+                            .map(|item| item.message_id)
+                            .unwrap_or(-1)
+                })
                 .and_then(|part| part.content.get("text").and_then(serde_json::Value::as_str))
                 .unwrap_or("")
                 .lines()
@@ -716,7 +723,12 @@ impl App {
                     &agena_tui::fl_args!("preview" => preview),
                 )
             };
-            parts.push(format!("{count} · {label}"));
+            let state = if execution.queue_paused {
+                ui_text::t(&self.i18n, "queue-paused")
+            } else {
+                label
+            };
+            parts.push(format!("{count} · {state} · /queue"));
         }
         if let Some(status_line) = self
             .status_line

@@ -116,6 +116,16 @@ pub(crate) struct ChoiceOverlay {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
+    MessageQueue {
+        session_id: i64,
+    },
+    QueuedMessage {
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    },
+    StoppedMessageQueue {
+        session_id: i64,
+    },
     InsertContent,
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),

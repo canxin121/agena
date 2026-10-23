@@ -28,6 +28,9 @@ async fn configure(
 ) -> Result<Mutation> {
     let original = configuration(connection, session).await?;
     let mut next = original.clone();
+    if let Some(paused) = change.message_queue_paused {
+        next.message_queue_paused = paused;
+    }
     if let Some(parent) = change.parent_session_id
         && original.parent_session_id != Some(parent)
     {
@@ -132,7 +135,13 @@ async fn configure(
         return Err(invalid("session configuration exceeds 64 KiB"));
     }
     if next != original {
-        sqlx::query("UPDATE agena_sessions SET configuration_json=?,relation_kind=?,metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(body).bind(next.relation_kind.as_str()).bind(now_ms()).bind(session.get()).execute(connection).await.map_err(sql_error)?;
+        sqlx::query("UPDATE agena_sessions SET configuration_json=?,relation_kind=?,metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(body).bind(next.relation_kind.as_str()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    }
+    if original.message_queue_paused != next.message_queue_paused {
+        // Re-run the existing compact-state projection when resuming; no
+        // execution transition is needed to wake a retained queue.
+        sqlx::query("UPDATE agena_session_statistics SET queued_executions=queued_executions WHERE session_id=?")
+            .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
     }
     Ok(Mutation::Configuration(Box::new(next)))
 }
@@ -530,6 +539,7 @@ pub(super) async fn apply(
                 connection,
                 metadata.id,
                 &SessionConfigurationChange {
+                    message_queue_paused: Some(config.message_queue_paused),
                     parent_session_id: config.parent_session_id,
                     relation_kind: Some(config.relation_kind),
                     conversation: Some(config.conversation.clone()),
@@ -641,6 +651,17 @@ pub(super) async fn apply(
         _ => return Ok(None),
     };
     Ok(Some(value))
+}
+
+/// Apply the paused presentation at the write boundary, never by loading
+/// configuration documents on the compact session-list read path.
+pub(super) async fn refresh_paused_summary(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<()> {
+    sqlx::query("UPDATE agena_session_statistics SET processing_state='ready' WHERE session_id=? AND running_executions=0 AND queued_executions>0 AND EXISTS(SELECT 1 FROM agena_sessions s WHERE s.id=? AND COALESCE(json_extract(s.configuration_json,'$.message_queue_paused'),0)=1)")
+        .bind(session.get()).bind(session.get()).execute(connection).await.map_err(sql_error)?;
+    Ok(())
 }
 
 pub(super) const STATE_SQL: &str = "t.processing_state";
@@ -815,8 +836,7 @@ pub(super) async fn workspace_statistics(
         .try_acquire_owned()
         .map_err(|_| KernelError::Busy)?;
     let sql = format!(
-        "SELECT s.workspace_id,count(*) AS total,sum(s.parent_session_id IS NULL) AS roots,sum(s.pinned) AS pinned,sum(t.running_executions+t.queued_executions>0) AS running,sum(({}) IN ('awaiting_interaction','failed')) AS attention FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.deleted_at_ms IS NULL AND s.workspace_id IN (SELECT value FROM json_each(?)) AND s.temporary=0 GROUP BY s.workspace_id",
-        STATE_SQL
+        "SELECT s.workspace_id,count(*) AS total,sum(s.parent_session_id IS NULL) AS roots,sum(s.pinned) AS pinned,sum(({STATE_SQL}) IN ('running','awaiting_interaction')) AS running,sum(({STATE_SQL}) IN ('awaiting_interaction','failed')) AS attention FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.deleted_at_ms IS NULL AND s.workspace_id IN (SELECT value FROM json_each(?)) AND s.temporary=0 GROUP BY s.workspace_id"
     );
     let rows = sqlx::query(&sql)
         .bind(encode(ids)?)

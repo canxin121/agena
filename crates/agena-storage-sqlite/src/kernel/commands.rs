@@ -118,6 +118,24 @@ pub(super) async fn apply(
             if document.is_empty() {
                 return Err(invalid("message is empty"));
             }
+            // Paused supervisors release admission permits. Bound durable
+            // paused input too, so the coherent control projection stays
+            // complete and retaining a queue cannot consume unbounded memory.
+            if super::lifecycle::configuration(connection, *session)
+                .await?
+                .message_queue_paused
+            {
+                let active: i64 = sqlx::query_scalar(
+                    "SELECT queued_executions+running_executions FROM agena_session_statistics WHERE session_id=?",
+                )
+                .bind(session.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+                if active >= 128 {
+                    return Err(KernelError::Busy);
+                }
+            }
             let body = encode(document)?;
             if body.len() > 256 * 1024 {
                 return Err(invalid("composer document exceeds 256 KiB"));
@@ -150,8 +168,28 @@ pub(super) async fn apply(
             session,
             execution,
             epoch,
+        }
+        | Command::ClaimNext {
+            session,
+            execution,
+            epoch,
         } => {
+            // This check and the claim share the serialized writer transaction.
+            // A stop must persist pause before releasing the current execution.
+            if super::lifecycle::configuration(connection, *session)
+                .await?
+                .message_queue_paused
+            {
+                return Err(KernelError::QueuePaused);
+            }
             let (view, _) = reads::execution(connection, *session, *execution).await?;
+            if matches!(command, Command::ClaimNext { .. }) {
+                let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.session_id=? AND (a.phase='running' OR (a.phase='queued' AND x.message_id<?)))")
+                    .bind(session.get()).bind(view.message_id.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+                if blocked {
+                    return Err(KernelError::QueueOutOfOrder);
+                }
+            }
             let mut state = ExecutionState::from_stored(view.generation, view.phase);
             state.claim()?;
             sqlx::query("UPDATE agena_attempts SET phase='running',owner_epoch=?,started_at_ms=? WHERE execution_id=? AND generation=?")
@@ -179,6 +217,17 @@ pub(super) async fn apply(
             finish(connection, view, ExecutionPhase::Cancelled)
                 .await
                 .map(Mutation::Execution)
+        }
+        Command::ClearQueued { session } => {
+            reads::metadata(connection, *session).await?;
+            let ids: Vec<String> = sqlx::query_scalar("SELECT x.id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.session_id=? AND a.phase='queued' ORDER BY x.message_id")
+                .bind(session.get()).fetch_all(&mut *connection).await.map_err(sql_error)?;
+            for id in &ids {
+                let execution = id.parse().map_err(storage)?;
+                let (view, _) = reads::execution(connection, *session, execution).await?;
+                finish(connection, view, ExecutionPhase::Cancelled).await?;
+            }
+            Ok(Mutation::ClearedQueued(ids.len() as u64))
         }
         Command::Retry { session, execution } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
@@ -1004,6 +1053,7 @@ pub(super) async fn recover(database: &sea_orm::DatabaseConnection) -> Result<()
         "UPDATE agena_rounds SET phase='interrupted',finished_at_ms=? WHERE phase='running'",
         "UPDATE agena_deliveries SET state='failed',owner_epoch=NULL,lease_until_ms=NULL WHERE state='pending' AND target_execution_id IS NOT NULL AND EXISTS(SELECT 1 FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.id=agena_deliveries.target_execution_id AND a.phase!='queued')",
         "UPDATE agena_attempts SET phase='interrupted',finished_at_ms=MAX(?,COALESCE(started_at_ms,?)) WHERE phase='running'",
+        "UPDATE agena_session_statistics SET processing_state='ready' WHERE queued_executions>0 AND running_executions=0 AND EXISTS(SELECT 1 FROM agena_sessions s WHERE s.id=agena_session_statistics.session_id AND COALESCE(json_extract(s.configuration_json,'$.message_queue_paused'),0)=1)",
         "DELETE FROM agena_blob_pins",
     ] {
         let values = (0..sql.matches('?').count()).map(|_| sea_orm::Value::from(now));

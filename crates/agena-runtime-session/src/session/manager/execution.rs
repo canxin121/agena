@@ -309,11 +309,15 @@ impl SessionManager {
         let attempt = match persist(|| {
             self.kernel()
                 .executor
-                .claim(claim, control.session, control.execution)
+                .claim_next(claim, control.session, control.execution)
         })
         .await
         {
             Ok(receipt) => receipt.value,
+            // Pausing releases in-memory supervision/admission, but leaves the
+            // durable input queued. Explicit resume or recovery registers it
+            // again; a paused queue never turns into failed user turns.
+            Err(KernelError::QueuePaused | KernelError::QueueOutOfOrder) => return Ok(()),
             Err(error) => return Err(kernel_error(error)),
         };
         let execution = persist(|| {

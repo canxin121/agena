@@ -1522,6 +1522,7 @@ async fn publish_rows(
         return Err(invalid("archive publication has unresolved references"));
     }
     let session = SessionId::try_from(id).map_err(storage)?;
+    super::lifecycle::refresh_paused_summary(connection, session).await?;
     let sequence:i64=sqlx::query_scalar("UPDATE agena_commits SET sequence=sequence+1 WHERE id=1 AND sequence<9223372036854775807 RETURNING sequence").fetch_one(&mut *connection).await.map_err(sql_error)?;
     let receipt = CommitReceipt {
         position: CommitPosition {

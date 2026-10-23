@@ -5,6 +5,39 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::MessageQueue { session_id } => {
+                let value = choice_selection_value(&selection);
+                match value.as_str() {
+                    "pause" | "resume" | "clear" => self.request_queue_control(session_id, &value),
+                    _ => {
+                        if let Ok(execution_id) = value.parse() {
+                            self.show_queued_message_actions(session_id, execution_id);
+                        }
+                    }
+                }
+                true
+            }
+            ChoiceOverlayAction::QueuedMessage {
+                session_id,
+                execution_id,
+            } => {
+                match choice_selection_value(&selection).as_str() {
+                    "restore" => {
+                        self.request_take_queued_message_by_id(session_id, execution_id, true)
+                    }
+                    "remove" => {
+                        self.request_take_queued_message_by_id(session_id, execution_id, false)
+                    }
+                    _ => self.request_message_queue(session_id, false),
+                }
+                true
+            }
+            ChoiceOverlayAction::StoppedMessageQueue { session_id } => {
+                if choice_selection_value(&selection) == "resume" {
+                    self.request_queue_control(session_id, "resume");
+                }
+                true
+            }
             ChoiceOverlayAction::InsertContent => match choice_selection_value(&selection).as_str()
             {
                 "file" => {

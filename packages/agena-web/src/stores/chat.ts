@@ -39,7 +39,7 @@ import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
 import { useDirectoryStoreUnscoped } from './directory'
 import { i18n } from '../i18n'
-import { normalizeSessionState, sessionStateExecution, sessionStateRequests } from '../types/chat'
+import { normalizeSessionState, sessionStateRequests } from '../types/chat'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -1056,9 +1056,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         setSessionMessages(sid, merged)
         loadedAny = true
         const fetchedContent = normalized.reduce(
-          (total, entry) =>
-            total +
-            entry.parts.filter((part) => !loadedIds.has(part.id)).length,
+          (total, entry) => total + entry.parts.filter((part) => !loadedIds.has(part.id)).length,
           0,
         )
         // A recent snapshot can advance the reply tail while this older page
@@ -1072,10 +1070,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const changedCursor: boolean = currentFold.nextCursor !== cursor
         const remaining = Math.max(0, currentFold.hiddenCount - fetchedContent)
         cursor = changedCursor ? currentFold.nextCursor : (page.nextCursor ?? null)
-        const nextAnchor =
-          normalized
-            .flatMap((entry) => entry.parts)
-            .at(0)?.id || currentFold.anchorPartId
+        const nextAnchor = normalized.flatMap((entry) => entry.parts).at(0)?.id || currentFold.anchorPartId
         const nextFold: MessageFold = {
           ...currentFold,
           anchorPartId: changedCursor ? currentFold.anchorPartId : String(nextAnchor),
@@ -1127,6 +1122,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
+    queuedComposerDocumentsBySession.value = {}
     transcriptCacheGeneration += 1
     transcriptObservations.clear()
     transcriptRecovery.clear()
@@ -1328,7 +1324,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       backgroundActivitiesBySession.value[sid] = st.backgroundActivities
     }
 
-    const execution = { ...st.execution, queued_messages: st.queuedMessages || [] }
+    const execution = {
+      ...st.execution,
+      queued_messages: st.queuedMessages || [],
+      queue_paused: Boolean(st.queuePaused),
+    }
     if (execution && typeof execution === 'object') {
       sessionExecutionBySession.value = {
         ...sessionExecutionBySession.value,
@@ -1378,6 +1378,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         usage: state.usage,
         backgroundActivities: activities,
         queuedMessages: state.queued_messages || [],
+        queuePaused: Boolean(state.queue_paused),
         backgroundActivityKinds: activities.map((activity) => activity.kind.toLowerCase()),
       },
       activityGeneration,
@@ -1682,6 +1683,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    delete queuedComposerDocumentsBySession.value[sid]
     transcriptCache.remove(sid)
     evictedTranscriptSessions.delete(sid)
     transcriptObservations.delete(sid)
@@ -1980,31 +1982,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return null
     const generation = transcriptCacheGeneration
     try {
-      const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
-      if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return null
-      if (st) applyExecutionStatus(st)
-      const executionId = sessionStateExecution(st?.state)?.execution_id
-      let outcome: chatApi.CancellationOutcome
-      if (!executionId) {
-        // The stop action also suppresses queued background notification wakes.
-        // There may be no execution in this short window even though the next
-        // delivery would otherwise start one immediately.
-        outcome = await chatApi.cancelSession(sid, null)
-      } else {
-        outcome = await chatApi.cancelSession(sid, executionId)
-        // If the short-lived execution changed between the snapshot and the
-        // exact cancel request, the stop action still applies to the current
-        // session. The session-scoped fallback also suppresses queued delivery
-        // wakes that could otherwise create the next execution immediately.
-        const after = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
-        if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return outcome
-        if (after) applyExecutionStatus(after)
-        const afterExecutionId = sessionStateExecution(after?.state)?.execution_id
-        if (outcome.result === 'execution_mismatch' || (afterExecutionId && afterExecutionId !== executionId)) {
-          outcome = await chatApi.cancelSession(sid, null)
-        }
-      }
+      // One backend stop fences the queue before cancelling its current owner.
+      const outcome = await chatApi.cancelSession(sid, null)
+      const after = await chatApi.getSessionExecutionStatus(sid, true)
       if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return outcome
+      if (after) applyExecutionStatus(after)
+      await reconcileExecutionParts(sid).catch(() => messageRevalidator(sid).invalidate(0))
       if (typeof outcome.restored_user_run_id === 'number') {
         removeMessageForRun(sid, outcome.restored_user_run_id)
       }
@@ -2012,6 +1995,39 @@ const useChatStoreDefinition = defineStore('chat', () => {
       return outcome
     } catch {
       return null
+    }
+  }
+
+  const queuedComposerDocumentsBySession = ref<Record<string, JsonValue[]>>({})
+  function getQueuedComposerDocuments(sid: string) {
+    return queuedComposerDocumentsBySession.value[sid] || []
+  }
+  function consumeQueuedComposerDocuments(sid: string) {
+    delete queuedComposerDocumentsBySession.value[sid]
+  }
+
+  async function takeQueuedMessage(sid: string, executionId: string, restore: boolean) {
+    const generation = transcriptCacheGeneration
+    try {
+      const document = await chatApi.takeQueuedMessage(sid, executionId)
+      // Keep successful take results independently of later refresh failures or
+      // session switches. A mounted composer consumes its own documents only.
+      if (restore && generation === transcriptCacheGeneration && !deletedSessions.has(sid))
+        queuedComposerDocumentsBySession.value[sid] = [...getQueuedComposerDocuments(sid), document]
+      return document
+    } finally {
+      reconcileExecutionAfterWrite(sid)
+      await refreshExecutionStatus(sid).catch(() => {})
+    }
+  }
+
+  async function updateMessageQueue(sid: string, action: 'pause' | 'resume' | 'clear') {
+    const generation = transcriptCacheGeneration
+    try {
+      const state = await chatApi.updateMessageQueue(sid, action)
+      if (applyExecutionResource(state, generation)) await reconcileExecutionParts(sid)
+    } finally {
+      reconcileExecutionAfterWrite(sid)
     }
   }
 
@@ -2230,7 +2246,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
           selectedSessionId.value !== sid &&
           !refreshMessagesInFlightBySession.has(sid)
         ) {
-          if (!props.resource_revisions && isRecord(part) && part.message_boundary === true) scheduleSessionsRefresh(800)
+          if (!props.resource_revisions && isRecord(part) && part.message_boundary === true)
+            scheduleSessionsRefresh(800)
           return
         }
         if (isRecord(part)) {
@@ -2275,9 +2292,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
               if (replyId) info.replyId = replyId
               const ordinalRaw = readNumber(part.user_message_ordinal)
               if (ordinalRaw != null && ordinalRaw > 0) info.userMessageOrdinal = Math.floor(ordinalRaw)
-              const boundaryEntry=upsertMessageEntryIn(list, info)
-              const boundaryPart=normalizeAgenaPart(String(partId),sid,key,part as JsonValue)
-              if (boundaryPart) upsertPart(boundaryEntry,boundaryPart,'')
+              const boundaryEntry = upsertMessageEntryIn(list, info)
+              const boundaryPart = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
+              if (boundaryPart) upsertPart(boundaryEntry, boundaryPart, '')
               if (info.role === 'user' && !isQueueOnlyMessage(boundaryEntry)) {
                 const currentCount = historyUserMessageCountBySession.value[sid]
                 if (typeof info.userMessageOrdinal === 'number') {
@@ -2319,7 +2336,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
               }
             }
             // Text tokens change content, not execution/interaction state.
-            if (!props.resource_revisions && (part.message_boundary === true || kind === 'tool_call')) scheduleSessionStatusRefresh(sid)
+            if (!props.resource_revisions && (part.message_boundary === true || kind === 'tool_call'))
+              scheduleSessionStatusRefresh(sid)
           }
         }
       } else if (sid && changeKind === 'part_removed') {
@@ -2456,6 +2474,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     renameSession,
     updateSessionMetadata,
     abortSession,
+    takeQueuedMessage,
+    updateMessageQueue,
+    getQueuedComposerDocuments,
+    consumeQueuedComposerDocuments,
     sendText,
     sendMessage,
     continueSession,

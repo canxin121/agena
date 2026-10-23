@@ -818,6 +818,7 @@ mod interaction_part_routing_tests {
         };
         SessionExecutionResource {
             queued_messages: Vec::new(),
+            queue_paused: false,
             receipt: None,
             part_page: None,
             session: SessionResource {
@@ -2726,6 +2727,7 @@ mod session_activity_state_machine_tests {
     fn execution_with(state: SessionState, parts: Vec<PartResource>) -> SessionExecutionResource {
         SessionExecutionResource {
             queued_messages: Vec::new(),
+            queue_paused: false,
             receipt: None,
             part_page: None,
             session: SessionResource {

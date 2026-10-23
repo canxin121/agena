@@ -2921,3 +2921,229 @@ async fn recovery_resumes_queued_input_from_another_workspace() {
     fixture.idle(session.get()).await;
     fixture.close().await;
 }
+
+#[tokio::test]
+async fn user_stop_preserves_pending_messages_until_explicit_backend_resume() {
+    let fixture = Fixture::new(4).await;
+    let first = fixture.submit("running input").await.receipt.unwrap();
+    fixture.calls(1).await;
+    let second = fixture.submit("saved second input").await.receipt.unwrap();
+    let third = fixture.submit("saved third input").await.receipt.unwrap();
+    crate::SessionExecutionControl::cancel_session_with_outcome(
+        &fixture.manager,
+        fixture.session.id,
+    )
+    .await
+    .unwrap();
+    fixture.idle(fixture.session.id).await;
+    let session = session_id(fixture.session.id).unwrap();
+    let snapshot = fixture
+        .manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 128)
+        .await
+        .unwrap();
+    assert!(snapshot.configuration.message_queue_paused);
+    assert!(snapshot.active_execution.is_none());
+    assert_eq!(snapshot.summary.running_executions, 0);
+    assert_eq!(snapshot.summary.queued_executions, 2);
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .execution(session, first.execution_id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Cancelled
+    );
+    for receipt in [&second, &third] {
+        assert_eq!(
+            fixture
+                .manager
+                .kernel()
+                .reader
+                .execution(session, receipt.execution_id)
+                .await
+                .unwrap()
+                .phase,
+            ExecutionPhase::Queued
+        );
+    }
+    assert_eq!(
+        fixture
+            .manager
+            .recover_background_deliveries(128)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    // A fresh send while paused is accepted and preserved, not an implicit
+    // authorization to run the retained queue.
+    fixture.submit("new input while paused").await;
+    fixture.idle(fixture.session.id).await;
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    fixture
+        .manager
+        .set_message_queue_paused(fixture.session.id, false)
+        .await
+        .unwrap();
+    fixture.calls(2).await;
+    let prompt = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[1]).unwrap();
+    assert!(prompt.contains("saved second input"));
+    assert!(!prompt.contains("saved third input"));
+    fixture.finish(1, "answer to second");
+    fixture.calls(3).await;
+    let prompt = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[2]).unwrap();
+    assert!(prompt.contains("saved third input"));
+    assert!(!prompt.contains("new input while paused"));
+    fixture.finish(2, "answer to third");
+    fixture.calls(4).await;
+    fixture.finish(3, "answer to new input");
+    fixture.idle(fixture.session.id).await;
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 4);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn clearing_pending_messages_does_not_cancel_the_current_provider() {
+    let fixture = Fixture::new(1).await;
+    let active = fixture.submit("keep current work").await.receipt.unwrap();
+    fixture.calls(1).await;
+    fixture.submit("clear pending one").await;
+    fixture.submit("clear pending two").await;
+    let session = session_id(fixture.session.id).unwrap();
+    let command = RequestId::new();
+    let result = fixture
+        .manager
+        .kernel()
+        .sessions
+        .clear_queued(command, session)
+        .await
+        .unwrap();
+    assert_eq!(result.value, 2);
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .sessions
+            .clear_queued(command, session)
+            .await
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .execution(session, active.execution_id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Running
+    );
+    fixture.finish(0, "current work finished");
+    fixture.idle(fixture.session.id).await;
+    assert_eq!(fixture.provider.requests.lock().unwrap().len(), 1);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn editing_a_queued_media_input_preserves_frozen_bytes_and_session_ownership() {
+    use base64::Engine as _;
+    let fixture = Fixture::new(1).await;
+    let bytes = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==").unwrap();
+    tokio::fs::write(fixture._root.path().join("input.png"), &bytes)
+        .await
+        .unwrap();
+    fixture
+        .manager
+        .set_message_queue_paused(fixture.session.id, true)
+        .await
+        .unwrap();
+    let queued = fixture
+        .manager
+        .submit(crate::SessionUserRunRequest::new(
+            fixture.session.id,
+            fixture.options(),
+            image_document(),
+        ))
+        .await
+        .unwrap()
+        .receipt
+        .unwrap();
+    fixture.idle(fixture.session.id).await;
+    let session = session_id(fixture.session.id).unwrap();
+    let execution = fixture
+        .manager
+        .kernel()
+        .reader
+        .execution(session, queued.execution_id)
+        .await
+        .unwrap();
+    let entry = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, execution.message_id)
+        .await
+        .unwrap();
+    let EntryPayload::User { document } = &entry.payload else {
+        panic!("queued media document")
+    };
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .cancel_queued(RequestId::new(), session, queued.execution_id)
+        .await
+        .unwrap();
+    tokio::fs::remove_file(fixture._root.path().join("input.png"))
+        .await
+        .unwrap();
+    let other = fixture
+        .manager
+        .create_session(SessionCreateRequest {
+            title: "unrelated session".into(),
+            parent_session_id: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .manager
+            .submit(crate::SessionUserRunRequest::new(
+                other.id,
+                fixture.options(),
+                document.clone()
+            ))
+            .await
+            .is_err(),
+        "a stored media URI must not grant another session blob access"
+    );
+    fixture
+        .manager
+        .submit(crate::SessionUserRunRequest::new(
+            fixture.session.id,
+            fixture.options(),
+            document.clone(),
+        ))
+        .await
+        .unwrap();
+    fixture.idle(fixture.session.id).await;
+    fixture
+        .manager
+        .set_message_queue_paused(fixture.session.id, false)
+        .await
+        .unwrap();
+    fixture.calls(1).await;
+    let request = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[0]).unwrap();
+    assert!(request.contains("iVBORw0KGgo"));
+    fixture.finish(0, "edited media answer");
+    fixture.idle(fixture.session.id).await;
+    fixture.close().await;
+}

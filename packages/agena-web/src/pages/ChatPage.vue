@@ -53,6 +53,7 @@ import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { queuedMessagePreviews } from './chat/queuedMessages'
+import { appendQueuedComposerDocuments, restoredComposerText, restoredComposerFiles } from './chat/queuedComposer'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
@@ -81,7 +82,9 @@ type OutgoingMessagePart =
           activity_type: 'resource'
           delivery?: 'reference' | 'model_input'
           kind: 'file' | 'image' | 'audio' | 'video' | 'pdf'
-          reference: { reference_type: 'workspace_path'; path: string }
+          reference:
+            | { reference_type: 'workspace_path'; path: string }
+            | { reference_type: 'artifact'; uri: string; sha256: string }
           name: string
           media_type?: string
           size_bytes?: number
@@ -1024,49 +1027,12 @@ watch([failedDraftVersion, () => ui.isImageViewerOpen], attachments.releaseUnuse
   flush: 'post',
 })
 
-function restoredComposerText(document: JsonValue): string {
-  if (!Array.isArray(document)) return ''
-  return document
-    .map((node) => {
-      const record = asRecord(node)
-      return record.type === 'text' && typeof record.text === 'string' ? record.text : ''
-    })
-    .join('')
-}
-
-function restoredComposerFiles(document: JsonValue): AttachedFile[] {
-  if (!Array.isArray(document)) return []
-  return document.flatMap((node, index) => {
-    const record = asRecord(node)
-    if (record.type !== 'activity') return []
-    const activity = asRecord(record.activity)
-    const payload = asRecord(activity.payload)
-    if (payload.activity_type !== 'resource') return []
-    const reference = asRecord(payload.reference)
-    const path = typeof reference.path === 'string' ? reference.path.trim() : ''
-    if (!path) return []
-    const filename =
-      typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : path.split('/').pop() || 'file'
-    const size =
-      typeof payload.size_bytes === 'number' && Number.isFinite(payload.size_bytes)
-        ? Math.max(0, payload.size_bytes)
-        : 0
-    const id = typeof activity.id === 'string' && activity.id.trim() ? activity.id : `restored-${Date.now()}-${index}`
-    return [
-      {
-        id,
-        filename,
-        size,
-        mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
-        serverPath: path,
-        delivery: payload.delivery === 'model_input' ? ('model_input' as const) : ('reference' as const),
-        state: 'ready' as const,
-      },
-    ]
-  })
-}
-
-function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
+function restoreCancelledComposer(outcome: chatApi.CancellationOutcome, sessionId: string) {
+  const execution = chat.getSessionExecution(sessionId)
+  if (execution?.queue_paused && execution.queued_messages?.length && chat.selectedSessionId === sessionId) {
+    stoppedQueueSessionId.value = sessionId
+  }
+  if (chat.selectedSessionId !== sessionId) return
   const document = outcome.restored_user_message
   if (document == null) return
 
@@ -1153,6 +1119,67 @@ const runUi = useChatRunUi({
   activityAutoCollapseOnIdle,
   compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
 })
+
+const queueBusy = ref(false)
+const stoppedQueueSessionId = ref<string | null>(null)
+const queuePaused = computed(() => Boolean(chat.selectedSessionExecution?.queue_paused))
+const queueStopChoiceOpen = computed(
+  () => stoppedQueueSessionId.value === chat.selectedSessionId && queuePaused.value && queuedMessages.value.length > 0,
+)
+function keepQueueStopped() {
+  stoppedQueueSessionId.value = null
+}
+
+watch(
+  () => chat.selectedSessionId,
+  () => {
+    stoppedQueueSessionId.value = null
+  },
+)
+watch(
+  () => [chat.selectedSessionId, chat.getQueuedComposerDocuments(chat.selectedSessionId || '')] as const,
+  ([sid, documents]) => {
+    if (!sid || !documents.length) return
+    const currentSegments: ComposerSegment[] = composerRef.value?.getSegments?.() ?? [
+      { type: 'text', text: draft.value },
+      ...attachedFiles.value.map((file) => ({ type: 'attachment' as const, id: file.id })),
+    ]
+    const { segments, files, text } = appendQueuedComposerDocuments(currentSegments, attachedFiles.value, documents)
+    attachedFiles.value = files
+    draft.value = text
+    const filesSnapshot = attachedFiles.value
+    const pendingSnapshot = pendingAttachments.value
+    chat.consumeQueuedComposerDocuments(sid)
+    void nextTick(() => {
+      if (
+        chat.selectedSessionId !== sid ||
+        draft.value !== text ||
+        attachedFiles.value !== filesSnapshot ||
+        pendingAttachments.value !== pendingSnapshot
+      )
+        return
+      composerRef.value?.restoreSegments?.(segments)
+      getComposerInput(composerRef.value)?.focus()
+    })
+  },
+  { flush: 'post', immediate: true },
+)
+
+async function queueAction(action: 'pause' | 'resume' | 'clear' | 'restore' | 'remove', executionId = '') {
+  const sid = chat.selectedSessionId
+  if (!sid || queueBusy.value) return
+  queueBusy.value = true
+  try {
+    if (action === 'restore' || action === 'remove')
+      await chat.takeQueuedMessage(sid, executionId, action === 'restore')
+    else await chat.updateMessageQueue(sid, action)
+    if (action === 'resume') stoppedQueueSessionId.value = null
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    queueBusy.value = false
+  }
+}
 
 const queuedMessages = computed(() =>
   queuedMessagePreviews(chat.messages, chat.selectedSessionExecution?.queued_messages ?? []),
@@ -1803,6 +1830,10 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'usage':
       await router.push({ path: '/settings/diagnostics', query: { view: 'usage' } })
       return
+    case 'queue':
+      await chat.refreshExecutionStatus(sid || '')
+      pageRef.value?.querySelector<HTMLElement>('[data-queued-messages] button')?.focus()
+      return
     case 'activities':
     case 'background':
       await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
@@ -1996,13 +2027,17 @@ async function sendReady(sid: string | null) {
     // One text part plus the attachments as their own parts: the text keeps one
     // placeholder per inline attachment, so the transcript renders the
     // attachments together above the text the user actually typed.
-    const parts: OutgoingMessagePart[] = []
+    const parts: JsonValue[] = []
     const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
     if (composed.typedText) parts.push({ type: 'text', text: composed.text })
     for (const id of composed.attachmentIds) {
       const f = filesById.get(id)
       if (!f) continue
+      if (f.composerNode) {
+        parts.push(f.composerNode)
+        continue
+      }
       let path = ''
       let sha256: string | undefined
       let size = Number.isFinite(f.size) && f.size > 0 ? Math.floor(f.size) : undefined
@@ -2373,6 +2408,11 @@ const viewCtx = {
 
   // Send/stop.
   queuedMessages,
+  queuePaused,
+  queueBusy,
+  queueStopChoiceOpen,
+  queueAction,
+  keepQueueStopped,
   sessionUsage,
   showComposerStopAction,
   composerStopDisabled,

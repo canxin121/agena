@@ -1734,7 +1734,10 @@ async fn commit_batch(
                 return None;
             }
             if matches!(pending.command, Command::DeleteSession { .. })
-                || matches!(receipt.value, Mutation::Execution(_))
+                || matches!(
+                    receipt.value,
+                    Mutation::Execution(_) | Mutation::ClearedQueued(_)
+                )
             {
                 Some(change_target(&pending.command, &receipt.value).0)
             } else {
@@ -1976,8 +1979,10 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Selection { session, .. }
         | Command::Send { session, .. }
         | Command::Claim { session, .. }
+        | Command::ClaimNext { session, .. }
         | Command::Cancel { session, .. }
         | Command::CancelQueued { session, .. }
+        | Command::ClearQueued { session }
         | Command::Retry { session, .. }
         | Command::Reply { session, .. }
         | Command::PrepareBlob { session, .. }
@@ -2084,8 +2089,10 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         }
         Command::Send { session, .. } => (*session, ChangeKind::Membership),
         Command::Claim { session, .. }
+        | Command::ClaimNext { session, .. }
         | Command::Cancel { session, .. }
         | Command::CancelQueued { session, .. }
+        | Command::ClearQueued { session }
         | Command::Retry { session, .. } => (*session, ChangeKind::Execution),
         Command::BeginRound { scope, .. }
         | Command::BeginCurrentRound { scope }
@@ -2179,6 +2186,7 @@ async fn execute(
         value = Mutation::Content(content::stored_head(connection, content).await?);
     }
     let session = change_target(&pending.command, &value).0;
+    lifecycle::refresh_paused_summary(connection, session).await?;
     if sqlx::query("UPDATE agena_sessions SET control_version=control_version+1 WHERE id=? AND control_version<9223372036854775807")
         .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected() != 1
     {
@@ -2246,7 +2254,10 @@ async fn entry_changes(
         ..Default::default()
     };
     match command {
-        Command::Fork { .. } | Command::Withdraw { .. } | Command::DeleteSession { .. } => {
+        Command::Fork { .. }
+        | Command::Withdraw { .. }
+        | Command::DeleteSession { .. }
+        | Command::ClearQueued { .. } => {
             change.requires_snapshot = true;
             return Ok(change);
         }

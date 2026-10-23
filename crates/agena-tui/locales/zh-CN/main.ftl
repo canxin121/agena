@@ -2638,3 +2638,25 @@ session-search-results-hints = ↑↓ 选择 · ←→ / PgUp/Dn 翻页 · / 搜
 session-page-status = 第 { $page }/{ $pages }{ $more } 页 · 已载入 { $count } 个会话
 session-bucket-page = 第 { $page } 页
 session-search-compact-hints = ↑↓ · ←→ 翻页 · Enter 打开 · Esc 返回
+
+# Backend-owned message queue controls
+command-queue-summary = 管理待发消息：编辑、删除、清空、暂停或恢复
+queue-title = 待发消息队列
+queue-paused = 队列已暂停
+queue-paused-hint = 消息已保留，恢复后才会发送。新消息也会留在队列中。
+queue-running-hint = 当前回复结束后，按顺序依次发送。
+queue-resume = 恢复发送
+queue-pause = 暂停队列
+queue-clear = 清空队列
+queue-clear-hint = 移除所有待发消息，保留正在运行的回复。
+queue-message = 待发消息
+queue-item-hint = 选择消息后可以取回编辑或删除。
+queue-restore = 取回输入框编辑
+queue-restore-hint = 从队列取出并合并到现有草稿，保留文字和附件。
+queue-remove = 删除这条消息
+queue-back = 返回队列
+queue-stopped-title = 当前回复已停止
+queue-stopped-prompt = 发送下一条，还是保持停止并保留队列？
+queue-keep-stopped = 保持停止，保留队列
+queue-send-next = 发送下一条
+queue-updated = 待发消息队列已更新

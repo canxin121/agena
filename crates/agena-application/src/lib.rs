@@ -61,6 +61,8 @@ pub(crate) fn kernel_error(error: agena_storage::kernel::KernelError) -> Applica
             ApplicationError::not_found_with_diagnostic("The resource was not found.", &error)
         }
         KernelError::Conflict(_)
+        | KernelError::QueuePaused
+        | KernelError::QueueOutOfOrder
         | KernelError::StaleAttempt
         | KernelError::PendingDelivery(_)
         | KernelError::ContentReset

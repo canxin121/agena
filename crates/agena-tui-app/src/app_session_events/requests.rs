@@ -645,6 +645,16 @@ impl App {
         };
         let session_id = execution.session.id;
         let execution_id = agena_domain::ExecutionId(queued.execution_id);
+        self.request_take_queued_message_by_id(session_id, execution_id, restore);
+        true
+    }
+
+    pub(crate) fn request_take_queued_message_by_id(
+        &mut self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+        restore: bool,
+    ) {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -661,7 +671,6 @@ impl App {
                 })
                 .await;
         });
-        true
     }
 
     pub(crate) fn request_continue(&mut self, session_id: i64) {
@@ -713,12 +722,6 @@ impl App {
     /// clear the stale local execution marker immediately so the composer and
     /// activity indicator respond in the same frame as Ctrl+C.
     pub(crate) fn request_cancel_run(&mut self, session_id: i64) {
-        let execution_id = self
-            .transcript
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.session.state.active_execution())
-            .map(|execution| agena_domain::ExecutionId(execution.execution_id));
         self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
             // The cached resource may still advertise an active execution (or
@@ -731,8 +734,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result =
-                crate::app_backend::operations::cancel_run(&application, session_id, execution_id)
-                    .await;
+                crate::app_backend::operations::cancel_run(&application, session_id, None).await;
             let result = match result {
                 Ok(outcome)
                     if outcome.result == agena_domain::CancellationResult::ExecutionMismatch =>

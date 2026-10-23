@@ -53,12 +53,12 @@ use sha2::{Digest, Sha256};
 
 use agena_plugin_host::sdk::host_api::{HostCommandRegisterRequest, HostCommandRemoveRequest};
 use agena_plugin_host::sdk::{
-    CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult,
-    CommandTarget, HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError,
-    PluginKey, PluginManifest, PluginManifestTranslation, PluginSkillDefinition,
-    Result as SdkResult, SettingsContract, SettingsNode, SettingsNodeKind, ToolContract,
-    ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch, ToolDocs, ToolInvokeInput,
-    ToolInvokeOutput, ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
+    CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult, CommandTarget,
+    HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError, PluginKey,
+    PluginManifest, PluginManifestTranslation, PluginSkillDefinition, Result as SdkResult,
+    SettingsContract, SettingsNode, SettingsNodeKind, ToolContract, ToolDefinition,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolDocs, ToolInvokeInput, ToolInvokeOutput,
+    ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
 };
 
 use discovery::{
@@ -222,41 +222,6 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-compact-summary",
     },
     BuiltInCommand {
-        action: "user-input",
-        slash: "/user-input",
-        aliases: &["reply"],
-        usage: None,
-        summary_key: "command-user-input-summary",
-    },
-    BuiltInCommand {
-        action: "allow",
-        slash: "/allow",
-        aliases: &[],
-        usage: None,
-        summary_key: "command-allow-summary",
-    },
-    BuiltInCommand {
-        action: "allow-always",
-        slash: "/allow-always",
-        aliases: &[],
-        usage: None,
-        summary_key: "command-allow-always-summary",
-    },
-    BuiltInCommand {
-        action: "deny",
-        slash: "/deny",
-        aliases: &[],
-        usage: None,
-        summary_key: "command-deny-summary",
-    },
-    BuiltInCommand {
-        action: "deny-always",
-        slash: "/deny-always",
-        aliases: &[],
-        usage: None,
-        summary_key: "command-deny-always-summary",
-    },
-    BuiltInCommand {
         action: "attach",
         slash: "/attach",
         aliases: &["file"],
@@ -283,13 +248,6 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         aliases: &[],
         usage: None,
         summary_key: "command-image-summary",
-    },
-    BuiltInCommand {
-        action: "paste",
-        slash: "/paste",
-        aliases: &["clipboard"],
-        usage: None,
-        summary_key: "command-paste-summary",
     },
     BuiltInCommand {
         action: "copy",
@@ -2230,9 +2188,9 @@ impl Plugin for CommandsPlugin {
                 "List discovered skills. Currently {declared} built-in and {external} external."
             )),
             "get" => Some("Read one discovered skill.".to_string()),
-            "read_resource" => Some(
-                "Read a bounded UTF-8 resource contained by one skill directory.".to_string(),
-            ),
+            "read_resource" => {
+                Some("Read a bounded UTF-8 resource contained by one skill directory.".to_string())
+            }
             "refresh" => Some(
                 "Rescan filesystem-backed skills and report whether the catalog changed."
                     .to_string(),

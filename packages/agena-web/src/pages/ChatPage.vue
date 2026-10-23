@@ -1572,13 +1572,6 @@ function commandSessionId(): string | null {
   return sid || null
 }
 
-function commandRequestId(): string {
-  const attention = chat.selectedAttention
-  const payload = asRecord(attention?.payload as JsonValue)
-  const properties = getRecord(payload, 'properties')
-  return typeof properties.id === 'string' ? properties.id.trim() : ''
-}
-
 /**
  * A command that documents no usage takes no arguments, so anything typed
  * after it is a mistake worth reporting rather than silently dropping.
@@ -1754,37 +1747,9 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'compact':
       await handleCompactSession()
       return
-    case 'user-input':
-      if (chat.selectedAttention?.kind === 'question') scrollToBottom('smooth')
-      else toasts.push('info', t('chat.toasts.noPendingUserInput'))
-      return
-    case 'allow':
-    case 'allow-always':
-    case 'deny':
-    case 'deny-always': {
-      if (!sid || chat.selectedAttention?.kind !== 'permission') {
-        toasts.push('info', t('chat.toasts.noPendingPermissionRequest'))
-        return
-      }
-      const requestId = commandRequestId()
-      if (!requestId) throw new Error(t('chat.toasts.pendingPermissionRequestMissingId'))
-      const reply =
-        command.action === 'allow'
-          ? 'once'
-          : command.action === 'allow-always'
-            ? 'always'
-            : command.action === 'deny-always'
-              ? 'reject_always'
-              : 'reject'
-      await chat.replyPermission(sid, requestId, reply)
-      return
-    }
     case 'attach':
     case 'image':
       openFilePicker()
-      return
-    case 'paste':
-      toasts.push('info', t('chat.toasts.useSystemPasteShortcut'))
       return
     case 'favorite':
     case 'hub':

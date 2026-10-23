@@ -154,12 +154,7 @@ impl App {
                             .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
                     })
                     .map(|entry| {
-                        let summary = entry
-                            .command
-                            .docs
-                            .summary
-                            .clone()
-                            .unwrap_or_default();
+                        let summary = entry.command.docs.summary.clone().unwrap_or_default();
                         let value = serde_json::json!([
                             entry.plugin_id.to_string(),
                             entry.command.id.clone(),

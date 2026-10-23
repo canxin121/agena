@@ -1469,6 +1469,16 @@ export default {
       "retryingIn": "Nuevo intento en {countdown}",
       "retryMeta": "intento {attempt} • siguiente {next}"
     },
+    "skills": {
+      "attach": "Adjuntar una referencia de Skill",
+      "title": "Skills",
+      "search": "Buscar Skills",
+      "empty": "No se encontraron Skills",
+      "referenceDescription": "Adjunta una referencia de Skill. Sus instrucciones se leerán cuando sea necesario.",
+      "loadFailed": "No se pudieron cargar las Skills",
+      "attachFailed": "No se pudo adjuntar la referencia de Skill",
+      "countLimit": "Un mensaje puede incluir como máximo {count} referencias de Skill"
+    },
     "page": {
       "nav": {
         "previousUserMessage": "Mensaje anterior del usuario",
@@ -1602,10 +1612,6 @@ export default {
       "sessionRequiredForCommand": "Se necesita una sesión para /{command}.",
       "sessionContinuationStarted": "Se ha iniciado la continuación de la sesión.",
       "pagerUnsupported": "La transcripción web ya permite recorrer las páginas mediante el desplazamiento.",
-      "noPendingUserInput": "No hay ninguna solicitud de entrada del usuario pendiente.",
-      "noPendingPermissionRequest": "No hay ninguna solicitud de permiso pendiente.",
-      "pendingPermissionRequestMissingId": "La solicitud de permiso pendiente no tiene id.",
-      "useSystemPasteShortcut": "Usa el atajo de pegado del sistema para insertar el texto del portapapeles.",
       "noAssistantMessageLoaded": "No hay ningún mensaje del asistente cargado.",
       "noVisibleTranscript": "No hay contenido visible en la transcripción.",
       "noChildSessions": "Esta sesión no tiene sesiones secundarias.",
@@ -3405,8 +3411,6 @@ export default {
     }
   },
   "command-activities-summary": "Abrir el panel de actividad en segundo plano",
-  "command-allow-always-summary": "Permitir siempre la primera solicitud de permiso pendiente",
-  "command-allow-summary": "Permitir una vez la primera solicitud de permiso pendiente",
   "command-attach-summary": "Adjuntar un archivo mediante el selector interactivo",
   "command-background-summary": "Volver al centro de sesiones; la sesión seguirá ejecutándose",
   "command-children-summary": "Abrir el selector de sesiones secundarias",
@@ -3417,8 +3421,6 @@ export default {
   "command-copy-message-summary": "Copiar el último mensaje del asistente",
   "command-copy-summary": "Copiar la transcripción cargada",
   "command-copy-visible-summary": "Copiar la parte visible de la transcripción",
-  "command-deny-always-summary": "Denegar siempre la primera solicitud de permiso pendiente",
-  "command-deny-summary": "Denegar una vez la primera solicitud de permiso pendiente",
   "command-diagnostics-summary": "Mostrar un resumen de diagnóstico anonimizado para enviar comentarios",
   "command-download-summary": "Descargar un archivo del espacio de trabajo mediante el proveedor de transferencia activo de Terminal",
   "command-editor-summary": "Abrir el editor externo para el cuadro de redacción",
@@ -3433,7 +3435,6 @@ export default {
   "command-new-summary": "Crear una sesión nueva",
   "command-pager-summary": "Abrir la transcripción cargada en un paginador de Terminal",
   "command-parent-summary": "Ir a la sesión principal",
-  "command-paste-summary": "Pegar archivos, imágenes o texto del portapapeles en el cuadro de redacción",
   "command-plan-summary": "Abrir el visor del plan de la sesión actual",
   "command-pr-summary": "Crear una solicitud de incorporación de cambios con opciones mínimas mediante gh",
   "command-rename-summary": "Cambiar el nombre de la sesión actual o seleccionada",
@@ -3445,7 +3446,6 @@ export default {
   "command-status-summary": "Mostrar el estado actual de la sesión, la ejecución, el espacio de trabajo y la interfaz",
   "command-timeline-summary": "Abrir una cronología de eventos con búsqueda para la sesión actual o seleccionada",
   "command-usage-summary": "Abrir el análisis interactivo de tokens y costes",
-  "command-user-input-summary": "Responder a la primera solicitud de información pendiente del usuario",
   "ui": {
     "inlineSearch": {
       "placeholder": "Buscar…",

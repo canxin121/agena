@@ -242,20 +242,6 @@ impl App {
         self.request_compact(session_id);
     }
 
-    pub(crate) fn reply_permission(&mut self, kind: PermissionReplyKind) {
-        let Some((session_id, request)) = self.pending_permission_overlay_target() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
-            return;
-        };
-        self.submit_permission_reply(
-            session_id,
-            request,
-            kind,
-            None,
-            ui_text::permission_reply_label(&self.i18n, kind),
-        );
-    }
-
     pub(crate) fn submit_permission_reply(
         &mut self,
         session_id: i64,

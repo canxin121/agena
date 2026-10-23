@@ -358,8 +358,7 @@ impl App {
         }
 
         let plugin_id = entry.plugin_id.to_string();
-        let definition = serde_json::to_vec(&entry.command)
-            .map_err(crate::UiFailure::internal)?;
+        let definition = serde_json::to_vec(&entry.command).map_err(crate::UiFailure::internal)?;
         let content_hash = hex::encode(Sha256::digest(definition));
         let payload = agena_domain::ActivityPayload::CommandReference(
             agena_domain::CommandReferenceActivity {
@@ -370,11 +369,8 @@ impl App {
                 aliases: entry.command.aliases.clone(),
             },
         );
-        let placeholder = crate::composer_state_impls::composer_activity_presentation(
-            &payload,
-            &self.i18n,
-        )
-        .0;
+        let placeholder =
+            crate::composer_state_impls::composer_activity_presentation(&payload, &self.i18n).0;
         let placeholder = self.make_unique_composer_placeholder(placeholder);
         self.composer.insert_element(placeholder.as_str());
         self.composer_items.push(ComposerItem {

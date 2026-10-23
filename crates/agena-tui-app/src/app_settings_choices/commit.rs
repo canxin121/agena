@@ -48,9 +48,11 @@ impl App {
                     catalog.commands.into_iter().find(|entry| {
                         entry.plugin_id.to_string() == plugin_id
                             && entry.command.id == command_id
-                            && entry.command.category.as_deref().is_some_and(|category| {
-                                category.eq_ignore_ascii_case("skill")
-                            })
+                            && entry
+                                .command
+                                .category
+                                .as_deref()
+                                .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
                     })
                 });
                 let Some(entry) = entry else {

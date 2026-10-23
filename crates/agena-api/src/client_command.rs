@@ -76,16 +76,10 @@ client_command_actions! {
     Pager => "pager", "/pager";
     Continue => "continue", "/continue";
     Compact => "compact", "/compact";
-    UserInput => "user-input", "/user-input";
-    Allow => "allow", "/allow";
-    AllowAlways => "allow-always", "/allow-always";
-    Deny => "deny", "/deny";
-    DenyAlways => "deny-always", "/deny-always";
     Attach => "attach", "/attach";
     Download => "download", "/download";
     Editor => "editor", "/editor";
     Image => "image", "/image";
-    Paste => "paste", "/paste";
     Copy => "copy", "/copy";
     CopyMessage => "copy-message", "/copy-message";
     CopyVisible => "copy-visible", "/copy-visible";

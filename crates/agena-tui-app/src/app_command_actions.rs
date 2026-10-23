@@ -46,15 +46,6 @@ impl App {
             ClientCommandAction::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             ClientCommandAction::Continue => self.continue_current_session(),
             ClientCommandAction::Compact => self.compact_current_session(),
-            ClientCommandAction::UserInput => self.open_user_input_overlay(),
-            ClientCommandAction::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
-            ClientCommandAction::AllowAlways => {
-                self.reply_permission(PermissionReplyKind::AllowAlways)
-            }
-            ClientCommandAction::Deny => self.reply_permission(PermissionReplyKind::DenyOnce),
-            ClientCommandAction::DenyAlways => {
-                self.reply_permission(PermissionReplyKind::DenyAlways)
-            }
             ClientCommandAction::Attach => {
                 self.focus = Focus::Composer;
                 self.request_file_attachment(false);
@@ -65,10 +56,6 @@ impl App {
             }
             ClientCommandAction::Image => {
                 self.request_file_attachment(true);
-            }
-            ClientCommandAction::Paste => {
-                self.focus = Focus::Composer;
-                self.pending_ui_action = Some(UiAction::PasteClipboard);
             }
             ClientCommandAction::Copy => self.copy_loaded_transcript(),
             ClientCommandAction::CopyMessage => self.copy_last_assistant_message(),
@@ -444,8 +431,8 @@ enum ForkKind {
 use crate::app_backend::PluginCommandEffect;
 use crate::commands::ClientCommand;
 use crate::{
-    App, AppMessage, ComposerDraft, Path, PermissionReplyKind, TIMELINE_EVENT_LIMIT, UiAction,
-    non_empty_owned, parse_pr_command_args, ui_text,
+    App, AppMessage, ComposerDraft, Path, TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned,
+    parse_pr_command_args, ui_text,
 };
 use agena_api::client_command::ClientCommandAction;
 use agena_tui::main_focus::Focus;

@@ -2086,9 +2086,7 @@ search-picker-custom-path-label = Eingegebenen Pfad verwenden
 
 command-activities-summary = Hintergrundaktivitäten öffnen
 
-command-allow-always-summary = Erste ausstehende Berechtigungsanfrage immer zulassen
 
-command-allow-summary = Erste ausstehende Berechtigungsanfrage einmalig zulassen
 
 command-attach-summary = Datei über die interaktive Auswahl anhängen
 
@@ -2110,9 +2108,7 @@ command-copy-summary = Geladenes Transkript kopieren
 
 command-copy-visible-summary = Sichtbaren Transkriptbereich kopieren
 
-command-deny-always-summary = Erste ausstehende Berechtigungsanfrage immer ablehnen
 
-command-deny-summary = Erste ausstehende Berechtigungsanfrage einmalig ablehnen
 
 command-diagnostics-summary = Bereinigte Diagnosezusammenfassung für Feedback anzeigen
 
@@ -2140,7 +2136,6 @@ command-pager-summary = Geladenes Transkript in einem Terminal-Pager öffnen
 
 command-parent-summary = Zur übergeordneten Sitzung springen
 
-command-paste-summary = Dateien, Bilder oder Text aus der Zwischenablage in das Eingabefeld einfügen
 
 command-plan-summary = Planansicht für die aktuelle Sitzung öffnen
 
@@ -2160,7 +2155,6 @@ command-timeline-summary = Durchsuchbare Ereigniszeitleiste für die aktuelle od
 
 command-usage-summary = Interaktive Token- und Kostenanalyse öffnen
 
-command-user-input-summary = Erste ausstehende Benutzereingabe beantworten
 
 context-help-summary-sessions = Geladene Sitzungen durchsuchen und die aktive Unterhaltung auswählen.
 

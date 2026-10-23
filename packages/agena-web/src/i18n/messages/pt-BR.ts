@@ -808,6 +808,16 @@ export default {
         "sent": "enviada"
       }
     },
+    "skills": {
+      "attach": "Anexar uma referência de Skill",
+      "title": "Skills",
+      "search": "Pesquisar Skills",
+      "empty": "Nenhuma Skill encontrada",
+      "referenceDescription": "Anexe uma referência de Skill. As instruções serão lidas quando necessário.",
+      "loadFailed": "Falha ao carregar as Skills",
+      "attachFailed": "Não foi possível anexar a referência de Skill",
+      "countLimit": "Uma mensagem pode incluir no máximo {count} referências de Skill"
+    },
     "page": {
       "nav": {
         "previousUserMessage": "Mensagem anterior do usuário",
@@ -1276,10 +1286,6 @@ export default {
       "sessionRequiredForCommand": "É necessária uma sessão para /{command}.",
       "sessionContinuationStarted": "Continuação da sessão iniciada.",
       "pagerUnsupported": "A transcrição na web já permite navegar pelas páginas usando a rolagem.",
-      "noPendingUserInput": "Não há solicitação de entrada do usuário pendente.",
-      "noPendingPermissionRequest": "Não há solicitação de permissão pendente.",
-      "pendingPermissionRequestMissingId": "A solicitação de permissão pendente não tem ID.",
-      "useSystemPasteShortcut": "Use o atalho de colar do sistema para inserir o texto da área de transferência.",
       "noAssistantMessageLoaded": "Nenhuma mensagem do assistente foi carregada.",
       "noVisibleTranscript": "Não há conteúdo de transcrição visível.",
       "noChildSessions": "Esta sessão não tem sessões filhas.",
@@ -3455,8 +3461,6 @@ export default {
     }
   },
   "command-activities-summary": "Abrir o painel de atividades em segundo plano",
-  "command-allow-always-summary": "Permitir sempre a primeira solicitação de permissão pendente",
-  "command-allow-summary": "Permitir uma vez a primeira solicitação de permissão pendente",
   "command-attach-summary": "Anexar um arquivo usando o seletor interativo",
   "command-background-summary": "Voltar ao painel de sessões; a sessão continuará em execução",
   "command-children-summary": "Abrir o seletor de sessões filhas",
@@ -3467,8 +3471,6 @@ export default {
   "command-copy-message-summary": "Copiar a última mensagem do assistente",
   "command-copy-summary": "Copiar a transcrição carregada",
   "command-copy-visible-summary": "Copiar a área visível da transcrição",
-  "command-deny-always-summary": "Negar sempre a primeira solicitação de permissão pendente",
-  "command-deny-summary": "Negar uma vez a primeira solicitação de permissão pendente",
   "command-diagnostics-summary": "Exibir um resumo de diagnóstico sanitizado para enviar como feedback",
   "command-download-summary": "Baixar um arquivo do espaço de trabalho pelo provedor de transferência ativo do Terminal",
   "command-editor-summary": "Abrir o editor externo do campo de mensagem",
@@ -3483,7 +3485,6 @@ export default {
   "command-new-summary": "Criar uma nova sessão",
   "command-pager-summary": "Abrir a transcrição carregada em um paginador do Terminal",
   "command-parent-summary": "Ir para a sessão pai",
-  "command-paste-summary": "Colar arquivos, imagens ou texto da área de transferência no campo de mensagem",
   "command-plan-summary": "Abrir o visualizador do plano da sessão atual",
   "command-pr-summary": "Criar um pull request com opções mínimas usando o gh",
   "command-rename-summary": "Renomear a sessão atual ou selecionada",
@@ -3495,7 +3496,6 @@ export default {
   "command-status-summary": "Exibir o status atual da sessão, execução, espaço de trabalho e interface",
   "command-timeline-summary": "Abrir uma linha do tempo pesquisável de eventos da sessão atual ou selecionada",
   "command-usage-summary": "Abrir análises interativas de tokens e custos",
-  "command-user-input-summary": "Responder à primeira solicitação pendente de entrada do usuário",
   interactive: {
     run: 'Executar',
     stop: 'Parar',

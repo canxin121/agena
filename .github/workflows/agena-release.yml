@@ -492,7 +492,7 @@ jobs:
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
       RELEASE_VERSION: ${{ needs.metadata.outputs.release_version }}
       TEST_PORT: "43220"
-      AGENA_DATA_DIR: ${{ runner.temp }}/agena-published-data
+      AGENA_DATA_DIR: ${{ github.workspace }}/.agena-published-data
     steps:
       - name: Smoke published installer (Unix)
         if: matrix.shell_kind == 'bash'

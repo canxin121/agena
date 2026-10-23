@@ -685,7 +685,7 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               >
                 <span class="text-[10px] font-mono text-muted-foreground uppercase">
-                  {{ badgeTextForFilename(f.filename) }}
+                  {{ f.composerKind === 'skill_ref' ? 'SKILL' : badgeTextForFilename(f.filename) }}
                 </span>
               </div>
 
@@ -704,7 +704,7 @@ onBeforeUnmount(() => {
                 >
                   {{ f.pastePreview }}
                 </p>
-                <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                <label v-if="f.composerKind !== 'skill_ref'" class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                   <input
                     type="checkbox"
                     :checked="f.delivery === 'model_input'"
@@ -860,7 +860,7 @@ onBeforeUnmount(() => {
                     aria-hidden="true"
                   >
                     <span class="text-[10px] font-mono text-muted-foreground uppercase">
-                      {{ badgeTextForFilename(f.filename) }}
+                      {{ f.composerKind === 'skill_ref' ? 'SKILL' : badgeTextForFilename(f.filename) }}
                     </span>
                   </div>
 
@@ -879,7 +879,7 @@ onBeforeUnmount(() => {
                     >
                       {{ f.pastePreview }}
                     </p>
-                    <label class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                    <label v-if="f.composerKind !== 'skill_ref'" class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
                       <input
                         type="checkbox"
                         :checked="f.delivery === 'model_input'"

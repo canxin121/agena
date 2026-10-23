@@ -10,14 +10,14 @@
 //!    the web client render the same names, aliases, usage lines and
 //!    descriptions without either one keeping its own hand-copied table.
 //!
-//! 2. **Skill packages, projected as commands.** Agena has no skills of its
-//!    own: `skill` is a vocabulary other agents use, and this is the one place
-//!    it is read. A skill package on disk — a `SKILL.md` under a skill root, or
-//!    a plain `.md` under a command root, or a `PluginSkillDefinition` another
-//!    plugin declared in its manifest — is registered as an ordinary command
-//!    whose handler is [`HANDLER_RUN`]. Running it resolves the package's
-//!    instructions and returns them as an [`CommandHostEffect::InsertPrompt`],
-//!    so the composer receives the text the same way for every command alike.
+//! 2. **Skill packages, projected as composer references.** Agena has no skills
+//!    of its own: `skill` is a vocabulary other agents use, and this is the one
+//!    place it is read. A skill package on disk — a `SKILL.md` under a skill
+//!    root, a plain `.md` under a command root, or a `PluginSkillDefinition`
+//!    another plugin declared in its manifest — is published in the shared
+//!    catalog without a slash spelling. The composer adds a message-scoped
+//!    reference; the model reads its instructions through this plugin when
+//!    needed.
 //!
 //! The declaration is the contract. A `Client` target names an action rather
 //! than a handler, because the client that renders the command palette is the
@@ -53,7 +53,7 @@ use sha2::{Digest, Sha256};
 
 use agena_plugin_host::sdk::host_api::{HostCommandRegisterRequest, HostCommandRemoveRequest};
 use agena_plugin_host::sdk::{
-    CommandDefinition, CommandDocs, CommandHostEffect, CommandInvokeInput, CommandResult,
+    CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult,
     CommandTarget, HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError,
     PluginKey, PluginManifest, PluginManifestTranslation, PluginSkillDefinition,
     Result as SdkResult, SettingsContract, SettingsNode, SettingsNodeKind, ToolContract,
@@ -74,8 +74,8 @@ const HANDLER_RUN: &str = "run";
 /// Group and category every discovered package is published with, so a
 /// composer can tell external packages apart from the built-ins it implements
 /// itself without knowing their names.
-const DISCOVERED_GROUP: &str = "Commands";
-const DISCOVERED_CATEGORY: &str = "Package";
+const DISCOVERED_GROUP: &str = "Skills";
+const DISCOVERED_CATEGORY: &str = "Skill";
 
 /// One built-in command, in palette order.
 ///
@@ -674,7 +674,7 @@ impl PackageOrigin {
     }
 }
 
-/// One entry of the effective command package catalog.
+/// One entry of the effective skill catalog.
 #[derive(Debug, Clone)]
 struct PackageEntry {
     command: DiscoveredCommand,
@@ -898,7 +898,7 @@ struct CommandsListInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct CommandsGetInput {
-    /// Canonical name, or an alias, of the command package to read.
+    /// Canonical name, or an alias, of the skill to read.
     name: String,
 }
 
@@ -940,10 +940,8 @@ struct CommandsRefreshInput {
     verbose: bool,
 }
 
-/// The one-field contract every discovered package is registered with, so a
-/// composer can hand the whole tail of `/<name> <args>` to the handler as one
-/// optional string. A bare scalar is accepted through the same contract, which
-/// is what a slash invocation produces.
+/// Catalog input shape retained for compatibility with the plugin command
+/// contract. Skills are surfaced as references and are not invoked as commands.
 fn package_contract() -> SettingsContract {
     SettingsContract::new(SettingsNode {
         id: "root".to_string(),
@@ -981,23 +979,23 @@ fn command_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         tool_definition(
             "list",
-            "List discovered command packages.",
+            "List discovered skills.",
             Some(
-                "List discovered command packages, with paging. Each entry names the package, its source, and whether it can be edited in this workspace.",
+                "List discovered skills, with paging. Each entry names the skill, its source, and whether it can be edited in this workspace.",
             ),
             macro_support::json_schema_for::<CommandsListInput>(),
             &[ToolTag::Query, ToolTag::Discovery, ToolTag::ReadOnly],
         ),
         tool_definition(
             "get",
-            "Read one discovered command package.",
-            Some("Read one package's instructions in full and apply them to the current task."),
+            "Read one discovered skill.",
+            Some("Read one skill's instructions in full and apply them to the current task."),
             macro_support::json_schema_for::<CommandsGetInput>(),
             &[ToolTag::Query, ToolTag::Discovery, ToolTag::ReadOnly],
         ),
         tool_definition(
             "install",
-            "Install a workspace-managed command package document.",
+            "Install a workspace-managed skill document.",
             Some(
                 "Writes `.agena/skills/<name>/SKILL.md` from a complete package document. Only workspace-local packages are mutable; declared, plugin and user-global packages remain read-only.",
             ),
@@ -1006,7 +1004,7 @@ fn command_tool_definitions() -> Vec<ToolDefinition> {
         ),
         tool_definition(
             "remove",
-            "Remove a workspace-managed command package document.",
+            "Remove a workspace-managed skill document.",
             Some(
                 "Deletes only `.agena/skills/<name>/SKILL.md`; declared, plugin and user-global packages cannot be removed through this tool.",
             ),
@@ -1918,14 +1916,16 @@ fn watcher_target(root: &Path) -> (PathBuf, RecursiveMode) {
     (ancestor, RecursiveMode::NonRecursive)
 }
 
-/// Turn one discovered package into the command a composer offers.
+/// Publish one discovered skill in the shared catalog so clients can attach a
+/// lazy reference to it. Skills are selected as composer content; they are not
+/// registered as slash commands.
 fn package_command_definition(name: &str, entry: &PackageEntry) -> CommandDefinition {
     CommandDefinition {
         id: name.to_string(),
         title: name.to_string(),
         group: DISCOVERED_GROUP.to_string(),
         category: Some(DISCOVERED_CATEGORY.to_string()),
-        slash: Some(format!("/{name}")),
+        slash: None,
         aliases: entry.command.frontmatter.aliases.clone(),
         docs: CommandDocs {
             summary: Some(CommandsPlugin::package_description(entry)),
@@ -2110,10 +2110,10 @@ fn package_write_output(
             .unwrap_or_default()
     );
     ToolInvokeOutput::from_parts(
-        format!("Command package {operation}: {}", result.name),
+        format!("Skill {operation}: {}", result.name),
         format!("{operation} · catalog generation {generation_label}"),
         format!(
-            "Command package '{}' was {operation} at {path}. Catalog generation {generation_label}.\n{outcome_note}",
+            "Skill '{}' was {operation} at {path}. Catalog generation {generation_label}.\n{outcome_note}",
             result.name
         ),
         Some(serde_json::json!({
@@ -2193,7 +2193,7 @@ impl Plugin for CommandsPlugin {
             .take(12)
             .map(|(name, entry)| {
                 format!(
-                    "- /{} [{}]: {}",
+                    "- {} [{}]: {}",
                     name,
                     entry.origin.source_label(),
                     Self::package_description(entry)
@@ -2202,13 +2202,13 @@ impl Plugin for CommandsPlugin {
             .collect::<Vec<_>>();
         let mut lines = vec![
             format!(
-                "Currently discovered command packages: {declared} declared, {external} external."
+                "Currently discovered skills: {declared} built-in, {external} external."
             ),
-            "Every package is also a slash command; running it inserts its instructions into the composer.".to_string(),
-            format!("Use `{COMMANDS_PLUGIN_ID}.list` to page through discovered packages."),
-            format!("Use `{COMMANDS_PLUGIN_ID}.get` to read one package in full, then apply its plain-text body to the current task."),
-            format!("Use `{COMMANDS_PLUGIN_ID}.read_resource` to read a bounded text resource from a package directory."),
-            format!("Use `{COMMANDS_PLUGIN_ID}.refresh` to rescan filesystem-backed packages and inspect the catalog generation."),
+            "Select a skill reference in the composer to add it to a message; its instructions are read when needed.".to_string(),
+            format!("Use `{COMMANDS_PLUGIN_ID}.list` to page through discovered skills."),
+            format!("Use `{COMMANDS_PLUGIN_ID}.get` to read one skill in full, then apply its plain-text body to the current task."),
+            format!("Use `{COMMANDS_PLUGIN_ID}.read_resource` to read a bounded text resource from a skill directory."),
+            format!("Use `{COMMANDS_PLUGIN_ID}.refresh` to rescan filesystem-backed skills and inspect the catalog generation."),
             format!("Use `{COMMANDS_PLUGIN_ID}.install` and `{COMMANDS_PLUGIN_ID}.remove` only for workspace-managed `.agena/skills` documents."),
         ];
         if !catalog.diagnostics.is_empty() {
@@ -2218,7 +2218,7 @@ impl Plugin for CommandsPlugin {
             ));
         }
         if sync.removed > 0 || sync.collisions > 0 {
-            lines.push(format!("Command registry: {}.", sync.summary()));
+            lines.push(format!("Skill catalog: {}.", sync.summary()));
         }
         if !preview.is_empty() {
             lines.push("Preview:".to_string());
@@ -2227,14 +2227,14 @@ impl Plugin for CommandsPlugin {
 
         let summary = match input.tool_name() {
             "list" => Some(format!(
-                "List discovered command packages. Currently {declared} declared and {external} external."
+                "List discovered skills. Currently {declared} built-in and {external} external."
             )),
-            "get" => Some("Read one discovered command package.".to_string()),
+            "get" => Some("Read one discovered skill.".to_string()),
             "read_resource" => Some(
-                "Read a bounded UTF-8 resource contained by one package directory.".to_string(),
+                "Read a bounded UTF-8 resource contained by one skill directory.".to_string(),
             ),
             "refresh" => Some(
-                "Rescan filesystem-backed command packages and report whether the catalog changed."
+                "Rescan filesystem-backed skills and report whether the catalog changed."
                     .to_string(),
             ),
             "install" => Some(
@@ -2287,39 +2287,10 @@ impl Plugin for CommandsPlugin {
         }
     }
 
-    async fn command_invoke(&self, input: CommandInvokeInput) -> SdkResult<CommandResult> {
-        let handler = input.command_id.clone();
-        // Every registered package is a `Method` target under one handler, so
-        // the command id — which is the package's canonical name — is what
-        // selects the instructions.
-        if handler != HANDLER_RUN {
-            return Err(PluginError::not_implemented(format!(
-                "commands plugin handler `{handler}`"
-            )));
-        }
-        let requested = input
-            .slash
-            .as_deref()
-            .map(|slash| slash.trim_start_matches('/'))
-            .filter(|name| !name.is_empty())
-            .unwrap_or(handler.as_str())
-            .to_string();
-        let args = command_args(&input.input);
-        let (name, body) = {
-            let catalog = self.definition_catalog_async().await?;
-            let (name, entry) = Self::resolve_package(&catalog.packages, requested.as_str())?;
-            (name.to_string(), entry.command.body.trim().to_string())
-        };
-        let prompt = if args.is_empty() {
-            body
-        } else {
-            format!("{body}\n\n{args}")
-        };
-        Ok(
-            CommandResult::succeeded(format!("Inserted `/{name}` instructions."))
-                .with_title(format!("/{name}"))
-                .with_effect(CommandHostEffect::InsertPrompt { prompt }),
-        )
+    async fn command_invoke(&self, _input: CommandInvokeInput) -> SdkResult<CommandResult> {
+        Err(PluginError::not_implemented(
+            "skills are selected as composer references and cannot be invoked as commands",
+        ))
     }
 }
 
@@ -2330,7 +2301,7 @@ impl CommandsPlugin {
         let entries = catalog.packages.into_iter().collect::<Vec<_>>();
         let (entries, total, offset) = Self::paginate(entries, input.offset, input.limit);
         let mut lines = vec![format!(
-            "Discovered command package(s): returned {}/{} starting at offset {}.",
+            "Discovered skill(s): returned {}/{} starting at offset {}.",
             entries.len(),
             total,
             offset
@@ -2338,13 +2309,13 @@ impl CommandsPlugin {
         for (name, entry) in &entries {
             if input.verbose {
                 lines.push(format!(
-                    "- /{}: {} ({})",
+                    "- {}: {} ({})",
                     name,
                     Self::package_description(entry),
                     entry.origin.source_label()
                 ));
             } else {
-                lines.push(format!("- /{name}"));
+                lines.push(format!("- {name}"));
             }
         }
         if input.verbose && !catalog.diagnostics.is_empty() {
@@ -2601,22 +2572,6 @@ fn parse_tool_input<T: serde::de::DeserializeOwned + JsonSchema>(
         &macro_support::json_schema_for::<T>(),
         &format!("{COMMANDS_PLUGIN_ID}.{tool} input field"),
     )
-}
-
-/// The one argument a package invocation can carry. The contract supplies
-/// `{ "args": "…" }`; a caller that bypasses the contract and hands over a bare
-/// string still works.
-fn command_args(value: &Value) -> String {
-    match value {
-        Value::Object(object) => object
-            .get("args")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
-        Value::String(text) => text.trim().to_string(),
-        _ => String::new(),
-    }
 }
 
 #[cfg(test)]
@@ -3161,7 +3116,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn running_a_package_returns_its_instructions_as_an_inserted_prompt() {
+    async fn a_skill_package_cannot_be_invoked_as_a_command() {
         let workspace = tempfile::tempdir().expect("workspace");
         let plugin = CommandsPlugin::new();
         init_test_plugin(&plugin, workspace.path()).await;
@@ -3176,22 +3131,8 @@ mod tests {
                 slash: Some("/verify".to_string()),
                 raw: String::new(),
             })
-            .await
-            .expect("invoke a declared package");
-        assert_eq!(
-            result.status,
-            agena_plugin_host::sdk::CommandStatus::Succeeded
-        );
-        let inserted = result
-            .effects
-            .iter()
-            .find_map(|effect| match effect {
-                CommandHostEffect::InsertPrompt { prompt } => Some(prompt.as_str()),
-                _ => None,
-            })
-            .expect("the insertion effect");
-        assert!(inserted.contains("Verify the current work from evidence."));
-        assert!(inserted.ends_with("focus on the parser"));
+            .await;
+        assert!(result.is_err());
     }
 
     #[test]

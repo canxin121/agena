@@ -32,6 +32,7 @@ export type TranscriptProjectionLabels = {
   /** Fallback titles for rows whose part carries no runtime presentation. */
   operation?: string
   command?: string
+  skill?: string
   error?: string
   notice?: string
   compaction?: string
@@ -365,7 +366,10 @@ function displayFields(
   if (kind === 'command') {
     const labels = commandLabels(part)
     return {
-      title: presentedTitle || text(presentationLabels?.command) || 'Command',
+      title:
+        presentedTitle ||
+        text(durablePartKind(part) === 'skill_ref' ? presentationLabels?.skill : presentationLabels?.command) ||
+        (durablePartKind(part) === 'skill_ref' ? 'Skill' : 'Command'),
       summary: presentedSummary || labels.join(', '),
       copyText: labels.join('\n'),
     }

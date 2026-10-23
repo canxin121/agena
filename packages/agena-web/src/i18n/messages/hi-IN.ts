@@ -1695,6 +1695,16 @@ export default {
       title: 'कमांड', search: 'कमांड खोजें', empty: 'कोई कमांड नहीं मिली', aliases: 'वैकल्पिक नाम',
       hint: 'ऊपर/नीचे जाएँ | चुनें: Enter | बंद करें: Esc', rewindPromptTitle: 'संदेश ID तक पीछे जाएँ', rewindPromptPlaceholder: 'संदेश ID',
     },
+    skills: {
+      attach: 'स्किल संलग्न करें',
+      title: 'स्किल',
+      search: 'स्किल खोजें',
+      empty: 'कोई स्किल नहीं मिली',
+      referenceDescription: 'स्किल संदर्भ संलग्न करें। निर्देश ज़रूरत पड़ने पर पढ़े जाएँगे।',
+      loadFailed: 'स्किल लोड नहीं हो सकी',
+      attachFailed: 'स्किल संदर्भ संलग्न नहीं हो सका',
+      countLimit: 'एक संदेश में अधिकतम {count} स्किल संदर्भ हो सकते हैं',
+    },
     sessionDiff: {
       toggleAria: 'सेशन के फ़ाइल बदलाव टॉगल करें', panelTitle: 'सेशन के फ़ाइल बदलाव', close: 'बंद करें', backToList: 'फ़ाइलों पर लौटें',
       listTitle: 'बदली हुई फ़ाइलें', loading: 'फ़ाइल बदलाव लोड हो रहे हैं...', empty: 'इस सेशन में अभी कोई फ़ाइल बदलाव नहीं है।',

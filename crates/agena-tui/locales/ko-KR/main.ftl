@@ -536,9 +536,9 @@ settings-activity-kind-resource-label = 지원하다
 
 settings-activity-kind-resource-description = 첨부 파일 및 기타 리소스 내용.
 
-settings-activity-kind-skill_reference-label = 명령 참조
+settings-activity-kind-skill_reference-label = 스킬 참조
 
-settings-activity-kind-skill_reference-description = 답변에서 선택한 명령에 대한 참조.
+settings-activity-kind-skill_reference-description = 답변에서 선택한 스킬에 대한 참조.
 
 settings-activity-kind-interaction-label = 회사연혁
 
@@ -1929,14 +1929,14 @@ activities-detail-source-part = 원본 부분 #{$id}
 activities-detail-next-wake = 다음 실행 {$at}
 activities-detail-output-separator = 실시간 로그 끝부분 @ {$seq}
 activities-detail-lines-omitted = … 이전 {$count}개 줄은 표시되지 않음
-activity-command-reference-title = 명령: {$name}
+activity-command-reference-title = 스킬: {$name}
 activity-detail-type = 유형: {$media_type}
 activity-detail-size = 크기: {$size}바이트
 activity-detail-dimensions = 크기: {$width}×{$height}
 activity-detail-preview-fields = 필드 {$count}개
 activity-detail-preview-items = 항목 {$count}개
-composer-chip-command = [명령: {$name}]
-composer-command-line = 명령: {$name}
+composer-chip-command = [스킬: {$name}]
+composer-command-line = 스킬: {$name}
 composer-clipboard-files = 클립보드 파일: {$error}
 composer-clipboard-image = 클립보드 이미지: {$error}
 composer-clipboard-text = 클립보드 텍스트: {$error}
@@ -2049,7 +2049,7 @@ context-help-context-activities = 백그라운드 활동
 flash-attachment-prepare-failed = 첨부 파일을 준비하지 못했습니다. 초안을 검토한 뒤 다시 보내세요.
 flash-attachment-preparing = 첨부 파일을 준비하는 중입니다. 준비가 끝나면 메시지가 전송됩니다.
 flash-clipboard-osc52-sent = 터미널에 클립보드 요청을 보냈습니다(OSC 52).
-flash-command-no-file-view = 명령 참조에는 파일 보기가 없습니다.
+flash-command-no-file-view = 스킬 참조에는 파일 보기가 없습니다.
 flash-download-outside-workspace = 다운로드 경로는 현재 작업 공간을 벗어날 수 없습니다.
 flash-download-relative-path = 현재 작업 공간을 기준으로 한 상대 경로를 사용하세요.
 flash-download-usage = 사용법: /download <작업 공간 경로>
@@ -3032,3 +3032,11 @@ queue-editor-keys = Tab: 텍스트/첨부 · Ctrl+S: 저장 · Esc: 취소
 queue-saving = 저장 중…
 queue-reference = 파일 참조
 queue-model-input = 모델 입력
+
+insert-content-skill-label = 스킬
+
+insert-content-skill-detail = 스킬 참조를 추가합니다. 지침은 필요할 때 읽습니다.
+
+flash-skill-attached = 스킬을 추가했습니다: {$name}
+
+flash-skill-count-limit = 메시지 하나에 최대 {$count}개의 스킬을 참조할 수 있습니다.

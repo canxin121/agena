@@ -87,7 +87,10 @@ pub(crate) fn plugin_slash_commands(
                     !matches!(
                         entry.command.target,
                         agena_plugin_host::sdk::CommandTarget::Client { .. }
-                    ) && entry
+                    ) && !entry.command.category.as_deref().is_some_and(|category| {
+                        category.eq_ignore_ascii_case("skill")
+                    })
+                        && entry
                         .command
                         .slash
                         .as_deref()

@@ -512,9 +512,9 @@ settings-activity-kind-resource-label = Recursos
 
 settings-activity-kind-resource-description = Adjuntos y otros contenidos de recursos.
 
-settings-activity-kind-skill_reference-label = Referencias de comando
+settings-activity-kind-skill_reference-label = Referencias de skill
 
-settings-activity-kind-skill_reference-description = Referencias a los comandos seleccionados en la respuesta.
+settings-activity-kind-skill_reference-description = Referencias a los skills seleccionados en la respuesta.
 
 settings-activity-kind-interaction-label = Interacciones
 
@@ -1868,14 +1868,14 @@ activities-detail-source-part = parte de origen #{$id}
 activities-detail-next-wake = próxima activación {$at}
 activities-detail-output-separator = seguimiento en directo @ {$seq}
 activities-detail-lines-omitted = … {$count} líneas anteriores ocultas
-activity-command-reference-title = Comando: {$name}
+activity-command-reference-title = Skill: {$name}
 activity-detail-type = Tipo: {$media_type}
 activity-detail-size = Tamaño: {$size} bytes
 activity-detail-dimensions = Dimensiones: {$width}×{$height}
 activity-detail-preview-fields = {$count} campos
 activity-detail-preview-items = {$count} elementos
-composer-chip-command = [Comando: {$name}]
-composer-command-line = Comando: {$name}
+composer-chip-command = [Skill: {$name}]
+composer-command-line = Skill: {$name}
 composer-clipboard-files = archivos del portapapeles: {$error}
 composer-clipboard-image = imagen del portapapeles: {$error}
 composer-clipboard-text = texto del portapapeles: {$error}
@@ -1988,7 +1988,7 @@ context-help-context-activities = Actividades en segundo plano
 flash-attachment-prepare-failed = No se pudo preparar un adjunto; revisa el borrador y vuelve a enviarlo.
 flash-attachment-preparing = Se están preparando los adjuntos; el mensaje se enviará cuando estén listos.
 flash-clipboard-osc52-sent = Solicitud de portapapeles enviada al terminal (OSC 52).
-flash-command-no-file-view = Las referencias de comandos no tienen vista de archivo.
+flash-command-no-file-view = Las referencias de skill no tienen vista de archivo.
 flash-download-outside-workspace = Las rutas de descarga no pueden salir del espacio de trabajo actual.
 flash-download-relative-path = Usa una ruta relativa al espacio de trabajo actual.
 flash-download-usage = Uso: /download <ruta-del-espacio-de-trabajo>
@@ -3038,3 +3038,11 @@ queue-editor-keys = Tab: texto/adjuntos · Ctrl+S: guardar · Esc: cancelar
 queue-saving = Guardando…
 queue-reference = referencia al archivo
 queue-model-input = entrada del modelo
+
+insert-content-skill-label = Skill
+
+insert-content-skill-detail = Adjunta una referencia de skill. Sus instrucciones se leen cuando hacen falta.
+
+flash-skill-attached = Skill adjunto: {$name}
+
+flash-skill-count-limit = Un mensaje puede incluir como máximo {$count} referencias de skill.

@@ -1584,6 +1584,16 @@ export default {
       rewindPromptTitle: '回退到消息 ID',
       rewindPromptPlaceholder: '消息 ID',
     },
+    skills: {
+      attach: '引用 Skill',
+      title: '选择 Skill',
+      search: '搜索 Skill',
+      empty: '没有找到 Skill',
+      referenceDescription: '以引用方式附加 Skill，需要时再读取它的指令。',
+      loadFailed: '加载 Skill 失败',
+      attachFailed: '无法附加 Skill 引用',
+      countLimit: '一条消息最多可以引用 {count} 个 Skill',
+    },
 
     page: {
       nav: {

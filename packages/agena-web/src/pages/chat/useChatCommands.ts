@@ -154,6 +154,7 @@ export function useChatCommands(opts: {
    * the server did not publish.
    */
   function pluginCommandFromCatalog(command: PluginCommandCatalogItem): PluginCommand | null {
+    if (command.category?.trim().toLowerCase() === 'skill') return null
     const pluginId = text(command.plugin_id)
     const commandId = text(command.id)
     const slash = text(command.slash)

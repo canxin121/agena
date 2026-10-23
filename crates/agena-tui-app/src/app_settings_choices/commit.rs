@@ -34,14 +34,33 @@ impl App {
                 }
                 true
             }
-            ChoiceOverlayAction::InsertContent => match choice_selection_value(&selection).as_str()
-            {
-                "file" => {
+            ChoiceOverlayAction::InsertContent => {
+                let value = choice_selection_value(&selection);
+                if value == "file" {
                     self.request_file_attachment(false);
-                    true
+                    return true;
                 }
-                _ => false,
-            },
+                let Ok([plugin_id, command_id]) = serde_json::from_str::<[String; 2]>(&value)
+                else {
+                    return false;
+                };
+                let entry = self.application.plugin_catalog().and_then(|catalog| {
+                    catalog.commands.into_iter().find(|entry| {
+                        entry.plugin_id.to_string() == plugin_id
+                            && entry.command.id == command_id
+                            && entry.command.category.as_deref().is_some_and(|category| {
+                                category.eq_ignore_ascii_case("skill")
+                            })
+                    })
+                });
+                let Some(entry) = entry else {
+                    return false;
+                };
+                if let Err(error) = self.stage_skill_reference(&entry) {
+                    self.flash_error(error);
+                }
+                true
+            }
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = choice_selection_value(&selection);
                 match parse_settings_field_input(&self.i18n, &field, input.as_str()) {

@@ -1,4 +1,5 @@
 const MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE: usize = 8;
+const MAX_COMMAND_REFERENCES_PER_MESSAGE: usize = 8;
 const MAX_CLIPBOARD_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES: u64 = 40 * 1024 * 1024;
 
@@ -333,6 +334,69 @@ impl App {
             "workspace",
             resolved.display().to_string(),
         )
+    }
+
+    pub(crate) fn stage_skill_reference(
+        &mut self,
+        entry: &agena_plugin_host::CommandCatalogItem,
+    ) -> UiResult<()> {
+        let references = self
+            .composer_items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.payload(),
+                    agena_domain::ActivityPayload::CommandReference(_)
+                )
+            })
+            .count();
+        if references >= MAX_COMMAND_REFERENCES_PER_MESSAGE {
+            return Err(crate::UiFailure::message(self.i18n.text_args(
+                "flash-skill-count-limit",
+                &agena_tui::fl_args!("count" => MAX_COMMAND_REFERENCES_PER_MESSAGE as i64),
+            )));
+        }
+
+        let plugin_id = entry.plugin_id.to_string();
+        let definition = serde_json::to_vec(&entry.command)
+            .map_err(crate::UiFailure::internal)?;
+        let content_hash = hex::encode(Sha256::digest(definition));
+        let payload = agena_domain::ActivityPayload::CommandReference(
+            agena_domain::CommandReferenceActivity {
+                name: entry.command.id.clone(),
+                description: entry.command.docs.summary.clone().unwrap_or_default(),
+                content_hash: content_hash.clone(),
+                source: plugin_id.clone(),
+                aliases: entry.command.aliases.clone(),
+            },
+        );
+        let placeholder = crate::composer_state_impls::composer_activity_presentation(
+            &payload,
+            &self.i18n,
+        )
+        .0;
+        let placeholder = self.make_unique_composer_placeholder(placeholder);
+        self.composer.insert_element(placeholder.as_str());
+        self.composer_items.push(ComposerItem {
+            activity: agena_domain::ComposerActivity {
+                id: agena_domain::ActivityId::new(),
+                payload,
+                provenance: agena_domain::ActivityProvenance {
+                    source: Some(plugin_id.clone()),
+                    content_hash: Some(content_hash),
+                    plugin_id: Some(plugin_id),
+                },
+            },
+            placeholder,
+            state: agena_api::part::PartExecutionStatusResource::Completed,
+            recovery_text: None,
+        });
+        self.after_composer_text_mutated();
+        self.flash_success(self.i18n.text_args(
+            "flash-skill-attached",
+            &agena_tui::fl_args!("name" => entry.command.title.clone()),
+        ));
+        Ok(())
     }
 
     pub(crate) fn stage_uploaded_attachment(
@@ -1588,6 +1652,8 @@ mod tests {
         );
     }
 }
+
+use sha2::{Digest, Sha256};
 
 use crate::Result;
 use crate::{

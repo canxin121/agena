@@ -9,6 +9,8 @@ import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
+import { readPluginCommandCatalog } from '@/lib/pluginCommandRead'
+import type { PluginCommandCatalogItem } from '@/lib/pluginOperations'
 import { promptForText } from '@/lib/appTextPrompt'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
@@ -22,6 +24,12 @@ import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
 
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
+import {
+  createSkillReferenceAttachment,
+  isSkillCatalogEntry,
+  skillCatalogKey,
+  skillReferenceKeyFromAttachment,
+} from './chat/skillReferences'
 import { getComposerInput, type ComposerExpose, type ComposerInput, type ComposerSegment } from './chat/composerInput'
 import { attachmentPlaceholder } from './chat/attachmentPlaceholder'
 import { useChatScrollNav } from './chat/useChatScrollNav'
@@ -201,6 +209,55 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
+const skillCatalog = ref<PluginCommandCatalogItem[]>([])
+const skillCatalogLoading = ref(false)
+let skillCatalogLoaded = false
+let skillCatalogLoad: Promise<void> | null = null
+
+function loadSkillCatalog(): Promise<void> {
+  if (skillCatalogLoaded) return Promise.resolve()
+  if (skillCatalogLoad) return skillCatalogLoad
+  skillCatalogLoading.value = true
+  skillCatalogLoad = readPluginCommandCatalog()
+    .then((response) => {
+      skillCatalog.value = (response.catalog?.commands || []).filter(isSkillCatalogEntry)
+      skillCatalogLoaded = true
+    })
+    .catch(() => {
+      toasts.push('error', String(t('chat.skills.loadFailed')))
+    })
+    .finally(() => {
+      skillCatalogLoading.value = false
+      skillCatalogLoad = null
+    })
+  return skillCatalogLoad
+}
+
+async function attachSkill(skillKey: string) {
+  const sessionId = chat.selectedSessionId
+  const command = skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
+  if (!command) return
+  if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) {
+    await nextTick()
+    getComposerInput(composerRef.value)?.focus()
+    return
+  }
+  const count = attachedFiles.value.filter((file) => file.composerKind === 'skill_ref').length
+  if (count >= 8) {
+    toasts.push('info', String(t('chat.skills.countLimit', { count: 8 })))
+    return
+  }
+  try {
+    const reference = await createSkillReferenceAttachment(command)
+    if (chat.selectedSessionId !== sessionId) return
+    attachedFiles.value = [...attachedFiles.value, reference]
+    await nextTick()
+    getComposerInput(composerRef.value)?.focus()
+  } catch {
+    toasts.push('error', String(t('chat.skills.attachFailed')))
+  }
+}
+
 const attachmentDraftsBySession = new Map<string, AttachedFile[]>()
 watch(
   () => chat.selectedSessionId,
@@ -953,6 +1010,7 @@ const renderBlocksApi = useChatRenderBlocks({
     attachment: String(t('chat.attachments.rowTitle')),
     operation: String(t('chat.partTitles.operation')),
     command: String(t('chat.partTitles.command')),
+    skill: String(t('chat.skills.title')),
     error: String(t('chat.partTitles.error')),
     notice: String(t('chat.partTitles.notice')),
     compaction: String(t('chat.partTitles.compaction')),
@@ -2004,7 +2062,9 @@ async function sendReady(sid: string | null) {
     // placeholder per inline attachment, so the transcript renders the
     // attachments together above the text the user actually typed.
     const parts: JsonValue[] = []
-    const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
+    const workspace = filesSnapshot.some((file) => file.composerKind !== 'skill_ref')
+      ? await chat.resolveSessionWorkspace(sid)
+      : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
     if (composed.typedText) parts.push({ type: 'text', text: composed.text })
     for (const id of composed.attachmentIds) {
@@ -2278,6 +2338,10 @@ const viewCtx = {
   promptHistoryAutoFocus: promptHistoryOpen,
   handleFileInputChange,
   removeAttachment,
+  skillCatalog,
+  skillCatalogLoading,
+  loadSkillCatalog,
+  attachSkill,
   clearAttachments,
   openFilePicker,
   openProjectAttachDialog,

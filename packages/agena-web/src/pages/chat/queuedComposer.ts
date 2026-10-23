@@ -24,11 +24,12 @@ export function restoredComposerFiles(document: JsonValue): AttachedFile[] {
     const payload = asRecord(activity.payload)
     const reference = asRecord(payload.reference)
     const path = typeof reference.path === 'string' ? reference.path.trim() : ''
-    const filename =
+    const baseFilename =
       [payload.name, payload.label, path.split('/').pop(), payload.text]
         .find((value) => typeof value === 'string' && value.trim())
         ?.toString()
         .slice(0, 120) || 'attachment'
+    const filename = payload.activity_type === 'command_reference' ? `Skill: ${baseFilename}` : baseFilename
     const size =
       typeof payload.size_bytes === 'number' && Number.isFinite(payload.size_bytes)
         ? Math.max(0, payload.size_bytes)
@@ -40,6 +41,7 @@ export function restoredComposerFiles(document: JsonValue): AttachedFile[] {
         filename,
         size,
         mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
+        ...(payload.activity_type === 'command_reference' ? { composerKind: 'skill_ref' as const } : {}),
         ...(path ? { serverPath: path } : { composerNode: node }),
         delivery: payload.delivery === 'model_input' ? ('model_input' as const) : ('reference' as const),
         state: 'ready' as const,

@@ -1591,6 +1591,16 @@ export default {
       rewindPromptTitle: 'Rewind to message ID',
       rewindPromptPlaceholder: 'Message ID',
     },
+    skills: {
+      attach: 'Attach a skill',
+      title: 'Skills',
+      search: 'Search skills',
+      empty: 'No skills found',
+      referenceDescription: 'Attach a skill reference. Its instructions are read when needed.',
+      loadFailed: 'Failed to load skills',
+      attachFailed: 'Could not attach the skill reference',
+      countLimit: 'A message can include at most {count} skill references',
+    },
 
     page: {
       nav: {

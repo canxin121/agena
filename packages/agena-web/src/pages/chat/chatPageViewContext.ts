@@ -6,6 +6,7 @@ import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttach
 import type { ComposerAttachment } from '@/pages/chat/attachmentIngestion'
 import type { AttentionEvent, MessageEntry, MessageFold } from '@/types/chat'
 import type { Command } from './useChatCommands'
+import type { SkillCatalogEntry } from './skillReferences'
 import type { ComposerExpose } from './composerInput'
 import type { JsonObject } from '@/types/json'
 import type { usePlanViewer } from './usePlanViewer'
@@ -73,6 +74,10 @@ export type ChatPageViewContext = {
   discardFailedAttachmentDraft: () => void
   attachedFiles: Ref<AttachedFile[]>
   pendingAttachments: Ref<PendingAttachment[]>
+  skillCatalog: MaybeRef<SkillCatalogEntry[]>
+  skillCatalogLoading: MaybeRef<boolean>
+  loadSkillCatalog: () => Promise<void>
+  attachSkill: (key: string) => Promise<void>
   attachmentsBusy: MaybeRef<boolean>
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>

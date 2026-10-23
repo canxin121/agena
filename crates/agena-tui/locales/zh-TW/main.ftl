@@ -646,9 +646,9 @@ settings-activity-kind-resource-label = 資源
 
 settings-activity-kind-resource-description = 附件及其他資源內容。
 
-settings-activity-kind-skill_reference-label = 指令引用
+settings-activity-kind-skill_reference-label = Skill 引用
 
-settings-activity-kind-skill_reference-description = 回覆中選用的指令引用。
+settings-activity-kind-skill_reference-description = 回覆中選用的 Skill 引用。
 
 settings-activity-kind-interaction-label = 交互
 
@@ -2082,14 +2082,14 @@ activities-detail-source-part = 來源片段 #{$id}
 activities-detail-next-wake = 下次喚醒 {$at}
 activities-detail-output-separator = 即時日誌 @ {$seq}
 activities-detail-lines-omitted = … 另有 {$count} 行較早內容未顯示
-activity-command-reference-title = 命令：{$name}
+activity-command-reference-title = Skill：{$name}
 activity-detail-type = 類型：{$media_type}
 activity-detail-size = 大小：{$size} 位元組
 activity-detail-dimensions = 尺寸：{$width}×{$height}
 activity-detail-preview-fields = {$count} 個欄位
 activity-detail-preview-items = {$count} 個項目
-composer-chip-command = [命令：{$name}]
-composer-command-line = 命令：{$name}
+composer-chip-command = [Skill：{$name}]
+composer-command-line = Skill：{$name}
 composer-clipboard-files = 剪貼簿檔案：{$error}
 composer-clipboard-image = 剪貼簿圖片：{$error}
 composer-clipboard-text = 剪貼簿文字：{$error}
@@ -2220,7 +2220,7 @@ context-help-context-activities = 背景活動
 flash-attachment-prepare-failed = 無法準備某個附件；請檢查草稿並重新傳送。
 flash-attachment-preparing = 正在準備附件；準備完成後將傳送訊息。
 flash-clipboard-osc52-sent = 已向終端機傳送剪貼簿請求（OSC 52）。
-flash-command-no-file-view = 命令參照沒有檔案檢視。
+flash-command-no-file-view = Skill 引用沒有檔案檢視。
 flash-download-outside-workspace = 下載路徑不能超出目前的工作區。
 flash-download-relative-path = 請使用相對於目前工作區的路徑。
 flash-download-usage = 用法：/download <工作區路徑>
@@ -3087,3 +3087,11 @@ queue-editor-keys = Tab：文字/附件 · Ctrl+S：儲存 · Esc：取消
 queue-saving = 儲存中…
 queue-reference = 檔案參照
 queue-model-input = 模型輸入
+
+insert-content-skill-label = Skill
+
+insert-content-skill-detail = 附加 Skill 引用，需要時再讀取其中的指令。
+
+flash-skill-attached = 已附加 Skill：{$name}
+
+flash-skill-count-limit = 一則訊息最多可引用 {$count} 個 Skill。

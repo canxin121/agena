@@ -16,6 +16,7 @@ import {
   RiSearchLine,
   RiCloseLine,
   RiCommandLine,
+  RiBookOpenLine,
   RiGitBranchLine,
 } from '@remixicon/vue'
 
@@ -34,8 +35,10 @@ import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
+import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
+import { skillCatalogKey } from './skillReferences'
 
 const SessionWorkSection = defineAsyncComponent(() => import('@/components/chat/SessionWorkSection.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
@@ -78,6 +81,10 @@ const {
   ui,
   attachedFiles,
   pendingAttachments,
+  skillCatalog,
+  skillCatalogLoading,
+  loadSkillCatalog,
+  attachSkill,
   failedAttachmentDraft,
   restoreFailedAttachmentDraft,
   discardFailedAttachmentDraft,
@@ -241,6 +248,9 @@ const {
 type TooltipAnchorLike = { triggerEl?: unknown; $el?: unknown } | HTMLElement | null
 
 const attachmentsTriggerRef = ref<TooltipAnchorLike>(null)
+const skillTriggerRef = ref<TooltipAnchorLike>(null)
+const skillPickerOpen = ref(false)
+const skillPickerQuery = ref('')
 const { width: viewportWidth } = useWindowSize()
 const COMPOSER_DESKTOP_MENU_GAP_PX = 16
 const COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX = 8
@@ -320,6 +330,37 @@ const activePickerAnchor = computed(() => {
 })
 
 const activeAttachmentsAnchor = computed(() => resolveAnchorEl(unref(attachmentsTriggerRef) as TooltipAnchorLike))
+const activeSkillAnchor = computed(() => resolveAnchorEl(unref(skillTriggerRef) as TooltipAnchorLike))
+const skillPickerGroups = computed(() => [
+  {
+    id: 'skills',
+    title: String(t('chat.skills.title')),
+    items: unref(skillCatalog).map((skill) => ({
+      id: skillCatalogKey(skill),
+      label: skill.title || skill.id,
+      description: skill.docs?.summary || String(t('chat.skills.referenceDescription')),
+      icon: RiBookOpenLine,
+      keywords: [skill.plugin_id, ...(skill.aliases || [])].join(' '),
+    })),
+  },
+])
+
+function setSkillPickerOpen(open: boolean) {
+  skillPickerOpen.value = open
+  if (open) {
+    closeAttachmentsPanel()
+    closePromptHistory()
+    closeCommandPalette()
+    void loadSkillCatalog()
+  } else {
+    skillPickerQuery.value = ''
+  }
+}
+
+function selectSkillOption(item: OptionMenuItem) {
+  setSkillPickerOpen(false)
+  void attachSkill(item.id)
+}
 
 // `ref="..."` in templates doesn't count as usage for TS.
 void pageRef
@@ -782,6 +823,26 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                 <template #controls>
                   <div ref="composerControlsRef" class="relative">
                     <OptionMenu
+                      :open="skillPickerOpen"
+                      :query="skillPickerQuery"
+                      :groups="skillPickerGroups"
+                      :title="t('chat.skills.title')"
+                      :mobile-title="t('chat.skills.title')"
+                      :search-placeholder="t('chat.skills.search')"
+                      :empty-text="t('chat.skills.empty')"
+                      :loading="unref(skillCatalogLoading)"
+                      :is-compact-touch="ui.isCompactTouch"
+                      :desktop-fixed="true"
+                      :desktop-anchor-el="activeSkillAnchor"
+                      :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
+                      :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
+                      desktop-placement="top-start"
+                      desktop-class="w-[min(420px,calc(100vw-1rem))]"
+                      @update:open="setSkillPickerOpen"
+                      @update:query="(value) => (skillPickerQuery = value)"
+                      @select="selectSkillOption"
+                    />
+                    <OptionMenu
                       ref="composerPickerRef"
                       :open="Boolean(composerPickerOpen)"
                       :query="composerPickerQuery"
@@ -831,6 +892,20 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                           @click.stop="openCommandPalette()"
                         >
                           <RiCommandLine class="h-4 w-4" />
+                        </IconButton>
+
+                        <IconButton
+                          ref="skillTriggerRef"
+                          class="text-muted-foreground hover:text-foreground hover:bg-secondary/40"
+                          :class="skillPickerOpen ? 'bg-secondary/60 text-foreground' : ''"
+                          :tooltip="t('chat.skills.attach')"
+                          :is-touch-pointer="ui.isTouchPointer"
+                          :title="t('chat.skills.attach')"
+                          :aria-label="t('chat.skills.attach')"
+                          @mousedown.prevent
+                          @click.stop="setSkillPickerOpen(!skillPickerOpen)"
+                        >
+                          <RiBookOpenLine class="h-4 w-4" />
                         </IconButton>
 
                         <ToolbarChipButton

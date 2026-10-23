@@ -482,9 +482,9 @@ settings-activity-kind-resource-label = Ressourcen
 
 settings-activity-kind-resource-description = Anlagen und sonstige Ressourceninhalte.
 
-settings-activity-kind-skill_reference-label = Befehlsreferenzen
+settings-activity-kind-skill_reference-label = Skill-Referenzen
 
-settings-activity-kind-skill_reference-description = Verweise auf die in der Antwort gewählten Befehle.
+settings-activity-kind-skill_reference-description = Verweise auf Skills, die in der Antwort ausgewählt wurden.
 
 settings-activity-kind-interaction-label = Wechselwirkungen
 
@@ -1914,14 +1914,14 @@ activities-detail-source-part = Quellteil #{$id}
 activities-detail-next-wake = nächster Aufruf {$at}
 activities-detail-output-separator = Live-Protokoll @ {$seq}
 activities-detail-lines-omitted = … {$count} ältere Zeilen ausgeblendet
-activity-command-reference-title = Befehl: {$name}
+activity-command-reference-title = Skill: {$name}
 activity-detail-type = Typ: {$media_type}
 activity-detail-size = Größe: {$size} Bytes
 activity-detail-dimensions = Abmessungen: {$width}×{$height}
 activity-detail-preview-fields = {$count} Felder
 activity-detail-preview-items = {$count} Elemente
-composer-chip-command = [Befehl: {$name}]
-composer-command-line = Befehl: {$name}
+composer-chip-command = [Skill: {$name}]
+composer-command-line = Skill: {$name}
 composer-clipboard-files = Dateien aus der Zwischenablage: {$error}
 composer-clipboard-image = Bild aus der Zwischenablage: {$error}
 composer-clipboard-text = Text aus der Zwischenablage: {$error}
@@ -2034,7 +2034,7 @@ context-help-context-activities = Hintergrundaktivitäten
 flash-attachment-prepare-failed = Ein Anhang konnte nicht vorbereitet werden; den Entwurf prüfen und erneut senden.
 flash-attachment-preparing = Anhänge werden vorbereitet; die Nachricht wird gesendet, sobald sie bereit sind.
 flash-clipboard-osc52-sent = Zwischenablage-Anfrage an das Terminal gesendet (OSC 52).
-flash-command-no-file-view = Befehlsreferenzen haben keine Dateiansicht.
+flash-command-no-file-view = Skill-Referenzen haben keine Dateiansicht.
 flash-download-outside-workspace = Download-Pfade dürfen den aktuellen Arbeitsbereich nicht verlassen.
 flash-download-relative-path = Einen Pfad relativ zum aktuellen Arbeitsbereich verwenden.
 flash-download-usage = Verwendung: /download <Arbeitsbereichspfad>
@@ -3182,3 +3182,11 @@ queue-editor-keys = Tab: Text/Anhänge · Ctrl+S: Speichern · Esc: Abbrechen
 queue-saving = Wird gespeichert…
 queue-reference = Dateiverweis
 queue-model-input = Modelleingabe
+
+insert-content-skill-label = Skill
+
+insert-content-skill-detail = Eine Skill-Referenz anhängen. Die Anweisungen werden bei Bedarf gelesen.
+
+flash-skill-attached = Skill angehängt: {$name}
+
+flash-skill-count-limit = Eine Nachricht kann höchstens {$count} Skills referenzieren.

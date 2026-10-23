@@ -569,6 +569,16 @@ export default {
       rewindPromptTitle: 'Revenir à l’identifiant du message',
       rewindPromptPlaceholder: 'Identifiant du message',
     },
+    skills: {
+      attach: 'Joindre un skill',
+      title: 'Skills',
+      search: 'Rechercher des skills',
+      empty: 'Aucun skill trouvé',
+      referenceDescription: 'Joindre une référence de skill. Ses instructions seront lues au besoin.',
+      loadFailed: 'Impossible de charger les skills',
+      attachFailed: 'Impossible de joindre la référence de skill',
+      countLimit: 'Un message peut inclure au maximum {count} références de skill',
+    },
     attachments: {
       recoveryNeedsEmptyDraft: 'Sélectionnez la session d’origine et effacez ou enregistrez votre brouillon actuel avant de le restaurer.',
       recoverBeforeSend: 'Restaurez ou supprimez le brouillon enregistré après l’échec avant tout nouvel envoi.',

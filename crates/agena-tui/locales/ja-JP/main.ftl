@@ -624,9 +624,9 @@ settings-activity-kind-resource-label = リソース
 
 settings-activity-kind-resource-description = 添付ファイルおよびその他のリソースコンテンツ。
 
-settings-activity-kind-skill_reference-label = コマンド参照
+settings-activity-kind-skill_reference-label = スキル参照
 
-settings-activity-kind-skill_reference-description = 回答で選択したコマンドへの参照。
+settings-activity-kind-skill_reference-description = 回答で選択したスキルへの参照。
 
 settings-activity-kind-interaction-label = インタラクション
 
@@ -2021,14 +2021,14 @@ activities-detail-source-part = ソースパート #{$id}
 activities-detail-next-wake = 次回の起動 {$at}
 activities-detail-output-separator = リアルタイムのログ末尾 @ {$seq}
 activities-detail-lines-omitted = … 以前の {$count} 行は非表示です
-activity-command-reference-title = コマンド: {$name}
+activity-command-reference-title = スキル: {$name}
 activity-detail-type = 種類: {$media_type}
 activity-detail-size = サイズ: {$size} バイト
 activity-detail-dimensions = 寸法: {$width}×{$height}
 activity-detail-preview-fields = {$count} フィールド
 activity-detail-preview-items = {$count} 項目
-composer-chip-command = [コマンド: {$name}]
-composer-command-line = コマンド: {$name}
+composer-chip-command = [スキル: {$name}]
+composer-command-line = スキル: {$name}
 composer-clipboard-files = クリップボードのファイル: {$error}
 composer-clipboard-image = クリップボードの画像: {$error}
 composer-clipboard-text = クリップボードのテキスト: {$error}
@@ -2141,7 +2141,7 @@ context-help-context-activities = バックグラウンドアクティビティ
 flash-attachment-prepare-failed = 添付ファイルを準備できませんでした。下書きを確認して再送信してください。
 flash-attachment-preparing = 添付ファイルを準備中です。準備ができ次第、メッセージを送信します。
 flash-clipboard-osc52-sent = クリップボード要求を端末に送信しました (OSC 52)。
-flash-command-no-file-view = コマンド参照にはファイル表示がありません。
+flash-command-no-file-view = スキル参照にはファイル表示がありません。
 flash-download-outside-workspace = ダウンロード先のパスは現在のワークスペース外には指定できません。
 flash-download-relative-path = 現在のワークスペースからの相対パスを使用してください。
 flash-download-usage = 使い方: /download <ワークスペース内のパス>
@@ -3036,3 +3036,11 @@ queue-editor-keys = Tab: 本文/添付 · Ctrl+S: 保存 · Esc: 取消
 queue-saving = 保存中…
 queue-reference = ファイル参照
 queue-model-input = モデル入力
+
+insert-content-skill-label = スキル
+
+insert-content-skill-detail = スキル参照を追加します。指示は必要なときに読み込まれます。
+
+flash-skill-attached = スキルを追加しました: {$name}
+
+flash-skill-count-limit = 1 件のメッセージには最大 {$count} 個のスキルを追加できます。

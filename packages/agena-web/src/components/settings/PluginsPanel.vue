@@ -445,7 +445,10 @@ const allCommands = computed(() =>
   Array.isArray(catalog.value?.catalog?.commands) ? catalog.value!.catalog!.commands! : [],
 )
 const selectedCommands = computed(() =>
-  allCommands.value.filter((command) => command.plugin_id === selectedPluginId.value),
+  allCommands.value.filter(
+    (command) =>
+      command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
+  ),
 )
 const selectedTools = computed(() =>
   Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : [],

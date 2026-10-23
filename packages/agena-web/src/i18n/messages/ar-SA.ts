@@ -807,6 +807,16 @@ export default {
       rewindPromptTitle: 'الرجوع إلى معرّف الرسالة',
       rewindPromptPlaceholder: 'معرّف الرسالة',
     },
+    skills: {
+      attach: 'إرفاق مهارة',
+      title: 'المهارات',
+      search: 'البحث عن المهارات',
+      empty: 'لم يُعثر على مهارات',
+      referenceDescription: 'أرفق مرجعًا للمهارة. تُقرأ تعليماتها عند الحاجة.',
+      loadFailed: 'تعذّر تحميل المهارات',
+      attachFailed: 'تعذّر إرفاق مرجع المهارة',
+      countLimit: 'يمكن أن تتضمن الرسالة {count} مراجع مهارات كحد أقصى',
+    },
     lspStatus: {
       toggleAria: 'تبديل حالة تشغيل LSP',
       panelTitle: 'حالة تشغيل LSP',

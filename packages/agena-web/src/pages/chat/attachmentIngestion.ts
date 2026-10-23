@@ -18,6 +18,7 @@ export type ComposerAttachment = {
   blob?: Blob
   serverPath?: string
   composerNode?: JsonValue
+  composerKind?: 'skill_ref'
   delivery?: AttachmentDelivery
   state: AttachmentState
   pastePreview?: string
@@ -53,13 +54,14 @@ export function createAttachmentIngestor(options: Options) {
   let queue: Promise<void> = Promise.resolve()
   const active = new Set<AbortController>()
   const activeById = new Map<string, AbortController>()
+  const resourceCount = (files: StagedAttachment[]) => files.filter((file) => file.composerKind !== 'skill_ref').length
   async function process(files: File[], epoch: number, stageOptions: StageOptions): Promise<File[]> {
     const accepted: File[] = []
     for (const file of files) {
       if (epoch !== generation) break
       if (stageOptions.shouldSkip?.(file)) continue
       const current = options.get()
-      if (current.length >= MAX_ATTACHMENTS) {
+      if (resourceCount(current) >= MAX_ATTACHMENTS) {
         options.onError({ kind: 'count', file })
         break
       }
@@ -134,7 +136,7 @@ export function createAttachmentIngestor(options: Options) {
         continue
       }
       const latest = options.get()
-      if (latest.length >= MAX_ATTACHMENTS) {
+      if (resourceCount(latest) >= MAX_ATTACHMENTS) {
         options.release?.(url)
         options.onError({ kind: 'count', file })
         break

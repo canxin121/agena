@@ -134,20 +134,65 @@ impl App {
     /// Opens the unified, cursor-preserving insertion palette. Every option
     /// stages an atomic user message part at the current composer cursor.
     pub(crate) fn open_insert_content_picker(&mut self) {
+        let mut items = vec![ChoiceItem {
+            label: ui_text::t(&self.i18n, "insert-content-file-label"),
+            detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
+            value: "file".to_owned(),
+            search_text: "file folder path attachment document image".to_owned(),
+            current: false,
+        }];
+        if let Some(catalog) = self.application.plugin_catalog() {
+            items.extend(
+                catalog
+                    .commands
+                    .into_iter()
+                    .filter(|entry| {
+                        entry
+                            .command
+                            .category
+                            .as_deref()
+                            .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
+                    })
+                    .map(|entry| {
+                        let summary = entry
+                            .command
+                            .docs
+                            .summary
+                            .clone()
+                            .unwrap_or_default();
+                        let value = serde_json::json!([
+                            entry.plugin_id.to_string(),
+                            entry.command.id.clone(),
+                        ])
+                        .to_string();
+                        ChoiceItem {
+                            label: format!(
+                                "{}: {}",
+                                ui_text::t(&self.i18n, "insert-content-skill-label"),
+                                entry.command.title,
+                            ),
+                            detail: summary.clone(),
+                            value,
+                            search_text: format!(
+                                "{} {} {} {}",
+                                entry.command.id,
+                                entry.command.title,
+                                summary,
+                                entry.command.aliases.join(" "),
+                            ),
+                            current: false,
+                        }
+                    }),
+            );
+        }
         self.open_choice_overlay(self.build_choice_overlay(
             ui_text::t(&self.i18n, "overlay-insert-content-title"),
             ui_text::t(&self.i18n, "overlay-insert-content-prompt"),
             None,
-            vec![ChoiceItem {
-                label: ui_text::t(&self.i18n, "insert-content-file-label"),
-                detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
-                value: "file".to_owned(),
-                search_text: "file folder path attachment document image".to_owned(),
-                current: false,
-            }],
+            items,
             ChoiceOverlayAction::InsertContent,
             false,
-            agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+            agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
         ));
     }
 

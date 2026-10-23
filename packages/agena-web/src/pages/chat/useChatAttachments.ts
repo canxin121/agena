@@ -311,7 +311,7 @@ export function useChatAttachments(opts: {
 
     const filename = basename(p)
     if (attachedFiles.value.some((f) => f.serverPath === p)) return
-    if (attachedFiles.value.length >= MAX_RESOURCE_ATTACHMENTS) {
+    if (attachedFiles.value.filter((file) => file.composerKind !== 'skill_ref').length >= MAX_RESOURCE_ATTACHMENTS) {
       toasts.push('error', i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_RESOURCE_ATTACHMENTS }))
       return
     }

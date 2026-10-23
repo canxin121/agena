@@ -509,16 +509,10 @@ impl App {
                 description: text("terminal-diagnostics-helper-not-probed"),
             });
         }
-        for (label, path) in [
-            (
-                "iTerm2 upload",
-                agena_tui_platform::iterm2::upload_utility(),
-            ),
-            (
-                "iTerm2 download",
-                agena_tui_platform::iterm2::download_utility(),
-            ),
-        ] {
+        for (label, path) in [(
+            "iTerm2 upload",
+            agena_tui_platform::iterm2::upload_utility(),
+        )] {
             provider_entries.push(HelpEntry {
                 keys: label.to_owned(),
                 description: path

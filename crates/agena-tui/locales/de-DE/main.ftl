@@ -2035,9 +2035,6 @@ flash-attachment-prepare-failed = Ein Anhang konnte nicht vorbereitet werden; de
 flash-attachment-preparing = Anhänge werden vorbereitet; die Nachricht wird gesendet, sobald sie bereit sind.
 flash-clipboard-osc52-sent = Zwischenablage-Anfrage an das Terminal gesendet (OSC 52).
 flash-command-no-file-view = Skill-Referenzen haben keine Dateiansicht.
-flash-download-outside-workspace = Download-Pfade dürfen den aktuellen Arbeitsbereich nicht verlassen.
-flash-download-relative-path = Einen Pfad relativ zum aktuellen Arbeitsbereich verwenden.
-flash-download-usage = Verwendung: /download <Arbeitsbereichspfad>
 flash-ui-backend-queue-full = Befehlswarteschlange des UI-Backends ist voll; auf laufende Vorgänge warten
 flash-ui-backend-unavailable = Befehlsdienst des UI-Backends ist nicht verfügbar
 help-diagnostics-kitty-helper = Kitty-Helfer
@@ -2112,7 +2109,6 @@ command-copy-visible-summary = Sichtbaren Transkriptbereich kopieren
 
 command-diagnostics-summary = Bereinigte Diagnosezusammenfassung für Feedback anzeigen
 
-command-download-summary = Arbeitsbereichsdatei über den aktiven Terminal-Übertragungsanbieter herunterladen
 
 command-editor-summary = Externen Editor für das Eingabefeld öffnen
 

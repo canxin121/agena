@@ -9,7 +9,6 @@ import {
   RiCheckLine,
   RiCloseLine,
   RiDeleteBinLine,
-  RiDownload2Line,
   RiEditLine,
   RiEyeLine,
   RiEyeOffLine,
@@ -47,7 +46,7 @@ import type { DialogKind, FileNode, FlatRow } from '../types'
 
 type ExplorerViewMode = 'tree' | 'search'
 type InlineCreateKind = 'createFile' | 'createFolder'
-type FileActionId = 'download' | 'copy-path' | 'copy-absolute-path'
+type FileActionId = 'copy-path' | 'copy-absolute-path'
 type NodeClickModifiers = { toggle: boolean; range: boolean }
 type ExplorerTreeRow =
   | { kind: 'more'; key: string; path: string; depth: number; loading: boolean; error: boolean }
@@ -826,7 +825,6 @@ const fileActionGroups: OptionMenuGroup[] = [
   {
     id: 'file-actions',
     items: [
-      { id: 'download', label: t('files.actions.download'), icon: RiDownload2Line },
       { id: 'copy-path', label: t('files.actions.copyPath'), icon: RiFileCopy2Line },
       { id: 'copy-absolute-path', label: t('files.actions.copyAbsolutePath'), icon: RiFileCopy2Line },
       { id: 'move', label: t('keyboard.moveFile'), icon: RiArrowUpLine },
@@ -851,10 +849,6 @@ function rowActionMenuTitle(node: FileNode): string {
 
 function rowActionMenuGroups(node: FileNode): OptionMenuGroup[] {
   const items: OptionMenuItem[] = []
-
-  if (node.type === 'file') {
-    items.push({ id: 'download', label: t('files.actions.download'), icon: RiDownload2Line })
-  }
 
   items.push(
     { id: 'copy-path', label: t('files.actions.copyPath'), icon: RiFileCopy2Line },
@@ -952,7 +946,7 @@ async function runFileActionMenu(node: FileNode, item: OptionMenuItem) {
     return
   }
   const action = item.id as FileActionId
-  if (action !== 'download' && action !== 'copy-path' && action !== 'copy-absolute-path') return
+  if (action !== 'copy-path' && action !== 'copy-absolute-path') return
   await props.runFileAction(action, node)
   fileActionMenuPath.value = ''
 }
@@ -976,7 +970,7 @@ async function runTreeRowActionMenu(node: FileNode, item: OptionMenuItem) {
   }
 
   const action = item.id as FileActionId
-  if (action === 'download' || action === 'copy-path' || action === 'copy-absolute-path') {
+  if (action === 'copy-path' || action === 'copy-absolute-path') {
     await props.runFileAction(action, node)
     fileActionMenuPath.value = ''
   }

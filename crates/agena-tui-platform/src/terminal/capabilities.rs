@@ -170,8 +170,7 @@ impl TerminalContext {
                 Capability::profiled(profile).with_provider(integrated)
             }
         };
-        let iterm2_helper_ready =
-            iterm2::upload_utility().is_some() || iterm2::download_utility().is_some();
+        let iterm2_helper_ready = iterm2::upload_utility().is_some();
         let iterm2_transfer_override = overrides::boolean(
             environment,
             "AGENA_TUI_ITERM2_FILE_TRANSFER",

@@ -77,7 +77,6 @@ client_command_actions! {
     Continue => "continue", "/continue";
     Compact => "compact", "/compact";
     Attach => "attach", "/attach";
-    Download => "download", "/download";
     Editor => "editor", "/editor";
     Image => "image", "/image";
     Copy => "copy", "/copy";

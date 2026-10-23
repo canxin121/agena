@@ -829,10 +829,6 @@ pub(super) enum UiAction {
     },
     PasteClipboard,
     EditComposerExternally,
-    DownloadTerminalFile {
-        path: PathBuf,
-        remove_after: bool,
-    },
     ExportTranscript {
         path: Option<PathBuf>,
     },

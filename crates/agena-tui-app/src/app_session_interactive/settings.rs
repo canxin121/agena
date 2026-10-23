@@ -40,53 +40,6 @@ impl App {
         self.request_path_browser_directory_refresh(directory);
     }
 
-    pub(crate) fn request_terminal_download(&mut self, raw_path: &str) {
-        let raw_path = raw_path.trim();
-        if raw_path.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-download-usage"));
-            return;
-        }
-        let requested = Path::new(raw_path);
-        if requested.is_absolute() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-download-relative-path"));
-            return;
-        }
-        if requested.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        }) {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-download-outside-workspace"));
-            return;
-        }
-        let relative = requested.to_string_lossy().replace('\\', "/");
-        self.dispatch_backend_operation(
-            move |application| async move {
-                let (filename, bytes) = application.download_workspace_file(&relative).await?;
-                let path = std::env::temp_dir().join(format!(
-                    "agena-download-{}-{filename}",
-                    uuid::Uuid::new_v4().simple()
-                ));
-                std::fs::write(path.as_path(), bytes).map_err(|error| {
-                    anyhow::anyhow!("failed to stage terminal download: {error}")
-                })?;
-                Ok::<_, anyhow::Error>(path)
-            },
-            |app, result| match result {
-                Ok(path) => {
-                    app.pending_ui_action = Some(UiAction::DownloadTerminalFile {
-                        path,
-                        remove_after: true,
-                    });
-                }
-                Err(error) => app.flash_error(error),
-            },
-        );
-    }
-
     pub(crate) fn open_rename_session_overlay(&mut self) {
         let Some(title) = self.current_or_selected_session_title() else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
@@ -428,8 +381,8 @@ impl App {
     }
 }
 use crate::{
-    App, JsonValue, Overlay, Path, PathBrowserMode, PathBrowserTarget, Route, SettingsPickerAction,
+    App, JsonValue, Overlay, PathBrowserMode, PathBrowserTarget, Route, SettingsPickerAction,
     SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, SettingsStudioPresentation,
-    SettingsStudioSection, SettingsStudioSectionId, UiAction, UiResult, get_json_path, min,
+    SettingsStudioSection, SettingsStudioSectionId, UiResult, get_json_path, min,
     settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
 };

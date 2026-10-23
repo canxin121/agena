@@ -137,7 +137,6 @@ export default {
     "false": "false",
     "copyFailed": "Error al copiar",
     "failedToCopyToClipboard": "No se ha podido copiar al portapapeles",
-    "downloadFailed": "Error al descargar",
     "previousPage": "Página anterior",
     "nextPage": "Página siguiente",
     "currentPage": "Página actual",
@@ -480,7 +479,6 @@ export default {
       "moveTargetInsideSelection": "No se puede mover una carpeta dentro de sí misma"
     },
     "actions": {
-      "download": "Descargar",
       "copyPath": "Copiar ruta",
       "copyAbsolutePath": "Copiar ruta absoluta"
     },
@@ -615,7 +613,6 @@ export default {
         "refreshContents": "Actualizar contenido del archivo",
         "refreshingContents": "Actualizando contenido del archivo...",
         "copyContents": "Copiar contenido",
-        "downloadRaw": "Descargar original"
       },
       "largeFile": {
         "title": "Se ha detectado un archivo grande",
@@ -1616,7 +1613,6 @@ export default {
       "noVisibleTranscript": "No hay contenido visible en la transcripción.",
       "noChildSessions": "Esta sesión no tiene sesiones secundarias.",
       "noParentSession": "Esta sesión no tiene ninguna sesión principal.",
-      "openSessionBeforeDownload": "Abre una sesión antes de descargar un archivo del espacio de trabajo.",
       "selectModelBeforeSending": "Selecciona un modelo antes de enviar",
       "modelHints": {
         "runtimeDefault": "Se usa el modelo predeterminado del runtime: {model}",
@@ -3422,7 +3418,6 @@ export default {
   "command-copy-summary": "Copiar la transcripción cargada",
   "command-copy-visible-summary": "Copiar la parte visible de la transcripción",
   "command-diagnostics-summary": "Mostrar un resumen de diagnóstico anonimizado para enviar comentarios",
-  "command-download-summary": "Descargar un archivo del espacio de trabajo mediante el proveedor de transferencia activo de Terminal",
   "command-editor-summary": "Abrir el editor externo para el cuadro de redacción",
   "command-export-summary": "Exportar la transcripción cargada como Markdown y abrirla en el editor",
   "command-favorite-summary": "Marcar o desmarcar como favorita la sesión actual o seleccionada",

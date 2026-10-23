@@ -198,7 +198,6 @@ export default {
     false: 'false',
     copyFailed: 'कॉपी नहीं हो सकी',
     failedToCopyToClipboard: 'क्लिपबोर्ड पर कॉपी नहीं हो सका',
-    downloadFailed: 'डाउनलोड विफल रहा',
     previousPage: 'पिछला पृष्ठ',
     nextPage: 'अगला पृष्ठ',
     currentPage: 'वर्तमान पृष्ठ',
@@ -376,7 +375,7 @@ export default {
       moveTargetOutsideWorkspace: 'स्थानांतरण का लक्ष्य वर्कस्पेस के भीतर होना चाहिए',
       moveTargetInsideSelection: 'किसी फ़ोल्डर को उसके अपने भीतर नहीं ले जा सकते',
     },
-    actions: { download: 'डाउनलोड करें', copyPath: 'पाथ कॉपी करें', copyAbsolutePath: 'पूरा पाथ कॉपी करें' },
+    actions: { copyPath: 'पाथ कॉपी करें', copyAbsolutePath: 'पूरा पाथ कॉपी करें' },
     confirmDiscard: {
       title: 'बिना सहेजे बदलाव',
       description: 'जारी रखने से पहले अपने बदलाव सहेजें?',
@@ -452,7 +451,7 @@ export default {
         autosave: { enable: 'अपने आप सहेजना चालू करें', disable: 'अपने आप सहेजना बंद करें', description: 'टेक्स्ट बदलाव अपने आप सहेजें' },
       },
       save: { titleDirty: 'सहेजें (Ctrl/Cmd+S)', titleSaved: 'सहेजा गया' },
-      actions: { refreshContents: 'फ़ाइल की सामग्री रीफ़्रेश करें', refreshingContents: 'फ़ाइल की सामग्री रीफ़्रेश हो रही है...', copyContents: 'सामग्री कॉपी करें', downloadRaw: 'मूल फ़ाइल डाउनलोड करें' },
+      actions: { refreshContents: 'फ़ाइल की सामग्री रीफ़्रेश करें', refreshingContents: 'फ़ाइल की सामग्री रीफ़्रेश हो रही है...', copyContents: 'सामग्री कॉपी करें' },
       largeFile: {
         title: 'बड़ी फ़ाइल मिली', description: 'यह फ़ाइल {size} की है। बहुत बड़ी फ़ाइलें लोड करने से संपादक का प्रदर्शन प्रभावित हो सकता है।',
         initialLoadHint: 'पहले {size} लोड करें, फिर ज़रूरत के अनुसार और लोड करें।', continue: 'लोड करना जारी रखें', loadMore: 'और लोड करें',
@@ -1525,7 +1524,6 @@ export default {
       noVisibleTranscript: 'ट्रांसक्रिप्ट की कोई सामग्री दिखाई नहीं दे रही है।',
       noChildSessions: 'इस सेशन का कोई चाइल्ड सेशन नहीं है।',
       noParentSession: 'इस सेशन का कोई पैरेंट सेशन नहीं है।',
-      openSessionBeforeDownload: 'वर्कस्पेस फ़ाइल डाउनलोड करने से पहले कोई सेशन खोलें।',
       selectModelBeforeSending: 'भेजने से पहले मॉडल चुनें',
       modelHints: {
         runtimeDefault: 'रनटाइम का डिफ़ॉल्ट उपयोग हो रहा है: {model}',
@@ -2154,7 +2152,6 @@ export default {
   'command-copy-summary': 'लोड किया गया ट्रांसक्रिप्ट कॉपी करें',
   'command-copy-visible-summary': 'दिख रहा ट्रांसक्रिप्ट कॉपी करें',
   'command-diagnostics-summary': 'फ़ीडबैक के लिए संवेदनशील जानकारी हटाकर निदान-सार दिखाएँ',
-  'command-download-summary': 'सक्रिय टर्मिनल ट्रांसफ़र प्रदाता से वर्कस्पेस फ़ाइल डाउनलोड करें',
   'command-editor-summary': 'कंपोज़र के लिए बाहरी संपादक खोलें',
   'command-export-summary': 'लोड किए गए ट्रांसक्रिप्ट को Markdown में निर्यात करके संपादक में खोलें',
   'command-favorite-summary': 'मौजूदा या चुने हुए सेशन को पसंदीदा बनाएँ या हटाएँ',

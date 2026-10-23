@@ -137,7 +137,6 @@ export default {
     "false": "false",
     "copyFailed": "Falha ao copiar",
     "failedToCopyToClipboard": "Falha ao copiar para a área de transferência",
-    "downloadFailed": "Falha ao baixar",
     "previousPage": "Página anterior",
     "nextPage": "Próxima página",
     "currentPage": "Página atual",
@@ -1290,7 +1289,6 @@ export default {
       "noVisibleTranscript": "Não há conteúdo de transcrição visível.",
       "noChildSessions": "Esta sessão não tem sessões filhas.",
       "noParentSession": "Esta sessão não tem sessão pai.",
-      "openSessionBeforeDownload": "Abra uma sessão antes de baixar um arquivo do espaço de trabalho.",
       "selectModelBeforeSending": "Selecione um modelo antes de enviar",
       "modelHints": {
         "runtimeDefault": "Usando o padrão do runtime: {model}",
@@ -2719,7 +2717,6 @@ export default {
       "moveTargetInsideSelection": "Não é possível mover uma pasta para dentro dela mesma"
     },
     "actions": {
-      "download": "Baixar",
       "copyPath": "Copiar caminho",
       "copyAbsolutePath": "Copiar caminho absoluto"
     },
@@ -2956,8 +2953,7 @@ export default {
       "actions": {
         "refreshContents": "Atualizar conteúdo do arquivo",
         "refreshingContents": "Atualizando conteúdo do arquivo...",
-        "copyContents": "Copiar conteúdo",
-        "downloadRaw": "Baixar original"
+        "copyContents": "Copiar conteúdo"
       },
       "largeFile": {
         "title": "Arquivo grande detectado",
@@ -3472,7 +3468,6 @@ export default {
   "command-copy-summary": "Copiar a transcrição carregada",
   "command-copy-visible-summary": "Copiar a área visível da transcrição",
   "command-diagnostics-summary": "Exibir um resumo de diagnóstico sanitizado para enviar como feedback",
-  "command-download-summary": "Baixar um arquivo do espaço de trabalho pelo provedor de transferência ativo do Terminal",
   "command-editor-summary": "Abrir o editor externo do campo de mensagem",
   "command-export-summary": "Exportar a transcrição carregada em Markdown e abri-la no editor",
   "command-favorite-summary": "Adicionar ou remover dos favoritos a sessão atual ou selecionada",

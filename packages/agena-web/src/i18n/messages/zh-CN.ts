@@ -137,7 +137,6 @@ export default {
     false: 'false',
     copyFailed: '复制失败',
     failedToCopyToClipboard: '复制到剪贴板失败',
-    downloadFailed: '下载失败',
     previousPage: '上一页',
     nextPage: '下一页',
     currentPage: '当前页',
@@ -1385,7 +1384,6 @@ export default {
       noVisibleTranscript: '当前没有可见的转录内容。',
       noChildSessions: '该会话没有子会话。',
       noParentSession: '该会话没有父会话。',
-      openSessionBeforeDownload: '下载工作区文件前请先打开会话。',
       selectModelBeforeSending: '发送前请选择模型',
       modelHints: {
         runtimeDefault: '使用运行时默认模型：{model}',
@@ -3207,7 +3205,6 @@ export default {
       moveTargetInsideSelection: '不能将文件夹移动到其自身内部',
     },
     actions: {
-      download: '下载',
       copyPath: '复制路径',
       copyAbsolutePath: '复制绝对路径',
     },
@@ -3342,7 +3339,6 @@ export default {
         refreshContents: '刷新文件内容',
         refreshingContents: '正在刷新文件内容...',
         copyContents: '复制内容',
-        downloadRaw: '下载原始文件',
       },
       largeFile: {
         title: '检测到大文件',
@@ -3525,7 +3521,6 @@ export default {
   'command-copy-summary': '复制已加载的对话记录',
   'command-copy-visible-summary': '复制当前可见视口',
   'command-diagnostics-summary': '显示用于反馈的脱敏诊断摘要',
-  'command-download-summary': '通过当前终端传输提供器将工作区文件下载到本地机器',
   'command-editor-summary': '为输入框打开外部编辑器',
   'command-export-summary': '将已加载的对话记录导出为 markdown，并在编辑器中打开',
   'command-favorite-summary': '收藏或取消收藏当前或选中的会话',

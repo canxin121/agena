@@ -245,7 +245,7 @@ export default {
   },
   files: {
     errors: { noProjectSelected: 'Aucun projet sélectionné', filenameRequired: 'Le nom du fichier est obligatoire', folderNameRequired: 'Le nom du dossier est obligatoire', nameRequired: 'Le nom est obligatoire', moveTargetOutsideWorkspace: 'La destination du déplacement doit rester dans l’espace de travail', moveTargetInsideSelection: 'Impossible de déplacer un dossier dans lui-même' },
-    actions: { download: 'Télécharger', copyPath: 'Copier le chemin', copyAbsolutePath: 'Copier le chemin absolu' },
+    actions: { copyPath: 'Copier le chemin', copyAbsolutePath: 'Copier le chemin absolu' },
     confirmDiscard: { title: 'Modifications non enregistrées', description: 'Enregistrer vos modifications avant de continuer ?', discard: 'Ignorer', saveChanges: 'Enregistrer les modifications' },
     refreshConflict: { title: 'Conflit lors de l’actualisation', description: 'Ce fichier a été modifié sur le disque alors que des modifications brouillon sont présentes dans le navigateur ({path}). Choisissez la version à conserver.', keepLocalDraft: 'Conserver le brouillon du navigateur', useRefreshedContent: 'Utiliser le contenu actualisé', remoteLargeHint: 'La version actualisée est volumineuse ({size}) et sera rouverte en mode par blocs.' },
     dialog: { namePlaceholder: 'Nom', title: { createFile: 'Créer un fichier', createFolder: 'Créer un dossier', rename: 'Renommer' }, rootFallback: 'racine', description: { createFile: 'Créer un fichier dans {base}', createFolder: 'Créer un dossier dans {base}', rename: 'Renommer {name}' } },
@@ -260,7 +260,7 @@ export default {
     viewer: {
       title: { selectFile: 'Sélectionner un fichier' },
       viewMenu: { title: 'Paramètres d’affichage', groupTitle: 'Options d’affichage', blame: { enable: 'Activer les responsabilités', disable: 'Désactiver les responsabilités', description: 'Afficher ou masquer les marqueurs d’attribution des commits' }, timeline: { enable: 'Activer la chronologie', disable: 'Désactiver la chronologie', description: 'Comparer deux commits dans l’éditeur' }, wrap: { enable: 'Activer le retour à la ligne', disable: 'Désactiver le retour à la ligne', description: 'Activer ou désactiver le retour à la ligne dans l’éditeur' }, autosave: { enable: 'Activer l’enregistrement automatique', disable: 'Désactiver l’enregistrement automatique', description: 'Enregistrer automatiquement les modifications du texte' } },
-      save: { titleDirty: 'Enregistrer (Ctrl/Cmd+S)', titleSaved: 'Enregistré' }, actions: { refreshContents: 'Actualiser le contenu du fichier', refreshingContents: 'Actualisation du contenu du fichier…', copyContents: 'Copier le contenu', downloadRaw: 'Télécharger le fichier brut' },
+      save: { titleDirty: 'Enregistrer (Ctrl/Cmd+S)', titleSaved: 'Enregistré' }, actions: { refreshContents: 'Actualiser le contenu du fichier', refreshingContents: 'Actualisation du contenu du fichier…', copyContents: 'Copier le contenu' },
       largeFile: { title: 'Fichier volumineux détecté', description: 'Ce fichier fait {size}. Le chargement de fichiers très volumineux peut affecter les performances de l’éditeur.', initialLoadHint: 'Commencez par charger les {size} initiaux, puis chargez la suite selon vos besoins.', continue: 'Continuer le chargement', loadMore: 'Charger davantage', partialLoadedBanner: '{loaded} sur {total} chargés.', pendingStatus: 'Fichier volumineux : {size}. Continuez le chargement pour afficher l’aperçu.', partialLoadedStatus: '{loaded}/{total} chargés partiellement' },
       status: { loadingTimelineCommits: 'Chargement des commits de la chronologie…', loadingBlame: 'Chargement des responsabilités…', noBlameYet: 'Aucune ligne de responsabilité disponible pour ce fichier.', showingBlameLastSaved: 'Responsabilités affichées pour la dernière version enregistrée du fichier.', loadingChanges: 'Chargement des modifications {scope}…', noChanges: 'Aucune modification {scope}.', hunksSummary: '{count} blocs · {range}', loadingImage: 'Chargement de l’image…', loadingPdf: 'Chargement du PDF…', loadingAudio: 'Chargement de l’audio…', loadingVideo: 'Chargement de la vidéo…' },
       markdown: { mode: { source: 'Source', preview: 'Aperçu', split: 'Côte à côte' } }, gitDiffMode: { staged: 'index', workingTree: 'arborescence de travail' }, gitDiffRange: { headToIndex: 'HEAD -> Index', indexToWorkingTree: 'Index -> Arborescence de travail' },
@@ -904,7 +904,6 @@ export default {
       noVisibleTranscript: 'Aucun contenu de transcription n’est visible.',
       noChildSessions: 'Cette session n’a pas de session enfant.',
       noParentSession: 'Cette session n’a pas de session parente.',
-      openSessionBeforeDownload: 'Ouvrez une session avant de télécharger un fichier de l’espace de travail.',
       selectModelBeforeSending: 'Sélectionnez un modèle avant l’envoi',
       modelHints: {
         runtimeDefault: 'Modèle par défaut du runtime : {model}',
@@ -1040,7 +1039,6 @@ export default {
     false: 'false',
     copyFailed: 'Échec de la copie',
     failedToCopyToClipboard: "Échec de la copie dans le presse-papiers",
-    downloadFailed: 'Échec du téléchargement',
     previousPage: 'Page précédente',
     nextPage: 'Page suivante',
     currentPage: 'Page actuelle',
@@ -2036,7 +2034,6 @@ export default {
   'command-copy-summary': 'Copier la transcription chargée',
   'command-copy-visible-summary': 'Copier la partie visible de la transcription',
   'command-diagnostics-summary': 'Afficher un résumé des diagnostics anonymisés à transmettre',
-  'command-download-summary': 'Télécharger un fichier de l’espace de travail via le fournisseur de transfert actif du terminal',
   'command-editor-summary': 'Ouvrir l’éditeur externe pour la zone de saisie',
   'command-export-summary': 'Exporter la transcription chargée au format Markdown et l’ouvrir dans l’éditeur',
   'command-favorite-summary': 'Ajouter aux favoris ou retirer des favoris la session actuelle ou sélectionnée',

@@ -8,9 +8,7 @@ use std::{
 };
 
 use crate::{
-    helper_runner::{
-        helper_is_executable, interrupted_status, run_interactive, run_interactive_guarded,
-    },
+    helper_runner::{helper_is_executable, interrupted_status, run_interactive_guarded},
     provider_error::ProviderError,
 };
 
@@ -25,11 +23,6 @@ pub fn upload_utility() -> Option<PathBuf> {
     UPLOAD.get_or_init(|| utility_path("it2ul")).clone()
 }
 
-pub fn download_utility() -> Option<PathBuf> {
-    static DOWNLOAD: OnceLock<Option<PathBuf>> = OnceLock::new();
-    DOWNLOAD.get_or_init(|| utility_path("it2dl")).clone()
-}
-
 fn utility_path(name: &str) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(home) = env::var_os("HOME") {
@@ -41,27 +34,6 @@ fn utility_path(name: &str) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|path| helper_is_executable(path))
-}
-
-pub(crate) fn request_download(path: &Path) -> Result<(), ProviderError> {
-    let utility = download_utility().ok_or_else(|| {
-        ProviderError::DependencyMissing(
-            "iTerm2 download utility `it2dl` is unavailable; install iTerm2 Shell Integration and Utilities on this remote account"
-                .to_owned(),
-        )
-    })?;
-    let mut command = Command::new(utility);
-    command.arg(path);
-    let status = run_interactive(&mut command, "iTerm2 file download")?;
-    if status.success() {
-        Ok(())
-    } else if interrupted_status(status) {
-        Err(ProviderError::Cancelled)
-    } else {
-        Err(ProviderError::Protocol(
-            "iTerm2 file download failed or was cancelled".to_owned(),
-        ))
-    }
 }
 
 /// Ask iTerm2 to show its local file picker and unpack the returned upload

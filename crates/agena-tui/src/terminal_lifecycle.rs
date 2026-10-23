@@ -47,7 +47,6 @@ pub enum SuspendReason {
     ExternalEditor,
     ExternalPager,
     FileUpload,
-    FileDownload,
     ClipboardRead,
     OpenPath,
 }

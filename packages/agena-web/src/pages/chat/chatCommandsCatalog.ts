@@ -41,7 +41,6 @@ export const CLIENT_COMMAND_ACTIONS = [
   'continue',
   'compact',
   'attach',
-  'download',
   'editor',
   'image',
   'copy',

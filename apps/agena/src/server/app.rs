@@ -62,10 +62,6 @@ fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
             post(crate::server::fs::fs_rename),
         )
         .route("/api/v1/workbench/fs/raw", get(crate::server::fs::fs_raw))
-        .route(
-            "/api/v1/workbench/fs/download",
-            get(crate::server::fs::fs_download),
-        )
 }
 
 /// Workbench API for filesystem, Git, preview, terminal, and MCP controls.

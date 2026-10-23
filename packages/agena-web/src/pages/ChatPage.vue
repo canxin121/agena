@@ -1610,27 +1610,6 @@ function parsePullRequestArguments(raw: string): {
   return output
 }
 
-async function downloadWorkspaceFile(pathInput: string) {
-  const sid = commandSessionId()
-  if (!sid) throw new Error(t('chat.toasts.openSessionBeforeDownload'))
-  const workspace = await chat.resolveSessionWorkspace(sid)
-  const path = workspaceRelativePath(pathInput, workspace.path)
-  const response = await fetch(
-    `/api/v1/workspaces/${encodeURIComponent(String(workspace.id))}/download?path=${encodeURIComponent(path)}`,
-  )
-  if (!response.ok) throw new Error(`Download failed (${response.status})`)
-  const blob = await response.blob()
-  const filename = path.split('/').filter(Boolean).pop() || 'workspace-file'
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
-}
-
 async function submitPromptFromCommand(prompt: string) {
   const value = String(prompt || '').trim()
   if (!value) return
@@ -1755,13 +1734,6 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'hub':
     case 'lineage':
       toasts.push('info', `/${command.name} is available in the terminal client.`)
-      return
-    case 'download':
-      if (!args) {
-        toasts.push('error', `Usage: ${commandUsage(command)}`)
-        return
-      }
-      await downloadWorkspaceFile(args)
       return
     case 'edit':
       toggleEditorFullscreen()

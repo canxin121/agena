@@ -286,10 +286,6 @@ mod tests {
             Some(("pr", "fix the build"))
         );
         assert_eq!(parse_invocation("  /side  "), Some(("side", "")));
-        assert_eq!(
-            parse_invocation("/download   a/b.zip"),
-            Some(("download", "a/b.zip"))
-        );
     }
 
     #[test]

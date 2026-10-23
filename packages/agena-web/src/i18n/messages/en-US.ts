@@ -137,7 +137,6 @@ export default {
     false: 'false',
     copyFailed: 'Copy failed',
     failedToCopyToClipboard: 'Failed to copy to clipboard',
-    downloadFailed: 'Download failed',
     previousPage: 'Previous page',
     nextPage: 'Next page',
     currentPage: 'Current page',
@@ -1392,7 +1391,6 @@ export default {
       noVisibleTranscript: 'No transcript content is visible.',
       noChildSessions: 'This session has no child sessions.',
       noParentSession: 'This session has no parent session.',
-      openSessionBeforeDownload: 'Open a session before downloading a workspace file.',
       selectModelBeforeSending: 'Select a model before sending',
       modelHints: {
         runtimeDefault: 'Using runtime default: {model}',
@@ -3218,7 +3216,6 @@ export default {
       moveTargetInsideSelection: 'Cannot move a folder into itself',
     },
     actions: {
-      download: 'Download',
       copyPath: 'Copy path',
       copyAbsolutePath: 'Copy absolute path',
     },
@@ -3354,7 +3351,6 @@ export default {
         refreshContents: 'Refresh file contents',
         refreshingContents: 'Refreshing file contents...',
         copyContents: 'Copy contents',
-        downloadRaw: 'Download raw',
       },
       largeFile: {
         title: 'Large file detected',
@@ -3538,7 +3534,6 @@ export default {
   'command-copy-summary': 'Copy the loaded transcript',
   'command-copy-visible-summary': 'Copy the visible transcript viewport',
   'command-diagnostics-summary': 'Show a sanitized diagnostics summary for feedback',
-  'command-download-summary': 'Download a workspace file through the active terminal transfer provider',
   'command-editor-summary': 'Open the external editor for the composer',
   'command-export-summary': 'Export the loaded transcript as markdown and open it in the editor',
   'command-favorite-summary': 'Favorite or unfavorite the current or selected session',

@@ -32,7 +32,7 @@ const IMAGE_EXTENSIONS = new Set([
 
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'])
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'])
-const FS_API_PATHS = new Set(['/api/v1/workbench/fs/raw', '/api/v1/workbench/fs/download'])
+const FS_API_PATHS = new Set(['/api/v1/workbench/fs/raw'])
 
 function normalizePath(raw: string): string {
   return String(raw || '')

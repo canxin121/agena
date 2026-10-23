@@ -127,7 +127,6 @@ const props = defineProps<{
   openTimeline: () => boolean | void | Promise<boolean | void>
   openSidebar: () => boolean | void | Promise<boolean | void>
   onHeaderBack?: () => boolean | void | Promise<boolean | void>
-  openRaw: () => boolean | void | Promise<boolean | void>
   refreshFile: () => boolean | void | Promise<boolean | void>
   save: () => boolean | void | Promise<boolean | void>
   confirmLargeFileLoad: () => boolean | void | Promise<boolean | void>
@@ -1365,9 +1364,6 @@ function handleHeaderBackClick() {
             <Button size="sm" @click="() => props.confirmLargeFileLoad()">{{
               t('files.viewer.largeFile.continue')
             }}</Button>
-            <Button variant="outline" size="sm" @click="props.openRaw">{{
-              t('files.viewer.actions.downloadRaw')
-            }}</Button>
           </div>
         </div>
       </div>
@@ -1376,11 +1372,6 @@ function handleHeaderBackClick() {
         <div class="rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground typography-meta">
           {{ t('files.viewer.binaryPreviewUnavailable') }}
           <div v-if="fileError" class="mt-2 text-destructive">{{ fileError }}</div>
-          <div class="mt-2">
-            <Button variant="outline" size="sm" class="font-mono text-xs" @click="props.openRaw">{{
-              t('files.viewer.actions.downloadRaw')
-            }}</Button>
-          </div>
         </div>
       </div>
 

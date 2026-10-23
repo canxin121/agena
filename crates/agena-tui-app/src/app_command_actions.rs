@@ -50,7 +50,6 @@ impl App {
                 self.focus = Focus::Composer;
                 self.request_file_attachment(false);
             }
-            ClientCommandAction::Download => self.request_terminal_download(args),
             ClientCommandAction::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }

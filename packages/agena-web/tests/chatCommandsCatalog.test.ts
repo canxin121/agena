@@ -95,6 +95,7 @@ describe('web command catalog', () => {
   test('the client action vocabulary covers every built-in the catalog declares', () => {
     expect(CLIENT_COMMAND_ACTIONS).toContain('help')
     expect(CLIENT_COMMAND_ACTIONS).toContain('side')
+    expect(CLIENT_COMMAND_ACTIONS).not.toContain('download')
     expect(new Set(CLIENT_COMMAND_ACTIONS).size).toBe(CLIENT_COMMAND_ACTIONS.length)
   })
 
@@ -120,13 +121,12 @@ describe('web command catalog', () => {
     expect(builtin('export', { usage: '[path]' }).requiresArguments).toBe(false)
     expect(paletteInvocation(builtin('export', { usage: '[path]' }))).toBe('/export')
     expect(paletteInvocation(builtin('sessions'))).toBe('/sessions')
-    expect(commandUsage(builtin('download', { usage: '<workspace-path>' }))).toBe('/download <workspace-path>')
     expect(commandUsage(builtin('sessions'))).toBe('/sessions')
   })
 
   test('slash parsing preserves arguments and rejects non-commands', () => {
     expect(parseSlashInvocation('/commit fix the parser')).toEqual({ name: 'commit', args: 'fix the parser' })
-    expect(parseSlashInvocation(' /DL artifacts/out.zip ')).toEqual({ name: 'dl', args: 'artifacts/out.zip' })
+    expect(parseSlashInvocation(' /HELP artifacts/out.zip ')).toEqual({ name: 'help', args: 'artifacts/out.zip' })
     expect(parseSlashInvocation('// literal')).toBeNull()
     expect(parseSlashInvocation('ordinary text')).toBeNull()
   })

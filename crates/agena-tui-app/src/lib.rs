@@ -208,7 +208,6 @@ use agena_tui_platform::clipboard::{
 };
 use agena_tui_platform::external_editor::{edit_text, open_path};
 use agena_tui_platform::terminal::TerminalRuntime;
-use agena_tui_platform::terminal_transfer::{download_providers, request_download};
 
 mod app_activities;
 mod app_backend;

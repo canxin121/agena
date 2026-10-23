@@ -935,15 +935,15 @@ appends captures with byte-budget checks; named/numeric references, `$$`, and
 unknown or malformed references keep the library's existing grammar. No-op
 replacements do not publish a new file or count as completed changes.
 
-Full text read, raw preview, download, content-search, and transform reads share
-the bounded reader. It checks metadata before and after opening, rejects
-non-files, and reads at most the configured limit plus one byte even if the
-opened inode grows. Full reads allow **50 MiB**; search/transform input retains
-its **2 MiB** searchable-file limit. Oversized read/raw/download requests return
-**413**, non-files and invalid UTF-8 text return **400**, and missing files
-return **404**, all in the Workbench JSON error envelope. Raw/download preserve
-arbitrary binary bytes, MIME type, cache policy, and inline/attachment headers.
-On Unix, nonblocking open prevents a swapped FIFO from waiting for a writer.
+Full text read, raw preview, content-search, and transform reads share the
+bounded reader. It checks metadata before and after opening, rejects non-files,
+and reads at most the configured limit plus one byte even if the opened inode
+grows. Full reads allow **50 MiB**; search/transform input retains its **2 MiB**
+searchable-file limit. Oversized read/raw requests return **413**, non-files and
+invalid UTF-8 text return **400**, and missing files return **404**, all in the
+Workbench JSON error envelope. Raw previews preserve arbitrary binary bytes,
+MIME type, cache policy, and inline content disposition. On Unix, nonblocking
+open prevents a swapped FIFO from waiting for a writer.
 
 These reads share the 16-worker limit and its cancellation-safe permit with
 file mutations. Completed responses can retain their buffers while clients

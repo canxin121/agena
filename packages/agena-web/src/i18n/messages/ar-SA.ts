@@ -641,7 +641,6 @@ export default {
       noVisibleTranscript: 'لا يظهر أي محتوى من سجل المحادثة.',
       noChildSessions: 'لا توجد جلسات فرعية لهذه الجلسة.',
       noParentSession: 'لا توجد جلسة رئيسية لهذه الجلسة.',
-      openSessionBeforeDownload: 'افتح جلسة قبل تنزيل ملف من مساحة العمل.',
       selectModelBeforeSending: 'حدّد نموذجًا قبل الإرسال',
       modelHints: {
         runtimeDefault: 'النموذج الافتراضي لبيئة التشغيل: {model}',
@@ -949,7 +948,7 @@ export default {
       noProjectSelected: 'لم يتم تحديد مشروع', filenameRequired: 'اسم الملف مطلوب', folderNameRequired: 'اسم المجلد مطلوب', nameRequired: 'الاسم مطلوب',
       moveTargetOutsideWorkspace: 'يجب أن يبقى الهدف المنقول داخل مساحة العمل', moveTargetInsideSelection: 'لا يمكن نقل مجلد إلى داخل نفسه',
     },
-    actions: { download: 'تنزيل', copyPath: 'نسخ المسار', copyAbsolutePath: 'نسخ المسار المطلق' },
+    actions: { copyPath: 'نسخ المسار', copyAbsolutePath: 'نسخ المسار المطلق' },
     confirmDiscard: { title: 'تغييرات غير محفوظة', description: 'هل تريد حفظ تعديلاتك قبل المتابعة؟', discard: 'تجاهل', saveChanges: 'حفظ التغييرات' },
     refreshConflict: {
       title: 'تعارض أثناء التحديث', description: 'تغيّر هذا الملف على القرص بينما لا تزال لديك تعديلات مسودة في الويب ({path}). اختر النسخة التي تريد الاحتفاظ بها.',
@@ -985,7 +984,7 @@ export default {
         autosave: { enable: 'تفعيل الحفظ التلقائي', disable: 'تعطيل الحفظ التلقائي', description: 'حفظ التغييرات النصية تلقائيًا' },
       },
       save: { titleDirty: 'حفظ (Ctrl/Cmd+S)', titleSaved: 'تم الحفظ' },
-      actions: { refreshContents: 'تحديث محتوى الملف', refreshingContents: 'جارٍ تحديث محتوى الملف...', copyContents: 'نسخ المحتوى', downloadRaw: 'تنزيل الملف الخام' },
+      actions: { refreshContents: 'تحديث محتوى الملف', refreshingContents: 'جارٍ تحديث محتوى الملف...', copyContents: 'نسخ المحتوى' },
       largeFile: {
         title: 'تم اكتشاف ملف كبير', description: 'حجم هذا الملف {size}. قد يؤثر تحميل الملفات الكبيرة جدًا في أداء المحرر.', initialLoadHint: 'ابدأ بتحميل أول {size}، ثم حمّل المزيد عند الحاجة.',
         continue: 'متابعة التحميل', loadMore: 'تحميل المزيد', partialLoadedBanner: 'تم تحميل {loaded} من {total}.', pendingStatus: 'ملف كبير: {size}. تابع التحميل لمعاينته.', partialLoadedStatus: 'تم تحميل جزء منه: {loaded}/{total}',
@@ -1089,7 +1088,6 @@ export default {
     false: 'false',
     copyFailed: 'فشل النسخ',
     failedToCopyToClipboard: 'تعذّر النسخ إلى الحافظة',
-    downloadFailed: 'فشل التنزيل',
     previousPage: 'الصفحة السابقة',
     nextPage: 'الصفحة التالية',
     currentPage: 'الصفحة الحالية',
@@ -2303,7 +2301,6 @@ export default {
   'command-copy-summary': 'انسخ سجل المحادثة المحمّل',
   'command-copy-visible-summary': 'انسخ الجزء الظاهر من سجل المحادثة',
   'command-diagnostics-summary': 'اعرض ملخصًا منقحًا للتشخيصات لمشاركته في الملاحظات',
-  'command-download-summary': 'نزّل ملفًا من مساحة العمل عبر مزوّد نقل الملفات النشط للطرفية',
   'command-editor-summary': 'افتح المحرر الخارجي لمؤلف الرسائل',
   'command-export-summary': 'صدّر سجل المحادثة المحمّل بصيغة Markdown وافتحه في المحرر',
   'command-favorite-summary': 'أضف الجلسة الحالية أو المحددة إلى المفضلة أو أزلها منها',

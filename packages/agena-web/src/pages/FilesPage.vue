@@ -1934,53 +1934,7 @@ async function copyToClipboard(text: string) {
   toasts.push('error', t('common.copyFailed'))
 }
 
-async function triggerDownloadForPath(path: string, fileName?: string) {
-  const rootPath = root.value
-  const normalized = normalizePath(String(path || '').trim())
-  if (!rootPath || !normalized || !withinWorkspace(normalized)) return
-
-  const url = `/api/v1/workbench/fs/download?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(normalized)}`
-  try {
-    const blob = await apiBlob(url)
-    const href = URL.createObjectURL(blob)
-
-    const link = document.createElement('a')
-    link.href = href
-    if (fileName) {
-      link.download = fileName
-    }
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-
-    window.setTimeout(() => {
-      try {
-        URL.revokeObjectURL(href)
-      } catch {
-        // ignore
-      }
-    }, 30_000)
-  } catch (err) {
-    const msg =
-      err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
-    toasts.push('error', msg || t('common.downloadFailed'))
-  }
-}
-
-async function openSelectedFileRaw() {
-  const file = selectedFile.value
-  if (!file) return
-  await triggerDownloadForPath(file.path, file.name)
-}
-
-async function runExplorerFileAction(action: 'download' | 'copy-path' | 'copy-absolute-path', node: FileNode) {
-  if (action === 'download') {
-    if (node.type !== 'file') return
-    triggerDownloadForPath(node.path, node.name)
-    return
-  }
-
+async function runExplorerFileAction(action: 'copy-path' | 'copy-absolute-path', node: FileNode) {
   if (action === 'copy-absolute-path') {
     await copyToClipboard(node.path)
     return
@@ -4842,7 +4796,6 @@ onMounted(async () => {
                 :is-refreshing-file="isRefreshingFile"
                 :displayed-content="displayedContent"
                 :raw-url="rawUrl"
-                :open-raw="openSelectedFileRaw"
                 :selected-path="selectedPath"
                 :image-gallery-items="filesImageGalleryItems"
                 :selected-image-gallery-index="selectedImageGalleryIndex"

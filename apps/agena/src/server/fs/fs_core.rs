@@ -502,17 +502,11 @@ pub async fn fs_raw(Query(q): Query<ReadQuery>) -> ApiResult<Response> {
         .unwrap())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct FsPathQuery {
-    pub directory: Option<String>,
-    pub path: Option<String>,
-}
-
 fn content_disposition_for(path: &Path, disposition_type: &str) -> String {
     let raw = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "download".to_string());
+        .unwrap_or_else(|| "file".to_string());
 
     // RFC 6266: provide both ASCII fallback and UTF-8 filename*.
     let mut ascii = String::with_capacity(raw.len());
@@ -521,7 +515,7 @@ fn content_disposition_for(path: &Path, disposition_type: &str) -> String {
         ascii.push(if ok { ch } else { '_' });
     }
     if ascii.trim().is_empty() {
-        ascii = "download".to_string();
+        ascii = "file".to_string();
     }
 
     let encoded = urlencoding::encode(&raw);
@@ -531,35 +525,8 @@ fn content_disposition_for(path: &Path, disposition_type: &str) -> String {
     )
 }
 
-fn content_disposition_attachment(path: &Path) -> String {
-    content_disposition_for(path, "attachment")
-}
-
 fn content_disposition_inline(path: &Path) -> String {
     content_disposition_for(path, "inline")
-}
-
-pub async fn fs_download(headers: HeaderMap, Query(q): Query<FsPathQuery>) -> ApiResult<Response> {
-    let file_path = q
-        .path
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .ok_or_else(|| AppError::bad_request("Path is required"))?;
-
-    let (_, abs) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
-
-    let mime = mime_for_ext(&abs);
-    let content = read_regular_file(abs.clone(), "read a file for download").await?;
-
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("cache-control", "no-store")
-        .header("content-type", mime)
-        .header("content-disposition", content_disposition_attachment(&abs))
-        .body(Body::from(content))
-        .unwrap())
 }
 
 #[derive(Debug, Deserialize)]

@@ -229,13 +229,6 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-attach-summary",
     },
     BuiltInCommand {
-        action: "download",
-        slash: "/download",
-        aliases: &["dl"],
-        usage: Some("<workspace-path>"),
-        summary_key: "command-download-summary",
-    },
-    BuiltInCommand {
         action: "editor",
         slash: "/editor",
         aliases: &["edit"],
@@ -2696,7 +2689,6 @@ mod tests {
             usage_of("pr"),
             Some("<title> [--body <text>] [--base <branch>] [--head <branch>]")
         );
-        assert_eq!(usage_of("download"), Some("<workspace-path>"));
         assert_eq!(usage_of("export"), Some("[path]"));
         assert_eq!(usage_of("settings"), None);
         assert_eq!(usage_of("side"), Some("[question]"));

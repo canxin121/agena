@@ -79,14 +79,10 @@ fn full_read_routes_bound_files_that_grow_after_preflight() {
         let _guard = FS_REQUEST_TESTS.acquire().await.unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let mut violations = Vec::new();
-        for endpoint in ["read", "raw", "download"] {
+        for endpoint in ["read", "raw"] {
             let target = fixture.path().join(endpoint);
             std::fs::write(&target, b"original").unwrap();
             let mut request = Box::pin(read(fixture.path(), endpoint, &target));
-            // Download first validates its workspace directory.
-            if endpoint == "download" {
-                finish_next_blocking_operation(request.as_mut()).await;
-            }
             finish_next_blocking_operation(request.as_mut()).await;
             std::fs::OpenOptions::new()
                 .write(true)
@@ -116,13 +112,10 @@ fn full_read_routes_recheck_file_type_after_preflight() {
         let _guard = FS_REQUEST_TESTS.acquire().await.unwrap();
         let fixture = tempfile::tempdir().unwrap();
         let mut violations = Vec::new();
-        for endpoint in ["read", "raw", "download"] {
+        for endpoint in ["read", "raw"] {
             let target = fixture.path().join(endpoint);
             std::fs::write(&target, b"original").unwrap();
             let mut request = Box::pin(read(fixture.path(), endpoint, &target));
-            if endpoint == "download" {
-                finish_next_blocking_operation(request.as_mut()).await;
-            }
             finish_next_blocking_operation(request.as_mut()).await;
             std::fs::remove_file(&target).unwrap();
             std::fs::create_dir(&target).unwrap();
@@ -149,12 +142,10 @@ async fn full_text_read_rejects_invalid_utf8_while_binary_routes_preserve_it() {
     let target = fixture.path().join("binary.png");
     for contents in [&b"valid\xff"[..], &b"incomplete\xf0\x9f\x98"[..]] {
         std::fs::write(&target, contents).unwrap();
-        for endpoint in ["raw", "download"] {
-            let response = read(fixture.path(), endpoint, &target).await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let bytes = response.into_body().collect().await.unwrap().to_bytes();
-            assert_eq!(bytes, contents);
-        }
+        let response = read(fixture.path(), "raw", &target).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(bytes, contents);
         assert_json_error(
             read(fixture.path(), "read", &target).await,
             StatusCode::BAD_REQUEST,
@@ -173,7 +164,7 @@ async fn full_read_routes_preserve_exact_limits_and_response_headers() {
             .unwrap()
             .set_len(size as u64)
             .unwrap();
-        for endpoint in ["read", "raw", "download"] {
+        for endpoint in ["read", "raw"] {
             let response = read(fixture.path(), endpoint, &target).await;
             if size > FILE_LIMIT {
                 assert_json_error(response, StatusCode::PAYLOAD_TOO_LARGE).await;
@@ -186,14 +177,9 @@ async fn full_read_routes_preserve_exact_limits_and_response_headers() {
                 assert_eq!(response.headers()["content-type"], "image/png");
                 assert_eq!(response.headers()["cache-control"], "no-store");
                 let disposition = response.headers()["content-disposition"].to_str().unwrap();
-                let kind = if endpoint == "raw" {
-                    "inline"
-                } else {
-                    "attachment"
-                };
                 assert_eq!(
                     disposition,
-                    format!("{kind}; filename=\"__.png\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A.png")
+                    "inline; filename=\"__.png\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A.png"
                 );
             }
             let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -207,7 +193,7 @@ async fn full_read_routes_preserve_exact_limits_and_response_headers() {
 async fn full_read_routes_reject_missing_paths_and_nonfiles() {
     let _guard = FS_REQUEST_TESTS.acquire().await.unwrap();
     let fixture = tempfile::tempdir().unwrap();
-    for endpoint in ["read", "raw", "download"] {
+    for endpoint in ["read", "raw"] {
         assert_json_error(
             read(fixture.path(), endpoint, &fixture.path().join("missing")).await,
             StatusCode::NOT_FOUND,
@@ -226,7 +212,7 @@ async fn full_read_routes_reject_missing_paths_and_nonfiles() {
         let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
         // SAFETY: name is a NUL-terminated path owned for the duration of mkfifo.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-        for endpoint in ["read", "raw", "download"] {
+        for endpoint in ["read", "raw"] {
             assert_json_error(
                 tokio::time::timeout(
                     Duration::from_secs(2),

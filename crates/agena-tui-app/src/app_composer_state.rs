@@ -825,9 +825,6 @@ impl App {
             }
             UiAction::PasteClipboard => self.paste_from_clipboard(terminal),
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
-            UiAction::DownloadTerminalFile { path, remove_after } => {
-                self.download_terminal_file(terminal, &path, remove_after)
-            }
             UiAction::ExportTranscript { path } => {
                 self.request_transcript_export(path.as_deref());
                 Ok(())
@@ -1197,74 +1194,6 @@ impl App {
             ));
         }
         Ok(())
-    }
-
-    pub(crate) fn download_terminal_file(
-        &mut self,
-        terminal: &mut TerminalRuntime,
-        path: &Path,
-        remove_after: bool,
-    ) -> Result<()> {
-        let _cleanup = TemporaryDownloadCleanup::new(path, remove_after);
-        let context = terminal.context().clone();
-        let providers = download_providers(&context);
-        if providers.is_empty() {
-            self.flash_warning(format!(
-                "No verified terminal download provider is available. {}",
-                context.diagnostic_summary(&self.i18n)
-            ));
-            return Ok(());
-        }
-        let mut failures = Vec::new();
-        for provider in providers {
-            let result = terminal.with_suspended(SuspendReason::FileDownload, || {
-                request_download(provider, path)
-            })?;
-            match result {
-                Ok(()) => {
-                    self.flash_success(format!(
-                        "Downloaded {} through {}.",
-                        path.file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("file"),
-                        provider.label(),
-                    ));
-                    return Ok(());
-                }
-                Err(error) if error.allows_fallback() => {
-                    failures.push(format!("{}: {error}", provider.label()));
-                }
-                Err(error) => {
-                    self.flash_error(crate::UiFailure::internal(error));
-                    return Ok(());
-                }
-            }
-        }
-        self.flash_error(crate::UiFailure::internal(failures.join("; ")));
-        Ok(())
-    }
-}
-
-struct TemporaryDownloadCleanup(Option<std::path::PathBuf>);
-
-impl TemporaryDownloadCleanup {
-    fn new(path: &Path, remove_after: bool) -> Self {
-        Self(remove_after.then(|| path.to_path_buf()))
-    }
-}
-
-impl Drop for TemporaryDownloadCleanup {
-    fn drop(&mut self) {
-        if let Some(path) = self.0.take()
-            && let Err(error) = std::fs::remove_file(&path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %path.display(),
-                diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                "failed to remove a temporary TUI download"
-            );
-        }
     }
 }
 
@@ -1657,8 +1586,8 @@ use crate::{
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, I18n, Instant, Overlay, Path, PathBuf,
     PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
     attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
-    download_providers, edit_text, find_placeholder_occurrence, normalize_pasted_path, open_path,
-    request_download, set_clipboard_text, ui_text,
+    edit_text, find_placeholder_occurrence, normalize_pasted_path, open_path, set_clipboard_text,
+    ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;

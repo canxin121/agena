@@ -148,34 +148,6 @@ pub(crate) fn request_upload(
     }
 }
 
-pub(crate) fn request_download(remote_path: &Path) -> Result<(), ProviderError> {
-    let utility = transfer_utility().ok_or_else(|| {
-        ProviderError::DependencyMissing(
-            "Kitty transfer helper is unavailable or lacks the `transfer` subcommand".to_owned(),
-        )
-    })?;
-    let local_destination = env::var("AGENA_TUI_DOWNLOAD_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "Downloads/".to_owned());
-    let mut command = Command::new(utility);
-    command
-        .args(["transfer", "--confirm-paths"])
-        .arg("--")
-        .arg(remote_path)
-        .arg(local_destination);
-    let status = run_interactive(&mut command, "Kitty file download")?;
-    if status.success() {
-        Ok(())
-    } else if interrupted_status(status) {
-        Err(ProviderError::Cancelled)
-    } else {
-        Err(ProviderError::Protocol(
-            "Kitty file download failed or was rejected by the terminal".to_owned(),
-        ))
-    }
-}
-
 pub(crate) fn request_clipboard_image(destination: &Path) -> Result<(), ProviderError> {
     let utility = clipboard_utility().ok_or_else(|| {
         ProviderError::DependencyMissing(

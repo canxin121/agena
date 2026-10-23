@@ -215,7 +215,7 @@ export type ChatPageViewContext = {
   queuePaused: MaybeRef<boolean>
   queueBusy: MaybeRef<boolean>
   queueStopChoiceOpen: MaybeRef<boolean>
-  queueAction: (action: 'pause' | 'resume' | 'clear' | 'restore' | 'remove', executionId?: string) => Promise<void>
+  queueAction: (action: 'pause' | 'resume' | 'clear' | 'remove', executionId?: string) => Promise<void>
   keepQueueStopped: () => void
   showComposerStopAction: MaybeRef<boolean>
   composerStopDisabled: MaybeRef<boolean>

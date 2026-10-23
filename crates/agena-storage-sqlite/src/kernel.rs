@@ -54,6 +54,8 @@ mod prompt;
 #[cfg(test)]
 mod prompt_tests;
 #[cfg(test)]
+mod queue_edit_tests;
+#[cfg(test)]
 mod tool_draft_tests;
 pub use metrics::{KernelDiagnostics, KernelMetricsSnapshot};
 #[cfg(test)]
@@ -1978,6 +1980,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Metadata { session, .. }
         | Command::Selection { session, .. }
         | Command::Send { session, .. }
+        | Command::EditQueued { session, .. }
         | Command::Claim { session, .. }
         | Command::ClaimNext { session, .. }
         | Command::Cancel { session, .. }
@@ -2089,6 +2092,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         }
         Command::Send { session, .. } => (*session, ChangeKind::Membership),
         Command::Claim { session, .. }
+        | Command::EditQueued { session, .. }
         | Command::ClaimNext { session, .. }
         | Command::Cancel { session, .. }
         | Command::CancelQueued { session, .. }

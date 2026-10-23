@@ -697,48 +697,6 @@ impl App {
         self.sync_composer_suggestions();
     }
 
-    /// Restore a document removed from the server queue into the editor.
-    /// The editor is captured without clearing it, so attachments that are
-    /// still being prepared keep their placeholders.
-    pub(crate) fn restore_queued_message_into_editor(&mut self, combined: ComposerDraft) {
-        // Capture the editor WITHOUT the pending-media substitution used for
-        // submission: a still-preparing placeholder must keep its anchor so the
-        // upload can replace it instead of being dropped without a trace.
-        self.sync_composer_items_with_editor();
-        let mut existing = ComposerDraft {
-            document: composer_document_from_editor(
-                self.composer.text(),
-                self.composer.draft_elements().as_slice(),
-                self.composer_items.as_slice(),
-            ),
-        };
-        let existing_render = existing.render_text(&self.i18n);
-        if !existing_render.is_empty() && !existing_render.ends_with('\n') {
-            existing.document.0.push(agena_domain::ComposerNode::Text {
-                text: "
-
-"
-                .to_owned(),
-            });
-        }
-        existing.document.0.extend(combined.document.0);
-        let (text, mut elements, items) = rebuild_placeholders(existing.document, &self.i18n);
-        for pending in self
-            .composer_items
-            .iter()
-            .filter(|item| !item.is_completed())
-        {
-            if let Some(range) = find_placeholder_occurrence(&text, &pending.placeholder, &elements)
-            {
-                elements.push(range);
-            }
-        }
-        self.composer.set_text(text);
-        self.composer.set_elements(elements);
-        self.composer_items = items;
-        self.sync_composer_suggestions();
-    }
-
     pub(crate) fn apply_external_editor_text(&mut self, text: String) {
         let mut occupied = Vec::new();
         let mut retained = Vec::new();
@@ -1299,7 +1257,7 @@ fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivi
 /// Capture the composer document from the editor projection. Completed items
 /// contribute their activity payload; items still preparing contribute only
 /// their recovery text, so a draft never persists a provisional part.
-fn composer_document_from_editor(
+pub(crate) fn composer_document_from_editor(
     text: &str,
     element_ranges: &[std::ops::Range<usize>],
     items: &[ComposerItem],
@@ -1351,7 +1309,7 @@ fn composer_document_from_editor(
 /// disambiguated here — otherwise `sync_composer_items_with_editor` would match
 /// both elements to one item and the second placeholder would degrade into
 /// literal body text on send.
-fn rebuild_placeholders(
+pub(crate) fn rebuild_placeholders(
     document: agena_domain::ComposerDocument,
     i18n: &I18n,
 ) -> (String, Vec<std::ops::Range<usize>>, Vec<ComposerItem>) {

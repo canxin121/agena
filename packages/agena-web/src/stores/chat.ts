@@ -1122,7 +1122,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
-    queuedComposerDocumentsBySession.value = {}
     transcriptCacheGeneration += 1
     transcriptObservations.clear()
     transcriptRecovery.clear()
@@ -1683,7 +1682,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
-    delete queuedComposerDocumentsBySession.value[sid]
     transcriptCache.remove(sid)
     evictedTranscriptSessions.delete(sid)
     transcriptObservations.delete(sid)
@@ -1998,26 +1996,30 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  const queuedComposerDocumentsBySession = ref<Record<string, JsonValue[]>>({})
-  function getQueuedComposerDocuments(sid: string) {
-    return queuedComposerDocumentsBySession.value[sid] || []
-  }
-  function consumeQueuedComposerDocuments(sid: string) {
-    delete queuedComposerDocumentsBySession.value[sid]
-  }
-
-  async function takeQueuedMessage(sid: string, executionId: string, restore: boolean) {
+  async function editQueuedMessage(sid: string, executionId: string, revision: number, document: JsonValue) {
     const generation = transcriptCacheGeneration
     try {
-      const document = await chatApi.takeQueuedMessage(sid, executionId)
-      // Keep successful take results independently of later refresh failures or
-      // session switches. A mounted composer consumes its own documents only.
-      if (restore && generation === transcriptCacheGeneration && !deletedSessions.has(sid))
-        queuedComposerDocumentsBySession.value[sid] = [...getQueuedComposerDocuments(sid), document]
-      return document
+      const state = await chatApi.editQueuedMessage(sid, executionId, revision, document)
+      if (applyExecutionResource(state, generation)) {
+        // Queue identities remain stable; explicitly refresh their edited bodies.
+        const queue = state.queued_messages || []
+        const ids = queue.map((item) => item.message_id)
+        if (ids.length) {
+          await reconcileLoadedParts(sid, ids.map(String)).catch(() => messageRevalidator(sid).invalidate(0))
+        }
+      }
     } finally {
       reconcileExecutionAfterWrite(sid)
-      await refreshExecutionStatus(sid).catch(() => {})
+    }
+  }
+
+  async function deleteQueuedMessage(sid: string, executionId: string) {
+    const generation = transcriptCacheGeneration
+    try {
+      const state = await chatApi.deleteQueuedMessage(sid, executionId)
+      if (applyExecutionResource(state, generation)) await reconcileExecutionParts(sid)
+    } finally {
+      reconcileExecutionAfterWrite(sid)
     }
   }
 
@@ -2474,10 +2476,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     renameSession,
     updateSessionMetadata,
     abortSession,
-    takeQueuedMessage,
+    editQueuedMessage,
+    deleteQueuedMessage,
     updateMessageQueue,
-    getQueuedComposerDocuments,
-    consumeQueuedComposerDocuments,
     sendText,
     sendMessage,
     continueSession,

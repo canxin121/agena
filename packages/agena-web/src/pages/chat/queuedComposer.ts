@@ -1,6 +1,5 @@
 import type { JsonValue, JsonObject } from '@/types/json'
 import type { AttachedFile } from './useChatAttachments'
-import type { ComposerSegment } from './composerInput'
 
 function asRecord(value: JsonValue): JsonObject {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -47,36 +46,4 @@ export function restoredComposerFiles(document: JsonValue): AttachedFile[] {
       },
     ]
   })
-}
-
-/** Merge a successful backend take without replacing the current draft. */
-export function appendQueuedComposerDocuments(
-  currentSegments: ComposerSegment[],
-  currentFiles: AttachedFile[],
-  documents: JsonValue[],
-) {
-  const segments = currentSegments.map((segment) => ({ ...segment }))
-  const files = [...currentFiles]
-  for (const document of documents) {
-    const restoredFiles = restoredComposerFiles(document)
-    const ids = new Set(files.map((file) => file.id))
-    files.push(...restoredFiles.filter((file) => !ids.has(file.id)))
-    if (segments.some((segment) => segment.type !== 'text' || segment.text))
-      segments.push({ type: 'text', text: '\n\n' })
-    let fileIndex = 0
-    if (Array.isArray(document))
-      for (const node of document) {
-        const item = asRecord(node)
-        if (item.type === 'text' && typeof item.text === 'string') segments.push({ type: 'text', text: item.text })
-        else if (item.type === 'activity') {
-          const file = restoredFiles[fileIndex++]
-          if (file) segments.push({ type: 'attachment', id: file.id })
-        }
-      }
-  }
-  const text = segments
-    .filter((segment): segment is Extract<ComposerSegment, { type: 'text' }> => segment.type === 'text')
-    .map((segment) => segment.text)
-    .join('')
-  return { segments, files, text }
 }

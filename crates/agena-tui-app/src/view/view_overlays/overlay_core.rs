@@ -50,6 +50,7 @@ impl App {
                     );
                 }
             }
+            Overlay::QueueEditor(dialog) => self.render_queue_editor(frame, area, dialog),
             Overlay::Choice(dialog) => {
                 agena_tui::choice::render_overlay(frame, area, &dialog.presentation, &self.i18n);
             }

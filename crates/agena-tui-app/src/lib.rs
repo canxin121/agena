@@ -237,6 +237,7 @@ mod app_plan_viewer;
 mod app_pointer;
 mod app_provider_runtime;
 mod app_provider_text;
+mod app_queue_editor;
 mod app_session_events;
 mod app_session_helpers;
 mod app_session_interactive;

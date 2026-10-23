@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { RiDeleteBinLine, RiEditLine, RiListOrdered2 } from '@remixicon/vue'
+import { ref, watch } from 'vue'
+import QueuedMessageEditor from './QueuedMessageEditor.vue'
 import { useI18n } from 'vue-i18n'
 import IconButton from '@/components/ui/IconButton.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import type { QueuedMessagePreview } from '@/pages/chat/queuedMessages'
 
-defineProps<{
+const props = defineProps<{
+  sessionId?: string | null
   messages: QueuedMessagePreview[]
   paused?: boolean
   busy?: boolean
   stopChoiceOpen?: boolean
 }>()
 const emit = defineEmits<{
-  restore: [executionId: string]
   remove: [executionId: string]
   clear: []
   pause: []
@@ -20,6 +22,13 @@ const emit = defineEmits<{
   keepStopped: []
 }>()
 const { t } = useI18n()
+const editing = ref('')
+watch(
+  () => props.sessionId,
+  () => {
+    editing.value = ''
+  },
+)
 </script>
 
 <template>
@@ -83,10 +92,10 @@ const { t } = useI18n()
           </p>
           <div class="flex shrink-0 items-center gap-0.5">
             <IconButton
-              :title="t('chat.page.queue.restore')"
-              :aria-label="t('chat.page.queue.restore')"
-              :disabled="busy || !message.executionId"
-              @click="emit('restore', message.executionId)"
+              :title="t('chat.page.queue.edit')"
+              :aria-label="t('chat.page.queue.edit')"
+              :disabled="busy || !message.executionId || !sessionId"
+              @click="editing = message.executionId"
             >
               <RiEditLine class="h-3.5 w-3.5" aria-hidden="true" />
             </IconButton>
@@ -103,6 +112,13 @@ const { t } = useI18n()
       </ol>
     </div>
   </section>
+  <QueuedMessageEditor
+    v-if="editing && sessionId"
+    :key="`${sessionId}:${editing}`"
+    :session-id="sessionId"
+    :execution-id="editing"
+    @close="editing = ''"
+  />
   <FormDialog
     :open="Boolean(stopChoiceOpen)"
     :title="t('chat.page.queue.stoppedTitle')"

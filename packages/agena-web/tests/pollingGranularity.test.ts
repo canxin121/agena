@@ -1760,7 +1760,7 @@ test('a settled transcript refresh keeps rendered identities and skips the page 
     }
   }))
 
-test('stop pauses the backend queue once, and queue management preserves documents for the right composer', () =>
+test('stop pauses the backend queue once, and in-place edits and deletion preserve the main draft', () =>
   withRuntime(async ({ tokens, calls, reply, setFetch, advance }) => {
     const sid = '99783'
     const key = `session:${sid}:state`
@@ -1808,14 +1808,21 @@ test('stop pauses the backend queue once, and queue management preserves documen
           paused = true
           return reply(key, { result: 'cancellation_requested' })
         }
-        if (url.pathname === `${path}/queue/${queue[0]?.execution_id}/take`) {
-          expect(typeof body.request_id).toBe('string')
-          queue = queue.slice(1)
-          return reply(key, recovered)
-        }
         if (url.pathname === `${path}/queue/pause`) paused = body.paused
         else if (url.pathname === `${path}/queue/clear`) queue = []
         else throw new Error(`Unexpected queue write ${url}`)
+        return reply(key, shell())
+      }
+      if (init?.method === 'PUT' || init?.method === 'DELETE') {
+        const body = JSON.parse(String(init.body))
+        expect(typeof body.request_id).toBe('string')
+        expect(url.pathname).toBe(`${path}/queue/${queue[0]?.execution_id}`)
+        if (init.method === 'PUT') {
+          expect(body.expected_revision).toBe(1)
+          expect(body.document).toEqual(recovered)
+        } else queue = queue.slice(1)
+        version++
+        tokens.set(key, `queue-controls:${version}`)
         return reply(key, shell())
       }
       if (url.pathname === `${path}/state`) return reply(key, shell())
@@ -1845,9 +1852,10 @@ test('stop pauses the backend queue once, and queue management preserves documen
     expect(chat.getSessionExecution(sid)?.queue_paused).toBe(true)
     expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(2)
     chat.setComposerDraft(sid, 'newer draft')
-    await complete(chat.takeQueuedMessage(sid, queue[0]!.execution_id, true))
-    expect(chat.getQueuedComposerDocuments(sid)).toEqual([recovered])
-    expect(chat.getQueuedComposerDocuments('different-session')).toEqual([])
+    const originalQueue = [...queue]
+    await complete(chat.editQueuedMessage(sid, queue[0]!.execution_id, 1, recovered))
+    expect(chat.getSessionExecution(sid)?.queued_messages).toEqual(originalQueue)
+    await complete(chat.deleteQueuedMessage(sid, queue[0]!.execution_id))
     expect(chat.getComposerDraft(sid)).toBe('newer draft')
     expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(1)
     await complete(chat.updateMessageQueue(sid, 'resume'))
@@ -1856,8 +1864,6 @@ test('stop pauses the backend queue once, and queue management preserves documen
     await complete(chat.updateMessageQueue(sid, 'clear'))
     expect(chat.getSessionExecution(sid)?.queue_paused).toBe(true)
     expect(chat.getSessionExecution(sid)?.queued_messages).toHaveLength(0)
-    expect(chat.getQueuedComposerDocuments(sid)).toEqual([recovered])
-    chat.consumeQueuedComposerDocuments(sid)
-    expect(chat.getQueuedComposerDocuments(sid)).toEqual([])
+    expect(chat.getComposerDraft(sid)).toBe('newer draft')
     expect(calls.some((url) => /\/(messages|continue)$/.test(url.pathname))).toBe(false)
   }))

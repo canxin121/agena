@@ -53,7 +53,7 @@ import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { queuedMessagePreviews } from './chat/queuedMessages'
-import { appendQueuedComposerDocuments, restoredComposerText, restoredComposerFiles } from './chat/queuedComposer'
+import { restoredComposerText, restoredComposerFiles } from './chat/queuedComposer'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
@@ -1136,42 +1136,13 @@ watch(
     stoppedQueueSessionId.value = null
   },
 )
-watch(
-  () => [chat.selectedSessionId, chat.getQueuedComposerDocuments(chat.selectedSessionId || '')] as const,
-  ([sid, documents]) => {
-    if (!sid || !documents.length) return
-    const currentSegments: ComposerSegment[] = composerRef.value?.getSegments?.() ?? [
-      { type: 'text', text: draft.value },
-      ...attachedFiles.value.map((file) => ({ type: 'attachment' as const, id: file.id })),
-    ]
-    const { segments, files, text } = appendQueuedComposerDocuments(currentSegments, attachedFiles.value, documents)
-    attachedFiles.value = files
-    draft.value = text
-    const filesSnapshot = attachedFiles.value
-    const pendingSnapshot = pendingAttachments.value
-    chat.consumeQueuedComposerDocuments(sid)
-    void nextTick(() => {
-      if (
-        chat.selectedSessionId !== sid ||
-        draft.value !== text ||
-        attachedFiles.value !== filesSnapshot ||
-        pendingAttachments.value !== pendingSnapshot
-      )
-        return
-      composerRef.value?.restoreSegments?.(segments)
-      getComposerInput(composerRef.value)?.focus()
-    })
-  },
-  { flush: 'post', immediate: true },
-)
 
-async function queueAction(action: 'pause' | 'resume' | 'clear' | 'restore' | 'remove', executionId = '') {
+async function queueAction(action: 'pause' | 'resume' | 'clear' | 'remove', executionId = '') {
   const sid = chat.selectedSessionId
   if (!sid || queueBusy.value) return
   queueBusy.value = true
   try {
-    if (action === 'restore' || action === 'remove')
-      await chat.takeQueuedMessage(sid, executionId, action === 'restore')
+    if (action === 'remove') await chat.deleteQueuedMessage(sid, executionId)
     else await chat.updateMessageQueue(sid, action)
     if (action === 'resume') stoppedQueueSessionId.value = null
   } catch (error) {

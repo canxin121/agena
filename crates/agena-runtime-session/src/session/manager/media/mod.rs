@@ -17,10 +17,35 @@ impl SessionManager {
         &self,
         session: SessionId,
         model: &ModelRef,
-        mut document: ComposerDocument,
+        document: ComposerDocument,
         request: RequestId,
     ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
-        if !document.0.iter().any(|node|matches!(node,ComposerNode::Activity{activity} if matches!(&activity.payload,ActivityPayload::Resource(resource) if resource.delivery==ResourceDelivery::ModelInput))){return Ok((document,Vec::new()));}
+        self.prepare_user_media_with_state(
+            session,
+            model,
+            document,
+            request,
+            self.state.load_full(),
+        )
+        .await
+    }
+
+    pub(super) async fn prepare_user_media_with_state(
+        &self,
+        session: SessionId,
+        model: &ModelRef,
+        mut document: ComposerDocument,
+        request: RequestId,
+        state: Arc<ExecutionState>,
+    ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
+        if !document.0.iter().any(|node| {
+            matches!(node, ComposerNode::Activity { activity }
+            if matches!(&activity.payload, ActivityPayload::Resource(resource)
+                if resource.delivery == ResourceDelivery::ModelInput
+                    || matches!(resource.reference, ResourceReference::Artifact { .. })))
+        }) {
+            return Ok((document, Vec::new()));
+        }
         #[cfg(test)]
         {
             let mut barrier = PREPARATION_BARRIER.lock().unwrap();
@@ -36,8 +61,7 @@ impl SessionManager {
             .acquire()
             .await
             .map_err(|_| AppError::Cancelled)?;
-        let state = self.state.load_full();
-        let context = self.execution_context_value(session).await?;
+        let context = self.execution_context_with_state(session, &state).await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let root = executor
             .workspace_root()
@@ -53,7 +77,9 @@ impl SessionManager {
             let ActivityPayload::Resource(resource) = &mut activity.payload else {
                 continue;
             };
-            if resource.delivery != ResourceDelivery::ModelInput {
+            if resource.delivery != ResourceDelivery::ModelInput
+                && !matches!(resource.reference, ResourceReference::Artifact { .. })
+            {
                 continue;
             }
             if blobs.len() >= media_input::MAX_MEDIA_INPUTS {
@@ -61,7 +87,7 @@ impl SessionManager {
                     "at most eight media resources may be sent in one message".into(),
                 ));
             }
-            let prepared = match &resource.reference {
+            let (prepared, existing_blob) = match &resource.reference {
                 ResourceReference::WorkspacePath { path } => {
                     let target = root.join(path).canonicalize().map_err(|error| {
                         AppError::Config(format!("selected attachment is unavailable: {error}"))
@@ -82,11 +108,12 @@ impl SessionManager {
                     let root = root.clone();
                     let path = path.clone();
                     let expected = activity.provenance.content_hash.clone();
-                    MEDIA_WORKERS
+                    let prepared = MEDIA_WORKERS
                         .run(move || media_input::read_local(&root, &path, expected.as_deref()))
                         .await
                         .map_err(|error| AppError::Internal(error.to_string()))?
-                        .map_err(AppError::Config)?
+                        .map_err(AppError::Config)?;
+                    (prepared, None)
                 }
                 ResourceReference::Artifact { uri, sha256 } => {
                     // Editing queued input preserves its frozen bytes, even
@@ -106,14 +133,19 @@ impl SessionManager {
                             "stored attachment size or checksum does not match".into(),
                         ));
                     }
+                    if resource.delivery == ResourceDelivery::Reference {
+                        blobs.push(reader.into_prepared());
+                        continue;
+                    }
                     let mut stored = Vec::with_capacity(reader.descriptor().byte_len as usize);
                     reader.copy_to(&mut stored).await.map_err(kernel_error)?;
                     let name = resource.name.clone();
-                    MEDIA_WORKERS
+                    let prepared = MEDIA_WORKERS
                         .run(move || media_input::from_bytes(&name, stored, None))
                         .await
                         .map_err(|error| AppError::Internal(error.to_string()))?
-                        .map_err(AppError::Config)?
+                        .map_err(AppError::Config)?;
+                    (prepared, Some(reader.into_prepared()))
                 }
                 _ => return Err(AppError::Config(
                     "model input must be a selected workspace file or a stored attachment in this session".into(),
@@ -131,9 +163,13 @@ impl SessionManager {
                 .validate_media_inputs(model, std::slice::from_ref(&bound))?;
             let blob_request =
                 request_key(&format!("media:{session:?}:{request}"), &index.to_string());
-            let blob = self
-                .prepare_immutable_blob(blob_request, session, &prepared.bytes)
-                .await?;
+            let blob = match existing_blob {
+                Some(blob) => blob,
+                None => {
+                    self.prepare_immutable_blob(blob_request, session, &prepared.bytes)
+                        .await?
+                }
+            };
             let mut attachment = bound;
             attachment.source = AttachmentSource::Base64 {
                 data: String::new(),

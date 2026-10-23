@@ -33,6 +33,7 @@ impl SessionManager {
         permit: OwnedSemaphorePermit,
         budget: Option<TaskBudget>,
     ) -> Arc<RunControl> {
+        let state = self.state.load_full();
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id) {
             return run.clone();
@@ -40,6 +41,8 @@ impl SessionManager {
         let run = Arc::new(RunControl {
             session: execution.session_id,
             execution: execution.id,
+            model: options.model.clone(),
+            state: state.clone(),
             cancel: self.shutdown.child_token(),
             phase: StdMutex::new(agena_domain::ExecutionPhase::Starting),
             done: Notify::new(),
@@ -58,7 +61,6 @@ impl SessionManager {
         };
         drop(active);
         let manager = self.clone();
-        let state = self.state.load_full();
         let result = run.clone();
         tokio::spawn(async move {
             let _permit = permit;

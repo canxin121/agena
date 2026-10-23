@@ -22,6 +22,7 @@ import {
 const props = defineProps<{
   draft: string
   fullscreen: boolean
+  hideExpand?: boolean
   modeLabel?: string
   attachedFiles: AttachedFile[]
   pendingAttachments: PendingAttachment[]
@@ -588,7 +589,7 @@ defineExpose({
       </div>
     </div>
     <slot name="overlay" />
-    <div class="absolute top-1 right-1 z-10 flex items-center gap-1">
+    <div v-if="!hideExpand" class="absolute top-1 right-1 z-10 flex items-center gap-1">
       <button
         tabindex="0"
         type="button"

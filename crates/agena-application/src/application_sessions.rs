@@ -471,6 +471,69 @@ impl Application {
         session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
+    pub async fn queued_message_for_edit(
+        &self,
+        session_id: i64,
+        execution: ExecutionId,
+    ) -> Result<agena_api::resource::QueuedMessageEditResource, ApplicationError> {
+        let session = crate::kernel_session_id(session_id)?;
+        let kernel = self.session_kernel()?;
+        let view = kernel
+            .reader
+            .execution(session, execution)
+            .await
+            .map_err(crate::kernel_error)?;
+        let entry = kernel
+            .reader
+            .entry(session, view.message_id)
+            .await
+            .map_err(crate::kernel_error)?;
+        if view.phase != agena_storage::kernel::ExecutionPhase::Queued || entry.execution_started {
+            return Err(ApplicationError::conflict(
+                "The message has already started or been removed.",
+            ));
+        }
+        let agena_storage::kernel::EntryPayload::User { document } = &entry.payload else {
+            return Err(ApplicationError::bad_request(
+                "The queued input is not a user message.",
+            ));
+        };
+        Ok(agena_api::resource::QueuedMessageEditResource {
+            execution_id: execution.0,
+            message_id: view.message_id.get(),
+            revision: entry.revision.get(),
+            document: document.clone(),
+        })
+    }
+
+    pub async fn edit_queued_message(
+        &self,
+        request: agena_runtime::session::SessionQueuedMessageEditRequest,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let session_id = request.session_id;
+        crate::session::validate_input_document(&request.document)?;
+        self.session_execution_services()?
+            .commands
+            .edit_queued_message(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(session_id).await
+    }
+
+    pub async fn delete_queued_message(
+        &self,
+        request: agena_domain::CommandId,
+        session_id: i64,
+        execution: ExecutionId,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        self.session_kernel()?
+            .sessions
+            .cancel_queued(request, crate::kernel_session_id(session_id)?, execution)
+            .await
+            .map_err(crate::kernel_error)?;
+        self.session_execution_resource(session_id).await
+    }
+
     /// Atomically remove unclaimed input and return its original document for
     /// optional editing. A racing claim returns a conflict without cancellation.
     pub async fn take_queued_message(

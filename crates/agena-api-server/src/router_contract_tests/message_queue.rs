@@ -279,3 +279,125 @@ async fn stopping_with_pending_input_keeps_the_queue_across_clients_until_resume
     server.server.abort();
     provider.abort();
 }
+
+#[tokio::test]
+async fn clients_edit_pending_input_in_place_and_conflicts_do_not_cancel_or_reorder_it() {
+    use agena_domain::{ComposerDocument, ComposerNode, ExecutionId};
+    let (release, held) = oneshot::channel();
+    let (provider_url, mut requests, provider) = spawn_fake_responses_provider(vec![
+        FakeProviderPlan {
+            events: terminal_response_events("active answer", "edit-active"),
+            release: Some(held),
+        },
+        FakeProviderPlan {
+            events: terminal_response_events("edited answer", "edit-next"),
+            release: None,
+        },
+    ])
+    .await;
+    let server = start_test_server(&provider_url).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let first = submit_test_run(&client, server.workspace_id, "active input").await;
+    let session = first.session.id;
+    tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    for text in ["original pending input", "delete this pending input"] {
+        client
+            .submit_message(SubmitRunParams {
+                session_id: session,
+                options: RunOptions::default(),
+                document: ComposerDocument(vec![ComposerNode::Text { text: text.into() }]),
+            })
+            .await
+            .unwrap();
+    }
+    let observer = AgenaClient::new(&server.url).unwrap();
+    let before = observer.get_session_state(session).await.unwrap();
+    let target = ExecutionId(before.queued_messages[0].execution_id);
+    let snapshot = observer
+        .queued_message_for_edit(session, target)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.document.text(), "original pending input");
+    let state = client
+        .edit_queued_message(
+            session,
+            target,
+            snapshot.revision,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "updated pending input".into(),
+            }]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state.queued_messages, before.queued_messages);
+    let updated = observer
+        .queued_message_for_edit(session, target)
+        .await
+        .unwrap();
+    assert_eq!(updated.message_id, snapshot.message_id);
+    assert_eq!(updated.revision, snapshot.revision + 1);
+    assert_eq!(updated.document.text(), "updated pending input");
+    let stale = observer
+        .edit_queued_message(
+            session,
+            target,
+            snapshot.revision,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "stale overwrite".into(),
+            }]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        stale.problem().unwrap().category,
+        agena_failure::FailureCategory::Conflict
+    );
+    let active = ExecutionId(first.receipt.unwrap().execution_id);
+    let started = observer
+        .edit_queued_message(
+            session,
+            active,
+            1,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "already started".into(),
+            }]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        started.problem().unwrap().category,
+        agena_failure::FailureCategory::Conflict
+    );
+    let after = observer
+        .delete_queued_message(session, ExecutionId(before.queued_messages[1].execution_id))
+        .await
+        .unwrap();
+    assert_eq!(after.queued_messages.len(), 1);
+    assert_eq!(after.queued_messages[0].message_id, snapshot.message_id);
+    let deleted = observer
+        .queued_message_for_edit(session, ExecutionId(before.queued_messages[1].execution_id))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        deleted.problem().unwrap().category,
+        agena_failure::FailureCategory::Conflict
+    );
+    assert!(requests.try_recv().is_err());
+    release.send(()).unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let prompt = serde_json::to_string(&next).unwrap();
+    assert!(prompt.contains("updated pending input"));
+    assert!(!prompt.contains("original pending input"));
+    assert!(!prompt.contains("delete this pending input"));
+    wait_for_execution(&observer, session, |state| {
+        state.session.state.active_execution().is_none()
+    })
+    .await;
+    provider.await.unwrap();
+}

@@ -1335,6 +1335,14 @@ pub struct QueuedMessageResource {
     pub message_id: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueuedMessageEditResource {
+    pub execution_id: uuid::Uuid,
+    pub message_id: i64,
+    pub revision: i64,
+    pub document: agena_domain::ComposerDocument,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionExecutionReceiptResource {
     pub execution_id: uuid::Uuid,

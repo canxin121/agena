@@ -128,38 +128,6 @@ impl App {
                 draft,
                 result,
             } => self.handle_session_turn_submitted(session_id, draft, result),
-            AppMessage::QueuedMessageTaken {
-                session_id,
-                restore,
-                result,
-            } => match result {
-                Ok(document) => {
-                    if restore {
-                        let draft = ComposerDraft { document };
-                        if self.transcript.session_id == Some(session_id) {
-                            self.restore_queued_message_into_editor(draft);
-                        } else {
-                            let slot = DraftSlot::Session(session_id);
-                            let mut saved = self.draft_store.get(slot).cloned().unwrap_or_default();
-                            if !saved.is_empty() && !draft.is_empty() {
-                                saved.document.0.push(agena_domain::ComposerNode::Text {
-                                    text: "\n\n".into(),
-                                });
-                            }
-                            saved.document.0.extend(draft.document.0);
-                            self.set_draft_for_slot(slot, saved);
-                            self.persist_draft_store_with_feedback(true);
-                        }
-                    } else {
-                        self.flash_success(ui_text::t(&self.i18n, "flash-pending-cancelled"));
-                    }
-                    self.request_refresh(session_id, true);
-                }
-                Err(error) => {
-                    self.flash_error(error);
-                    self.request_refresh(session_id, true);
-                }
-            },
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, RunOperation::Continue, result)
             }

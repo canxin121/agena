@@ -22,12 +22,8 @@ impl App {
                 execution_id,
             } => {
                 match choice_selection_value(&selection).as_str() {
-                    "restore" => {
-                        self.request_take_queued_message_by_id(session_id, execution_id, true)
-                    }
-                    "remove" => {
-                        self.request_take_queued_message_by_id(session_id, execution_id, false)
-                    }
+                    "edit" => self.request_edit_queued_message(session_id, execution_id),
+                    "remove" => self.request_delete_queued_message(session_id, execution_id),
                     _ => self.request_message_queue(session_id, false),
                 }
                 true

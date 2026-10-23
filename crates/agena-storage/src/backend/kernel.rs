@@ -138,6 +138,13 @@ pub enum Command {
         document: ComposerDocument,
         blobs: Vec<BlobLease>,
     },
+    EditQueued {
+        session: SessionId,
+        execution: ExecutionId,
+        expected_revision: EntryRevision,
+        document: ComposerDocument,
+        blobs: Vec<BlobLease>,
+    },
     Claim {
         session: SessionId,
         execution: ExecutionId,

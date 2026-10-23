@@ -125,9 +125,9 @@ impl App {
     ) {
         let items = vec![
             self.queue_choice(
-                "queue-restore",
-                ui_text::t(&self.i18n, "queue-restore-hint"),
-                "restore".into(),
+                "queue-edit",
+                ui_text::t(&self.i18n, "queue-edit-hint"),
+                "edit".into(),
             ),
             self.queue_choice("queue-remove", String::new(), "remove".into()),
             self.queue_choice("queue-back", String::new(), "back".into()),
@@ -281,7 +281,7 @@ mod tests {
                 .iter()
                 .map(|item| item.value.as_str())
                 .collect::<Vec<_>>(),
-            ["restore", "remove", "back"]
+            ["edit", "remove", "back"]
         );
     }
 
@@ -313,38 +313,5 @@ mod tests {
         assert_eq!(app.composer.text(), "new draft");
         assert!(app.transcript_footer_text().contains("Queue paused"));
         assert!(app.transcript_footer_text().contains("/queue"));
-    }
-}
-
-#[cfg(test)]
-mod restoration_tests {
-    use super::*;
-
-    #[test]
-    fn returning_stored_media_keeps_the_new_draft_and_uses_a_readable_attachment_label() {
-        let mut app = App::new_with_backend(
-            TuiBackend::remote_mock(),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        app.composer.set_text("new draft".to_owned());
-        let document = serde_json::from_value(serde_json::json!([
-            {"type":"text","text":"returned text"},
-            {"type":"activity","activity":{"id":"00000000-0000-0000-0000-000000000003","payload":{
-                "activity_type":"resource","delivery":"model_input","kind":"image","name":"saved-image.png",
-                "reference":{"reference_type":"artifact","uri":"agena:media:v1:internal-binding","sha256":"hash"}
-            }}}
-        ])).unwrap();
-        app.restore_queued_message_into_editor(ComposerDraft { document });
-        let restored = app.current_composer_draft();
-        assert!(restored.text().contains("new draft"));
-        assert!(restored.text().contains("returned text"));
-        assert!(app.composer.text().contains("saved-image.png"));
-        assert!(!app.composer.text().contains("internal-binding"));
-        assert!(
-            serde_json::to_string(&restored.document)
-                .unwrap()
-                .contains("agena:media:v1:internal-binding")
-        );
     }
 }

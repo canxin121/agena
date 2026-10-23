@@ -108,6 +108,20 @@ pub(super) fn command_bytes(command: &Command) -> Result<Vec<u8>> {
             document,
             blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
         )),
+        Command::EditQueued {
+            session,
+            execution,
+            expected_revision,
+            document,
+            blobs,
+        } => serde_json::to_vec(&(
+            "edit_queued",
+            session,
+            execution,
+            expected_revision,
+            document,
+            blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+        )),
         Command::CompleteTool {
             scope,
             tool,
@@ -350,7 +364,10 @@ pub(super) async fn publish(
         if lease.session != session {
             return Err(KernelError::Ownership);
         }
-        let row = check_pin(connection, *lease, true).await?;
+        // A retained read capability can republish an immutable attachment,
+        // including one inherited from a shared conversation segment. Opening
+        // the pin already checked membership in this session.
+        let row = check_pin(connection, *lease, false).await?;
         if row.try_get::<String, _>("state").map_err(storage)? != "ready" {
             return Err(KernelError::Conflict(
                 "blob preparation is not ready".into(),

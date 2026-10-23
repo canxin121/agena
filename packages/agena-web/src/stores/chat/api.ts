@@ -1220,20 +1220,51 @@ export async function compactSession(sessionId: string, options?: RunOptionsPayl
   return state
 }
 
-/** Conditional backend queue mutations; clients never dispatch pending items. */
-export async function takeQueuedMessage(sessionId: string, executionId: string): Promise<JsonValue> {
+export type QueuedMessageEdit = {
+  execution_id: string
+  message_id: number
+  revision: number
+  document: JsonValue
+}
+
+export function getQueuedMessageForEdit(sessionId: string, executionId: string): Promise<QueuedMessageEdit> {
+  return apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`)
+}
+
+export async function editQueuedMessage(
+  sessionId: string,
+  executionId: string,
+  revision: number,
+  document: JsonValue,
+): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
-  const document = await apiJson<JsonValue>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}/take`,
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`,
     {
-      method: 'POST',
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_revision: revision, document }),
+    },
+  )
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
+}
+
+export async function deleteQueuedMessage(sessionId: string, executionId: string): Promise<AgenaExecutionState> {
+  const scope = sessionRoutingScope()
+  const state = await apiJson<AgenaExecutionState>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`,
+    {
+      method: 'DELETE',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ request_id: crypto.randomUUID() }),
     },
   )
   reconcileSessionMutation(sessionId, 'execution', scope)
-  return document
+  return state
 }
+
+/** Conditional backend queue mutations; clients never dispatch pending items. */
 
 export async function updateMessageQueue(
   sessionId: string,

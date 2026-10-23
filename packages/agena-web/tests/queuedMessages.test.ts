@@ -150,7 +150,7 @@ test('queue renders as a bounded ordered preview, without ordinary message roles
     expect(html).toContain('&lt;script&gt;')
     expect(html).not.toContain('<script>')
     expect(html).not.toContain('data-message-role')
-    expect(html).toContain('取回输入框编辑')
+    expect(html).toContain('编辑待发消息')
     expect(html).toContain('删除这条待发消息')
     expect(html).toContain('清空队列')
     expect(html).toContain('暂停队列')

@@ -1,4 +1,13 @@
-/// Input for creating a persisted session.
+/// Conditionally update a queued message in place, preserving its FIFO identity.
+#[derive(Debug, Clone)]
+pub struct SessionQueuedMessageEditRequest {
+    pub request_id: agena_domain::CommandId,
+    pub session_id: i64,
+    pub execution_id: agena_domain::ExecutionId,
+    pub expected_revision: i64,
+    pub document: agena_domain::ComposerDocument,
+}
+
 #[derive(Debug, Clone)]
 /// Request to create a session.
 pub struct SessionCreateRequest {

@@ -443,6 +443,12 @@ pub fn router(state: AppState) -> Router {
                 post(rest::ask_btw).layer(DefaultBodyLimit::max(32 * 1024)),
             )
             .route(
+                "/api/v1/sessions/{session_id}/queue/{execution_id}",
+                get(rest::queued_message_for_edit)
+                    .put(rest::edit_queued_message)
+                    .delete(rest::delete_queued_message),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/queue/{execution_id}/take",
                 post(rest::take_queued_message),
             )

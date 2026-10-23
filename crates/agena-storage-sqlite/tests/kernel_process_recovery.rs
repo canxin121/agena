@@ -147,6 +147,7 @@ struct CompactionEvidence {
     checkpoint: EntryId,
     summary: ContentStreamView,
     suffix: Vec<EntryId>,
+    queued: ExecutionView,
     unfinished_round: RoundId,
     unfinished_summary: ContentId,
 }
@@ -232,7 +233,8 @@ async fn compaction_fixture(ports: &KernelPorts, workspace: i64) -> CompactionEv
         execution,
         checkpoint,
         summary,
-        suffix: vec![users[2], late.message_id],
+        suffix: vec![users[2]],
+        queued: late,
         unfinished_round: unfinished.id(),
         unfinished_summary: pending.id(),
     }
@@ -592,6 +594,48 @@ fn killed_kernel_recovers_committed_facts_and_interrupts_pending_authorization()
             .await
             .unwrap();
         assert_eq!(text.bytes, "durable compaction 世界\n\0".as_bytes());
+        // Recovery preserves later queued input without injecting it into
+        // this retried execution. It becomes visible to its own next round.
+        assert_eq!(
+            ports
+                .reader
+                .execution(compact.session, compact.queued.id)
+                .await
+                .unwrap()
+                .phase,
+            ExecutionPhase::Queued
+        );
+        next.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let pending = ports
+            .executor
+            .claim(RequestId::new(), compact.session, compact.queued.id)
+            .await
+            .unwrap()
+            .value;
+        let pending_round = pending
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let pending_prompt = pending_round.prompt().await.unwrap();
+        assert!(
+            pending_prompt
+                .entries
+                .iter()
+                .any(|entry| entry.entry.id == compact.queued.message_id)
+        );
+        pending_round
+            .finish(RequestId::new(), None, true)
+            .await
+            .unwrap();
+        pending
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
         assert_eq!(
             ports
                 .reader

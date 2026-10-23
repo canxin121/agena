@@ -118,9 +118,9 @@ session / execution / background-activity / notification 的状态类型只有�
 事件分页只共享已校验的不可变物理块与仍有效的授权 context；缓存和块定位索引共同受 16 MiB / 2,048 entries 的上限及写入 COMMIT fence 管理，不保存整个 source 的目录。open head 每次实时捕获，小页只截取所需尾部；缓存不会把旧 accepted/committed head 当作当前事实。跨提交、撤权或裁剪的竞态会重新验证或明确重试，过期 epoch 和已删除前缀继续返回 reset/gap。frozen provider 输入仍按原 committed boundary 读取，后续追加不会进入该输入。
 
 - 用户发送将真实 user EntryId、输入文档、附件 blob 引用和 queued attempt 一起提交后确认。
-- AI 工作中继续发送也使用同一提交接口；后端按已提交的用户 EntryId FIFO 调度，等待当前整次 execution（含工具、交互等待和后续模型轮次）结束。后续待发消息不会提前进入当前 execution 的 prompt，模型历史按消息归属恢复为 user / assistant / user 顺序。Web 与 TUI 只提交和展示服务端 `queued_messages` / `queue_paused`，不保留自行触发发送的客户端队列。停止先持久化暂停标记、再取消 running，保留 queued；writer Claim 和后台恢复都服从该标记，只有显式恢复才继续 FIFO。两端停止后提供继续或保留队列的选择，并提供取回编辑、单条删除、清空及暂停/恢复。
+- AI 工作中继续发送也使用同一提交接口；后端按已提交的用户 EntryId FIFO 调度，等待当前整次 execution（含工具、交互等待和后续模型轮次）结束。后续待发消息不会提前进入当前 execution 的 prompt，模型历史按消息归属恢复为 user / assistant / user 顺序。Web 与 TUI 只提交和展示服务端 `queued_messages` / `queue_paused`，不保留自行触发发送的客户端队列。停止先持久化暂停标记、再取消 running，保留 queued；writer Claim 和后台恢复都服从该标记，只有显式恢复才继续 FIFO。两端停止后提供继续或保留队列的选择，并提供独立弹窗原位编辑（含附件）、单条删除、清空及暂停/恢复。
 - `/runs` 按 part 的 `message_id` 归属提供正式对话分页，不把尚未认领或未认领即撤回的 user entry 计入消息窗口及导航总数。队列正文根据服务端 `queued_messages` 的明确身份读取，在 Web 输入框上方 / TUI footer 单独显示。`content.queue_only` 区分待发或撤回的原始输入与已使用过的用户回合；queued retry 不会隐藏先前已执行的输入。part revision 也覆盖 attempt generation 与执行阶段推进，确保认领后客户端能清除 pending 缓存。
-- 未认领的 queued 输入在正常关闭及服务重启后保留并由后端恢复；新提交入口也先恢复同会话已持久化的队列，避免抢在后台扫描之前越序。`POST /api/v1/sessions/{session_id}/queue/{execution_id}/take` 以 `request_id` 幂等地移除仍为 queued 的消息并返回原文档；已被认领或已移除时返回 HTTP 409，不能取消正在运行的执行。详细语义与调研见 [消息队列](message-queue.md)。
+- 未认领的 queued 输入在正常关闭及服务重启后保留并由后端恢复；新提交入口也先恢复同会话已持久化的队列，避免抢在后台扫描之前越序。`GET /api/v1/sessions/{session_id}/queue/{execution_id}` 返回原文档及 revision；同路径 `PUT` 以 `request_id` 和 `expected_revision` 条件更新从未开始、未冻结且未共享的 queued 输入，保留消息身份与 FIFO，原子替换正文和附件引用；`DELETE` 幂等地移除仍为 queued 的消息。已被认领、已移除或版本冲突时返回 HTTP 409，不能修改正在运行或已经使用过的输入。详细语义与调研见 [消息队列](message-queue.md)。
 - 助手消息使用该 generation 第一条真实 assistant entry 作为稳定边界；后续正文、推理和工具属于同一 response。重试创建新 generation，历史响应身份不变。
 - 压缩使用独立 provider round 与不可变摘要源；只有成功的 `commit_compaction` 才同时提交 checkpoint、覆盖边界与 prompt-window generation。失败、取消及 unchanged 保留原窗口。
 - 普通 provider 请求在 round 开始时冻结 entry revision、tool/interaction 决定、capture head 与 opaque replay。后续正文或后台通知不会改写已经构造的请求。

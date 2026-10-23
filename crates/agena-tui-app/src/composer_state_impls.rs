@@ -16,20 +16,6 @@ impl ComposerDraft {
         self.document.text()
     }
 
-    pub(crate) fn render_text(&self, i18n: &I18n) -> String {
-        self.document
-            .0
-            .iter()
-            .map(|node| match node {
-                ComposerNode::Text { text } => text.clone(),
-                ComposerNode::Activity { activity } => {
-                    composer_activity_presentation(&activity.payload, i18n).0
-                }
-            })
-            .collect::<Vec<_>>()
-            .concat()
-    }
-
     pub(crate) fn activities(&self) -> impl Iterator<Item = &agena_domain::ComposerActivity> {
         self.document.0.iter().filter_map(|node| match node {
             ComposerNode::Activity { activity } => Some(activity.as_ref()),

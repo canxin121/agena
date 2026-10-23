@@ -582,10 +582,10 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           </div>
           <QueuedMessages
             :messages="queuedMessages"
+            :session-id="chat.selectedSessionId"
             :paused="queuePaused"
             :busy="queueBusy"
             :stop-choice-open="queueStopChoiceOpen"
-            @restore="queueAction('restore', $event)"
             @remove="queueAction('remove', $event)"
             @clear="queueAction('clear')"
             @pause="queueAction('pause')"

@@ -686,11 +686,6 @@ pub(super) enum AppMessage {
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     },
-    QueuedMessageTaken {
-        session_id: i64,
-        restore: bool,
-        result: UiResult<agena_domain::ComposerDocument>,
-    },
     SessionContinued {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
@@ -999,6 +994,7 @@ pub(super) enum Overlay {
     SessionRename(LineInputOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
     Choice(ChoiceOverlay),
+    QueueEditor(crate::app_queue_editor::QueueEditorOverlay),
     PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
     Confirm(ConfirmOverlay),

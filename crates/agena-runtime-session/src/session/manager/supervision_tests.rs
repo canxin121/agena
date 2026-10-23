@@ -3054,6 +3054,7 @@ async fn clearing_pending_messages_does_not_cancel_the_current_provider() {
 
 #[tokio::test]
 async fn editing_a_queued_media_input_preserves_frozen_bytes_and_session_ownership() {
+    use crate::SessionExecutionCommandService;
     use base64::Engine as _;
     let fixture = Fixture::new(1).await;
     let bytes = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==").unwrap();
@@ -3095,13 +3096,6 @@ async fn editing_a_queued_media_input_preserves_frozen_bytes_and_session_ownersh
     let EntryPayload::User { document } = &entry.payload else {
         panic!("queued media document")
     };
-    fixture
-        .manager
-        .kernel()
-        .sessions
-        .cancel_queued(RequestId::new(), session, queued.execution_id)
-        .await
-        .unwrap();
     tokio::fs::remove_file(fixture._root.path().join("input.png"))
         .await
         .unwrap();
@@ -3125,15 +3119,198 @@ async fn editing_a_queued_media_input_preserves_frozen_bytes_and_session_ownersh
             .is_err(),
         "a stored media URI must not grant another session blob access"
     );
+    let mut edited = document.clone();
+    edited.0.insert(
+        0,
+        ComposerNode::Text {
+            text: "updated media instruction".into(),
+        },
+    );
+    for node in &mut edited.0 {
+        if let ComposerNode::Activity { activity } = node
+            && let agena_domain::ActivityPayload::Resource(resource) = &mut activity.payload
+        {
+            resource.name = "renamed-image.png".into();
+        }
+    }
+    let request = crate::SessionQueuedMessageEditRequest {
+        request_id: RequestId::new(),
+        session_id: fixture.session.id,
+        execution_id: queued.execution_id,
+        expected_revision: entry.revision.get(),
+        document: edited.clone(),
+    };
     fixture
         .manager
-        .submit(crate::SessionUserRunRequest::new(
-            fixture.session.id,
-            fixture.options(),
-            document.clone(),
-        ))
+        .edit_queued_message(request.clone())
         .await
         .unwrap();
+    fixture.manager.edit_queued_message(request).await.unwrap();
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, execution.message_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        saved.revision.get(),
+        entry.revision.get() + 1,
+        "replay must not write twice"
+    );
+    let original_blobs = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry_blobs(session, execution.message_id)
+        .await
+        .unwrap();
+    let blob_id = original_blobs[0].id;
+    let agena_storage::kernel::EntryPayload::User {
+        document: saved_document,
+    } = &saved.payload
+    else {
+        panic!("saved media")
+    };
+    let mut reference_only = saved_document.clone();
+    for node in &mut reference_only.0 {
+        if let ComposerNode::Activity { activity } = node
+            && let agena_domain::ActivityPayload::Resource(resource) = &mut activity.payload
+        {
+            resource.delivery = agena_domain::ResourceDelivery::Reference;
+        }
+    }
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: saved.revision.get(),
+            document: reference_only,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .entry_blobs(session, execution.message_id)
+            .await
+            .unwrap()[0]
+            .id,
+        blob_id
+    );
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: saved.revision.get() + 1,
+            document: saved_document.clone(),
+        })
+        .await
+        .unwrap();
+    let mut invalid = saved_document.clone();
+    invalid.0.extend(image_document().0); // original file is gone
+    assert!(
+        fixture
+            .manager
+            .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+                request_id: RequestId::new(),
+                session_id: fixture.session.id,
+                execution_id: queued.execution_id,
+                expected_revision: saved.revision.get() + 2,
+                document: invalid,
+            })
+            .await
+            .is_err()
+    );
+    let after_failure = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, execution.message_id)
+        .await
+        .unwrap();
+    assert_eq!(after_failure.revision.get(), saved.revision.get() + 2);
+    assert_eq!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .entry_blobs(session, execution.message_id)
+            .await
+            .unwrap()[0]
+            .id,
+        blob_id
+    );
+    tokio::fs::write(fixture._root.path().join("input.png"), &bytes)
+        .await
+        .unwrap();
+    let mut with_added_file = saved_document.clone();
+    let new_file = image_document().0.pop().unwrap();
+    with_added_file.0.push(new_file);
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: after_failure.revision.get(),
+            document: with_added_file,
+        })
+        .await
+        .unwrap();
+    let added = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, execution.message_id)
+        .await
+        .unwrap();
+    let EntryPayload::User {
+        document: with_two_files,
+    } = &added.payload
+    else {
+        panic!("two files")
+    };
+    let two_blobs = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry_blobs(session, execution.message_id)
+        .await
+        .unwrap();
+    assert_eq!(two_blobs.len(), 2);
+    assert_eq!(two_blobs[0].id, blob_id);
+    let replacement_id = two_blobs[1].id;
+    assert_ne!(replacement_id, blob_id);
+    let mut replaced = with_two_files.clone();
+    replaced.0.retain(|node| !matches!(node, ComposerNode::Activity { activity }
+        if matches!(&activity.payload, agena_domain::ActivityPayload::Resource(resource) if resource.name == "renamed-image.png")));
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: added.revision.get(),
+            document: replaced,
+        })
+        .await
+        .unwrap();
+    let final_blobs = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry_blobs(session, execution.message_id)
+        .await
+        .unwrap();
+    assert_eq!(final_blobs.len(), 1);
+    assert_eq!(final_blobs[0].id, replacement_id);
     fixture.idle(fixture.session.id).await;
     fixture
         .manager
@@ -3144,6 +3321,154 @@ async fn editing_a_queued_media_input_preserves_frozen_bytes_and_session_ownersh
     let request = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[0]).unwrap();
     assert!(request.contains("iVBORw0KGgo"));
     fixture.finish(0, "edited media answer");
+    fixture.idle(fixture.session.id).await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn editing_queued_text_is_consumed_in_place_without_changing_fifo_or_the_active_prompt() {
+    use crate::SessionExecutionCommandService;
+    let fixture = Fixture::new(3).await;
+    fixture.submit("active input").await;
+    fixture.calls(1).await;
+    let queued = fixture.submit("old queued input").await.receipt.unwrap();
+    fixture.submit("last queued input").await;
+    let session = session_id(fixture.session.id).unwrap();
+    let original = fixture
+        .manager
+        .kernel()
+        .reader
+        .execution(session, queued.execution_id)
+        .await
+        .unwrap();
+    let entry = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, original.message_id)
+        .await
+        .unwrap();
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: entry.revision.get(),
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "edited queued input".into(),
+            }]),
+        })
+        .await
+        .unwrap();
+    let active = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[0]).unwrap();
+    assert!(!active.contains("queued input"));
+    fixture.finish(0, "active answer");
+    fixture.calls(2).await;
+    let next = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[1]).unwrap();
+    assert!(next.contains("edited queued input"));
+    assert!(!next.contains("old queued input"));
+    assert!(!next.contains("last queued input"));
+    fixture.finish(1, "edited answer");
+    fixture.calls(3).await;
+    let last = serde_json::to_string(&fixture.provider.requests.lock().unwrap()[2]).unwrap();
+    assert!(last.find("edited answer").unwrap() < last.find("last queued input").unwrap());
+    fixture.finish(2, "last answer");
+    fixture.idle(fixture.session.id).await;
+    let execution = fixture
+        .manager
+        .kernel()
+        .reader
+        .execution(session, queued.execution_id)
+        .await
+        .unwrap();
+    assert_eq!(execution.message_id, original.message_id);
+    assert_eq!(execution.phase, ExecutionPhase::Succeeded);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn editing_media_uses_the_queued_runs_model_after_later_submissions_switch_models() {
+    use crate::SessionExecutionCommandService;
+    use base64::Engine as _;
+    let fixture = Fixture::new(3).await;
+    let bytes = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==").unwrap();
+    tokio::fs::write(fixture._root.path().join("input.png"), &bytes)
+        .await
+        .unwrap();
+    fixture.submit("active input").await;
+    fixture.calls(1).await;
+    let queued = fixture
+        .manager
+        .submit(crate::SessionUserRunRequest::new(
+            fixture.session.id,
+            fixture.options(),
+            image_document(),
+        ))
+        .await
+        .unwrap()
+        .receipt
+        .unwrap();
+    let mut options = fixture.options();
+    options.model = ModelRef::try_new("fixture", "other-model").unwrap();
+    fixture
+        .manager
+        .submit(crate::SessionUserRunRequest::new(
+            fixture.session.id,
+            options,
+            document("later model input"),
+        ))
+        .await
+        .unwrap();
+    let session = session_id(fixture.session.id).unwrap();
+    let execution = fixture
+        .manager
+        .kernel()
+        .reader
+        .execution(session, queued.execution_id)
+        .await
+        .unwrap();
+    let entry = fixture
+        .manager
+        .kernel()
+        .reader
+        .entry(session, execution.message_id)
+        .await
+        .unwrap();
+    let EntryPayload::User { document } = &entry.payload else {
+        panic!("queued media")
+    };
+    fixture
+        .manager
+        .edit_queued_message(crate::SessionQueuedMessageEditRequest {
+            request_id: RequestId::new(),
+            session_id: fixture.session.id,
+            execution_id: queued.execution_id,
+            expected_revision: entry.revision.get(),
+            document: document.clone(),
+        })
+        .await
+        .unwrap();
+    fixture.finish(0, "active answer");
+    fixture.calls(2).await;
+    {
+        let requests = fixture.provider.requests.lock().unwrap();
+        let media_request = &requests[1];
+        assert_eq!(media_request.model, ModelId::new("model"));
+        assert!(
+            serde_json::to_string(media_request)
+                .unwrap()
+                .contains("iVBORw0KGgo"),
+            "editing must not bind the image to the later message's model"
+        );
+    }
+    fixture.finish(1, "image answer");
+    fixture.calls(3).await;
+    assert_eq!(
+        fixture.provider.requests.lock().unwrap()[2].model,
+        ModelId::new("other-model")
+    );
+    fixture.finish(2, "other model answer");
     fixture.idle(fixture.session.id).await;
     fixture.close().await;
 }

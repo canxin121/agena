@@ -72,6 +72,11 @@ impl std::error::Error for SessionExecutionCommandError {}
 #[async_trait]
 /// Service that accepts session execution commands.
 pub trait SessionExecutionCommandService: Send + Sync {
+    async fn edit_queued_message(
+        &self,
+        request: crate::SessionQueuedMessageEditRequest,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
+
     async fn create_session(
         &self,
         request: crate::SessionCreateRequest,
@@ -169,6 +174,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionExecutionCommandService for FakeService {
+        async fn edit_queued_message(
+            &self,
+            request: crate::SessionQueuedMessageEditRequest,
+        ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
+        }
         async fn create_session(
             &self,
             _request: crate::SessionCreateRequest,

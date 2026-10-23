@@ -62,16 +62,26 @@ POST /api/v1/sessions/{session_id}/queue/clear
 
 ## 编辑与取消待发消息
 
-Web 每条待发消息都有取回编辑和删除操作，顶部提供暂停、恢复和清空。TUI 的 `/queue` 展示完整的有界待发列表，选择任意消息后可以取回编辑或删除，并提供暂停、恢复和清空；原有 Ctrl+P 取出队首、Ctrl+X 删除队首继续可用。单条操作调用：
+Web 每条待发消息都有编辑和删除操作，顶部提供暂停、恢复和清空。TUI 的 `/queue` 可以选择任意消息，在独立弹窗中编辑文字和附件；Ctrl+P 打开队首消息的编辑弹窗，Ctrl+X 删除队首。编辑保留消息及 FIFO 位置，不创建新的 execution，不使用主输入框。取消或关闭弹窗不写入后端。
 
 ```text
-POST /api/v1/sessions/{session_id}/queue/{execution_id}/take
+GET /api/v1/sessions/{session_id}/queue/{execution_id}
+→ { "execution_id": "…", "message_id": 42, "revision": 1, "document": [...] }
+
+PUT /api/v1/sessions/{session_id}/queue/{execution_id}
+{ "request_id": "<CommandId>", "expected_revision": 1, "document": [...] }
+
+DELETE /api/v1/sessions/{session_id}/queue/{execution_id}
 { "request_id": "<CommandId>" }
 ```
 
-服务端读取不可变原文档，随后在 writer 事务中执行 `CancelQueued`。只有 current attempt 仍为 queued 时才成功；它与 executor claim 共享串行写入边界。成功返回原始 `ComposerDocument`，历史中的 user part 标记为 cancelled。编辑后的发送是一次新的消息提交，排到当前队尾。取回结果在客户端归属于原会话，不覆盖请求期间输入的新草稿；文字、附件和输入位置一起合并。图片等 model-input 资源保留原有不可变引用，再次发送时后端按会话 membership 校验 blob、校验大小及摘要、重新验证媒体格式并绑定当前模型；原 workspace 文件删除不影响取回后发送。其他会话不能凭该引用读取附件。
+PUT 与 DELETE 返回最新的 `SessionExecutionResource`。PUT 在同一个 writer 事务内检查 queued 状态、从未开始执行、预期 revision，以及输入没有被模型轮次冻结或共享至其他会话，然后更新同一个 user entry、递增 revision 并原子替换附件引用。Claim、删除、清空和其他客户端编辑都与该事务串行；失败不改变正文或附件。
 
-若 claim 先完成，接口返回 HTTP 409 并保持运行中的执行。若另一个客户端先取出消息，也返回冲突。相同 `request_id` 的成功重放保持幂等。客户端收到冲突后重新读取服务端状态。
+Web 弹窗复用独立的 Composer，支持输入、粘贴、拖入与选择文件，并提供附件名称、发送方式、替换和删除控件。TUI 弹窗提供独立文字编辑区、附件列表和服务端工作区文件路径编辑；Tab 切换区域，附件区 Enter/r 替换、a 新增、n 改名、p 切换发送方式、Delete 删除，Ctrl+S 保存，Esc 取消。资源之外的结构化活动保留原文档，可删除，不转换成文件。
+
+编辑保留附件在文档中的位置、结构化活动与来源信息。已保存的 model-input 图片等资源复用当前会话有权访问的不可变 blob，原工作区文件删除不影响后续编辑。改变名称或暂时改成文件引用仍保留 blob；重新改成模型输入时重新验证媒体格式与模型能力。仍在调度中的消息使用自己的模型与路由配置，后续消息切换模型不会改写前面待发附件的绑定。新文件沿用已有上传和媒体准备流程；保存失败保留弹窗内容，成功上传的文件可用于重试。其他会话不能凭资源 URI 读取附件。
+
+已开始的消息（包括 queued retry）、已移除或版本冲突返回 HTTP 409，客户端保留尚未保存的编辑。成功请求按 `request_id` 幂等，重复请求不会再次递增 revision。旧的 `POST .../queue/{execution_id}/take` 保留供旧客户端兼容，当前 Web 和 TUI 不再调用。
 
 ## 回归验证
 
@@ -90,6 +100,7 @@ POST /api/v1/sessions/{session_id}/queue/{execution_id}/take
 - 停止回归：当前 provider 挂起、后续两条已提交时，停止只取消 running，pending 保持 queued；后台恢复不触发请求，显式恢复后逐条获得回复。
 - 清空回归：一次移除两条 pending，当前 provider 正常完成；幂等重放不移除后来提交的输入。
 - 持久化回归：文件 SQLite 关闭并重开后，queue_paused 和 queued 保持原样，Claim 被 writer 拒绝；显式恢复后可以领取。
-- 两端管理回归：Web 请求只操作服务端队列，取回内容按 session 保管；TUI 可以选择非队首项并保留新草稿，停止选择默认保留队列。
-- 附件回归：待发图片取出后删除原文件，再次提交仍使用已保存的字节；其他会话重用同一引用被拒绝。
+- 两端管理回归：Web 直接编辑和删除服务端队列；TUI 可选择非队首项并在弹窗编辑。主输入框草稿不变，停止选择默认保留队列。
+- 附件回归：待发图片的原文件删除后仍可原位改名和编辑，修改发送方式保留已保存的字节；失败不部分更新正文或附件，其他会话重用同一引用被拒绝。
 - 恢复顺序回归：暂停后恢复时，后续输入不能越过仍为 queued 的队首，也不能与 running attempt 同时领取；内存和文件 SQLite 执行相同检查。
+- 原位编辑回归：内存及文件 SQLite、运行时和独立 HTTP 客户端验证原消息身份、FIFO、revision 冲突与幂等；已开始或共享输入拒绝修改。Web 保留内联附件顺序和结构化活动，TUI 独立弹窗修改文字及附件。

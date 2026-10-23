@@ -329,7 +329,7 @@ impl App {
                     return;
                 }
                 ComposerAction::EditQueue => {
-                    if self.try_pop_queue_into_editor() {
+                    if self.edit_first_queued_message() {
                         self.reset_prompt_history_recall();
                         self.after_composer_text_mutated();
                         return;
@@ -971,12 +971,12 @@ impl App {
     }
 
     /// Editing and dropping pending input are conditional backend mutations.
-    pub(crate) fn try_pop_queue_into_editor(&mut self) -> bool {
-        self.request_take_queued_message(true)
+    pub(crate) fn edit_first_queued_message(&mut self) -> bool {
+        self.request_first_queued_message_action(true)
     }
 
     pub(crate) fn cancel_pending_message(&mut self) {
-        if !self.request_take_queued_message(false) {
+        if !self.request_first_queued_message_action(false) {
             self.flash_info(ui_text::t(&self.i18n, "flash-no-pending-message"));
         }
     }

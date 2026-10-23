@@ -164,6 +164,59 @@ pub(super) async fn apply(
                 reads::execution(connection, *session, execution).await?.0,
             ))
         }
+        Command::EditQueued {
+            session,
+            execution,
+            expected_revision,
+            document,
+            blobs,
+        } => {
+            let (view, _) = reads::execution(connection, *session, *execution).await?;
+            let (revision, started): (i64, bool) = sqlx::query_as("SELECT revision,EXISTS(SELECT 1 FROM agena_attempts a WHERE a.execution_id=? AND a.started_at_ms IS NOT NULL) FROM agena_entries WHERE id=?")
+                .bind(execution.to_string()).bind(view.message_id.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if view.phase != ExecutionPhase::Queued || started {
+                return Err(KernelError::Conflict(
+                    "the message has already started or been removed".into(),
+                ));
+            }
+            if revision != expected_revision.get() {
+                return Err(KernelError::Conflict(
+                    "the queued message was changed by another client".into(),
+                ));
+            }
+            let frozen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_round_inputs WHERE entry_id=?) OR EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE m.entry_id=? AND s.session_id!=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+                .bind(view.message_id.get()).bind(view.message_id.get()).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if frozen {
+                return Err(KernelError::Conflict(
+                    "the input is already shared with another conversation or model round".into(),
+                ));
+            }
+            let body = encode(document)?;
+            if document.is_empty() || body.len() > 256 * 1024 {
+                return Err(invalid("message must be nonempty and within 256 KiB"));
+            }
+            sqlx::query("UPDATE agena_entries SET body_json=?,revision=revision+1 WHERE id=?")
+                .bind(body)
+                .bind(view.message_id.get())
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            sqlx::query("DELETE FROM agena_blob_references WHERE entry_id=?")
+                .bind(view.message_id.get())
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            super::blobs::publish(connection, *session, view.message_id.get(), blobs).await?;
+            sqlx::query(
+                "UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?",
+            )
+            .bind(now)
+            .bind(session.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            Ok(Mutation::Execution(view))
+        }
         Command::Claim {
             session,
             execution,

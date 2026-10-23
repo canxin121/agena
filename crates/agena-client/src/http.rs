@@ -2287,6 +2287,44 @@ impl AgenaClient {
         .await
     }
 
+    pub async fn queued_message_for_edit(
+        &self,
+        session_id: i64,
+        execution: agena_domain::ExecutionId,
+    ) -> Result<agena_api::resource::QueuedMessageEditResource, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session_id}/queue/{execution}"))
+            .await
+    }
+
+    pub async fn edit_queued_message(
+        &self,
+        session_id: i64,
+        execution: agena_domain::ExecutionId,
+        expected_revision: i64,
+        document: agena_domain::ComposerDocument,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.put_json(&format!("/api/v1/sessions/{session_id}/queue/{execution}"),
+            serde_json::json!({"request_id": agena_domain::CommandId::new(), "expected_revision":expected_revision,"document":document}),
+        ).await
+    }
+
+    pub async fn delete_queued_message(
+        &self,
+        session_id: i64,
+        execution: agena_domain::ExecutionId,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        let body = serde_json::json!({"request_id": agena_domain::CommandId::new()});
+        let response = self
+            .send_request(
+                reqwest::Method::DELETE,
+                self.endpoint(&format!("/api/v1/sessions/{session_id}/queue/{execution}")),
+                Some(&body),
+                None,
+            )
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn set_message_queue_paused(
         &self,
         session_id: i64,

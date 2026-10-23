@@ -699,6 +699,61 @@ pub async fn clear_message_queue(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EditQueuedMessageRequest {
+    pub request_id: agena_domain::CommandId,
+    pub expected_revision: i64,
+    pub document: agena_domain::ComposerDocument,
+}
+
+pub async fn queued_message_for_edit(
+    State(state): State<AppState>,
+    Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .queued_message_for_edit(session_id, agena_domain::ExecutionId(execution_id))
+            .await?,
+    ))
+}
+
+pub async fn edit_queued_message(
+    State(state): State<AppState>,
+    Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
+    Json(request): Json<EditQueuedMessageRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .edit_queued_message(agena_runtime::session::SessionQueuedMessageEditRequest {
+                request_id: request.request_id,
+                session_id,
+                execution_id: agena_domain::ExecutionId(execution_id),
+                expected_revision: request.expected_revision,
+                document: request.document,
+            })
+            .await?,
+    ))
+}
+
+pub async fn delete_queued_message(
+    State(state): State<AppState>,
+    Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
+    Json(request): Json<TakeQueuedMessageRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .delete_queued_message(
+                request.request_id,
+                session_id,
+                agena_domain::ExecutionId(execution_id),
+            )
+            .await?,
+    ))
+}
+
 pub async fn take_queued_message(
     State(state): State<AppState>,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,

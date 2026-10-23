@@ -636,7 +636,7 @@ impl App {
         });
     }
 
-    pub(crate) fn request_take_queued_message(&mut self, restore: bool) -> bool {
+    pub(crate) fn request_first_queued_message_action(&mut self, edit: bool) -> bool {
         let Some(execution) = self.transcript.execution.as_ref() else {
             return false;
         };
@@ -645,32 +645,37 @@ impl App {
         };
         let session_id = execution.session.id;
         let execution_id = agena_domain::ExecutionId(queued.execution_id);
-        self.request_take_queued_message_by_id(session_id, execution_id, restore);
+        if edit {
+            self.request_edit_queued_message(session_id, execution_id);
+        } else {
+            self.request_delete_queued_message(session_id, execution_id);
+        }
         true
     }
 
-    pub(crate) fn request_take_queued_message_by_id(
+    pub(crate) fn request_delete_queued_message(
         &mut self,
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
-        restore: bool,
     ) {
-        let application = self.application.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = application
-                .client()
-                .take_queued_message(session_id, execution_id)
-                .await
-                .map_err(|error| crate::UiFailure::from_backend(error.into()));
-            let _ = tx
-                .send(AppMessage::QueuedMessageTaken {
-                    session_id,
-                    restore,
-                    result,
-                })
-                .await;
-        });
+        self.dispatch_backend_operation(
+            move |application| async move {
+                application
+                    .client()
+                    .delete_queued_message(session_id, execution_id)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(state) => {
+                    app.handle_session_execution_updated(session_id, state, true);
+                    app.request_refresh(session_id, true);
+                }
+                Err(error) => {
+                    app.flash_error(error);
+                    app.request_refresh(session_id, true);
+                }
+            },
+        );
     }
 
     pub(crate) fn request_continue(&mut self, session_id: i64) {

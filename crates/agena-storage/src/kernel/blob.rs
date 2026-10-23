@@ -68,6 +68,15 @@ pub struct BlobReader {
     pin: Arc<Pin>,
 }
 impl BlobReader {
+    /// Reuse an accessible immutable blob in a new entry revision. The read
+    /// capability retains its lifetime pin and session ownership checks.
+    pub fn into_prepared(self) -> PreparedBlob {
+        PreparedBlob {
+            descriptor: self.descriptor,
+            pin: self.pin,
+        }
+    }
+
     pub fn descriptor(&self) -> &BlobDescriptor {
         &self.descriptor
     }
@@ -159,6 +168,34 @@ async fn pin_blob(
 }
 
 impl SessionCommands {
+    /// Replace unclaimed input without changing its FIFO identity. Frozen or
+    /// previously executed input cannot be edited, including queued retries.
+    pub async fn edit_queued_with_blobs(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        expected_revision: EntryRevision,
+        document: ComposerDocument,
+        blobs: &[PreparedBlob],
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        let blobs = bindings(&self.0, session, blobs)?;
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::EditQueued {
+                        session,
+                        execution,
+                        expected_revision,
+                        document,
+                        blobs,
+                    },
+                )
+                .await?,
+        )
+    }
+
     /// Copy only bytes explicitly supplied by the caller. Local-path attachment
     /// references keep their existing semantics and are never implicitly read.
     /// Replaying a request reads and verifies the same stream/chunk identities.

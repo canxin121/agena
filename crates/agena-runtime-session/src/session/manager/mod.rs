@@ -59,6 +59,8 @@ struct TaskBudget {
 struct RunControl {
     session: SessionId,
     execution: ExecutionId,
+    model: ModelRef,
+    state: Arc<ExecutionState>,
     cancel: CancellationToken,
     phase: StdMutex<agena_domain::ExecutionPhase>,
     done: Notify,

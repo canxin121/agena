@@ -755,6 +755,72 @@ fn command_error(error: AppError) -> SessionExecutionCommandError {
 }
 #[async_trait::async_trait]
 impl SessionExecutionCommandService for SessionManager {
+    async fn edit_queued_message(
+        &self,
+        request: crate::SessionQueuedMessageEditRequest,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+        let session = session_id(request.session_id).map_err(command_error)?;
+        let revision = agena_storage::kernel::EntryRevision::try_from(request.expected_revision)
+            .map_err(|error| command_error(AppError::Config(error.to_string())))?;
+        let dispatch = self.session_dispatch(session);
+        let _submission = dispatch.submission.lock().await;
+        // Later submissions can select another model. Edit attachments using
+        // the route the queued supervisor will actually run, rather than the
+        // session's most recently selected model or reloaded provider config.
+        let supervised = self
+            .active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&request.execution_id)
+            .filter(|run| run.session == session)
+            .map(|run| (run.model.clone(), run.state.clone()));
+        let (model, state) = match supervised {
+            Some(value) => value,
+            None => {
+                let metadata = self
+                    .kernel()
+                    .reader
+                    .metadata(session)
+                    .await
+                    .map_err(|error| command_error(kernel_error(error)))?;
+                let options = self
+                    .options_for_selection(&metadata.selection.clone().unwrap_or_default())
+                    .map_err(command_error)?;
+                (options.model, self.state.load_full())
+            }
+        };
+        let (document, blobs) = self
+            .prepare_user_media_with_state(
+                session,
+                &model,
+                request.document,
+                request.request_id,
+                state,
+            )
+            .await
+            .map_err(command_error)?;
+        persist(|| {
+            self.kernel().sessions.edit_queued_with_blobs(
+                request.request_id,
+                session,
+                request.execution_id,
+                revision,
+                document.clone(),
+                &blobs,
+            )
+        })
+        .await
+        .map_err(|error| {
+            command_error(match error {
+                KernelError::Conflict(message) => AppError::PersistenceConflict(message),
+                other => kernel_error(other),
+            })
+        })?;
+        Ok(SessionExecutionCommandOutcome::completed(
+            request.session_id,
+        ))
+    }
+
     async fn create_session(
         &self,
         r: SessionCreateRequest,

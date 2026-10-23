@@ -441,17 +441,30 @@ verify_checksum() {
   fi
 }
 
-profile_file() {
+managed_profile_files() {
+  local zdotdir="${ZDOTDIR:-$HOME}"
   case "${SHELL:-}" in
-    */zsh) printf '%s/.zshenv' "${ZDOTDIR:-$HOME}" ;;
-    *) printf '%s/.profile' "$HOME" ;;
+    */zsh) printf '%s\n' "$zdotdir/.zshenv" "$zdotdir/.zshrc" ;;
+    *) printf '%s\n' "$HOME/.profile" ;;
   esac
+}
+
+profile_file() {
+  managed_profile_files | tail -n 1
 }
 
 profile_files() {
   local zdotdir="${ZDOTDIR:-$HOME}"
   printf '%s\n' "$HOME/.profile" "$HOME/.zprofile" "$zdotdir/.zshenv" "$zdotdir/.zshrc" |
     awk '!seen[$0]++'
+}
+
+is_managed_profile_file() {
+  local candidate="$1" managed
+  while IFS= read -r managed; do
+    [[ "$candidate" == "$managed" ]] && return 0
+  done < <(managed_profile_files)
+  return 1
 }
 
 remove_managed_block() {
@@ -472,21 +485,22 @@ remove_managed_block() {
 update_shell_path() {
   (( UPDATE_PATH == 1 )) || return 0
   local profile quoted client_env_quoted
-  profile="$(profile_file)"
   quoted="$(shell_quote "$BIN_DIR")"
   client_env_quoted="$(shell_quote "$CLIENT_ENV_FILE")"
-  while IFS= read -r candidate; do
-    [[ "$candidate" == "$profile" ]] || remove_managed_block "$candidate"
+  while IFS= read -r profile; do
+    is_managed_profile_file "$profile" || remove_managed_block "$profile"
   done < <(profile_files)
-  touch "$profile"
-  remove_managed_block "$profile"
-  {
-    printf '\n%s\n' "$PATH_MARKER_BEGIN"
-    printf 'export PATH=%s:"$PATH"\n' "$quoted"
-    printf 'if [ -r %s ]; then . %s; fi\n' "$client_env_quoted" "$client_env_quoted"
-    printf '%s\n' "$PATH_MARKER_END"
-  } >> "$profile"
-  echo "Added Agena PATH/client environment setup to $profile"
+  while IFS= read -r profile; do
+    touch "$profile"
+    remove_managed_block "$profile"
+    {
+      printf '\n%s\n' "$PATH_MARKER_BEGIN"
+      printf 'export PATH=%s:"$PATH"\n' "$quoted"
+      printf 'if [ -r %s ]; then . %s; fi\n' "$client_env_quoted" "$client_env_quoted"
+      printf '%s\n' "$PATH_MARKER_END"
+    } >> "$profile"
+    echo "Added Agena PATH/client environment setup to $profile"
+  done < <(managed_profile_files)
 }
 
 remove_shell_path() {

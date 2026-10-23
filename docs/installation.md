@@ -66,10 +66,11 @@ full hash of the selected data root, so installing or stopping one instance
 does not address another instance's service.
 With the normal shell/environment update enabled, Unix exports the root from
 its private client environment file and Windows sets the user
-`AGENA_DATA_DIR`. On Unix the managed block goes to `~/.zshenv` for zsh
-(honoring `ZDOTDIR`) and `~/.profile` for other shells; an older Agena block
-is removed from the other startup files. Open a new shell or source that file
-to load the command.
+`AGENA_DATA_DIR`. On Unix the managed block goes to both `~/.zshenv` and
+`~/.zshrc` for zsh (honoring `ZDOTDIR`), and to `~/.profile` for other shells;
+an older Agena block is removed from the other startup files. The zsh entries
+make the command available both in new shells and after reloading `.zshrc`.
+Open a new shell or source one of those files to load the command.
 With `--no-path-update` / `-NoPathUpdate`, set that variable yourself or run
 clients with `agena --data-dir /path/to/agena-data ...`.
 

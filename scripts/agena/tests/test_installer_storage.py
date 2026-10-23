@@ -335,16 +335,27 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertIn("--version applies to release installs", result.stdout)
         self.assertFalse(self.calls_path.exists())
 
-    def test_path_update_targets_zsh_startup_file(self):
+    def test_path_update_targets_zsh_startup_files_and_preserves_symlinks(self):
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        zshrc_target = dotfiles / ".zshrc"
+        zshrc_target.write_text("export USER_SETTING=keep\n")
+        zshrc = self.home / ".zshrc"
+        zshrc.symlink_to(zshrc_target)
         result = self.invoke(
             "install", "--archive", self.archive, "--data-dir", self.data_dir,
             "--workspace", self.workspace, "--service-mode", "detached",
             update_path=True,
             environment={"SHELL": "/bin/zsh"},
         )
+        command_path = str(self.install_dir / "bin").replace(" ", "\\ ")
         zshenv = self.home / ".zshenv"
         self.assertIn(f"Added Agena PATH/client environment setup to {zshenv}", result.stdout)
-        self.assertIn(str(self.install_dir / "bin").replace(" ", "\\ "), zshenv.read_text())
+        self.assertIn(f"Added Agena PATH/client environment setup to {zshrc}", result.stdout)
+        self.assertIn(command_path, zshenv.read_text())
+        self.assertTrue(zshrc.is_symlink())
+        self.assertIn("export USER_SETTING=keep", zshrc_target.read_text())
+        self.assertIn(command_path, zshrc_target.read_text())
         self.assertFalse((self.home / ".profile").exists())
 
     def test_path_update_moves_old_profile_block_and_preserves_user_content(self):
@@ -361,9 +372,11 @@ class InstallerStorageTests(unittest.TestCase):
             update_path=True,
             environment={"SHELL": "/bin/zsh"},
         )
+        command_path = str(self.install_dir / "bin").replace(" ", "\\ ")
         self.assertIn("export USER_SETTING=keep", profile.read_text())
         self.assertNotIn("# >>> agena installer >>>", profile.read_text())
-        self.assertIn(str(self.install_dir / "bin").replace(" ", "\\ "), (self.home / ".zshenv").read_text())
+        self.assertIn(command_path, (self.home / ".zshenv").read_text())
+        self.assertIn(command_path, (self.home / ".zshrc").read_text())
 
     def test_source_install_rejects_a_directory_that_is_not_a_checkout(self):
         not_source = self.root / "not source"

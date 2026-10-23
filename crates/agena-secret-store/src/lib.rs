@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use agena_storage_layout::{StorageLayout, secure_directory, secure_file};
+use agena_storage_layout::{StorageLayout, resolve_private_path, secure_directory, secure_file};
 use ring::{
     aead::{self, Aad, LessSafeKey, Nonce, UnboundKey},
     rand::{SecureRandom, SystemRandom},
@@ -91,18 +91,23 @@ impl FileSecretStore {
 
     fn locked<T>(
         &self,
-        operation: impl FnOnce(&mut BTreeMap<String, String>) -> Result<T, SecretStoreError>,
+        operation: impl FnOnce(&Self, &mut BTreeMap<String, String>) -> Result<T, SecretStoreError>,
     ) -> Result<T, SecretStoreError> {
-        reject_symlink_ancestors(&self.root).map_err(storage_io)?;
-        secure_directory(&self.root).map_err(storage_io)?;
-        reject_symlink_ancestors(&self.root).map_err(storage_io)?;
-        let lock_path = self.root.join(format!("{}.lock", self.namespace_digest));
+        let store = Self {
+            root: resolve_private_path(&self.root).map_err(storage_io)?,
+            namespace_digest: self.namespace_digest.clone(),
+        };
+        secure_directory(&store.root).map_err(storage_io)?;
+        // Recheck after creation, then use this same resolved path for every
+        // lock, master-key operation, read and atomic replacement.
+        resolve_private_path(&store.root).map_err(storage_io)?;
+        let lock_path = store.root.join(format!("{}.lock", store.namespace_digest));
         let lock = private_open(&lock_path, true).map_err(storage_io)?;
         // Each operation opens its own lock handle, so threads in this process
         // obey the same locking protocol as separate processes.
         lock.lock().map_err(storage_io)?;
-        let mut values = self.read()?;
-        operation(&mut values)
+        let mut values = store.read()?;
+        operation(&store, &mut values)
         // Dropping the handle releases the lock, including on any error path.
     }
 
@@ -231,36 +236,36 @@ impl Default for FileSecretStore {
 
 impl SecretStore for FileSecretStore {
     fn get_secret(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
-        self.locked(|values| Ok(values.get(key).cloned()))
+        self.locked(|_, values| Ok(values.get(key).cloned()))
     }
 
     fn set_secret(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
-        self.locked(|values| {
+        self.locked(|store, values| {
             values.insert(key.to_owned(), value.to_owned());
-            self.write(values)
+            store.write(values)
         })
     }
 
     fn delete_secret(&self, key: &str) -> Result<(), SecretStoreError> {
-        self.locked(|values| {
+        self.locked(|store, values| {
             if values.remove(key).is_some() {
-                self.write(values)?;
+                store.write(values)?;
             }
             Ok(())
         })
     }
 
     fn list_secret_keys(&self) -> Result<Vec<String>, SecretStoreError> {
-        self.locked(|values| Ok(values.keys().cloned().collect()))
+        self.locked(|_, values| Ok(values.keys().cloned().collect()))
     }
 
     fn get_or_insert_secret(&self, key: &str, candidate: &str) -> Result<String, SecretStoreError> {
-        self.locked(|values| {
+        self.locked(|store, values| {
             if let Some(value) = values.get(key) {
                 return Ok(value.clone());
             }
             values.insert(key.to_owned(), candidate.to_owned());
-            self.write(values)?;
+            store.write(values)?;
             Ok(candidate.to_owned())
         })
     }
@@ -282,23 +287,6 @@ fn storage_io(error: io::Error) -> SecretStoreError {
     // io::Error from custom platform backends can carry arbitrary strings.
     // Restrict the public error to the operation class and OS error kind.
     SecretStoreError::Unavailable(format!("filesystem operation failed ({:?})", error.kind()))
-}
-
-fn reject_symlink_ancestors(path: &Path) -> io::Result<()> {
-    for ancestor in path.ancestors() {
-        match fs::symlink_metadata(ancestor) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "unsafe secret directory",
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 fn private_open(path: &Path, create: bool) -> io::Result<File> {
@@ -357,6 +345,41 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_system_temp_aliases_share_one_encrypted_store_and_reject_user_links() {
+        for base in ["/tmp", "/var/tmp"] {
+            let directory = tempfile::tempdir_in(base).unwrap();
+            let root = directory.path().join("secrets");
+            let store = FileSecretStore::at(&root, "macos-system-alias");
+            assert_eq!(
+                store.get_or_insert_secret("identity", "original").unwrap(),
+                "original"
+            );
+            let canonical = FileSecretStore::at(root.canonicalize().unwrap(), "macos-system-alias");
+            assert_eq!(
+                canonical
+                    .get_or_insert_secret("identity", "replacement")
+                    .unwrap(),
+                "original"
+            );
+            canonical.set_secret("next", "value").unwrap();
+            assert_eq!(store.get_secret("next").unwrap().as_deref(), Some("value"));
+
+            let alias = directory.path().join("user-alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert!(
+                FileSecretStore::at(alias, "macos-system-alias")
+                    .set_secret("identity", "changed")
+                    .is_err()
+            );
+            assert_eq!(
+                canonical.get_secret("identity").unwrap().as_deref(),
+                Some("original")
+            );
+        }
+    }
 
     #[test]
     fn namespaces_are_isolated_and_delete_is_idempotent() {

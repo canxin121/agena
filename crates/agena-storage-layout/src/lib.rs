@@ -19,8 +19,19 @@ pub struct StorageLayout {
 
 impl StorageLayout {
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
         Self {
-            root: absolute_path(&root.into()),
+            // Do not canonicalize arbitrary data-root symlinks here: doing so
+            // would hide them from the private-storage checks at preparation.
+            // This constructor is infallible, so retain an invalid path for
+            // prepare() to reject instead of silently changing its identity.
+            root: resolve_private_path(&root).unwrap_or_else(|_| {
+                if root.as_os_str().is_empty() {
+                    root
+                } else {
+                    absolute_unresolved_path(&root).unwrap_or(root)
+                }
+            }),
         }
     }
 
@@ -52,7 +63,9 @@ impl StorageLayout {
     /// Bind one immutable root to a running process. Repeated composition of
     /// the same instance is harmless; selecting another instance is an error.
     pub fn initialize_process(root: impl Into<PathBuf>) -> io::Result<Self> {
-        let layout = Self::new(root);
+        let layout = Self {
+            root: resolve_private_path(&root.into())?,
+        };
         let installed = PROCESS_LAYOUT.get_or_init(|| layout.clone());
         if installed != &layout {
             return Err(io::Error::new(
@@ -182,35 +195,133 @@ fn absolute_path(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Create an application-owned directory without following a symlink at the
-/// final component, then restrict it to the current account.
-pub fn secure_directory(path: &Path) -> io::Result<()> {
-    if path.parent().is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a filesystem root cannot be a private storage directory",
-        ));
+/// Resolve a private storage path while rejecting user-created symlinks in
+/// every existing component. Missing suffixes are kept for later creation.
+///
+/// macOS ships root-owned /var, /tmp and /etc symlinks into /private. Only
+/// these exact aliases, with their fixed targets and protected system parents,
+/// may be resolved. A user alias beneath them is still rejected. Callers must
+/// perform I/O on the returned path rather than canonicalizing the input.
+pub fn resolve_private_path(path: &Path) -> io::Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return Err(unsafe_private_path());
     }
-    // Validate every existing component, including parents of an already
-    // existing leaf. Do not silently follow a replaced managed directory.
-    for ancestor in path
-        .ancestors()
-        .filter(|ancestor| !ancestor.as_os_str().is_empty())
-    {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "private storage has an unsafe ancestor",
-                ));
+    let absolute = absolute_unresolved_path(path)?;
+    let components = absolute.components().collect::<Vec<_>>();
+    let mut resolved = PathBuf::new();
+    for (index, component) in components.iter().enumerate() {
+        match component {
+            Component::Prefix(prefix) => {
+                resolved.push(prefix.as_os_str());
+                continue;
+            }
+            Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                // Earlier components have already been checked. In particular,
+                // an alias cannot be hidden by subsequently spelling /../.
+                resolved.pop();
+                continue;
+            }
+            Component::Normal(name) => resolved.push(name),
+        }
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if let Some(target) = trusted_system_alias(&resolved, &metadata)? {
+                    resolved = target;
+                } else {
+                    return Err(unsafe_private_path());
+                }
+            }
+            Ok(metadata) if index + 1 < components.len() && !metadata.is_dir() => {
+                return Err(unsafe_private_path());
             }
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
     }
+    Ok(resolved)
+}
+
+fn absolute_unresolved_path(path: &Path) -> io::Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn unsafe_private_path() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "private storage has an unsafe ancestor",
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn trusted_system_alias(path: &Path, metadata: &std::fs::Metadata) -> io::Result<Option<PathBuf>> {
+    use std::os::unix::fs::MetadataExt;
+
+    let (relative_target, target) = match path.to_str() {
+        Some("/var") => ("private/var", Path::new("/private/var")),
+        Some("/tmp") => ("private/tmp", Path::new("/private/tmp")),
+        Some("/etc") => ("private/etc", Path::new("/private/etc")),
+        _ => return Ok(None),
+    };
+    if metadata.uid() != 0 {
+        return Err(unsafe_private_path());
+    }
+    // The user must not be able to replace either the root alias or its
+    // /private destination. Symlink permissions themselves are not meaningful.
+    for parent in [Path::new("/"), Path::new("/private")] {
+        let parent_metadata = std::fs::symlink_metadata(parent)?;
+        if !parent_metadata.is_dir()
+            || parent_metadata.file_type().is_symlink()
+            || parent_metadata.uid() != 0
+            || parent_metadata.mode() & 0o022 != 0
+        {
+            return Err(unsafe_private_path());
+        }
+    }
+    let actual_target = std::fs::read_link(path)?;
+    if actual_target != target && actual_target != Path::new(relative_target) {
+        return Err(unsafe_private_path());
+    }
+    let target_metadata = std::fs::symlink_metadata(target)?;
+    if !target_metadata.is_dir()
+        || target_metadata.file_type().is_symlink()
+        || target_metadata.uid() != 0
+        || (target == Path::new("/private/tmp")
+            && target_metadata.mode() & 0o022 != 0
+            && target_metadata.mode() & 0o1000 == 0)
+        || (target != Path::new("/private/tmp") && target_metadata.mode() & 0o022 != 0)
+    {
+        return Err(unsafe_private_path());
+    }
+    Ok(Some(target.to_path_buf()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn trusted_system_alias(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+) -> io::Result<Option<PathBuf>> {
+    Ok(None)
+}
+
+/// Create an application-owned directory without following user symlinks,
+/// then restrict it to the current account.
+pub fn secure_directory(path: &Path) -> io::Result<()> {
+    let path = resolve_private_path(path)?;
+    if path.parent().is_none() || is_system_storage_anchor(&path) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a system directory cannot be a private storage directory",
+        ));
+    }
     let mut missing = Vec::new();
-    let mut existing = path;
+    let mut existing = path.as_path();
     loop {
         match std::fs::symlink_metadata(existing) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -250,18 +361,39 @@ pub fn secure_directory(path: &Path) -> io::Result<()> {
         }
         restrict(&directory, true)?;
     }
-    restrict(path, true)
+    restrict(&path, true)
 }
 
 pub fn secure_file(path: &Path) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
+    let path = resolve_private_path(path)?;
+    let metadata = std::fs::symlink_metadata(&path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "private storage file is not a regular file",
         ));
     }
-    restrict(path, false)
+    restrict(&path, false)
+}
+
+#[cfg(target_os = "macos")]
+fn is_system_storage_anchor(path: &Path) -> bool {
+    [
+        "/var",
+        "/tmp",
+        "/etc",
+        "/private",
+        "/private/var",
+        "/private/tmp",
+        "/private/etc",
+    ]
+    .iter()
+    .any(|anchor| path == Path::new(anchor))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_system_storage_anchor(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(unix)]
@@ -352,5 +484,102 @@ mod tests {
         let link = fixture.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(secure_directory(&link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_paths_do_not_hide_user_symlinks_in_layouts_or_parent_components() {
+        let fixture = tempfile::tempdir().unwrap();
+        let target = fixture.path().join("target");
+        std::fs::create_dir_all(target.join("existing")).unwrap();
+        let alias = fixture.path().join("alias");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        let private_file = target.join("existing/key");
+        std::fs::write(&private_file, "unchanged").unwrap();
+
+        assert!(StorageLayout::new(&alias).prepare().is_err());
+        assert!(resolve_private_path(&alias.join("../new-storage")).is_err());
+        assert!(secure_file(&alias.join("existing/key")).is_err());
+        assert_eq!(std::fs::read_to_string(private_file).unwrap(), "unchanged");
+        assert!(!fixture.path().join("new-storage").exists());
+    }
+
+    #[test]
+    fn an_empty_private_root_cannot_select_the_current_working_directory() {
+        assert!(resolve_private_path(Path::new("")).is_err());
+        assert!(StorageLayout::new("").prepare().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_paths_reject_user_aliases_even_when_they_target_system_directories() {
+        let fixture = tempfile::tempdir().unwrap();
+        for name in ["tmp", "var", "etc"] {
+            let alias = fixture.path().join(name);
+            std::os::unix::fs::symlink(Path::new("/").join(name), &alias).unwrap();
+            assert!(resolve_private_path(&alias.join("agena-private")).is_err());
+            assert!(secure_directory(&alias.join("agena-private")).is_err());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_system_temp_aliases_allow_private_descendants_but_not_user_links() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for base in ["/tmp", "/var/tmp"] {
+            let fixture = tempfile::tempdir_in(base).unwrap();
+            let directory = fixture.path().join("nested/private");
+            secure_directory(&directory).unwrap();
+            let resolved = resolve_private_path(&directory).unwrap();
+            assert_eq!(resolved, directory.canonicalize().unwrap());
+            assert!(resolved.starts_with("/private"));
+            assert_eq!(
+                std::fs::metadata(&resolved).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+
+            let file = directory.join("key");
+            std::fs::write(&file, "private-value").unwrap();
+            secure_file(&file).unwrap();
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+
+            let alias = fixture.path().join("user-alias");
+            std::os::unix::fs::symlink(&directory, &alias).unwrap();
+            assert!(secure_directory(&alias.join("new")).is_err());
+            assert!(secure_file(&alias.join("key")).is_err());
+        }
+        assert_eq!(
+            resolve_private_path(Path::new("/etc/agena-nonexistent-private-entry")).unwrap(),
+            PathBuf::from("/private/etc/agena-nonexistent-private-entry")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_system_aliases_and_their_targets_never_become_private_storage_roots() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for path in [
+            "/tmp",
+            "/var",
+            "/etc",
+            "/private",
+            "/private/tmp",
+            "/private/var",
+            "/private/etc",
+        ] {
+            let path = Path::new(path);
+            let before = std::fs::metadata(path).unwrap().permissions().mode();
+            assert!(secure_directory(path).is_err());
+            assert!(StorageLayout::new(path).prepare().is_err());
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode(),
+                before
+            );
+        }
     }
 }

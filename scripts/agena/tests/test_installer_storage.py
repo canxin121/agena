@@ -99,12 +99,18 @@ class InstallerStorageTests(unittest.TestCase):
         Path(str(archive) + ".sha256").write_text(digest + "  fixture.tar.gz\n")
         return archive
 
-    def invoke(self, action, *arguments, environment=None, success=True, cwd=None):
+    def invoke(self, action, *arguments, environment=None, success=True, cwd=None,
+               update_path=False):
         env = dict(self.env)
         env.update(environment or {})
+        command = [
+            "bash", str(SCRIPTS / "install.sh"), action,
+            "--install-dir", str(self.install_dir), *map(str, arguments),
+        ]
+        if not update_path:
+            command.append("--no-path-update")
         result = subprocess.run(
-            ["bash", str(SCRIPTS / "install.sh"), action,
-             "--install-dir", str(self.install_dir), "--no-path-update", *map(str, arguments)],
+            command,
             env=env, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=30,
         )
@@ -328,6 +334,36 @@ class InstallerStorageTests(unittest.TestCase):
         )
         self.assertIn("--version applies to release installs", result.stdout)
         self.assertFalse(self.calls_path.exists())
+
+    def test_path_update_targets_zsh_startup_file(self):
+        result = self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            update_path=True,
+            environment={"SHELL": "/bin/zsh"},
+        )
+        zshenv = self.home / ".zshenv"
+        self.assertIn(f"Added Agena PATH/client environment setup to {zshenv}", result.stdout)
+        self.assertIn(str(self.install_dir / "bin").replace(" ", "\\ "), zshenv.read_text())
+        self.assertFalse((self.home / ".profile").exists())
+
+    def test_path_update_moves_old_profile_block_and_preserves_user_content(self):
+        profile = self.home / ".profile"
+        profile.write_text(
+            "export USER_SETTING=keep\n"
+            "# >>> agena installer >>>\n"
+            "export PATH=/old/agena/bin:\"$PATH\"\n"
+            "# <<< agena installer <<<\n"
+        )
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            update_path=True,
+            environment={"SHELL": "/bin/zsh"},
+        )
+        self.assertIn("export USER_SETTING=keep", profile.read_text())
+        self.assertNotIn("# >>> agena installer >>>", profile.read_text())
+        self.assertIn(str(self.install_dir / "bin").replace(" ", "\\ "), (self.home / ".zshenv").read_text())
 
     def test_source_install_rejects_a_directory_that_is_not_a_checkout(self):
         not_source = self.root / "not source"

@@ -442,29 +442,44 @@ verify_checksum() {
 }
 
 profile_file() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    printf '%s/.zprofile' "$HOME"
-  else
-    printf '%s/.profile' "$HOME"
-  fi
+  case "${SHELL:-}" in
+    */zsh) printf '%s/.zshenv' "${ZDOTDIR:-$HOME}" ;;
+    *) printf '%s/.profile' "$HOME" ;;
+  esac
+}
+
+profile_files() {
+  local zdotdir="${ZDOTDIR:-$HOME}"
+  printf '%s\n' "$HOME/.profile" "$HOME/.zprofile" "$zdotdir/.zshenv" "$zdotdir/.zshrc" |
+    awk '!seen[$0]++'
+}
+
+remove_managed_block() {
+  local profile="$1" temporary
+  [[ -f "$profile" ]] || return 0
+  grep -Fq "$PATH_MARKER_BEGIN" "$profile" || return 0
+  temporary="${profile}.agena.$$"
+  awk -v begin="$PATH_MARKER_BEGIN" -v end="$PATH_MARKER_END" '
+    $0 == begin { skip=1; next }
+    $0 == end { skip=0; next }
+    !skip { print }
+  ' "$profile" > "$temporary"
+  # Write through the original path so dotfile symlinks are preserved.
+  cat "$temporary" > "$profile"
+  rm -f "$temporary"
 }
 
 update_shell_path() {
   (( UPDATE_PATH == 1 )) || return 0
-  local profile quoted client_env_quoted temporary
+  local profile quoted client_env_quoted
   profile="$(profile_file)"
   quoted="$(shell_quote "$BIN_DIR")"
   client_env_quoted="$(shell_quote "$CLIENT_ENV_FILE")"
+  while IFS= read -r candidate; do
+    [[ "$candidate" == "$profile" ]] || remove_managed_block "$candidate"
+  done < <(profile_files)
   touch "$profile"
-  if grep -Fq "$PATH_MARKER_BEGIN" "$profile"; then
-    temporary="${profile}.agena.$$"
-    awk -v begin="$PATH_MARKER_BEGIN" -v end="$PATH_MARKER_END" '
-      $0 == begin { skip=1; next }
-      $0 == end { skip=0; next }
-      !skip { print }
-    ' "$profile" > "$temporary"
-    mv "$temporary" "$profile"
-  fi
+  remove_managed_block "$profile"
   {
     printf '\n%s\n' "$PATH_MARKER_BEGIN"
     printf 'export PATH=%s:"$PATH"\n' "$quoted"
@@ -475,16 +490,10 @@ update_shell_path() {
 }
 
 remove_shell_path() {
-  local profile temporary
-  profile="$(profile_file)"
-  [[ -f "$profile" ]] || return 0
-  temporary="${profile}.agena.$$"
-  awk -v begin="$PATH_MARKER_BEGIN" -v end="$PATH_MARKER_END" '
-    $0 == begin { skip=1; next }
-    $0 == end { skip=0; next }
-    !skip { print }
-  ' "$profile" > "$temporary"
-  mv "$temporary" "$profile"
+  local profile
+  while IFS= read -r profile; do
+    remove_managed_block "$profile"
+  done < <(profile_files)
 }
 
 native_service_available() {

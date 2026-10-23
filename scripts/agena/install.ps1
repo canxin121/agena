@@ -5,6 +5,9 @@ Param(
   [string]$Version = "",
   [string]$Archive = "",
   [string]$Checksum = "",
+  [switch]$Source,
+  [string]$SourcePath = "",
+  [string]$SourceRef = "",
   [string]$InstallDir = "",
   [string]$DataDir = "",
   [string]$ListenHost = "127.0.0.1",
@@ -29,6 +32,18 @@ if (-not $DataDir) {
 }
 if (-not $Workspace) {
   $Workspace = $HOME
+}
+
+if ($Source) {
+  if ($Action -notin @("Install", "Upgrade")) {
+    throw "-Source is only supported for Install and Upgrade"
+  }
+  if ($Archive) { throw "-Source cannot be combined with -Archive" }
+  if ($Checksum) { throw "-Source cannot be combined with -Checksum" }
+  if ($Version) { throw "-Version applies to release installs; use -SourceRef to select a branch or tag" }
+}
+elseif ($SourcePath -or $SourceRef) {
+  throw "-SourcePath and -SourceRef require -Source"
 }
 
 function Resolve-Directory([string]$Path) {
@@ -87,6 +102,107 @@ function Get-TargetTriple {
     "X64" { return "x86_64-pc-windows-msvc" }
     "Arm64" { return "aarch64-pc-windows-msvc" }
     default { throw "Unsupported Windows architecture: $arch" }
+  }
+}
+
+function Test-SourceRoot([string]$Path) {
+  return ((Test-Path -LiteralPath (Join-Path $Path "Cargo.toml") -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $Path "packages/agena-web/package.json") -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $Path "scripts/agena/package-backend.ps1") -PathType Leaf))
+}
+
+function Find-SourceRoot([string]$Start) {
+  if ([string]::IsNullOrWhiteSpace($Start)) { return $null }
+  $current = Resolve-Directory $Start
+  while ($current) {
+    if (Test-SourceRoot $current) { return $current }
+    $parent = [IO.Path]::GetDirectoryName($current)
+    if (-not $parent -or $parent -eq $current) { break }
+    $current = $parent
+  }
+  return $null
+}
+
+function Get-InstallerSourceRoot {
+  if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) { return $null }
+  $scriptsDir = Split-Path -Parent $PSScriptRoot
+  $repositoryRoot = Split-Path -Parent $scriptsDir
+  return Find-SourceRoot $repositoryRoot
+}
+
+function Test-GitSource([string]$Value) {
+  return $Value -match '^(https?://|ssh://|git://|file://|git@.+:)'
+}
+
+function Invoke-SourceClone([string]$Repository, [string]$Temp) {
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if (-not $git) { throw "git is required to install from a remote source repository" }
+  $destination = Join-Path $Temp "source"
+  $cloneArgs = @("clone", "--depth", "1")
+  if ($SourceRef) { $cloneArgs += @("--branch", $SourceRef) }
+  $cloneArgs += @($Repository, $destination)
+  Write-Host "Cloning Agena source from $Repository"
+  & $git.Source @cloneArgs
+  if ($LASTEXITCODE -ne 0) { throw "git clone failed with exit code $LASTEXITCODE" }
+  if (-not (Test-Path -LiteralPath $destination -PathType Container)) {
+    throw "git clone did not create $destination"
+  }
+  return $destination
+}
+
+function Resolve-SourceRoot([string]$Temp) {
+  $requested = $SourcePath.Trim()
+  if ($requested) {
+    if (Test-Path -LiteralPath $requested -PathType Container) {
+      $root = Find-SourceRoot $requested
+      if (-not $root) { throw "-SourcePath is not an Agena checkout: $requested" }
+      return $root
+    }
+    if (Test-GitSource $requested) {
+      $cloned = Invoke-SourceClone $requested $Temp
+      $root = Find-SourceRoot $cloned
+      if (-not $root) { throw "cloned source is not an Agena checkout: $requested" }
+      return $root
+    }
+    throw "-SourcePath must name an Agena checkout or a Git URL"
+  }
+
+  $root = Find-SourceRoot (Get-Location).Path
+  if ($root) { return $root }
+  $root = Get-InstallerSourceRoot
+  if ($root) { return $root }
+
+  $cloned = Invoke-SourceClone "https://github.com/$Repo.git" $Temp
+  $root = Find-SourceRoot $cloned
+  if (-not $root) { throw "cloned source is not an Agena checkout" }
+  return $root
+}
+
+function New-SourceArchive([string]$Temp, [string]$Target) {
+  $root = Resolve-SourceRoot $Temp
+  if ($SourceRef -and $root -ne (Resolve-Directory (Join-Path $Temp "source"))) {
+    Write-Warning "-SourceRef only applies when cloning; using the existing checkout as-is"
+  }
+  Write-Host "Building Agena from source at $root"
+  $packageScript = Join-Path $root "scripts/agena/package-backend.ps1"
+  if (-not (Test-Path -LiteralPath $packageScript -PathType Leaf)) {
+    throw "Agena source build script is missing: $packageScript"
+  }
+  & $packageScript -TargetTriple $Target
+  if ($LASTEXITCODE -ne 0) { throw "Agena source build failed with exit code $LASTEXITCODE" }
+
+  $artifactDir = Join-Path $root "artifacts/agena"
+  $archive = Get-ChildItem -LiteralPath $artifactDir -File -Filter "agena-backend-$Target-v*.zip" |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  if (-not $archive) { throw "Agena source build did not produce a package archive" }
+  $checksum = "$($archive.FullName).sha256"
+  if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+    throw "Agena source build did not produce a package checksum"
+  }
+  Write-Host "Source package ready: $($archive.FullName)"
+  return [pscustomobject]@{
+    Archive = $archive.FullName
+    Checksum = $checksum
   }
 }
 
@@ -350,33 +466,39 @@ function Install-OrUpgrade([string]$RequestedAction) {
   Resolve-ServiceMode
   New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 
-  $target = Get-TargetTriple
-  $packageVersion = ""
-  if (-not $Archive) {
-    if (-not $Version) { $releaseVersion = Get-LatestVersion } else { $releaseVersion = Normalize-Version $Version }
-    if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
-      throw "-Version must name a beta release, for example 0.1.0-beta.1"
-    }
-    $script:Version = $releaseVersion
-    $packageVersion = $Matches[1]
-    $archiveSource = "https://github.com/$Repo/releases/download/agena-v$releaseVersion/agena-backend-$target-v$packageVersion.zip"
-    $checksumSource = "$archiveSource.sha256"
-  } else {
-    $archiveSource = $Archive
-    $checksumSource = if ($Checksum) { $Checksum } else { "$Archive.sha256" }
-    if ($Version) {
-      $releaseVersion = Normalize-Version $Version
-      if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
-        throw "-Version must name a beta release, for example 0.1.0-beta.1"
-      }
-      $packageVersion = $Matches[1]
-      $script:Version = $releaseVersion
-    }
-  }
-
   $temp = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force -Path $temp | Out-Null
   try {
+    $target = Get-TargetTriple
+    $packageVersion = ""
+    if ($Source) {
+      $sourceArchive = New-SourceArchive $temp $target
+      $archiveSource = $sourceArchive.Archive
+      $checksumSource = $sourceArchive.Checksum
+    }
+    elseif (-not $Archive) {
+      if (-not $Version) { $releaseVersion = Get-LatestVersion } else { $releaseVersion = Normalize-Version $Version }
+      if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+        throw "-Version must name a beta release, for example 0.1.0-beta.1"
+      }
+      $script:Version = $releaseVersion
+      $packageVersion = $Matches[1]
+      $archiveSource = "https://github.com/$Repo/releases/download/agena-v$releaseVersion/agena-backend-$target-v$packageVersion.zip"
+      $checksumSource = "$archiveSource.sha256"
+    }
+    else {
+      $archiveSource = $Archive
+      $checksumSource = if ($Checksum) { $Checksum } else { "$Archive.sha256" }
+      if ($Version) {
+        $releaseVersion = Normalize-Version $Version
+        if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+          throw "-Version must name a beta release, for example 0.1.0-beta.1"
+        }
+        $packageVersion = $Matches[1]
+        $script:Version = $releaseVersion
+      }
+    }
+
     $archivePath = Join-Path $temp "agena.zip"
     $checksumPath = Join-Path $temp "agena.sha256"
     Get-FileFromSource $archiveSource $archivePath

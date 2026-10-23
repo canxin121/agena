@@ -8,6 +8,12 @@ REPO="${AGENA_INSTALL_REPO:-$DEFAULT_REPO}"
 VERSION="${AGENA_INSTALL_VERSION:-}"
 ARCHIVE=""
 CHECKSUM=""
+SOURCE_MODE=0
+SOURCE=""
+SOURCE_REF=""
+SOURCE_ARCHIVE=""
+SOURCE_CHECKSUM=""
+SOURCE_ROOT=""
 INSTALL_DIR="${AGENA_INSTALL_DIR:-$HOME/.local/share/agena}"
 DATA_DIR="${AGENA_DATA_DIR:-$HOME/agena}"
 HOST="${AGENA_SERVER_HOST:-127.0.0.1}"
@@ -25,6 +31,9 @@ Usage: install.sh [install|upgrade|uninstall|start|stop|restart|status|permissio
 One-click install (latest beta release):
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
 
+Source install (build from a checkout):
+  bash scripts/agena/install.sh install --source
+
 Lifecycle examples:
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- upgrade
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- stop
@@ -35,6 +44,8 @@ Options:
   --version VERSION        Beta release version/tag; default is latest beta
   --archive PATH_OR_URL    Install a specific release archive
   --checksum PATH_OR_URL   SHA256 file for --archive (defaults to ARCHIVE.sha256)
+  --source [PATH_OR_URL]   Build from source instead of installing a release archive
+  --source-ref REF         Branch or tag to clone with --source (remote sources only)
   --install-dir DIR        Install root (default: ~/.local/share/agena)
   --data-dir DIR           Instance data root (default: AGENA_DATA_DIR or ~/agena)
   --host HOST              Server host (default: 127.0.0.1)
@@ -59,6 +70,17 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="${2:-}"; shift 2 ;;
     --archive) ARCHIVE="${2:-}"; shift 2 ;;
     --checksum) CHECKSUM="${2:-}"; shift 2 ;;
+    --source)
+      SOURCE_MODE=1
+      if [[ $# -ge 2 && "${2:-}" != -* ]]; then
+        SOURCE="$2"
+        shift 2
+      else
+        SOURCE=""
+        shift
+      fi ;;
+    --source=*) SOURCE_MODE=1; SOURCE="${1#*=}"; shift ;;
+    --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --data-dir) DATA_DIR="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
@@ -81,6 +103,27 @@ case "$SERVICE_MODE" in
   auto|native|detached) ;;
   *) echo "ERROR: --service-mode must be auto, native, or detached" >&2; exit 2 ;;
 esac
+if (( SOURCE_MODE )); then
+  case "$ACTION" in
+    install|upgrade) ;;
+    *) echo "ERROR: --source is only supported for install and upgrade" >&2; exit 2 ;;
+  esac
+  if [[ -n "$ARCHIVE" ]]; then
+    echo "ERROR: --source cannot be combined with --archive" >&2
+    exit 2
+  fi
+  if [[ -n "$CHECKSUM" ]]; then
+    echo "ERROR: --source cannot be combined with --checksum" >&2
+    exit 2
+  fi
+  if [[ -n "$VERSION" ]]; then
+    echo "ERROR: --version applies to release installs; use --source-ref to select a branch or tag" >&2
+    exit 2
+  fi
+elif [[ -n "$SOURCE_REF" ]]; then
+  echo "ERROR: --source-ref requires --source" >&2
+  exit 2
+fi
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
   echo "ERROR: invalid port: $PORT" >&2
   exit 2
@@ -256,6 +299,122 @@ target_triple() {
   esac
 }
 
+is_source_root() {
+  local path="$1"
+  [[ -f "$path/Cargo.toml" &&
+     -f "$path/packages/agena-web/package.json" &&
+     -f "$path/scripts/agena/package-backend.sh" ]]
+}
+
+find_source_root() {
+  local current
+  current="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  while :; do
+    if is_source_root "$current"; then
+      printf '%s' "$current"
+      return 0
+    fi
+    [[ "$current" == "/" ]] && break
+    current="$(dirname "$current")"
+  done
+  return 1
+}
+
+installer_source_root() {
+  local script="${BASH_SOURCE[0]:-}" directory
+  [[ -n "$script" && -f "$script" ]] || return 1
+  directory="$(cd "$(dirname "$script")" && pwd -P)" || return 1
+  find_source_root "$(cd "$directory/../.." && pwd -P)"
+}
+
+is_git_source() {
+  case "$1" in
+    http://*|https://*|ssh://*|git://*|file://*|git@*:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+clone_source() {
+  local repository="$1" destination="$2"
+  if ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: git is required to install from a remote source repository" >&2
+    return 1
+  fi
+  local -a clone_args=(clone --depth 1)
+  if [[ -n "$SOURCE_REF" ]]; then
+    clone_args+=(--branch "$SOURCE_REF")
+  fi
+  echo "Cloning Agena source from $repository" >&2
+  git "${clone_args[@]}" "$repository" "$destination"
+}
+
+resolve_source_root() {
+  SOURCE_ROOT=""
+  local temp="$1" requested="$SOURCE" root
+  if [[ -n "$requested" ]]; then
+    if [[ -d "$requested" ]]; then
+      root="$(find_source_root "$requested")" || {
+        echo "ERROR: --source directory is not an Agena checkout: $requested" >&2
+        return 1
+      }
+      SOURCE_ROOT="$root"
+      return 0
+    fi
+    if is_git_source "$requested"; then
+      clone_source "$requested" "$temp/source" || return
+      root="$(find_source_root "$temp/source")" || {
+        echo "ERROR: cloned source is not an Agena checkout: $requested" >&2
+        return 1
+      }
+      SOURCE_ROOT="$root"
+      return 0
+    fi
+    echo "ERROR: --source must name an Agena checkout or a Git URL" >&2
+    return 1
+  fi
+  if root="$(find_source_root "$PWD")"; then
+    SOURCE_ROOT="$root"
+    return 0
+  fi
+  if root="$(installer_source_root)"; then
+    SOURCE_ROOT="$root"
+    return 0
+  fi
+  clone_source "https://github.com/${REPO}.git" "$temp/source" || return
+  root="$(find_source_root "$temp/source")" || {
+    echo "ERROR: cloned source is not an Agena checkout" >&2
+    return 1
+  }
+  SOURCE_ROOT="$root"
+}
+
+prepare_source_archive() {
+  local temp="$1" target="$2" source_root package_script build_log
+  resolve_source_root "$temp" || exit 1
+  source_root="$SOURCE_ROOT"
+  if [[ -n "$SOURCE_REF" && "$source_root" != "$temp/source" ]]; then
+    echo "WARNING: --source-ref only applies when cloning; using the existing checkout as-is" >&2
+  fi
+  package_script="$source_root/scripts/agena/package-backend.sh"
+  echo "Building Agena from source at $source_root"
+  build_log="$temp/source-build.log"
+  if ! (
+    cd "$source_root"
+    bash "$package_script" "$target"
+  ) 2>&1 | tee "$build_log"; then
+    echo "ERROR: Agena source build failed" >&2
+    exit 1
+  fi
+  SOURCE_ARCHIVE="$(sed -n 's/^Package ready: //p' "$build_log" | tail -1)"
+  SOURCE_CHECKSUM="$(sed -n 's/^Checksum ready: //p' "$build_log" | tail -1)"
+  [[ -n "$SOURCE_CHECKSUM" ]] || SOURCE_CHECKSUM="${SOURCE_ARCHIVE}.sha256"
+  if [[ -z "$SOURCE_ARCHIVE" || ! -f "$SOURCE_ARCHIVE" || ! -f "$SOURCE_CHECKSUM" ]]; then
+    echo "ERROR: source build did not produce an Agena archive and checksum" >&2
+    exit 1
+  fi
+  echo "Source package ready: $SOURCE_ARCHIVE"
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -426,7 +585,13 @@ install_or_upgrade() {
 
   local target archive_source checksum_source temp archive_path checksum_path stage binary_version package_version=""
   target="$(target_triple)"
-  if [[ -z "$ARCHIVE" ]]; then
+  temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-install.XXXXXX")"
+  trap 'rm -rf "$temp"' EXIT
+  if (( SOURCE_MODE )); then
+    prepare_source_archive "$temp" "$target"
+    archive_source="$SOURCE_ARCHIVE"
+    checksum_source="$SOURCE_CHECKSUM"
+  elif [[ -z "$ARCHIVE" ]]; then
     if [[ -z "$VERSION" ]]; then
       VERSION="$(latest_version)"
     else
@@ -452,8 +617,6 @@ install_or_upgrade() {
     fi
   fi
 
-  temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-install.XXXXXX")"
-  trap 'rm -rf "$temp"' EXIT
   archive_path="$temp/agena.tar.gz"
   checksum_path="$temp/agena.sha256"
   download_file "$archive_source" "$archive_path"

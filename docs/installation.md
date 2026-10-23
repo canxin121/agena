@@ -82,6 +82,51 @@ directory: `cd /path/to/project && agena` uses `/path/to/project` for new
 sessions, while `agena tui --workspace /other/path` remains the explicit
 override.
 
+## Install from source
+
+Build and install from a checkout without downloading a release archive:
+
+```bash
+cd /path/to/agena
+bash scripts/agena/install.sh install --source
+```
+
+The installer uses the checkout that contains the current directory, then the
+checkout that contains the installer script. It does not clone another copy
+when either checkout is available. To build another checkout, pass its path;
+to clone a remote repository, pass a Git URL:
+
+```bash
+bash scripts/agena/install.sh install --source /path/to/agena
+bash scripts/agena/install.sh install --source https://github.com/canxin121/agena.git
+bash scripts/agena/install.sh install --source https://github.com/canxin121/agena.git --source-ref master
+```
+
+`--source` cannot be combined with `--archive`, `--checksum`, or `--version`.
+Source mode builds the native binary and Web frontend, creates the normal
+archive and SHA-256 file under `artifacts/agena/`, verifies that archive, and
+then uses the same install, startup, and rollback path as a release install.
+Use `upgrade --source` to rebuild and replace an existing installation.
+
+The source build requires Rust 1.97.0 through rustup (or a compatible
+`AGENA_STABLE_TOOLCHAIN`), Bun, Python 3, `tar` on macOS/Linux, Git when
+cloning, and the platform C/C++ build tools required by the Rust dependencies.
+If the Web frontend is already built, set `AGENA_WEB_DIST_PREBUILT=1` to skip
+Bun and the frontend build. Build output stays in the checkout's `target/` and
+`packages/agena-web/dist/`; for a local checkout, the generated package stays
+in `artifacts/agena/`. A checkout cloned from a Git URL is temporary and is
+removed after installation.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\agena\install.ps1 -Action Install -Source
+```
+
+Use `-SourcePath D:\src\agena` to select another checkout or a Git URL, and
+`-SourceRef master` when cloning a branch or tag. Source mode does not use
+`-Version`.
+
 ## Lifecycle operations
 
 On macOS/Linux the installer can be re-run with an action:
@@ -219,8 +264,8 @@ migrated by this version.
 `python3 scripts/agena/tests/test_installer_storage.py` runs offline installer
 contracts with temporary homes, local archives and a stub executable. It covers
 saved-root precedence, paths with spaces, upgrade rollback, stopped instances,
-purge boundaries and service-helper arguments without installing a system
-service.
+purge boundaries, source-checkout selection, source builds and service-helper
+arguments without installing a system service.
 
 `.github/workflows/installer-ci.yml` builds the real release archive format on
 GitHub-hosted Linux, macOS, and Windows runners. Each runner then executes the

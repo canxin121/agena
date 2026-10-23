@@ -29,17 +29,52 @@ $ServerManifest = Join-Path $RepoRoot "Cargo.toml"
 $ServerTargetDir = Join-Path $RepoRoot "target"
 $RunnerWorkspace = if ($env:GITHUB_WORKSPACE) {
   $env:GITHUB_WORKSPACE
-} else {
+} elseif ($env:RUNNER_TEMP) {
   Split-Path -Parent $env:RUNNER_TEMP
+} else {
+  $RepoRoot
 }
 $ReleaseDir = Join-Path $RepoRoot "artifacts/agena"
-$WebDistDir = Join-Path $RepoRoot "packages/agena-web/dist"
+$WebProjectDir = Join-Path $RepoRoot "packages/agena-web"
+$WebDistDir = Join-Path $WebProjectDir "dist"
+
+foreach ($tool in @("cargo", "rustc")) {
+  if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+    throw "$tool is required to build Agena from source"
+  }
+}
+
+if ($env:AGENA_WEB_DIST_PREBUILT -ne "1") {
+  $bun = Get-Command bun -ErrorAction SilentlyContinue
+  if (-not $bun) { throw "bun is required to build the Agena Web frontend" }
+  if (-not (Test-Path -LiteralPath (Join-Path $WebProjectDir "node_modules") -PathType Container)) {
+    Push-Location $WebProjectDir
+    try {
+      & $bun.Source install --frozen-lockfile
+      if ($LASTEXITCODE -ne 0) { throw "bun install failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+      Pop-Location
+    }
+  }
+  Push-Location $WebProjectDir
+  try {
+    & $bun.Source run build
+    if ($LASTEXITCODE -ne 0) { throw "bun run build failed with exit code $LASTEXITCODE" }
+  }
+  finally {
+    Pop-Location
+  }
+}
 
 if (-not $TargetTriple) {
   $TargetTriple = Get-HostTriple
 }
 
 $IsWindowsTarget = $TargetTriple -match "windows"
+if (-not $IsWindowsTarget -and -not (Get-Command tar -ErrorAction SilentlyContinue)) {
+  throw "tar is required to build Agena from source"
+}
 if ($IsWindowsTarget) {
   & (Join-Path $RepoRoot "scripts/ci/setup-windows-toolchain.ps1") -TargetTriple $TargetTriple
 }
@@ -55,7 +90,7 @@ if (-not $agenaPackage) {
 }
 $Version = $agenaPackage.version
 
-if (-not (Test-Path -LiteralPath (Join-Path $WebDistDir "index.html"))) {
+if (-not (Test-Path -LiteralPath (Join-Path $WebDistDir "index.html") -PathType Leaf)) {
   throw "Prebuilt Agena Web frontend not found at $WebDistDir"
 }
 

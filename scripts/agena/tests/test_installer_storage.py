@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -98,13 +99,13 @@ class InstallerStorageTests(unittest.TestCase):
         Path(str(archive) + ".sha256").write_text(digest + "  fixture.tar.gz\n")
         return archive
 
-    def invoke(self, action, *arguments, environment=None, success=True):
+    def invoke(self, action, *arguments, environment=None, success=True, cwd=None):
         env = dict(self.env)
         env.update(environment or {})
         result = subprocess.run(
             ["bash", str(SCRIPTS / "install.sh"), action,
              "--install-dir", str(self.install_dir), "--no-path-update", *map(str, arguments)],
-            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env=env, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             timeout=30,
         )
         if success:
@@ -119,6 +120,30 @@ class InstallerStorageTests(unittest.TestCase):
             "--workspace", self.workspace, "--service-mode", "detached",
             environment={"AGENA_DATA_DIR": str(self.root / "ignored environment data")},
         )
+
+    def source_checkout(self, name="source checkout"):
+        root = self.root / name
+        (root / "packages/agena-web").mkdir(parents=True)
+        (root / "Cargo.toml").write_text("[workspace]\nmembers = []\n")
+        (root / "packages/agena-web/package.json").write_text("{}\n")
+        scripts = root / "scripts/agena"
+        scripts.mkdir(parents=True)
+        archive = self.archive
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        package_script = scripts / "package-backend.sh"
+        package_script.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'root="$(cd "$(dirname "$0")/../.." && pwd)"\n'
+            'mkdir -p "$root/artifacts/agena"\n'
+            f'cp {shlex.quote(str(archive))} "$root/artifacts/agena/agena-backend-${{1:-test}}-v0.1.0.tar.gz"\n'
+            'archive="$root/artifacts/agena/agena-backend-${1:-test}-v0.1.0.tar.gz"\n'
+            f'printf \'%s  %s\\n\' {shlex.quote(digest)} "$(basename "$archive")" > "$archive.sha256"\n'
+            'printf \'Package ready: %s\\n\' "$archive"\n'
+            'printf \'Checksum ready: %s.sha256\\n\' "$archive"\n'
+        )
+        package_script.chmod(0o755)
+        return root
 
     def assert_only_selected_root_was_called(self):
         calls = self.calls_path.read_text().splitlines()
@@ -223,6 +248,96 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertTrue((self.data_dir / "agena.db").is_file())
         self.assertTrue(self.default_sentinel.is_file())
         self.assert_only_selected_root_was_called()
+
+    def test_source_install_uses_current_checkout_without_cloning(self):
+        checkout = self.source_checkout()
+        fake_bin = self.root / "fake bin"
+        fake_bin.mkdir()
+        marker = self.root / "git was called"
+        git = fake_bin / "git"
+        git.write_text(
+            "#!/usr/bin/env bash\n"
+            f"touch {shlex.quote(str(marker))}\n"
+            "exit 99\n"
+        )
+        git.chmod(0o755)
+        result = self.invoke(
+            "install", "--source", "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            cwd=checkout,
+            environment={"PATH": str(fake_bin) + os.pathsep + self.env["PATH"]},
+        )
+        self.assertIn(f"Building Agena from source at {checkout}", result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertTrue((self.install_dir / "bin/agena").is_file())
+        self.assert_only_selected_root_was_called()
+
+    def test_source_install_accepts_an_explicit_checkout_path(self):
+        checkout = self.source_checkout("other checkout")
+        unrelated = self.root / "unrelated cwd"
+        unrelated.mkdir()
+        result = self.invoke(
+            "install", "--source", checkout, "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            cwd=unrelated,
+        )
+        self.assertIn(f"Building Agena from source at {checkout}", result.stdout)
+        self.assertTrue((self.install_dir / "bin/agena").is_file())
+        self.assert_only_selected_root_was_called()
+
+    def test_source_install_clones_an_explicit_git_url(self):
+        template = self.source_checkout("source template")
+        fake_bin = self.root / "clone bin"
+        fake_bin.mkdir()
+        calls = self.root / "git calls"
+        git = fake_bin / "git"
+        git.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'printf \'%s\\n\' "$*" >> "$TEST_GIT_CALLS"\n'
+            '[[ "${1:-}" == "clone" ]] || exit 97\n'
+            'destination="${!#}"\n'
+            'mkdir -p "$destination"\n'
+            f'cp -R {shlex.quote(str(template))}/. "$destination"/\n'
+        )
+        git.chmod(0o755)
+        result = self.invoke(
+            "install", "--source", "https://example.invalid/agena.git",
+            "--data-dir", self.data_dir, "--workspace", self.workspace,
+            "--service-mode", "detached",
+            environment={
+                "PATH": str(fake_bin) + os.pathsep + self.env["PATH"],
+                "TEST_GIT_CALLS": str(calls),
+            },
+        )
+        self.assertIn("https://example.invalid/agena.git", calls.read_text())
+        self.assertIn("Building Agena from source", result.stdout)
+        self.assertTrue((self.install_dir / "bin/agena").is_file())
+        self.assert_only_selected_root_was_called()
+
+    def test_source_install_rejects_release_only_options(self):
+        checkout = self.source_checkout()
+        result = self.invoke(
+            "install", "--source", checkout, "--archive", self.archive,
+            "--data-dir", self.data_dir, success=False,
+        )
+        self.assertIn("--source cannot be combined with --archive", result.stdout)
+        result = self.invoke(
+            "install", "--source", checkout, "--version", "0.1.0-beta.1",
+            "--data-dir", self.data_dir, success=False,
+        )
+        self.assertIn("--version applies to release installs", result.stdout)
+        self.assertFalse(self.calls_path.exists())
+
+    def test_source_install_rejects_a_directory_that_is_not_a_checkout(self):
+        not_source = self.root / "not source"
+        not_source.mkdir()
+        result = self.invoke(
+            "install", "--source", not_source, "--data-dir", self.data_dir,
+            success=False,
+        )
+        self.assertIn("is not an Agena checkout", result.stdout)
+        self.assertFalse(self.calls_path.exists())
 
 
 if __name__ == "__main__":

@@ -23,6 +23,17 @@ read_version() {
     | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "agena"))'
 }
 
+for required_tool in cargo rustc python3 tar; do
+  if ! command -v "$required_tool" >/dev/null 2>&1; then
+    echo "ERROR: $required_tool is required to build Agena from source." >&2
+    exit 1
+  fi
+done
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "ERROR: sha256sum or shasum is required to checksum the Agena package." >&2
+  exit 1
+fi
+
 TARGET_TRIPLE="${1:-$(detect_host_triple)}"
 BUILD_STD="${2:-false}"
 TARGET_RUSTFLAGS="${3:-}"

@@ -41,6 +41,18 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
 
+To build and install from a checkout instead of a release archive:
+
+```bash
+cd /path/to/agena
+bash scripts/agena/install.sh install --source
+```
+
+The current checkout is used directly. Pass `--source PATH` to build another
+checkout or `--source GIT_URL` to clone one; see the
+[installation guide](docs/installation.md#install-from-source) for requirements
+and Windows usage.
+
 GitHub Releases remain beta releases. The repository and binaries use version
 `0.1.0`; beta tags use `agena-v0.1.0-beta.N`. The installer discovers the
 newest beta release, verifies its SHA-256, installs the native binary and Web

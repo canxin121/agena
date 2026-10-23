@@ -10,6 +10,7 @@ import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import ActivityLogView from '@/components/chat/ActivityLogView.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
+import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
 import DeferredPartBody from './DeferredPartBody.vue'
 import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
@@ -195,8 +196,7 @@ async function loadSection(section: ToolDetailSection, options: SectionLoadOptio
     // Transcript output can advance before its section's revision hint.
     // Validate directly until the body catches up, including a terminal state.
     const needsCurrentOutput =
-      section === 'output' &&
-      (!sectionLoaded(section) || (status.value.terminal && loadedOutputState !== sourceState))
+      section === 'output' && (!sectionLoaded(section) || (status.value.terminal && loadedOutputState !== sourceState))
     const observed = sectionObservations.get(section)
     if (
       !needsCurrentOutput &&
@@ -544,12 +544,13 @@ function toggleOuter() {
           'text-amber-600 dark:text-amber-400': status.tone === 'warning',
           'text-rose-600 dark:text-rose-400': status.tone === 'danger',
           'text-muted-foreground': status.tone === 'muted',
-          'animate-spin': status.spinning,
         }"
         :title="status.label"
         aria-hidden="true"
-        >{{ status.icon }}</span
       >
+        <BrailleSpinner v-if="status.spinning" />
+        <template v-else>{{ status.icon }}</template>
+      </span>
       <span class="min-w-0 flex-1 truncate text-[13px] font-semibold">{{
         operation.userInputs[0] ? operation.toolName || operation.title : operation.title
       }}</span>

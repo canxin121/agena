@@ -4,6 +4,7 @@ import { RiArrowRightSLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
+import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
 import AgenaContentText from '@/components/chat/AgenaContentText.vue'
@@ -110,12 +111,13 @@ function openAttachment(path: string, url: string) {
         'text-amber-600 dark:text-amber-400': status.tone === 'warning',
         'text-rose-600 dark:text-rose-400': status.tone === 'danger',
         'text-muted-foreground': status.tone === 'muted',
-        'animate-spin': status.spinning,
       }"
       :title="status.label"
       aria-hidden="true"
-      >{{ status.icon }}</span
     >
+      <BrailleSpinner v-if="status.spinning" />
+      <template v-else>{{ status.icon }}</template>
+    </span>
     <span class="text-[13px] font-semibold" :class="status.tone === 'danger' ? 'text-rose-700 dark:text-rose-300' : ''">
       {{ part.title }}
     </span>
@@ -145,12 +147,13 @@ function openAttachment(path: string, url: string) {
           'text-amber-600 dark:text-amber-400': status.tone === 'warning',
           'text-rose-600 dark:text-rose-400': status.tone === 'danger',
           'text-muted-foreground': status.tone === 'muted',
-          'animate-spin': status.spinning,
         }"
         :title="status.label"
         aria-hidden="true"
-        >{{ status.icon }}</span
       >
+        <BrailleSpinner v-if="status.spinning" />
+        <template v-else>{{ status.icon }}</template>
+      </span>
       <span
         v-if="ordinal"
         class="shrink-0 rounded bg-muted/60 px-1 font-mono text-[11px] text-muted-foreground"

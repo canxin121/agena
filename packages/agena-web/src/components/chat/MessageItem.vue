@@ -7,6 +7,7 @@ import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
+import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
 import type { MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import {
@@ -362,11 +363,12 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           'text-primary': runStatus.tone === 'pending',
           'text-amber-600 dark:text-amber-400': runStatus.tone === 'warning',
           'text-rose-600 dark:text-rose-400': runStatus.tone === 'danger',
-          'animate-spin': runStatus.spinning,
         }"
         :title="runStatus.label"
-        >{{ runStatus.icon }}</span
       >
+        <BrailleSpinner v-if="runStatus.spinning" />
+        <template v-else>{{ runStatus.icon }}</template>
+      </span>
       <span v-if="showTimestamps">{{ formatTime(message.info.time?.created) }}</span>
       <span v-if="message.info.providerID || message.info.modelID" class="min-w-0 truncate font-mono text-[10px]">
         {{ [message.info.providerID, message.info.adapterID, message.info.modelID].filter(Boolean).join('/') }}

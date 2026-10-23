@@ -1,8 +1,9 @@
 //! On-demand, non-recursive watches for the directories actually shown by a
 //! files pane. The stream owns the watcher; disconnect drops every OS watch.
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     convert::Infallible,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -99,6 +100,42 @@ struct Changes {
     reconnect: bool,
 }
 
+fn is_topology_change(kind: notify::EventKind) -> bool {
+    matches!(
+        kind,
+        notify::EventKind::Create(_)
+            | notify::EventKind::Remove(_)
+            | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+    )
+}
+
+fn watched_directory_was_replaced(
+    kind: notify::EventKind,
+    path: &Path,
+    watched: &BTreeMap<PathBuf, Option<std::fs::Metadata>>,
+) -> bool {
+    if !is_topology_change(kind) {
+        return false;
+    }
+    let Some(_original) = watched.get(path) else {
+        return false;
+    };
+    // FSEvents can deliver an earlier Create/Remove flag after registration.
+    // That does not detach the watch when the directory inode is unchanged.
+    #[cfg(unix)]
+    if let Some(original) = _original
+        && let Ok(current) = std::fs::metadata(path)
+    {
+        use std::os::unix::fs::MetadataExt;
+        return !current.is_dir()
+            || current.dev() != original.dev()
+            || current.ino() != original.ino();
+    }
+    // A missing/unreadable target or a platform without a stable inode query
+    // retains the conservative reconnect behavior.
+    true
+}
+
 pub async fn fs_watch(
     headers: HeaderMap,
     Query(query): Query<WatchQuery>,
@@ -139,7 +176,10 @@ pub async fn fs_watch(
             let changes = Arc::new(Mutex::new(Changes::default()));
             let (wake, events) = tokio::sync::watch::channel(0_u64);
             let pending = changes.clone();
-            let watch_paths = watched.clone();
+            let watch_paths = watched
+                .iter()
+                .map(|path| (path.clone(), std::fs::metadata(path).ok()))
+                .collect::<BTreeMap<_, _>>();
             // notify may report canonical OS paths even when the UI opened a
             // symlinked workspace. Preserve every watched alias in the events.
             let aliases = watched
@@ -163,12 +203,7 @@ pub async fn fs_watch(
                             batch.truncated |= event.need_rescan();
                             // OS watches can be detached by directory deletion or
                             // replacement. Reopen the stream to watch the new inode.
-                            let topology_change = matches!(
-                                event.kind,
-                                notify::EventKind::Create(_)
-                                    | notify::EventKind::Remove(_)
-                                    | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
-                            );
+                            let topology_change = is_topology_change(event.kind);
                             if event.paths.len() > 256 {
                                 batch.truncated = true;
                                 batch.reconnect |= topology_change;
@@ -191,8 +226,11 @@ pub async fn fs_watch(
                                     mapped.push(path);
                                 }
                                 for path in mapped {
-                                    batch.reconnect |=
-                                        topology_change && watch_paths.contains(&path);
+                                    batch.reconnect |= watched_directory_was_replaced(
+                                        event.kind,
+                                        &path,
+                                        &watch_paths,
+                                    );
                                     if batch.paths.len() < 256 {
                                         batch.paths.insert(to_api_path(&path));
                                     } else {
@@ -264,4 +302,56 @@ pub async fn fs_watch(
         }
     };
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20))))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn delayed_topology_events_reconnect_only_after_watched_directory_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("watched");
+        std::fs::create_dir(&path).unwrap();
+        let watched = BTreeMap::from([(path.clone(), Some(std::fs::metadata(&path).unwrap()))]);
+        for kind in [
+            notify::EventKind::Create(CreateKind::Folder),
+            notify::EventKind::Remove(RemoveKind::Folder),
+            notify::EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+        ] {
+            let event = notify::Event::new(kind).add_path(path.clone());
+            assert!(!watched_directory_was_replaced(
+                event.kind,
+                &event.paths[0],
+                &watched
+            ));
+        }
+        let child_event = notify::Event::new(notify::EventKind::Create(CreateKind::File))
+            .add_path(path.join("external.txt"));
+        assert!(!watched_directory_was_replaced(
+            child_event.kind,
+            &child_event.paths[0],
+            &watched,
+        ));
+
+        // Retain the original inode so the replacement cannot reuse it.
+        std::fs::rename(&path, temp.path().join("original")).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let replacement = notify::Event::new(notify::EventKind::Create(CreateKind::Folder))
+            .add_path(path.clone());
+        assert!(watched_directory_was_replaced(
+            replacement.kind,
+            &replacement.paths[0],
+            &watched,
+        ));
+        std::fs::remove_dir(&path).unwrap();
+        let removed =
+            notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder)).add_path(path);
+        assert!(watched_directory_was_replaced(
+            removed.kind,
+            &removed.paths[0],
+            &watched
+        ));
+    }
 }

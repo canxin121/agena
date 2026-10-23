@@ -586,6 +586,16 @@ mod tests {
         );
         let (first, second) =
             tokio::join!(apps.run("session", "tasks"), apps.run("session", "tasks"));
+        if let Err(error) = &first
+            && let Some(session) = apps
+                .registry
+                .get_by_id(&service_id("session", "tasks", "api"))
+                .await
+        {
+            let output = std::fs::read_to_string(&session.logs_path)
+                .unwrap_or_else(|read_error| format!("cannot read service logs: {read_error}"));
+            panic!("app startup failed: {error:?}; service logs: {output}");
+        }
         let first = first.unwrap();
         assert_eq!(
             first.services["api"].pid,

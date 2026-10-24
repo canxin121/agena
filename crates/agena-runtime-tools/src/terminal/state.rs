@@ -262,20 +262,35 @@ impl State {
             }
             Self::push(&mut inner, text)
         };
-        if let Some(writer) = &self.output
-            && let Err(error) =
-                writer.try_log(agena_domain::CommandOutputStream::Stdout, &event.line)
-        {
-            writer.record_loss(
-                agena_domain::ContentKind::Log,
-                event.line.len(),
-                &error.to_string(),
-            );
-        }
+        self.publish_log(&event.line);
         self.changed.notify_all();
         if let Some(listener) = &self.listener {
             let summary = self.summary();
             self.observe(|| listener.on_event(&event, &summary));
+        }
+    }
+
+    fn publish_log(&self, text: &str) {
+        let Some(writer) = &self.output else { return };
+        // This runs on the native PTY worker. Busy means no bytes were
+        // admitted, so a short bounded retry is safe and keeps a transient
+        // registry lock/commit gate from turning ordinary output into loss.
+        let deadline = Instant::now() + Duration::from_millis(50);
+        loop {
+            match writer.try_log(agena_domain::CommandOutputStream::Stdout, text) {
+                Ok(_) => return,
+                Err(agena_storage::kernel::KernelError::Busy) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => {
+                    writer.record_loss(
+                        agena_domain::ContentKind::Log,
+                        text.len(),
+                        &error.to_string(),
+                    );
+                    return;
+                }
+            }
         }
     }
 
@@ -392,8 +407,16 @@ impl State {
                     inner.patches_since_snapshot += 1;
                 }
             }
+            Err(agena_storage::kernel::KernelError::Busy) => {
+                // Retain the last admitted base and retry even if no more PTY
+                // bytes arrive. No screen was lost while it remains dirty.
+                lock(&self.inner).screen_dirty = true;
+            }
             Err(error) => {
-                lock(&self.inner).emitted_screen = None;
+                let mut inner = lock(&self.inner);
+                inner.emitted_screen = None;
+                inner.screen_dirty = true;
+                drop(inner);
                 writer.record_loss(agena_domain::ContentKind::Terminal, 0, &error.to_string());
             }
         }
@@ -435,18 +458,41 @@ impl State {
         };
         if let Some(writer) = &self.output {
             if let Some(text) = final_text {
-                let bytes = text.len();
-                if let Err(error) = writer.try_log(agena_domain::CommandOutputStream::Stdout, &text)
-                {
-                    writer.record_loss(agena_domain::ContentKind::Log, bytes, &error.to_string());
-                }
+                self.publish_log(&text);
             }
-            self.publish_screen(true);
+            // The driver is about to exit. Persist a complete final frame
+            // with bounded admission retries before sealing activity output;
+            // a failed synchronous try must not permanently drop the tail.
+            let screen = super::screen::snapshot(lock(&self.inner).parser.screen());
             let output = writer.clone();
             let summary = self.summary();
             match tokio::runtime::Handle::try_current() {
                 Ok(runtime) => {
                     runtime.spawn(async move {
+                        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                        loop {
+                            match output
+                                .append(agena_domain::ContentInput::Terminal {
+                                    screen: screen.clone(),
+                                })
+                                .await
+                            {
+                                Ok(()) => break,
+                                Err(agena_storage::kernel::KernelError::Busy)
+                                    if tokio::time::Instant::now() < deadline =>
+                                {
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                }
+                                Err(error) => {
+                                    output.record_loss(
+                                        agena_domain::ContentKind::Terminal,
+                                        0,
+                                        &error.to_string(),
+                                    );
+                                    break;
+                                }
+                            }
+                        }
                         output.finish_activity(&summary).await;
                     });
                 }
@@ -659,7 +705,7 @@ impl State {
                 rows,
                 cols,
                 cursor_row,
-                cursor_col,
+                cursor_col: cursor_col.min(cols.saturating_sub(1)),
                 cursor_visible: !screen.hide_cursor(),
                 alternate_screen: screen.alternate_screen(),
                 bracketed_paste: screen.bracketed_paste(),

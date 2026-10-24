@@ -481,11 +481,25 @@ impl Application {
         let reader = self.session_kernel()?.reader.clone();
         // Membership is checked by the backend on bootstrap and every range;
         // a rewind/deletion revokes retained watch capabilities immediately.
-        let changes = reader
-            .watch_content(session, id)
-            .await
-            .map_err(crate::kernel_error)?;
-        let head = changes.head().map_err(crate::kernel_error)?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut backoff = std::time::Duration::from_millis(1);
+        let (changes, head) = loop {
+            let result = match reader.watch_content(session, id).await {
+                Ok(changes) => changes.head().map(|head| (changes, head)),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(watch) => break watch,
+                // Bootstrap has no cursor yet. Apply the same bounded
+                // admission recovery as ContentDelivery instead of exposing
+                // a transient Busy as a failed live-output connection.
+                Err(KernelError::Busy) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(std::time::Duration::from_millis(100));
+                }
+                Err(error) => return Err(crate::kernel_error(error)),
+            }
+        };
         let resource = resource(session_id, &head);
         Ok(ContentWatch {
             resource,

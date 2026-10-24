@@ -5481,92 +5481,81 @@ impl BuiltinHumanRenderer {
                     exit_code,
                     completion_reason,
                 } => {
-                    if let Some(screen) = terminal {
-                        blocks.push(ViewBlock::Log {
-                            id: Some("terminal-screen".into()),
-                            stream: agena_domain::CommandOutputStream::Stdout,
-                            text: Self::bounded_human_text(&screen.text),
-                        });
-                        if let Some(output) = output.filter(|text| !text.is_empty())
-                            && !screen
-                                .text
-                                .contains(super::terminal_tool::display_output(&output).trim())
-                        {
+                    if output_resource.is_none() {
+                        if let Some(screen) = terminal {
                             blocks.push(ViewBlock::Log {
-                                id: Some("terminal-output".into()),
+                                id: Some("terminal-screen".into()),
                                 stream: agena_domain::CommandOutputStream::Stdout,
-                                text: Self::bounded_human_text(
-                                    &super::terminal_tool::display_output(&output),
-                                ),
+                                text: Self::bounded_human_text(&screen.text),
                             });
-                        }
-                    } else if matches!(
-                        action.as_str(),
-                        "open" | "read" | "write" | "resize" | "signal"
-                    ) {
-                        if background {
+                        } else if matches!(
+                            action.as_str(),
+                            "open" | "read" | "write" | "resize" | "signal"
+                        ) {
+                            if background {
+                                blocks.extend(Self::event_log_blocks(&events));
+                            }
+                            if let Some(output) = output.filter(|text| !text.is_empty()) {
+                                blocks.push(ViewBlock::Log {
+                                    id: Some("terminal-output".into()),
+                                    stream: agena_domain::CommandOutputStream::Stdout,
+                                    text: Self::bounded_human_text(
+                                        &super::terminal_tool::display_output(&output),
+                                    ),
+                                });
+                            }
+                        } else if matches!(action.as_str(), "run" | "exec" | "spawn" | "watch") {
+                            let event_stdout = events
+                                .iter()
+                                .filter(|event| {
+                                    matches!(event.stream, agena_domain::ProcessStream::Stdout)
+                                })
+                                .map(|event| event.line.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let stdout = output
+                                .map(|output| Self::bounded_human_text(&output))
+                                .unwrap_or_else(|| {
+                                    if !raw.text_content().is_empty() {
+                                        Self::bounded_human_text(raw.text_content())
+                                    } else {
+                                        Self::bounded_human_text(event_stdout.as_str())
+                                    }
+                                });
+                            let command = command
+                                .filter(|command| !command.trim().is_empty())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("shell {action}"));
+                            let stderr = events
+                                .iter()
+                                .filter(|event| {
+                                    matches!(event.stream, agena_domain::ProcessStream::Stderr)
+                                })
+                                .map(|event| event.line.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            blocks.push(ViewBlock::Command {
+                                id: Some("command".into()),
+                                command,
+                                cwd: cwd.map(str::to_owned),
+                                exit_code,
+                                stdout,
+                                stderr: Self::bounded_human_text(stderr.as_str()),
+                            });
+                        } else {
                             blocks.extend(Self::event_log_blocks(&events));
-                        }
-                        if let Some(output) = output.filter(|text| !text.is_empty()) {
-                            blocks.push(ViewBlock::Log {
-                                id: Some("terminal-output".into()),
-                                stream: agena_domain::CommandOutputStream::Stdout,
-                                text: Self::bounded_human_text(
-                                    &super::terminal_tool::display_output(&output),
-                                ),
-                            });
-                        }
-                    } else if matches!(action.as_str(), "run" | "exec" | "spawn" | "watch") {
-                        let event_stdout = events
-                            .iter()
-                            .filter(|event| {
-                                matches!(event.stream, agena_domain::ProcessStream::Stdout)
-                            })
-                            .map(|event| event.line.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let stdout = output
-                            .map(|output| Self::bounded_human_text(&output))
-                            .unwrap_or_else(|| {
-                                if !raw.text_content().is_empty() {
-                                    Self::bounded_human_text(raw.text_content())
-                                } else {
-                                    Self::bounded_human_text(event_stdout.as_str())
-                                }
-                            });
-                        let command = command
-                            .filter(|command| !command.trim().is_empty())
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| format!("shell {action}"));
-                        let stderr = events
-                            .iter()
-                            .filter(|event| {
-                                matches!(event.stream, agena_domain::ProcessStream::Stderr)
-                            })
-                            .map(|event| event.line.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        blocks.push(ViewBlock::Command {
-                            id: Some("command".into()),
-                            command,
-                            cwd: cwd.map(str::to_owned),
-                            exit_code,
-                            stdout,
-                            stderr: Self::bounded_human_text(stderr.as_str()),
-                        });
-                    } else {
-                        blocks.extend(Self::event_log_blocks(&events));
-                        if blocks
-                            .iter()
-                            .all(|block| block.block_id() != Some("stdout"))
-                            && let Some(output) = output
-                            && !output.trim().is_empty()
-                        {
-                            blocks.push(ViewBlock::Log {
-                                id: Some("stdout".into()),
-                                stream: agena_domain::CommandOutputStream::Stdout,
-                                text: Self::bounded_human_text(output.as_str()),
-                            });
+                            if blocks
+                                .iter()
+                                .all(|block| block.block_id() != Some("stdout"))
+                                && let Some(output) = output
+                                && !output.trim().is_empty()
+                            {
+                                blocks.push(ViewBlock::Log {
+                                    id: Some("stdout".into()),
+                                    stream: agena_domain::CommandOutputStream::Stdout,
+                                    text: Self::bounded_human_text(output.as_str()),
+                                });
+                            }
                         }
                     }
                     let mut fields = vec![("Action", action.clone())];
@@ -5960,5 +5949,57 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
             return Ok(Self::compact_blocks(Self::fallback(raw)));
         }
         Ok(Self::compact_blocks(blocks))
+    }
+}
+
+#[cfg(test)]
+mod terminal_output_tests {
+    use super::*;
+
+    fn result(resource: Option<agena_domain::ContentRef>) -> RawOutput {
+        RawOutput {
+            payload: Some(json!({
+                "action": "open", "output_resource": resource,
+                "output": "1\r\n2\r\n", "terminal": {
+                    "rows": 24, "cols": 80, "cursor_row": 2, "cursor_col": 0,
+                    "cursor_visible": true, "alternate_screen": false,
+                    "bracketed_paste": false, "application_cursor": false,
+                    "text": "1\n2", "truncated": false
+                }
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn native_terminal_resource_replaces_inline_screen_and_raw_output() {
+        let resource = agena_domain::ContentRef {
+            resource_id: agena_domain::ContentId::new(),
+            kind: agena_domain::ContentKind::Terminal,
+        };
+        let blocks = BuiltinHumanRenderer::new("shell.open")
+            .render_human(&RenderContext::default(), &result(Some(resource.clone())))
+            .unwrap();
+        assert_eq!(blocks.iter().filter(|block| matches!(block, ViewBlock::Content { resource: value, .. } if value == &resource)).count(), 1);
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, ViewBlock::Log { .. } | ViewBlock::Command { .. }))
+        );
+    }
+
+    #[test]
+    fn inline_terminal_screen_does_not_repeat_escaped_crlf_output() {
+        let blocks = BuiltinHumanRenderer::new("shell.open")
+            .render_human(&RenderContext::default(), &result(None))
+            .unwrap();
+        let logs = blocks
+            .iter()
+            .filter_map(|block| match block {
+                ViewBlock::Log { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(logs, vec!["1\n2"]);
     }
 }

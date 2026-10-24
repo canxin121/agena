@@ -24,6 +24,19 @@ fn tool_content_for_presentation(
             .resources
             .retain(|resource| resource.resource_id != trace.resource_id);
     }
+    // A PTY's raw log and screen are two projections of the same output.
+    // Keep the raw capture in storage, but display and subscribe to the screen
+    // once. This also applies before a running tool has returned a result.
+    if agena_domain::ToolPermissionConfig::canonical_shell_tool_name(&content.name).is_some()
+        && content
+            .resources
+            .iter()
+            .any(|resource| resource.kind == agena_domain::ContentKind::Terminal)
+    {
+        content
+            .resources
+            .retain(|resource| resource.kind != agena_domain::ContentKind::Log);
+    }
     let Some(output) = content.output.as_mut() else {
         return Some(content);
     };
@@ -73,6 +86,48 @@ fn project_tool_content(
             .expect("content references are JSON serializable");
     }
     projected
+}
+
+#[cfg(test)]
+mod terminal_presentation_tests {
+    use super::*;
+    use agena_domain::{ContentId, ContentKind, ContentRef};
+    use agena_runtime_contracts::part_content::ToolCallContent;
+
+    #[test]
+    fn pty_displays_one_projection_before_and_after_tool_completion() {
+        let log = ContentRef {
+            resource_id: ContentId::new(),
+            kind: ContentKind::Log,
+        };
+        let terminal = ContentRef {
+            resource_id: ContentId::new(),
+            kind: ContentKind::Terminal,
+        };
+        let text = ContentRef {
+            resource_id: ContentId::new(),
+            kind: ContentKind::Text,
+        };
+        let mut content = ToolCallContent {
+            name: "shell.open".into(),
+            input: serde_json::json!({"command": "seq 1 10"}),
+            resources: vec![log.clone(), terminal.clone(), text.clone()],
+            ..Default::default()
+        };
+        for output in [None, Some(agena_domain::RawOutput::default())] {
+            content.output = output;
+            let projected = tool_content_for_presentation(&content.as_value()).unwrap();
+            assert_eq!(projected.resources, vec![terminal.clone(), text.clone()]);
+            assert_eq!(content.resources[0], log);
+        }
+        content.resources = vec![log.clone()];
+        assert_eq!(
+            tool_content_for_presentation(&content.as_value())
+                .unwrap()
+                .resources,
+            vec![log]
+        );
+    }
 }
 
 /// Shared by list, detail and live reads. No client or transport dimension.

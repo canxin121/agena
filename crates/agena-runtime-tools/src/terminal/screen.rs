@@ -11,6 +11,10 @@ fn color(value: vt100::Color) -> Option<TerminalColor> {
 pub(super) fn snapshot(screen: &vt100::Screen) -> TerminalSnapshot {
     let (rows, cols) = screen.size();
     let (cursor_row, cursor_col) = screen.cursor_position();
+    // vt100 represents delayed wrapping with col == cols after writing the
+    // rightmost cell. The visible cursor is still in the last column; the
+    // transport requires an in-bounds cell position.
+    let cursor_col = cursor_col.min(cols.saturating_sub(1));
     let mut cells = Vec::<TerminalCellRun>::new();
     for row in 0..rows {
         let end = (0..cols)
@@ -67,5 +71,28 @@ pub(super) fn snapshot(screen: &vt100::Screen) -> TerminalSnapshot {
         bracketed_paste: screen.bracketed_paste(),
         application_cursor: screen.application_cursor(),
         cells,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_validate_at_right_margin_and_after_resize() {
+        let mut parser = vt100::Parser::new(3, 5, 0);
+        for bytes in [
+            b"12345".as_slice(),
+            b"67890",
+            b"\r\nabcde",
+            b"\x1b[?1049hABCDE",
+        ] {
+            parser.process(bytes);
+            let frame = snapshot(parser.screen());
+            assert_eq!(frame.validate(None), Ok(()), "{frame:?}");
+        }
+        parser.screen_mut().set_size(2, 3);
+        let frame = snapshot(parser.screen());
+        assert_eq!(frame.validate(None), Ok(()), "{frame:?}");
     }
 }

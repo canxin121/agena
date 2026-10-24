@@ -354,7 +354,11 @@ impl ContentView {
             resource.state = previous.resource.state;
         }
         let terminal = resource.kind == agena_domain::ContentKind::Terminal;
-        let (lines, wrapped, omitted) = observation_lines(self.parser.screen_mut(), !terminal);
+        let (lines, wrapped, omitted) = if resource.kind == agena_domain::ContentKind::Text {
+            (Vec::new(), Vec::new(), false)
+        } else {
+            observation_lines(self.parser.screen_mut(), !terminal)
+        };
         self.windowed |= omitted;
         self.frame = Some(Arc::new(ContentFrame {
             resource,
@@ -433,8 +437,9 @@ fn screen_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
     lines
 }
 
-/// Log history is a local, bounded observation window. PTY screens preserve
-/// every row, including empty rows, and never turn into a wrapped transcript.
+/// Log history is a local, bounded observation window. Normal PTY screens
+/// omit unused trailing rows in the transcript; alternate screens preserve
+/// their full layout. Neither kind reflows terminal cells.
 fn observation_lines(
     screen: &mut vt100::Screen,
     history: bool,
@@ -458,10 +463,8 @@ fn observation_lines(
     }
     lines.extend(screen_lines(screen));
     wrapped.extend((0..rows).map(|row| screen.row_wrapped(row as u16)));
-    if history {
-        let observed_rows = lines.len() - rows + usize::from(screen.cursor_position().0) + 1;
-        while lines.len() > observed_rows && lines.last().is_some_and(|line| line.spans.is_empty())
-        {
+    if history || !screen.alternate_screen() {
+        while lines.last().is_some_and(|line| line.spans.is_empty()) {
             lines.pop();
             wrapped.pop();
         }
@@ -625,4 +628,180 @@ fn clip_cells(line: &Line<'static>, width: usize) -> Line<'static> {
         }
     }
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::{
+        ContentChunk, ContentKind, TerminalAttributes, TerminalCellRun, TerminalSnapshot,
+    };
+
+    fn page(kind: ContentKind, sequence: u64, payload: ContentPayload) -> ContentPage {
+        let cursor = ContentCursor {
+            epoch: agena_domain::ContentEpoch::new().into(),
+            sequence,
+        };
+        ContentPage {
+            resource: ContentResource {
+                resource_id: agena_domain::ContentId::new(),
+                owner_session_id: 1,
+                part_id: 1,
+                kind,
+                state: ContentState::Active,
+                cursor,
+                committed_cursor: cursor,
+                total_bytes: None,
+                dropped_bytes: 0,
+                dropped_packets: 0,
+                committed_dropped_bytes: 0,
+                committed_dropped_packets: 0,
+                retained_ranges: Vec::new(),
+                capture_error: None,
+            },
+            chunks: vec![ContentChunk {
+                cursor,
+                captured_at_ms: 0,
+                payload,
+            }],
+            next_cursor: cursor,
+            has_more: false,
+            gap: false,
+        }
+    }
+
+    fn screen() -> TerminalSnapshot {
+        TerminalSnapshot {
+            rows: 24,
+            cols: 80,
+            cursor_row: 10,
+            cursor_col: 0,
+            cursor_visible: true,
+            alternate_screen: false,
+            bracketed_paste: false,
+            application_cursor: false,
+            cells: (0..10)
+                .map(|row| TerminalCellRun {
+                    row,
+                    col: 0,
+                    text: (row + 1).to_string(),
+                    attributes: TerminalAttributes::default(),
+                })
+                .collect(),
+        }
+    }
+
+    fn text(view: &ContentView) -> Vec<String> {
+        view.frame
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn terminal_reconnect_does_not_duplicate_output_or_unused_rows() {
+        let mut view = ContentView::default();
+        let first = page(
+            ContentKind::Terminal,
+            1,
+            ContentPayload::Terminal { screen: screen() },
+        );
+        assert!(view.apply(first.clone()));
+        assert_eq!(
+            text(&view),
+            (1..=10).map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+        assert!(view.apply(first.clone()));
+        let mut next = first.clone();
+        next.next_cursor.sequence = 2;
+        next.resource.cursor.sequence = 2;
+        next.resource.committed_cursor.sequence = 2;
+        next.chunks[0].cursor.sequence = 2;
+        assert!(view.apply(next));
+        // An old in-flight page must not roll the observation backwards.
+        assert!(view.apply(first));
+        assert_eq!(view.cursor.unwrap().sequence, 2);
+        assert_eq!(text(&view).join("\n"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n10");
+    }
+
+    #[test]
+    fn terminal_patch_clears_rows_and_recovers_from_missing_base() {
+        let mut view = ContentView::default();
+        let first = page(
+            ContentKind::Terminal,
+            1,
+            ContentPayload::Terminal { screen: screen() },
+        );
+        assert!(view.apply(first.clone()));
+        let mut next = first.clone();
+        next.next_cursor.sequence = 2;
+        next.resource.cursor.sequence = 2;
+        next.resource.committed_cursor.sequence = 2;
+        next.chunks[0].cursor.sequence = 2;
+        let mut patch = screen();
+        patch.cells.clear();
+        next.chunks[0].payload = ContentPayload::TerminalPatch {
+            base_cursor: first.next_cursor,
+            screen: patch,
+            rows_changed: vec![9],
+        };
+        assert!(view.apply(next.clone()));
+        assert_eq!(text(&view).len(), 9);
+        let mut fresh = ContentView::default();
+        assert!(!fresh.apply(next));
+        assert!(fresh.cursor.is_none());
+        assert!(fresh.apply(first));
+        assert_eq!(text(&fresh).len(), 10);
+    }
+
+    #[test]
+    fn alternate_screen_preserves_geometry_and_interior_blank_rows() {
+        let mut view = ContentView::default();
+        let mut snapshot = screen();
+        snapshot.alternate_screen = true;
+        snapshot.cells.retain(|run| run.row != 4);
+        assert!(view.apply(page(
+            ContentKind::Terminal,
+            1,
+            ContentPayload::Terminal { screen: snapshot }
+        )));
+        assert_eq!(text(&view).len(), 24);
+        assert!(text(&view)[4].is_empty());
+    }
+
+    #[test]
+    fn text_does_not_render_an_extra_emulator_row() {
+        let mut view = ContentView::default();
+        assert!(view.apply(page(
+            ContentKind::Text,
+            5,
+            ContentPayload::Text {
+                text: "hello".into()
+            }
+        )));
+        let frame = view.frame.as_ref().unwrap();
+        assert_eq!(frame.text.as_ref(), "hello");
+        assert!(frame.lines.is_empty());
+    }
+
+    #[test]
+    fn log_scrollback_preserves_each_line_once_without_empty_screen_padding() {
+        let mut view = ContentView::default();
+        let output = (1..=60).map(|i| format!("{i}\n")).collect::<String>();
+        assert!(view.apply(page(
+            ContentKind::Log,
+            1,
+            ContentPayload::Log {
+                stream: agena_domain::CommandOutputStream::Stdout,
+                text: output,
+            }
+        )));
+        assert_eq!(
+            text(&view),
+            (1..=60).map(|i| i.to_string()).collect::<Vec<_>>()
+        );
+    }
 }

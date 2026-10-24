@@ -162,8 +162,8 @@ pub(crate) fn activity_status_icon(status: PartExecutionStatusResource) -> &'sta
     }
 }
 
-/// Render the shared one-line Activity chrome with Markdown-aware title and
-/// summary spans. Status belongs to the icon, title carries heading emphasis,
+/// Render the shared one-line Activity chrome with a literal title and
+/// Markdown-aware summary. Status belongs to the icon, title carries heading emphasis,
 /// and the compact summary stays visually subordinate instead of tinting and
 /// bolding the entire row as one undifferentiated string.
 pub(crate) fn push_activity_headline(
@@ -207,9 +207,9 @@ pub(crate) fn push_activity_headline_with_summary(
 
     let title_style = Style::default().add_modifier(Modifier::BOLD);
     let summary_style = Style::default().fg(agena_tui_components::theme::muted_color());
-    let mut content_spans = markdown_inline_line(title.as_str(), title_style, i18n)
-        .map(|line| line.spans)
-        .unwrap_or_else(|| vec![Span::styled(title.clone(), title_style)]);
+    // Titles contain shell syntax and paths. Interpreting `$...$`, backticks
+    // or underscores as prose changes the command the user sees and copies.
+    let mut content_spans = vec![Span::styled(title.clone(), title_style)];
     if !summary.is_empty() {
         content_spans.push(Span::styled(" · ", summary_style));
         content_spans.extend(
@@ -416,3 +416,27 @@ use super::{
 };
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart, truncate_rich_line};
 use unicode_segmentation::UnicodeSegmentation;
+
+#[cfg(test)]
+mod terminal_title_tests {
+    use super::*;
+
+    #[test]
+    fn shell_headline_preserves_command_syntax() {
+        let command =
+            r#"Open interactive terminal · for i in $(seq 1 10); do echo "$i"; sleep 1; done"#;
+        let mut lines = Vec::new();
+        push_activity_headline(
+            &mut lines,
+            PartExecutionStatusResource::Completed,
+            true,
+            true,
+            command,
+            "",
+            160,
+            &I18n::english(),
+        );
+        assert!(lines[0].text.ends_with(command), "{}", lines[0].text);
+        assert_eq!(lines[0].copy_text, command);
+    }
+}

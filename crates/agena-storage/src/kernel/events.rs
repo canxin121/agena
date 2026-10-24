@@ -594,7 +594,13 @@ impl EventProjection {
             ProjectionValue::Terminal(value) => value.as_deref().cloned().map(Box::new),
             _ => None,
         };
-        if document.is_none() && terminal.is_none() {
+        // Opening a terminal precedes launching the PTY and capturing its first
+        // screen. A frozen prompt can legitimately observe that empty source.
+        // Its optional screen is absent, rather than a missing checkpoint.
+        if document.is_none()
+            && terminal.is_none()
+            && !matches!(&self.value, ProjectionValue::Terminal(None) if self.sequence == 0)
+        {
             return Err(KernelError::NotFound("event checkpoint".into()));
         }
         Ok(EventSnapshot {

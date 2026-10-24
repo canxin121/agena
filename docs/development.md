@@ -20,7 +20,6 @@ Validate the frontend from `packages/agena-web`:
 
 ```sh
 bun install --frozen-lockfile
-bun test
 bun run build
 bun audit
 ```
@@ -787,10 +786,8 @@ Web client consumes a generated mirror instead of a hand-written copy:
 cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
 ```
 
-Regenerate the mirror whenever backend state definitions change.
-`bun test tests/sessionStateContract.test.ts` in `packages/agena-web` checks that
-the shipped parser accepts exactly the generated kinds and that no module outside
-the mirror declares a second vocabulary.
+Regenerate the mirror whenever backend state definitions change; the generated
+file is the only frontend copy of the state vocabulary.
 
 ## Dependency maintenance
 

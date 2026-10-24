@@ -34,7 +34,7 @@ function mergeMessageTree(base: unknown, overlay: unknown): unknown {
 }
 
 // Catalogs are imported statically rather than through `import.meta.glob` so
-// non-Vite consumers such as `bun test` can load this module directly.
+// non-Vite consumers can load this module directly.
 const loadedMessages: Record<string, MessageSchema> = {
   'ar-SA': arSAMessages as unknown as MessageSchema,
   'en-US': enUSMessages,

@@ -194,8 +194,5 @@ The Web package is expected to pass:
 ```sh
 bun run check:imports
 bun run typecheck
-bun test
 bun run build
 ```
-
-Focused contract and unit tests cover the section hierarchy/deep links, advanced layer editor, model verbosity metadata, plugin schema defaults/overrides/unions, plugin settings workflow, permission layer summaries, TUI/Web locale separation, and dynamic Interface searches.

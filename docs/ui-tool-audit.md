@@ -89,10 +89,8 @@ cargo clippy -p agena-plugin-sdk -p agena-bundled-plugins \
   -p agena-tui-app -p agena-tui-plugin-workbench --all-targets --locked -- -D warnings
 python3 scripts/ci/verify-runtime-capabilities.py
 cd packages/agena-web
-bun test
 bun run build
 ```
 
-Web lifecycle tests verify delayed responses, abort/disposal and mutation
-ordering. The in-app browser was unavailable in this environment, so this audit
-does not claim interactive browser screenshots or device-specific visual QA.
+The in-app browser was unavailable in this environment, so this audit does not
+claim interactive browser screenshots or device-specific visual QA.

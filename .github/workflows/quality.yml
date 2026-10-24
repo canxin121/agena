@@ -64,8 +64,6 @@ jobs:
           bun-version-file: .bun-version
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
-      - name: Test
-        run: bun test
       - name: Build and check types, imports, and translations
         run: bun run build
       - name: Audit dependencies

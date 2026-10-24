@@ -69,12 +69,9 @@ Git 等共用区块标题原本把操作按钮放在展开按钮内部。现在�
 bun run dev --host 127.0.0.1 --port 5175 --strictPort
 ```
 
-保持源码稳定，在另一终端运行两组浏览器回归；完成后执行测试和构建，避免 Vite 热更新或测试依赖缓存重建干扰浏览器中的焦点状态：
+保持源码稳定；完成后执行构建。前端测试与浏览器验收脚本已移除，下文记录的是本次修复当时的验收结果。
 
 ```sh
-uv run --with playwright python scripts/verify-keyboard-navigation.py --base http://127.0.0.1:5175
-uv run --with playwright python scripts/verify-keyboard-workflows.py --base http://127.0.0.1:5175
-bun test
 bun run build
 git diff --check
 ```

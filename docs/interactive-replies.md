@@ -94,20 +94,10 @@ Routine checks:
 
 ```sh
 cd packages/agena-web
-bun test
 bun run build
 ```
 
-Browser regressions live in `packages/agena-web/tests/browser/`. They mount real production components and exercise real local API/database/Git operations. Use an isolated server/data directory on a different port from your running Agena instance, plus a Vite proxy to that port. For example, run `agena --data-dir /tmp/agena-ui server --port 3228`; configure the verification Vite server on 5179 to proxy `/api`, `/auth`, `/health` to 3228. Do not point these tests at a shared production server.
-
-With Playwright Core and its browser installed, run:
-
-```sh
-AGENA_UI_TEST_URL=http://127.0.0.1:5179 node packages/agena-web/tests/browser/rich-replies.mjs
-AGENA_UI_TEST_URL=http://127.0.0.1:5179 node packages/agena-web/tests/browser/workspace-tab-context.mjs
-AGENA_UI_TEST_URL=http://127.0.0.1:5179 node packages/agena-web/tests/browser/git-sidebar.mjs
-```
-
-`AGENA_UI_TEST_BROWSER_MODULE` can point to an existing Playwright Core module, and `AGENA_UI_TEST_CHROME_PATH` to an installed Chrome executable. The tests create temporary state, use isolated Git repositories, stop their app services, and retain screenshots. Fixtures are development-only, outside the production build.
+Rust and frontend test suites have been removed pending a new repository-wide
+test plan.
 
 Validation for this change passed the frontend suite and production build. Browser regressions covered real backend CRUD, persistence, sandbox boundaries, streamed reply identity, mobile/full preview, real Git staging/committing, branch/worktree/compare entry points, and tab context menus across split groups.

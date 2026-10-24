@@ -1,11 +1,45 @@
-# Install Agena
+# Install, upgrade, and remove Agena
 
-Agena releases contain one native executable plus the matching Web frontend.
-The public installers detect the host architecture, download the matching
-GitHub Release asset, verify its SHA-256 file, install both pieces, and start
-the server.
+Agena is distributed as a native executable plus a built Web frontend. The
+release installers detect the host architecture, download the matching GitHub
+Release archive, verify its SHA-256 checksum, install the executable and Web
+assets, and start the server through a native per-user service when one is
+available, or through Agena's detached server lifecycle otherwise. A release
+install does not need Rust, Bun, or a source checkout.
 
-## One-click install
+This guide covers both release installs and installs built from source. The two
+paths share the same archive layout, checksum verification, installation state,
+startup check, and rollback behavior.
+
+## Supported release targets
+
+Release archives are published for these Rust targets:
+
+| Operating system | Architectures |
+| --- | --- |
+| Linux | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` |
+| macOS | `x86_64-apple-darwin`, `aarch64-apple-darwin` |
+| Windows | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` |
+
+The source of truth is
+[`scripts/agena/universal-targets.json`](../scripts/agena/universal-targets.json).
+The Unix installer accepts x86_64 and arm64/aarch64; the Windows installer
+accepts x64 and ARM64.
+
+## Release install prerequisites
+
+The macOS/Linux release path needs Bash, `curl` or `wget`, `tar`, and either
+`sha256sum` or `shasum`. The one-line command below uses `curl` to download
+the installer itself.
+
+The Windows installer needs PowerShell. It prefers `curl.exe` and `tar.exe`
+when present and falls back to `Invoke-WebRequest` and `Expand-Archive`.
+No Rust, Bun, Git, or source checkout is required for a release install.
+
+Both paths use the current user's profile and do not require administrator or
+root privileges for the default directories and user service.
+
+## Quick install
 
 ### macOS and Linux
 
@@ -13,8 +47,24 @@ the server.
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
 ```
 
-Supported release architectures are x86_64 and arm64/aarch64 on both macOS and
-Linux.
+The installer writes a managed block to the shell startup files so a newly
+opened terminal can run `agena`. For zsh it updates `~/.zshenv` and `~/.zshrc`
+(honoring `ZDOTDIR`); for other shells it updates `~/.profile`. Open a new
+terminal after installation. In zsh, update the current terminal with:
+
+```bash
+source "${ZDOTDIR:-$HOME}/.zshrc"
+```
+
+For other shells, source `~/.profile` instead.
+
+If `agena` is still not found, the PATH block may not have been loaded, the
+shell may not read the updated file, or installation may have used
+`--no-path-update`. You can always call the installed binary directly:
+
+```bash
+~/.local/share/agena/bin/agena --data-dir ~/agena
+```
 
 ### Windows PowerShell
 
@@ -22,84 +72,183 @@ Linux.
 irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1 | iex
 ```
 
-Agena publishes beta releases. The repository and binary versions are `0.1.0`;
-release tags add a beta sequence, such as `agena-v0.1.0-beta.1`. With no
-explicit `--version` / `-Version`, the installers select the newest beta
-release whose tag matches `agena-vX.Y.Z-beta.N`.
+The installer updates the user `Path` and user-level `AGENA_DATA_DIR` unless
+`-NoPathUpdate` is supplied. Open a new PowerShell window after installation.
+Until then, call `"$env:LOCALAPPDATA\Agena\bin\agena.exe"` directly.
 
-The Windows installer supports x86_64 and ARM64 release packages.
+## Defaults
 
-By default Agena is installed under the current user's application-data area,
-the Web/server listens on `127.0.0.1:3210`, and the workspace is the current
-user's home directory. macOS uses a launchd user agent, Windows uses a Task
-Scheduler logon task, and Linux uses a systemd user service when one is
-available. Linux environments without a user systemd session automatically use
-Agena's detached server lifecycle instead.
+| Setting | macOS/Linux default | Windows default |
+| --- | --- | --- |
+| Installation root | `~/.local/share/agena` | `%LOCALAPPDATA%\Agena` |
+| Instance data root | `~/agena` | `~/agena` |
+| Listen address | `127.0.0.1:3210` | `127.0.0.1:3210` |
+| Workspace root | `$HOME` | `$HOME` |
+| Service mode | `auto` | `auto` (resolved to `native`) |
 
-The executable and Web assets have a separate installation directory from the
-instance's data. Unix defaults to `~/.local/share/agena` for application files;
-Windows defaults to `%LOCALAPPDATA%\Agena`. Instance data defaults to `~/agena`
-on every platform. Set `AGENA_DATA_DIR`, or pass `--data-dir` to the Unix
-installer / `-DataDir` to the PowerShell installer, to choose another root:
+On macOS/Linux, `auto` selects the native user service when launchd or a
+working per-user systemd session is available. Otherwise it uses Agena's
+detached server lifecycle. On Windows, `auto` always resolves to the native
+Task Scheduler logon task.
+
+The installation root contains program files. The data root contains the
+instance's database, configuration, secrets, workspace data, logs, and client
+state. They must be different directories, and neither may contain the other.
+
+## Unix installer options
+
+```text
+install.sh [install|upgrade|uninstall|start|stop|restart|status|permissions] [options]
+```
+
+The `permissions` action is macOS-specific; other Unix hosts report that it is
+only needed on macOS.
+
+| Option | Meaning |
+| --- | --- |
+| `--repo OWNER/REPO` | GitHub repository to download releases from |
+| `--version VERSION` | Select a beta release instead of the newest one |
+| `--archive PATH_OR_URL` | Install a specific backend archive |
+| `--checksum PATH_OR_URL` | Checksum file for `--archive`; defaults to `ARCHIVE.sha256` |
+| `--source [PATH_OR_URL]` | Build from a local checkout or clone a Git URL |
+| `--source-ref REF` | Branch or tag used when cloning a remote source |
+| `--install-dir DIR` | Override the installation root |
+| `--data-dir DIR` | Override the instance data root |
+| `--host HOST` | Server listen host |
+| `--port PORT` | Server listen port |
+| `--workspace PATH` | Default workspace root for the server |
+| `--ui-password PASSWORD` | Operator password for the Web/TUI management API |
+| `--service-mode MODE` | `auto`, `native`, or `detached` |
+| `--no-path-update` | Do not update shell startup files or `AGENA_DATA_DIR` |
+| `--purge-data` | With `uninstall`, also remove the saved data root |
+
+The matching environment variables are `AGENA_INSTALL_REPO`,
+`AGENA_INSTALL_VERSION`, `AGENA_INSTALL_DIR`, `AGENA_DATA_DIR`,
+`AGENA_SERVER_HOST`, `AGENA_SERVER_PORT`, `AGENA_SERVER_UI_PASSWORD`,
+`AGENA_WORKSPACE_ROOT`, and `AGENA_INSTALL_SERVICE_MODE`. Command-line options
+take precedence over the environment.
+
+## Windows installer options
+
+```powershell
+.\scripts\agena\install.ps1 -Action Install
+```
+
+The supported actions are `Install`, `Upgrade`, `Uninstall`, `Start`, `Stop`,
+`Restart`, and `Status`. There is no `Permissions` action on Windows.
+
+| Parameter | Meaning |
+| --- | --- |
+| `-Repo OWNER/REPO` | GitHub repository to download releases from |
+| `-Version VERSION` | Select a beta release instead of the newest one |
+| `-Archive PATH_OR_URL` | Install a specific backend archive |
+| `-Checksum PATH_OR_URL` | Checksum file for `-Archive`; defaults to `ARCHIVE.sha256` |
+| `-Source` | Build from source |
+| `-SourcePath PATH_OR_URL` | Select another checkout or clone a Git URL |
+| `-SourceRef REF` | Branch or tag used when cloning a remote source |
+| `-InstallDir DIR` | Override the installation root |
+| `-DataDir DIR` | Override the instance data root |
+| `-ListenHost HOST` | Server listen host |
+| `-Port PORT` | Server listen port |
+| `-Workspace PATH` | Default workspace root for the server |
+| `-UiPassword PASSWORD` | Operator password for the Web/TUI management API |
+| `-ServiceMode MODE` | `auto`, `native`, or `detached` |
+| `-NoPathUpdate` | Do not update the user `Path` or `AGENA_DATA_DIR` |
+| `-PurgeData` | With `Uninstall`, also remove the saved data root |
+
+## Installation and data layout
+
+A Unix installation root contains:
+
+```text
+<install-dir>/
+  bin/agena
+  web-dist/
+  install-state.env
+  client-env.sh
+```
+
+A Windows installation root contains `bin\agena.exe`, `web-dist\`, and
+`install-state.json`. The state file records the selected install and data
+roots, host, port, workspace, service mode, and operator password when one was
+supplied. Treat it as private.
+
+The data root uses one storage policy for the server and its local clients:
+
+| Path | Contents |
+| --- | --- |
+| `agena.db` | SQLite database for sessions, Scheduler state, and server state |
+| `agena.json` | User configuration |
+| `secrets/` | Application-managed encrypted SecretStore |
+| `workspaces/<workspace-key>/` | Per-workspace uploads, memory, and artifacts |
+| `cache/` | Derived indexes and caches, including memory indexes |
+| `tmp/` | Temporary runtime files |
+| `logs/` | Server and tool logs |
+| `run/server.json` | Live endpoint record for the selected instance |
+| `marketplace/` | Plugin marketplace state |
+| `plugin-data/` | Plugin-owned data |
+| `clients/<client-key>/` | Local client state |
+| `terminal-ui.json` | TUI presentation state |
+| `macos/Agena.app` | macOS permission host, when installed |
+
+Program files, Web assets, and client environment files belong to the
+installation root. Sessions, configuration, credentials, workspace content,
+and logs belong to the data root. Use a separate data root for each independent
+server instance.
+
+The installer saves the selected roots. The installer's `start`, `stop`,
+`status`, `upgrade`, and `uninstall` actions read that saved state and address
+the same instance even when the invoking shell exports a different
+`AGENA_DATA_DIR`. The automatic rollback after a failed upgrade uses the same
+saved state. Native service definitions pass the data root explicitly.
+Service names include a hash of the data root, so stopping or upgrading one
+instance does not address another instance's service.
+
+## Beta release selection
+
+The repository and binary versions are `0.1.0`. Releases use tags such as
+`agena-v0.1.0-beta.1`; archives contain the package version without the
+`agena-v` prefix. With no explicit version, the installer selects the newest
+release tag matching `agena-vX.Y.Z-beta.N`.
+
+`--version` / `-Version` accepts the full tag or the version portion:
 
 ```bash
-bash scripts/agena/install.sh install --data-dir /path/to/agena-data
+bash scripts/agena/install.sh install --version 0.1.0-beta.1
 ```
 
 ```powershell
-& $installer -Action Install -DataDir 'D:\AgenaData'
+.\scripts\agena\install.ps1 -Action Install -Version 0.1.0-beta.1
 ```
 
-The chosen root contains `agena.db` for sessions, Scheduler and server state,
-`agena.json` for user configuration, `secrets/` for the application-managed
-encrypted SecretStore, `workspaces/` for workspace data, `logs/` for logs, and
-`run/server.json` for the live endpoint record. A single instance has one root;
-database and server-state paths have no separate environment overrides.
-
-Installers save the selected root in their installation state. Start, stop,
-upgrade, rollback and uninstall continue to address that installed root even
-when the invoking shell has a different `AGENA_DATA_DIR`. Native service
-definitions explicitly pass `--data-dir` to the executable. Keep the
-installation and data directories separate; neither may contain the other.
-Native service labels, systemd unit names and Windows task names include the
-full hash of the selected data root, so installing or stopping one instance
-does not address another instance's service.
-With the normal shell/environment update enabled, Unix exports the root from
-its private client environment file and Windows sets the user
-`AGENA_DATA_DIR`. On Unix the managed block goes to both `~/.zshenv` and
-`~/.zshrc` for zsh (honoring `ZDOTDIR`), and to `~/.profile` for other shells;
-an older Agena block is removed from the other startup files. The zsh entries
-make the command available both in new shells and after reloading `.zshrc`.
-Open a new shell or source one of those files to load the command.
-With `--no-path-update` / `-NoPathUpdate`, set that variable yourself or run
-clients with `agena --data-dir /path/to/agena-data ...`.
-
-When `--ui-password` (or `AGENA_SERVER_UI_PASSWORD`) is used on macOS/Linux,
-the installer also writes a private client environment file under the install
-directory and sources it from the shell profile. The same operator credential
-is exposed to thin clients as `AGENA_SERVER_PASSWORD`, so a newly opened shell
-can run `agena` / `agena tui` against the protected local server without a
-second manual password export. The password itself is not written directly into
-the shell profile.
-
-The TUI workspace is independent of the long-lived server process working
-directory: `cd /path/to/project && agena` uses `/path/to/project` for new
-sessions, while `agena tui --workspace /other/path` remains the explicit
-override.
+Release archives are named
+`agena-backend-<target>-v<package-version>.tar.gz` on Unix and `.zip` on
+Windows. Each archive has a `.sha256` file next to it.
 
 ## Install from source
 
-Build and install from a checkout without downloading a release archive:
+Source mode builds the native executable and Web frontend, creates the same
+archive and checksum used by release installs, and then runs the ordinary
+install, startup check, and rollback path.
+
+### Unix
+
+From an Agena checkout:
 
 ```bash
 cd /path/to/agena
 bash scripts/agena/install.sh install --source
 ```
 
-The installer uses the checkout that contains the current directory, then the
-checkout that contains the installer script. It does not clone another copy
-when either checkout is available. To build another checkout, pass its path;
-to clone a remote repository, pass a Git URL:
+`--source` without a value resolves the checkout in this order:
+
+1. The nearest checkout containing the current working directory.
+2. The checkout containing the installer script.
+3. A fresh shallow clone of `https://github.com/<repo>.git`.
+
+When either existing checkout is found, the installer builds it in place and
+does not clone another copy. To build a different checkout or clone a remote
+repository:
 
 ```bash
 bash scripts/agena/install.sh install --source /path/to/agena
@@ -107,37 +256,68 @@ bash scripts/agena/install.sh install --source https://github.com/canxin121/agen
 bash scripts/agena/install.sh install --source https://github.com/canxin121/agena.git --source-ref master
 ```
 
-`--source` cannot be combined with `--archive`, `--checksum`, or `--version`.
-Source mode builds the native binary and Web frontend, creates the normal
-archive and SHA-256 file under `artifacts/agena/`, verifies that archive, and
-then uses the same install, startup, and rollback path as a release install.
-Use `upgrade --source` to rebuild and replace an existing installation.
+`--source-ref` only applies when the installer clones a remote source. With an
+existing checkout it prints a warning and builds the checkout as it is.
 
-The source build requires Rust 1.97.0 through rustup (or a compatible
-`AGENA_STABLE_TOOLCHAIN`), Bun, Python 3, `tar` on macOS/Linux, Git when
-cloning, and the platform C/C++ build tools required by the Rust dependencies.
-If the Web frontend is already built, set `AGENA_WEB_DIST_PREBUILT=1` to skip
-Bun and the frontend build. Build output stays in the checkout's `target/` and
-`packages/agena-web/dist/`; for a local checkout, the generated package stays
-in `artifacts/agena/`. A checkout cloned from a Git URL is temporary and is
-removed after installation.
+Source mode cannot be combined with `--version`, `--archive`, or `--checksum`.
+Use `upgrade --source` to rebuild and replace an existing installation:
 
-Windows PowerShell:
+```bash
+bash scripts/agena/install.sh upgrade --source
+```
+
+A remote clone is temporary and is removed after installation. A local
+checkout keeps its build output: Cargo output stays in `target/`, the Web build
+stays in `packages/agena-web/dist/`, and the package archive stays in
+`artifacts/agena/`.
+
+### Windows
 
 ```powershell
 .\scripts\agena\install.ps1 -Action Install -Source
 ```
 
-Use `-SourcePath D:\src\agena` to select another checkout or a Git URL, and
-`-SourceRef master` when cloning a branch or tag. Source mode does not use
-`-Version`.
+Use `-SourcePath D:\src\agena` for another checkout, or a Git URL such as
+`-SourcePath https://github.com/canxin121/agena.git`. Use `-SourceRef master`
+when cloning a branch or tag. Source mode cannot be combined with `-Version`,
+`-Archive`, or `-Checksum`.
+
+The same checkout resolution order applies: current directory, installer
+checkout, then a shallow remote clone. A local checkout keeps its package
+archive under `artifacts/agena/`; Windows packaging normally builds in
+`.agena-target` under the checkout (or under the CI workspace when one is set).
+A temporary remote clone is removed after installation.
+
+### Source build requirements
+
+Source installs require:
+
+- Rust 1.97.0 through `rustup`, or a compatible override through
+  `AGENA_STABLE_TOOLCHAIN`.
+- Bun 1.3.14 for the Web frontend, unless a prebuilt frontend is supplied.
+- Python 3 for the Cargo metadata step in the Unix packaging script.
+- Git when cloning a remote repository.
+- `tar` and `sha256sum` or `shasum` on macOS/Linux.
+- PowerShell archive creation on Windows.
+- The platform C/C++ build tools required by Rust dependencies. Windows
+  packaging runs `scripts/ci/setup-windows-toolchain.ps1` for Windows targets.
+
+If the Web frontend is already built at
+`packages/agena-web/dist/index.html`, set `AGENA_WEB_DIST_PREBUILT=1` to skip
+Bun and the frontend build. The build fails if that file is missing.
+
+The source build uses the version from Cargo metadata. To install a specific
+branch, set `--source-ref` / `-SourceRef` while cloning.
 
 ## Lifecycle operations
 
-On macOS/Linux the installer can be re-run with an action:
+### Unix
 
 ```bash
-# Upgrade to the latest beta release.
+# Install the newest beta.
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
+
+# Upgrade the installed instance to the newest beta.
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- upgrade
 
 # Inspect, stop, start, or restart the installed server.
@@ -146,14 +326,17 @@ curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agen
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- start
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- restart
 
-# Remove the application while keeping configuration, sessions, and logs.
+# Remove the application while keeping data.
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- uninstall
 ```
 
-For Windows, invoke the downloaded script block with the desired action:
+Use the downloaded `install.sh` as a local script for repeated operations. A
+piped install works, but it downloads the installer again each time.
+
+### Windows
 
 ```powershell
-$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1))
+$installer = Join-Path $PWD scripts\agena\install.ps1
 & $installer -Action Upgrade
 & $installer -Action Status
 & $installer -Action Stop
@@ -162,136 +345,159 @@ $installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin
 & $installer -Action Uninstall
 ```
 
-The installed binary exposes the same server lifecycle directly:
+### Installed binary
+
+The installed executable exposes server lifecycle commands directly:
 
 ```text
+agena server start
 agena server status
 agena server stop
-agena server start
+agena server install
+agena server uninstall
+agena server permissions
 ```
 
 `agena server install` and `agena server uninstall` manage the native per-user
-service on macOS, Linux, and Windows.
+service. `agena server permissions` opens the macOS Full Disk Access setup.
+Running `agena server` without an action runs the server in the foreground for
+development. The installer's `restart` action is a stop followed by a start;
+`agena server` itself does not define a `restart` action.
 
-## macOS file permissions (one-time setup)
+The TUI workspace is independent of the long-lived server process working
+directory. `cd /path/to/project && agena` uses `/path/to/project` for new
+sessions. `agena tui --workspace /other/path` is the explicit override.
 
-For workspaces that span protected folders, other apps' data, external disks,
-or network volumes, grant **Agena** **Full Disk Access** once in **System
-Settings → Privacy & Security → Full Disk Access**. macOS requires the user
-to enable this switch; Agena cannot grant it to itself or preapprove every
-future disk/app by opening directories at startup.
+## Operator password and client environment
 
-Run `agena server permissions` after installing the native user service. It
-reveals the exact app in Finder and opens the settings page. Use **+** and
-**Cmd+Shift+G** to select the displayed app path (normally
-`~/agena/macos/Agena.app`), enable it, then run:
+On macOS/Linux the installer writes `client-env.sh` under the installation
+root, and the managed shell block sources it. The file always exports
+`AGENA_DATA_DIR`; when `--ui-password` or `AGENA_SERVER_UI_PASSWORD` is
+supplied, it also exports `AGENA_SERVER_PASSWORD`, so a new shell can run
+`agena` or `agena tui` against the protected local server. The password is not
+written directly into the shell profile, but it is present in the installer
+state and, when a native service is used, in the service definition because
+the service needs it at startup.
 
-```bash
-agena server stop
-agena server start
-```
+With `--no-path-update`, the installer does not modify startup files. Set
+`AGENA_DATA_DIR` yourself or pass `--data-dir` explicitly.
 
-The native service runs through a small signed supervisor in this app. Its
-executable, bundle ID, Info.plist, and signature are preserved byte-for-byte
-across normal upgrades, rollbacks, and reinstalls that preserve runtime data.
-The server and the tools it spawns inherit the responsible app's file-access
-identity. The large server executable can therefore be upgraded independently.
-Do not add the changing `bin/agena` executable to Full Disk Access instead.
-An existing grant to an older standalone executable must be granted once to
-the new app. The installer verifies an existing app and reports damage instead
-of silently replacing/re-signing it and losing the remembered identity.
+## macOS file access
 
-Interactive first installation opens this setup once. Set
+Workspaces that span protected folders, other applications' data, external
+disks, or network volumes need a one-time **Full Disk Access** grant:
+
+1. Install with the native user service.
+2. Run `agena server permissions` (or the installer action `permissions`).
+3. In **System Settings → Privacy & Security → Full Disk Access**, choose
+   **+**, press **Cmd+Shift+G**, and select the displayed app. The normal path
+   is `~/agena/macos/Agena.app`.
+4. Enable the app, then run `agena server stop` and `agena server start`.
+
+macOS makes the final access decision. Agena cannot grant the permission to
+itself, and a future system reset or manual replacement can require the grant
+again. The native service runs through a small signed supervisor inside
+`Agena.app`; its identity is preserved across normal upgrades and reinstalls
+that keep runtime data. The installer reports a damaged existing app instead
+of silently replacing or re-signing it and losing the remembered identity.
+
+Interactive first installs open the permission setup once. Set
 `AGENA_MACOS_OPEN_PERMISSIONS=0` for headless installers. Upgrades and restarts
-neither reopen settings nor probe private data to guess authorization status.
-Normal uninstall preserves the app with runtime data; `--purge-data`, manually
-deleting/replacing the app, revoking/resetting privacy settings, or a future
-supervisor migration can require authorization again. macOS controls the final
-decision; no app can guarantee a permanent grant after a system reset.
+do not reopen settings or probe private data to guess authorization state.
 
-The TUI loads its recursive file index only when file mentions are used.
-Recursive Web searches and workspace indexing from a broad home/root scope
-skip macOS privacy domains before opening them, including `~/Library`, standard
-protected user folders, and unselected mounted disks. Direct directory listing
-is still available; select a protected folder/project as the workspace/search
-root to index it deliberately. This reduces incidental prompts even without
-Full Disk Access. File access does not grant Accessibility, Screen Recording,
-microphone, camera, or Automation permissions. Direct `agena server` and
-detached/development runs remain under the launching terminal's privacy identity;
-use the native user service for the persistent Agena app identity.
+Recursive Web searches and workspace indexing skip macOS privacy domains when
+the search root is broad, including `~/Library`, standard protected user
+folders, and unselected mounted disks. Direct listing remains available. File
+access does not grant Accessibility, Screen Recording, microphone, camera, or
+Automation permissions. A foreground `agena server` or detached development
+run remains under the launching terminal's privacy identity; use the native
+service for the persistent Agena app identity.
 
-Apple describes the code identity constraint in
+Apple documents the code identity constraint in
 [TN3127: Inside Code Signing: Requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
 
-## Install a specific version
+## Custom archives and checksums
 
-macOS/Linux:
+Both installers accept a local or remote archive and its checksum:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh \
-  | bash -s -- install --version 0.1.0-beta.1
+bash scripts/agena/install.sh install \
+  --archive ./agena-backend-aarch64-apple-darwin-v0.1.0.tar.gz \
+  --checksum ./agena-backend-aarch64-apple-darwin-v0.1.0.tar.gz.sha256
 ```
-
-Windows:
 
 ```powershell
-$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.ps1))
-& $installer -Action Install -Version 0.1.0-beta.1
+.\scripts\agena\install.ps1 -Action Install `
+  -Archive .\agena-backend-x86_64-pc-windows-msvc-v0.1.0.zip `
+  -Checksum .\agena-backend-x86_64-pc-windows-msvc-v0.1.0.zip.sha256
 ```
 
-Both installers also accept a local or remote `--archive`/`-Archive` plus its
-`.sha256` file. CI uses that path to test the exact release-package layout
-without depending on an already-published GitHub release.
+The archive must contain `bin/agena` (or `bin/agena.exe`) and
+`web-dist/index.html`. If `--version` is also supplied, the binary version must
+match the package version in the release tag. Without `--version`, the
+archive's binary version becomes the installed version.
 
-Upgrades are transactional at the package level. The existing executable, Web
-frontend, and installer state are retained until the replacement has started
-successfully. If a replacement passes download/checksum/version validation but
-fails during startup, the installer restores the prior files and service. CI
-also exercises this rollback path with an intentionally broken replacement
-binary.
+## Transactional upgrades and rollback
 
-## Uninstalling data
+Upgrades keep the current executable, Web assets, installer state, and service
+until the replacement starts successfully. If a replacement passes download,
+checksum, archive, and version validation but fails during startup, the
+installer restores the previous files and restarts the previous service. The
+same rollback path runs for source builds and for local archives.
 
-Normal uninstall removes the installed executable, Web frontend, and user
-service, while preserving the selected instance's data. `--purge-data` on Unix
-or `-PurgeData` on Windows additionally removes the actual data root saved in
-the installation state. A custom root is purged directly; the default
-`~/agena` is left alone when another root was selected.
+## Uninstall and purge
 
-Purge refuses filesystem roots, the account home, shared system locations,
-overlapping installation/data directories, and directories without an Agena
-instance database. It removes configuration and credentials as well as
-sessions. Installer state and databases from older storage layouts are not
-migrated by this version.
+A normal uninstall removes the installed executable, Web assets, shell PATH
+block, and user service. It preserves the selected data root, including
+configuration, sessions, credentials, logs, and workspace data.
 
-## Installer CI
+`--purge-data` on Unix or `-PurgeData` on Windows removes the data root saved in
+the installation state as well. Purge refuses a filesystem root, the account
+home, fixed protected platform directories (`/bin`, `/usr`, `/usr/local`,
+`/etc`, `/var`, `/opt`, and `/tmp` on Unix; system and profile roots on
+Windows), overlapping installation/data directories, and a directory without
+an `agena.db`. A custom root is purged directly; the default `~/agena` is left
+alone when another root was selected. Purge removes configuration and
+credentials as well as sessions.
 
-`python3 scripts/agena/tests/test_installer_storage.py` runs offline installer
-contracts with temporary homes, local archives and a stub executable. It covers
-saved-root precedence, paths with spaces, upgrade rollback, stopped instances,
-purge boundaries, source-checkout selection, source builds and service-helper
-arguments without installing a system service.
+Installer state uses schema 2. An existing state file with another schema is
+rejected instead of migrated, and the message asks for a reinstall with an
+explicit data root. Existing SQLite databases must match the current Agena
+schema; an incompatible database is rejected without being modified.
 
-`.github/workflows/installer-ci.yml` builds the real release archive format on
-GitHub-hosted Linux, macOS, and Windows runners. Each runner then executes the
-full lifecycle against that archive:
+## Installer verification
 
-1. install and start;
-2. status and health check;
-3. stop and verify the endpoint is gone;
-4. start and restart;
-5. upgrade through the installer again;
-6. uninstall and verify both the process/service and install directory are gone.
+The repository verifies installers in three layers:
 
-The current-package lifecycle fixtures select a custom data root. They verify
-that a normal uninstall preserves it, then reinstall and verify that explicit
-purge removes that root while preserving a sentinel in the unselected default
-directory.
+1. `python3 scripts/agena/tests/test_installer_storage.py` runs offline
+   installer contracts with temporary homes, local archives, and a stub
+   executable. It covers saved-root precedence, paths with spaces, upgrade
+   rollback, stopped instances, purge boundaries, source-checkout selection,
+   source builds, and service-helper arguments without installing a system
+   service.
+2. `.github/workflows/installer-ci.yml` builds real backend archives and runs
+   install, status and health check, stop, start, restart, upgrade, and
+   uninstall on Linux x86_64 (detached service), macOS arm64 (native service),
+   and Windows x86_64 (native service). The same workflow also installs the
+   current latest beta through public GitHub release URLs on Windows.
+3. The platform lifecycle checks select a custom data root and verify that a
+   normal uninstall preserves it, then reinstall and verify that explicit purge
+   removes that root while preserving a sentinel in the unselected default
+   directory. They also exercise a deliberately broken replacement binary to
+   verify rollback.
 
-The release workflow publishes `install.sh` and `install.ps1` next to every
-versioned Agena archive, together with `install.sh.sha256` and
-`install.ps1.sha256`, so the one-click URLs always resolve to a tested installer
-from the release itself. After publication, the release workflow downloads
-those public installer assets again on Linux, macOS, and Windows and runs a
-second install/status/stop/start/upgrade/uninstall smoke against the published
-backend archives.
+The release workflow publishes `install.sh`, `install.ps1`,
+`install.sh.sha256`, and `install.ps1.sha256` next to every versioned Agena
+archive. After publication it downloads those public installer assets again on
+Linux, macOS, and Windows and runs install, status, stop, start, upgrade, and
+uninstall against the published backend archives.
+
+For local changes, the minimum installer checks are:
+
+```sh
+bash -n scripts/agena/install.sh \
+  scripts/agena/install-service.sh \
+  scripts/agena/uninstall-service.sh
+python3 scripts/agena/tests/test_installer_storage.py
+python3 scripts/agena/verify-target-coverage.py
+```

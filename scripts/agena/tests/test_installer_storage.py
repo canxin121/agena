@@ -107,7 +107,7 @@ class InstallerStorageTests(unittest.TestCase):
             "bash", str(SCRIPTS / "install.sh"), action,
             "--install-dir", str(self.install_dir), *map(str, arguments),
         ]
-        if not update_path:
+        if not update_path and action in {"install", "reinstall", "upgrade", "uninstall"}:
             command.append("--no-path-update")
         result = subprocess.run(
             command,
@@ -340,23 +340,201 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertEqual(self.calls_path.read_bytes(), original_calls)
 
-    def test_service_helpers_pin_saved_root_without_invoking_a_system_service_manager(self):
-        result = subprocess.run(
-            ["bash", str(SCRIPTS / "install-service.sh"), "--archive", str(self.archive),
-             "--install-dir", str(self.install_dir), "--data-dir", str(self.data_dir)],
-            env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
+    def test_failed_first_install_leaves_no_partial_installation(self):
+        bad = self.package("broken first install", BAD_STUB)
+        self.invoke(
+            "install", "--archive", bad, "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            success=False,
         )
-        self.assertEqual(result.returncode, 0, result.stdout)
-        env = dict(self.env, AGENA_DATA_DIR="/")
-        result = subprocess.run(
-            ["bash", str(SCRIPTS / "uninstall-service.sh"), "--install-dir", str(self.install_dir), "--remove-install-dir"],
-            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertFalse((self.install_dir / "bin").exists())
+        self.assertFalse((self.install_dir / "web-dist").exists())
+        self.assertFalse((self.install_dir / "install-state.env").exists())
+
+    def test_reinstall_requires_an_existing_installation(self):
+        result = self.invoke("reinstall", "--archive", self.archive, success=False)
+        self.assertIn("not installed", result.stdout.lower())
+        self.assertFalse(self.calls_path.exists())
         self.assertFalse(self.install_dir.exists())
-        self.assertTrue((self.data_dir / "agena.db").is_file())
-        self.assertTrue(self.default_sentinel.is_file())
+
+    def test_install_refuses_an_existing_installation_and_names_replacement_actions(self):
+        self.install()
+        original = (self.install_dir / "bin/agena").read_bytes()
+        result = self.invoke("install", "--archive", self.archive, success=False)
+        self.assertIn("already installed", result.stdout)
+        self.assertIn("reinstall", result.stdout)
+        self.assertIn("upgrade", result.stdout)
+        self.assertEqual((self.install_dir / "bin/agena").read_bytes(), original)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_reinstall_replaces_a_running_installation_in_place(self):
+        self.install()
+        result = self.invoke("reinstall", "--archive", self.archive,
+                             environment={"AGENA_DATA_DIR": "/"})
+        self.assertIn("reinstalled", result.stdout)
+        self.assertEqual(self.state_value("VERSION"), "0.1.0")
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertEqual(self.state_value("SERVICE_MODE"), "detached")
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
         self.assert_only_selected_root_was_called()
+
+    def test_reinstall_keeps_a_stopped_instance_stopped(self):
+        self.install()
+        self.invoke("stop")
+        self.invoke("reinstall", "--archive", self.archive)
+        self.assertFalse((self.data_dir / "run/stub-running").exists())
+        self.assert_only_selected_root_was_called()
+
+    def test_reinstall_keeps_saved_settings_and_applies_explicit_overrides(self):
+        self.install()
+        original_state = (self.install_dir / "install-state.env").read_bytes()
+        self.invoke("reinstall", "--archive", self.archive)
+        self.assertEqual((self.install_dir / "install-state.env").read_bytes(), original_state)
+
+        new_workspace = self.root / "reinstalled workspace"
+        self.invoke(
+            "reinstall", "--archive", self.archive,
+            "--workspace", new_workspace,
+            "--port", "4321",
+            environment={"AGENA_SERVER_PORT": "9999", "AGENA_WORKSPACE_ROOT": "/"},
+        )
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertEqual(self.state_value("HOST"), "127.0.0.1")
+        self.assertEqual(self.state_value("PORT"), "4321")
+        self.assertEqual(self.state_value("WORKSPACE"), str(new_workspace))
+        self.assertEqual(self.state_value("SERVICE_MODE"), "detached")
+        self.assertTrue(new_workspace.is_dir())
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_reinstall_rejects_an_unsafe_data_override_before_stopping(self):
+        self.install()
+        original_calls = self.calls_path.read_bytes()
+        self.invoke(
+            "reinstall", "--archive", self.archive,
+            "--data-dir", self.install_dir / "overlapping data",
+            success=False,
+        )
+        extra_calls = self.calls_path.read_bytes()[len(original_calls):].decode().splitlines()
+        self.assertTrue(all("\tstatus\t" in line for line in extra_calls), extra_calls)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_failed_reinstall_restores_binary_state_and_configuration(self):
+        self.install()
+        original_binary = (self.install_dir / "bin/agena").read_bytes()
+        original_state = (self.install_dir / "install-state.env").read_bytes()
+        bad = self.package("broken reinstall", BAD_STUB)
+        replacement_data = self.root / "failed reinstall data"
+        self.invoke(
+            "reinstall", "--archive", bad,
+            "--data-dir", replacement_data,
+            "--host", "0.0.0.0",
+            "--port", "4321",
+            success=False,
+        )
+        self.assertEqual((self.install_dir / "bin/agena").read_bytes(), original_binary)
+        self.assertEqual((self.install_dir / "install-state.env").read_bytes(), original_state)
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertEqual(self.state_value("HOST"), "127.0.0.1")
+        self.assertEqual(self.state_value("PORT"), "3210")
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+        self.assert_only_selected_root_was_called()
+
+    def test_reinstall_requires_a_package_when_no_release_was_recorded(self):
+        self.install()
+        original_calls = self.calls_path.read_bytes()
+        result = self.invoke("reinstall", success=False)
+        self.assertIn("--archive", result.stdout)
+        self.assertIn("--source", result.stdout)
+        extra_calls = self.calls_path.read_bytes()[len(original_calls):].decode().splitlines()
+        self.assertTrue(all("\tstatus\t" in line for line in extra_calls), extra_calls)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_actions_reject_options_they_would_ignore(self):
+        self.install()
+        original_calls = self.calls_path.read_bytes()
+        cases = [
+            (["status", "--host", "0.0.0.0"], "--host only applies"),
+            (["stop", "--archive", str(self.archive)], "--archive only applies"),
+            (["restart", "--port", "4321"], "--port only applies"),
+            (["status", "--source"], "--source only applies"),
+            (["install", "--purge-data"], "--purge-data only applies to uninstall"),
+        ]
+        for arguments, expected in cases:
+            result = self.invoke(*arguments, success=False)
+            self.assertIn(expected, result.stdout, result.stdout)
+        self.assertEqual(self.calls_path.read_bytes(), original_calls)
+
+    def test_source_reinstall_rebuilds_the_current_checkout(self):
+        self.install()
+        checkout = self.source_checkout("reinstall checkout")
+        result = self.invoke("reinstall", "--source", cwd=checkout)
+        self.assertIn(f"Building Agena from source at {checkout}", result.stdout)
+        self.assertIn("reinstalled", result.stdout)
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def fake_release_downloads(self):
+        fake_bin = self.root / "release bin"
+        fake_bin.mkdir()
+        urls = self.root / "release urls.txt"
+        urls.write_text("")
+        archive = self.archive
+        checksum = Path(str(archive) + ".sha256")
+        curl = fake_bin / "curl"
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'destination=""\n'
+            'url=""\n'
+            'while [[ $# -gt 0 ]]; do\n'
+            '  case "$1" in\n'
+            '    -o) destination="$2"; shift 2 ;;\n'
+            '    -*) shift ;;\n'
+            '    *) url="$1"; shift ;;\n'
+            '  esac\n'
+            'done\n'
+            f'printf \'%s\\n\' "$url" >> {shlex.quote(str(urls))}\n'
+            'case "$url" in\n'
+            f'  *.sha256) cp {shlex.quote(str(checksum))} "$destination" ;;\n'
+            f'  *) cp {shlex.quote(str(archive))} "$destination" ;;\n'
+            'esac\n'
+        )
+        curl.chmod(0o755)
+        environment = {"PATH": str(fake_bin) + os.pathsep + self.env["PATH"]}
+        return urls, environment
+
+    def test_release_install_records_and_reuses_the_release_for_reinstall(self):
+        urls, environment = self.fake_release_downloads()
+        self.invoke(
+            "install", "--version", "0.1.0-beta.1", "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            environment=environment,
+        )
+        self.assertEqual(self.state_value("VERSION"), "0.1.0")
+        self.assertEqual(self.state_value("RELEASE_VERSION"), "0.1.0-beta.1")
+        self.assertIn("agena-v0.1.0-beta.1", urls.read_text())
+
+        urls.write_text("")
+        self.invoke("reinstall", environment=environment)
+        downloaded = urls.read_text()
+        self.assertIn("agena-v0.1.0-beta.1", downloaded)
+        self.assertIn("agena-backend-", downloaded)
+        self.assertEqual(self.state_value("RELEASE_VERSION"), "0.1.0-beta.1")
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+        self.assert_only_selected_root_was_called()
+
+    def test_upgrade_selects_the_newest_release_instead_of_the_recorded_one(self):
+        urls, environment = self.fake_release_downloads()
+        self.invoke(
+            "install", "--version", "0.1.0-beta.1", "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            environment=environment,
+        )
+        urls.write_text("")
+        self.invoke("upgrade", "--version", "0.1.0-beta.2", environment=environment)
+        downloaded = urls.read_text()
+        self.assertIn("agena-v0.1.0-beta.2", downloaded)
+        self.assertEqual(self.state_value("RELEASE_VERSION"), "0.1.0-beta.2")
 
     def test_source_install_uses_current_checkout_without_cloning(self):
         checkout = self.source_checkout()

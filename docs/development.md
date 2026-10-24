@@ -245,9 +245,7 @@ bash -n scripts/dependencies/check.sh
 For installer changes, also run:
 
 ```sh
-bash -n scripts/agena/install.sh \
-  scripts/agena/install-service.sh \
-  scripts/agena/uninstall-service.sh
+bash -n scripts/agena/install.sh
 python3 scripts/agena/tests/test_installer_storage.py
 python3 scripts/agena/verify-target-coverage.py
 ```

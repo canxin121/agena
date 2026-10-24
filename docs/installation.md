@@ -98,7 +98,7 @@ state. They must be different directories, and neither may contain the other.
 ## Unix installer options
 
 ```text
-install.sh [install|upgrade|uninstall|start|stop|restart|status|permissions] [options]
+install.sh [install|reinstall|upgrade|uninstall|start|stop|restart|status|permissions] [options]
 ```
 
 The `permissions` action is macOS-specific; other Unix hosts report that it is
@@ -134,8 +134,9 @@ take precedence over the environment.
 .\scripts\agena\install.ps1 -Action Install
 ```
 
-The supported actions are `Install`, `Upgrade`, `Uninstall`, `Start`, `Stop`,
-`Restart`, and `Status`. There is no `Permissions` action on Windows.
+The supported actions are `Install`, `Reinstall`, `Upgrade`, `Uninstall`,
+`Start`, `Stop`, `Restart`, and `Status`. There is no `Permissions` action on
+Windows.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -156,6 +157,40 @@ The supported actions are `Install`, `Upgrade`, `Uninstall`, `Start`, `Stop`,
 | `-NoPathUpdate` | Do not update the user `Path` or `AGENA_DATA_DIR` |
 | `-PurgeData` | With `Uninstall`, also remove the saved data root |
 
+## Installer actions
+
+Each installer action has one job. `install`, `reinstall`, and `upgrade` share
+the same preparation, activation, startup check, and rollback pipeline and
+differ only in their preconditions and version selection.
+
+| Action | Precondition | Version selection | Runtime settings |
+| --- | --- | --- | --- |
+| `install` | no installation at the selected root | newest beta; or `--version`, `--archive`, `--source` | flags, otherwise defaults |
+| `reinstall` | an installation exists | recorded release; or `--version`, `--archive`, `--source` | saved values; explicit flags override |
+| `upgrade` | an installation exists | newest beta; or `--version`, `--archive`, `--source` | saved values; explicit flags override |
+| `start`, `stop`, `restart`, `status`, `permissions` | an installation exists | not applicable | saved values |
+| `uninstall` | an installation exists | not applicable | saved values |
+
+`install` refuses to modify an existing installation and names `reinstall` and
+`upgrade` instead. `reinstall` replaces the program in place: the data root,
+workspace, bind address, port, service mode, and password come from the
+installation state unless the corresponding option is supplied. A running
+instance stays running, and a stopped instance stays stopped.
+
+A release install records the release tag, so `reinstall` can download and
+verify the same release again. A source build or a custom archive has no
+recorded release tag; reinstall those with `--source`, `--archive`, or
+`--version`.
+
+All replacement actions are transactional. The installer prepares and verifies
+the package, stops the current instance, swaps `bin/` and `web-dist/`, starts
+the replacement, restores the previous running or stopped state, and only then
+writes the installation state. A failure while starting or while saving state
+restores the previous program files, installer state, data root, and service.
+
+Options are validated against the selected action, so `status --host` or
+`stop --archive` fails instead of ignoring the option.
+
 ## Installation and data layout
 
 A Unix installation root contains:
@@ -170,8 +205,9 @@ A Unix installation root contains:
 
 A Windows installation root contains `bin\agena.exe`, `web-dist\`, and
 `install-state.json`. The state file records the selected install and data
-roots, host, port, workspace, service mode, and operator password when one was
-supplied. Treat it as private.
+roots, the installed version, the release tag when the package came from a
+release, host, port, workspace, service mode, and operator password when one
+was supplied. Treat it as private.
 
 The data root uses one storage policy for the server and its local clients:
 
@@ -197,10 +233,10 @@ and logs belong to the data root. Use a separate data root for each independent
 server instance.
 
 The installer saves the selected roots. The installer's `start`, `stop`,
-`status`, `upgrade`, and `uninstall` actions read that saved state and address
-the same instance even when the invoking shell exports a different
-`AGENA_DATA_DIR`. The automatic rollback after a failed upgrade uses the same
-saved state. Native service definitions pass the data root explicitly.
+`status`, `reinstall`, `upgrade`, and `uninstall` actions read that saved state
+and address the same instance even when the invoking shell exports a different
+`AGENA_DATA_DIR`. The automatic rollback after a failed replacement uses the
+same saved state. Native service definitions pass the data root explicitly.
 Service names include a hash of the data root, so stopping or upgrading one
 instance does not address another instance's service.
 
@@ -260,17 +296,20 @@ bash scripts/agena/install.sh install --source https://github.com/canxin121/agen
 existing checkout it prints a warning and builds the checkout as it is.
 
 Source mode cannot be combined with `--version`, `--archive`, or `--checksum`.
-Use `upgrade --source` to rebuild and replace an existing installation:
+Use `reinstall --source` to rebuild the current checkout and replace the
+existing program, or `upgrade --source` to do the same through the upgrade
+action:
 
 ```bash
+bash scripts/agena/install.sh reinstall --source
 bash scripts/agena/install.sh upgrade --source
 ```
 
-An upgrade also applies any explicitly supplied runtime settings. Omitted
-settings keep their saved values:
+Both actions apply any explicitly supplied runtime settings. Omitted settings
+keep their saved values:
 
 ```bash
-bash scripts/agena/install.sh upgrade --source \
+bash scripts/agena/install.sh reinstall --source \
   --host 0.0.0.0 \
   --port 8080 \
   --workspace /path/to/projects
@@ -281,15 +320,16 @@ The installer stops the saved service, starts the replacement with the new
 settings, and writes them to the installation state. If startup fails, it
 restores the previous binary, settings, active data root, and service.
 
-On Windows, use `-Action Upgrade` with `-ListenHost`, `-Port`, `-Workspace`,
-`-DataDir`, `-UiPassword`, or `-ServiceMode`.
+On Windows, use `-Action Reinstall` or `-Action Upgrade` with `-ListenHost`,
+`-Port`, `-Workspace`, `-DataDir`, `-UiPassword`, or `-ServiceMode`.
 
 Environment variables are used for a fresh install, but do not override saved
-values during an upgrade; pass the corresponding option explicitly.
-`--data-dir` changes which data root subsequent runs use. Agena does not copy
-or migrate the old database and workspace data into the new root. Changing the
-program installation root is also outside the upgrade path; uninstall while
-preserving data, then reinstall with a different `--install-dir`.
+values during `reinstall` or `upgrade`; pass the corresponding option
+explicitly. `--data-dir` changes which data root subsequent runs use. Agena
+does not copy or migrate the old database and workspace data into the new
+root. Changing the program installation root is outside the replacement path;
+uninstall while preserving data, then run `install` with the new
+`--install-dir`.
 
 A remote clone is temporary and is removed after installation. A local
 checkout keeps its build output: Cargo output stays in `target/`, the Web build
@@ -342,7 +382,8 @@ branch, set `--source-ref` / `-SourceRef` while cloning.
 # Install the newest beta.
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
 
-# Upgrade the installed instance to the newest beta.
+# Reinstall the recorded release, or upgrade to the newest beta.
+curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- reinstall
 curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- upgrade
 
 # Inspect, stop, start, or restart the installed server.
@@ -362,6 +403,7 @@ piped install works, but it downloads the installer again each time.
 
 ```powershell
 $installer = Join-Path $PWD scripts\agena\install.ps1
+& $installer -Action Reinstall
 & $installer -Action Upgrade
 & $installer -Action Status
 & $installer -Action Stop
@@ -462,13 +504,14 @@ The archive must contain `bin/agena` (or `bin/agena.exe`) and
 match the package version in the release tag. Without `--version`, the
 archive's binary version becomes the installed version.
 
-## Transactional upgrades and rollback
+## Transactional replacement and rollback
 
-Upgrades keep the current executable, Web assets, installer state, and service
-until the replacement starts successfully. If a replacement passes download,
-checksum, archive, and version validation but fails during startup, the
-installer restores the previous files and restarts the previous service. The
-same rollback path runs for source builds and for local archives.
+`reinstall` and `upgrade` keep the current executable, Web assets, installer
+state, and service until the replacement starts successfully. If a replacement
+passes download, checksum, archive, and version validation but fails during
+startup or while saving state, the installer restores the previous files,
+settings, data root, and running state. The same rollback path runs for source
+builds and for local archives.
 
 ## Uninstall and purge
 
@@ -496,15 +539,16 @@ The repository verifies installers in three layers:
 
 1. `python3 scripts/agena/tests/test_installer_storage.py` runs offline
    installer contracts with temporary homes, local archives, and a stub
-   executable. It covers saved-root precedence, paths with spaces, upgrade
-   rollback, stopped instances, purge boundaries, source-checkout selection,
-   source builds, and service-helper arguments without installing a system
-   service.
+   executable. It covers saved-root precedence, paths with spaces, action
+   preconditions, option validation, reinstall and upgrade rollback, stopped
+   instances, purge boundaries, and source-checkout selection without
+   installing a system service.
 2. `.github/workflows/installer-ci.yml` builds real backend archives and runs
-   install, status and health check, stop, start, restart, upgrade, and
-   uninstall on Linux x86_64 (detached service), macOS arm64 (native service),
-   and Windows x86_64 (native service). The same workflow also installs the
-   current latest beta through public GitHub release URLs on Windows.
+   install, status and health check, stop, start, restart, reinstall, upgrade,
+   and uninstall on Linux x86_64 (detached service), macOS arm64 (native
+   service), and Windows x86_64 (native service). The same workflow also
+   installs the current latest beta through public GitHub release URLs on
+   Windows and reinstalls the recorded release.
 3. The platform lifecycle checks select a custom data root and verify that a
    normal uninstall preserves it, then reinstall and verify that explicit purge
    removes that root while preserving a sentinel in the unselected default
@@ -514,15 +558,13 @@ The repository verifies installers in three layers:
 The release workflow publishes `install.sh`, `install.ps1`,
 `install.sh.sha256`, and `install.ps1.sha256` next to every versioned Agena
 archive. After publication it downloads those public installer assets again on
-Linux, macOS, and Windows and runs install, status, stop, start, upgrade, and
-uninstall against the published backend archives.
+Linux, macOS, and Windows and runs install, status, stop, start, reinstall,
+upgrade, and uninstall against the published backend archives.
 
 For local changes, the minimum installer checks are:
 
 ```sh
-bash -n scripts/agena/install.sh \
-  scripts/agena/install-service.sh \
-  scripts/agena/uninstall-service.sh
+bash -n scripts/agena/install.sh
 python3 scripts/agena/tests/test_installer_storage.py
 python3 scripts/agena/verify-target-coverage.py
 ```

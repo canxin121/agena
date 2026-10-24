@@ -1,5 +1,5 @@
 Param(
-  [ValidateSet("Install", "Upgrade", "Uninstall", "Start", "Stop", "Restart", "Status")]
+  [ValidateSet("Install", "Reinstall", "Upgrade", "Uninstall", "Start", "Stop", "Restart", "Status")]
   [string]$Action = "Install",
   [string]$Repo = "canxin121/agena",
   [string]$Version = "",
@@ -23,12 +23,16 @@ Param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$RepoSpecified = $PSBoundParameters.ContainsKey("Repo")
+$VersionSpecified = $PSBoundParameters.ContainsKey("Version")
 $DataDirSpecified = $PSBoundParameters.ContainsKey("DataDir")
 $ListenHostSpecified = $PSBoundParameters.ContainsKey("ListenHost")
 $PortSpecified = $PSBoundParameters.ContainsKey("Port")
 $WorkspaceSpecified = $PSBoundParameters.ContainsKey("Workspace")
 $UiPasswordSpecified = $PSBoundParameters.ContainsKey("UiPassword")
 $ServiceModeSpecified = $PSBoundParameters.ContainsKey("ServiceMode")
+
+$ReleaseVersion = ""
 
 if (-not $InstallDir) {
   $InstallDir = Join-Path $env:LOCALAPPDATA "Agena"
@@ -41,9 +45,33 @@ if (-not $Workspace) {
   $Workspace = $HOME
 }
 
+$replacementAction = $Action -in @("Install", "Reinstall", "Upgrade")
+$candidateParameters = @(
+  foreach ($name in @("Repo", "Version", "Archive", "Checksum", "Source", "SourcePath", "SourceRef")) {
+    if ($PSBoundParameters.ContainsKey($name)) { $name }
+  }
+)
+$runtimeParameters = @(
+  foreach ($name in @("DataDir", "ListenHost", "Port", "Workspace", "UiPassword", "ServiceMode")) {
+    if ($PSBoundParameters.ContainsKey($name)) { $name }
+  }
+)
+if (-not $replacementAction -and $candidateParameters) {
+  throw "$(($candidateParameters | ForEach-Object { "-$_" }) -join ', ') only applies to Install, Reinstall, and Upgrade"
+}
+if (-not $replacementAction -and $runtimeParameters) {
+  throw "$(($runtimeParameters | ForEach-Object { "-$_" }) -join ', ') only applies to Install, Reinstall, and Upgrade"
+}
+if ($PurgeData -and $Action -ne "Uninstall") {
+  throw "-PurgeData only applies to Uninstall"
+}
+if ($NoPathUpdate -and $Action -notin @("Install", "Reinstall", "Upgrade", "Uninstall")) {
+  throw "-NoPathUpdate only applies to Install, Reinstall, Upgrade, and Uninstall"
+}
+
 if ($Source) {
-  if ($Action -notin @("Install", "Upgrade")) {
-    throw "-Source is only supported for Install and Upgrade"
+  if (-not $replacementAction) {
+    throw "-Source is only supported for Install, Reinstall, and Upgrade"
   }
   if ($Archive) { throw "-Source cannot be combined with -Archive" }
   if ($Checksum) { throw "-Source cannot be combined with -Checksum" }
@@ -309,6 +337,7 @@ function Save-State {
     schema = 2
     repo = $Repo
     version = $Version
+    releaseVersion = $ReleaseVersion
     installDir = $InstallDir
     dataDir = $DataDir
     host = $ListenHost
@@ -331,6 +360,7 @@ function Load-State {
   }
   $script:Repo = [string]$state.repo
   $script:Version = [string]$state.version
+  $script:ReleaseVersion = [string]$state.releaseVersion
   $script:InstallDir = Resolve-Directory ([string]$state.installDir)
   if ($InstallDir -ne $selectedInstallDir) { throw "installer state belongs to a different installation" }
   $script:DataDir = [string]$state.dataDir
@@ -389,61 +419,27 @@ function Get-ServerArgs {
 }
 
 function Invoke-AgenaLifecycle([string[]]$Arguments, [switch]$Capture) {
-  $names = @(
-    "AGENA_DATA_DIR",
-    "AGENA_SERVER_HOST",
-    "AGENA_SERVER_PORT",
-    "AGENA_SERVER_UI_PASSWORD",
-    "AGENA_MCP_ENABLED",
-    "AGENA_MCP_PUBLIC_URL",
-    "AGENA_MCP_OAUTH_ISSUER_URL",
-    "AGENA_MCP_AUTH_MODE",
-    "AGENA_MCP_ANONYMOUS_ACCESS",
-    "AGENA_MCP_CLIENT_REGISTRATION",
-    "AGENA_WORKSPACE_ROOT",
-    "AGENA_SERVER_UI_DIR"
-  )
-  $saved = @{}
-  try {
-    foreach ($name in $names) {
-      $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-      Remove-Item "Env:$name" -ErrorAction SilentlyContinue
-    }
-    $output = (& $AgenaBin --data-dir $DataDir @Arguments 2>&1 | Out-String)
-    $code = $LASTEXITCODE
-    if ($Capture) {
-      return [pscustomobject]@{ Code = [int]$code; Output = $output }
-    }
-    if ($output.Trim()) {
-      Write-Host $output.TrimEnd()
-    }
-    return [int]$code
-  }
-  finally {
-    foreach ($name in $names) {
-      $value = $saved[$name]
-      if ($null -eq $value) {
-        Remove-Item "Env:$name" -ErrorAction SilentlyContinue
-      } else {
-        [Environment]::SetEnvironmentVariable($name, $value, "Process")
-      }
-    }
-  }
+  return Invoke-AgenaLifecycleAt $DataDir $Arguments -Capture:$Capture
 }
 
-function Test-ServerRunning {
+function Test-ServerRunningAt([string]$DataRoot) {
   if (-not (Test-Path -LiteralPath $AgenaBin)) { return $false }
-  $result = Invoke-AgenaLifecycle @("server", "status") -Capture
+  $result = Invoke-AgenaLifecycleAt $DataRoot @("server", "status") -Capture
   return $result.Output.Contains(" is running at ")
 }
 
-function Stop-ForUpgrade {
+function Test-ServerRunning {
+  return Test-ServerRunningAt $DataDir
+}
+
+# Stop or deregister the instance described by the given saved settings.
+function Stop-Installation([string]$DataRoot, [string]$Mode) {
   if (-not (Test-Path -LiteralPath $AgenaBin)) { return }
-  if ($ServiceMode -eq "native") {
-    $code = Invoke-AgenaLifecycle @("server", "uninstall")
-    if ($code -ne 0) { throw "Failed to stop/uninstall the existing Agena user service before upgrade" }
-  } elseif (Test-ServerRunning) {
-    $code = Invoke-AgenaLifecycle @("server", "stop")
+  if ($Mode -eq "native") {
+    $code = Invoke-AgenaLifecycleAt $DataRoot @("server", "uninstall")
+    if ($code -ne 0) { throw "Failed to stop/uninstall the existing Agena user service" }
+  } elseif (Test-ServerRunningAt $DataRoot) {
+    $code = Invoke-AgenaLifecycleAt $DataRoot @("server", "stop")
     if ($code -ne 0) { throw "Agena server stop failed" }
   }
 }
@@ -458,7 +454,30 @@ function Start-Installed {
   if ($code -ne 0) { throw "Agena server failed to start" }
 }
 
-function Install-OrUpgrade([string]$RequestedAction) {
+# Replacement pipeline shared by Install, Reinstall, and Upgrade:
+#
+#   Resolve-Replacement    read saved state, overlay explicit options
+#   New-Candidate          download or build, verify, unpack, probe version
+#   Install-Candidate      stop the current instance, swap program files
+#   Complete-Replacement   start, restore prior run state, save state
+#
+# Failures during activation restore the previous program files, state,
+# settings, and running state.
+
+$script:TempDir = ""
+$script:BackupDir = ""
+$script:CandidateStage = ""
+$script:CandidateVersion = ""
+$script:CandidateInstalled = $false
+$script:ActivationStarted = $false
+$script:HadState = $false
+$script:OldDataDir = ""
+$script:OldServiceMode = ""
+$script:OldWasRunning = $false
+$script:ReplacementAction = ""
+
+function Resolve-Replacement {
+  $requestedRepo = $Repo
   $requestedVersion = $Version
   $requestedDataDir = $DataDir
   $requestedListenHost = $ListenHost
@@ -466,15 +485,31 @@ function Install-OrUpgrade([string]$RequestedAction) {
   $requestedWorkspace = $Workspace
   $requestedUiPassword = $UiPassword
   $requestedServiceMode = $ServiceMode
-  $oldDataDir = $DataDir
-  $oldServiceMode = $ServiceMode
-  $oldWasRunning = $false
-  if ($RequestedAction -eq "Upgrade") {
+
+  $script:ReplacementAction = $Action
+  $script:OldWasRunning = $false
+  if ($Action -eq "Install") {
+    if (Test-Path -LiteralPath $StateFile) {
+      throw ("Agena is already installed at $InstallDir; " +
+        "use -Action Reinstall to replace the installed version or -Action Upgrade to install a newer version")
+    }
+    if ($Source) { $script:ReleaseVersion = "" }
+    elseif ($Archive) { if (-not $VersionSpecified) { $script:ReleaseVersion = "" } }
+    else { $script:ReleaseVersion = $requestedVersion }
+  }
+  else {
     Load-State
-    $oldDataDir = $DataDir
-    $oldServiceMode = $ServiceMode
-    $oldWasRunning = Test-ServerRunning
-    $script:Version = $requestedVersion
+    $script:OldDataDir = $DataDir
+    $script:OldServiceMode = $ServiceMode
+    $script:OldWasRunning = Test-ServerRunning
+    $script:ReleaseVersion = [string]$ReleaseVersion
+    if ($RepoSpecified) { $script:Repo = $requestedRepo }
+    if ($Source) { $script:ReleaseVersion = "" }
+    elseif ($Archive) {
+      $script:ReleaseVersion = if ($VersionSpecified) { $requestedVersion } else { "" }
+    }
+    elseif ($VersionSpecified) { $script:ReleaseVersion = $requestedVersion }
+    elseif ($Action -eq "Upgrade") { $script:ReleaseVersion = "" }
     if ($DataDirSpecified) { $script:DataDir = $requestedDataDir }
     if ($ListenHostSpecified) { $script:ListenHost = $requestedListenHost }
     if ($PortSpecified) { $script:Port = $requestedPort }
@@ -482,167 +517,191 @@ function Install-OrUpgrade([string]$RequestedAction) {
     if ($UiPasswordSpecified) { $script:UiPassword = $requestedUiPassword }
     if ($ServiceModeSpecified) { $script:ServiceMode = $requestedServiceMode }
     Assert-StoragePaths
-  } elseif (Test-Path -LiteralPath $StateFile) {
-    throw "Agena is already installed at $InstallDir; use -Action Upgrade to reinstall or change settings"
+    if ($Action -eq "Reinstall" -and -not $Source -and -not $Archive -and -not $ReleaseVersion) {
+      throw "This installation has no recorded release version; reinstall with -Archive PATH, -Source, or -Version VERSION"
+    }
   }
   Resolve-ServiceMode
-  $newDataDir = $DataDir
-  $newServiceMode = $ServiceMode
   New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
+}
 
-  $temp = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
-  New-Item -ItemType Directory -Force -Path $temp | Out-Null
-  try {
-    $target = Get-TargetTriple
-    $packageVersion = ""
-    if ($Source) {
-      $sourceArchive = New-SourceArchive $temp $target
-      $archiveSource = $sourceArchive.Archive
-      $checksumSource = $sourceArchive.Checksum
+function New-Candidate([string]$Temp) {
+  $target = Get-TargetTriple
+  $packageVersion = ""
+  if ($Source) {
+    $script:ReleaseVersion = ""
+    $sourceArchive = New-SourceArchive $Temp $target
+    $archiveSource = $sourceArchive.Archive
+    $checksumSource = $sourceArchive.Checksum
+  }
+  elseif (-not $Archive) {
+    if (-not $ReleaseVersion) { $selectedRelease = Get-LatestVersion } else { $selectedRelease = Normalize-Version $ReleaseVersion }
+    if ($selectedRelease -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+      throw "-Version must name a beta release, for example 0.1.0-beta.1"
     }
-    elseif (-not $Archive) {
-      if (-not $Version) { $releaseVersion = Get-LatestVersion } else { $releaseVersion = Normalize-Version $Version }
-      if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
+    $script:ReleaseVersion = $selectedRelease
+    $packageVersion = $Matches[1]
+    $archiveSource = "https://github.com/$Repo/releases/download/agena-v$selectedRelease/agena-backend-$target-v$packageVersion.zip"
+    $checksumSource = "$archiveSource.sha256"
+  }
+  else {
+    $archiveSource = $Archive
+    $checksumSource = if ($Checksum) { $Checksum } else { "$Archive.sha256" }
+    if ($ReleaseVersion) {
+      $selectedRelease = Normalize-Version $ReleaseVersion
+      if ($selectedRelease -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
         throw "-Version must name a beta release, for example 0.1.0-beta.1"
       }
-      $script:Version = $releaseVersion
       $packageVersion = $Matches[1]
-      $archiveSource = "https://github.com/$Repo/releases/download/agena-v$releaseVersion/agena-backend-$target-v$packageVersion.zip"
-      $checksumSource = "$archiveSource.sha256"
+      $script:ReleaseVersion = $selectedRelease
     }
-    else {
-      $archiveSource = $Archive
-      $checksumSource = if ($Checksum) { $Checksum } else { "$Archive.sha256" }
-      if ($Version) {
-        $releaseVersion = Normalize-Version $Version
-        if ($releaseVersion -notmatch '^(\d+\.\d+\.\d+)-beta\.[1-9]\d*$') {
-          throw "-Version must name a beta release, for example 0.1.0-beta.1"
+  }
+
+  $archivePath = Join-Path $Temp "agena.zip"
+  $checksumPath = Join-Path $Temp "agena.sha256"
+  Get-FileFromSource $archiveSource $archivePath
+  Get-FileFromSource $checksumSource $checksumPath
+  Assert-Checksum $archivePath $checksumPath
+  Write-Host "Verified Agena package checksum"
+
+  $stage = Join-Path $Temp "stage"
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+  Write-Host "Extracting Agena package archive"
+  $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+  if ($tar) {
+    & $tar.Source -xf $archivePath -C $stage
+    if ($LASTEXITCODE -ne 0) {
+      throw "tar.exe extraction failed with exit code ${LASTEXITCODE}"
+    }
+  }
+  else {
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $stage -Force
+  }
+  $stageBin = Join-Path $stage "bin\agena.exe"
+  $stageWeb = Join-Path $stage "web-dist\index.html"
+  if (-not (Test-Path -LiteralPath $stageBin) -or -not (Test-Path -LiteralPath $stageWeb)) {
+    throw "Package archive is missing bin/agena.exe or web-dist/index.html"
+  }
+  Write-Host "Validating Agena binary"
+  $binaryVersionText = (& $stageBin --version | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $binaryVersionText -notmatch '(\S+)$') {
+    throw "Installed Agena binary did not report a version"
+  }
+  $binaryVersion = $Matches[1]
+  if ($packageVersion -and $binaryVersion -ne $packageVersion) {
+    throw "Archive contains Agena $binaryVersion but release $ReleaseVersion contains $packageVersion"
+  }
+  $script:Version = $binaryVersion
+  $script:CandidateVersion = $binaryVersion
+  $script:CandidateStage = $stage
+  Write-Host "Validated Agena $binaryVersion"
+}
+
+function Install-Candidate([string]$Temp) {
+  $backup = Join-Path $Temp "backup"
+  New-Item -ItemType Directory -Force -Path $backup | Out-Null
+  $script:BackupDir = $backup
+  if (Test-Path -LiteralPath $StateFile) {
+    $script:HadState = $true
+    Copy-Item -LiteralPath $StateFile -Destination (Join-Path $backup "install-state.json") -Force
+  }
+
+  Write-Host "Stopping the installed Agena instance if needed"
+  Stop-Installation $script:OldDataDir $script:OldServiceMode
+
+  $script:ActivationStarted = $true
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  foreach ($name in @("bin", "web-dist")) {
+    $existing = Join-Path $InstallDir $name
+    if (Test-Path -LiteralPath $existing) {
+      Move-Item -LiteralPath $existing -Destination (Join-Path $backup $name)
+    }
+    Move-Item -LiteralPath (Join-Path $CandidateStage $name) -Destination $existing
+  }
+  $script:CandidateInstalled = $true
+}
+
+function Complete-Replacement {
+  Write-Host "Starting Agena server using $ServiceMode mode"
+  Start-Installed
+  if ($script:ReplacementAction -ne "Install" -and -not $script:OldWasRunning) {
+    $stopCode = Invoke-AgenaLifecycle @("server", "stop")
+    if ($stopCode -ne 0) {
+      throw "The replacement could not return the instance to its stopped state"
+    }
+  }
+  Save-State
+  try { Update-UserPath } catch { Write-Warning "Agena installed, but PATH update failed: $_" }
+}
+
+function Undo-Replacement {
+  Write-Warning "Restoring the previous Agena installation."
+  if (Test-Path -LiteralPath $AgenaBin) {
+    if ($ServiceMode -eq "native") {
+      try { [void](Invoke-AgenaLifecycle @("server", "uninstall")) } catch {}
+    } elseif (Test-ServerRunning) {
+      try { [void](Invoke-AgenaLifecycle @("server", "stop")) } catch {}
+    }
+  }
+
+  foreach ($name in @("bin", "web-dist")) {
+    $saved = Join-Path $BackupDir $name
+    if (-not (Test-Path -LiteralPath $saved)) { continue }
+    $current = Join-Path $InstallDir $name
+    if (Test-Path -LiteralPath $current) { Remove-Item -LiteralPath $current -Recurse -Force }
+    Move-Item -LiteralPath $saved -Destination $current
+  }
+
+  if ($HadState) {
+    Copy-Item -LiteralPath (Join-Path $BackupDir "install-state.json") -Destination $StateFile -Force
+    Load-State
+    if ($ServiceMode -eq "native") {
+      try {
+        Start-Installed
+        if (-not $OldWasRunning) {
+          [void](Invoke-AgenaLifecycle @("server", "stop"))
         }
-        $packageVersion = $Matches[1]
-        $script:Version = $releaseVersion
+      } catch {
+        Write-Warning "Rollback restored the old files but could not restore the native service: $_"
       }
+    } elseif ($OldWasRunning) {
+      try { Start-Installed } catch { Write-Warning "Rollback restored the old files but could not restart the old server: $_" }
     }
-
-    $archivePath = Join-Path $temp "agena.zip"
-    $checksumPath = Join-Path $temp "agena.sha256"
-    Get-FileFromSource $archiveSource $archivePath
-    Get-FileFromSource $checksumSource $checksumPath
-    Assert-Checksum $archivePath $checksumPath
-    Write-Host "Verified Agena release checksum"
-
-    $stage = Join-Path $temp "stage"
-    New-Item -ItemType Directory -Force -Path $stage | Out-Null
-    Write-Host "Extracting Agena release archive"
-    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if ($tar) {
-      & $tar.Source -xf $archivePath -C $stage
-      if ($LASTEXITCODE -ne 0) {
-        throw "tar.exe extraction failed with exit code ${LASTEXITCODE}"
-      }
-    }
-    else {
-      Expand-Archive -LiteralPath $archivePath -DestinationPath $stage -Force
-    }
-    Write-Host "Extracted Agena release archive"
-    $stageBin = Join-Path $stage "bin\agena.exe"
-    $stageWeb = Join-Path $stage "web-dist\index.html"
-    if (-not (Test-Path -LiteralPath $stageBin) -or -not (Test-Path -LiteralPath $stageWeb)) {
-      throw "Release archive is missing bin/agena.exe or web-dist/index.html"
-    }
-    Write-Host "Validating Agena release binary"
-    $binaryVersionText = (& $stageBin --version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $binaryVersionText -notmatch '(\S+)$') {
-      throw "Installed Agena binary did not report a version"
-    }
-    $binaryVersion = $Matches[1]
-    if ($packageVersion -and $binaryVersion -ne $packageVersion) {
-      throw "Archive contains Agena $binaryVersion but release $Version contains $packageVersion"
-    }
-    $script:Version = $binaryVersion
-    Write-Host "Validated Agena $binaryVersion"
-
-    $backup = Join-Path $temp "backup"
-    New-Item -ItemType Directory -Force -Path $backup | Out-Null
-    if (Test-Path -LiteralPath $StateFile) {
-      Copy-Item -LiteralPath $StateFile -Destination (Join-Path $backup "install-state.json") -Force
-    }
-
-    Write-Host "Stopping existing Agena installation if needed"
-    if ($RequestedAction -eq "Upgrade") {
-      $script:DataDir = $oldDataDir
-      $script:ServiceMode = $oldServiceMode
-    }
-    Stop-ForUpgrade
-    if ($RequestedAction -eq "Upgrade") {
-      $script:DataDir = $newDataDir
-      $script:ServiceMode = $newServiceMode
-    }
-    Write-Host "Installing Agena files"
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    foreach ($name in @("bin", "web-dist")) {
-      $existing = Join-Path $InstallDir $name
-      if (Test-Path -LiteralPath $existing) {
-        Move-Item -LiteralPath $existing -Destination (Join-Path $backup $name)
-      }
-      Move-Item -LiteralPath (Join-Path $stage $name) -Destination $existing
-    }
-    Write-Host "Installed Agena files"
-
-    try {
-      Write-Host "Starting Agena server using $ServiceMode mode"
-      Start-Installed
-      Write-Host "Started Agena server"
-      if ($RequestedAction -eq "Upgrade" -and -not $oldWasRunning) {
-        $stopCode = Invoke-AgenaLifecycle @("server", "stop")
-        if ($stopCode -ne 0) {
-          throw "Upgraded Agena could not be returned to its previous stopped state"
-        }
-      }
-      Save-State
-      try { Update-UserPath } catch { Write-Warning "Agena installed, but PATH update failed: $_" }
-    }
-    catch {
-      $installError = $_
-      Write-Warning "The new Agena version failed to start; restoring the previous installation."
-      if (Test-Path -LiteralPath $AgenaBin) {
-        if ($ServiceMode -eq "native") {
-          try { [void](Invoke-AgenaLifecycle @("server", "uninstall")) } catch {}
-        } elseif (Test-ServerRunning) {
-          try { [void](Invoke-AgenaLifecycle @("server", "stop")) } catch {}
-        }
-      }
-
+  } else {
+    if ($CandidateInstalled) {
       foreach ($name in @("bin", "web-dist")) {
-        $current = Join-Path $InstallDir $name
-        if (Test-Path -LiteralPath $current) { Remove-Item -LiteralPath $current -Recurse -Force }
-        $old = Join-Path $backup $name
-        if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $current }
+        Remove-Item -LiteralPath (Join-Path $InstallDir $name) -Recurse -Force -ErrorAction SilentlyContinue
       }
-
-      $oldState = Join-Path $backup "install-state.json"
-      if (Test-Path -LiteralPath $oldState) {
-        Copy-Item -LiteralPath $oldState -Destination $StateFile -Force
-        Load-State
-        if ($ServiceMode -eq "native") {
-          try {
-            Start-Installed
-            if (-not $oldWasRunning) {
-              [void](Invoke-AgenaLifecycle @("server", "stop"))
-            }
-          } catch {
-            Write-Warning "Rollback restored the old files but could not restore the native service: $_"
-          }
-        } elseif ($oldWasRunning) {
-          try { Start-Installed } catch { Write-Warning "Rollback restored the old files but could not restart the old server: $_" }
-        }
-      } else {
-        Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
-      }
-      throw $installError
     }
-    Write-Host "Agena $Version installed at $InstallDir"
+    Remove-Item -LiteralPath $StateFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Invoke-Replacement {
+  Resolve-Replacement
+  $temp = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Force -Path $temp | Out-Null
+  $script:TempDir = $temp
+  try {
+    New-Candidate $temp
+    Install-Candidate $temp
+    Complete-Replacement
+    $script:ActivationStarted = $false
+    $verb = switch ($script:ReplacementAction) {
+      "Reinstall" { "reinstalled" }
+      "Upgrade" { "upgraded" }
+      default { "installed" }
+    }
+    Write-Host "Agena $Version $verb at $InstallDir"
     Write-Host "Instance data: $DataDir"
     Write-Host "Web UI: http://${ListenHost}:$Port"
+  }
+  catch {
+    if ($script:ActivationStarted) {
+      $script:ActivationStarted = $false
+      try { Undo-Replacement } catch { Write-Warning "Rollback failed: $_" }
+    }
+    throw
   }
   finally {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
@@ -695,8 +754,9 @@ function Uninstall-Agena {
 }
 
 switch ($Action) {
-  "Install" { Install-OrUpgrade "Install" }
-  "Upgrade" { Install-OrUpgrade "Upgrade" }
+  "Install" { Invoke-Replacement }
+  "Reinstall" { Invoke-Replacement }
+  "Upgrade" { Invoke-Replacement }
   "Uninstall" { Uninstall-Agena }
   "Start" { Start-Agena }
   "Stop" { Stop-Agena }

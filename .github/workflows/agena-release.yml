@@ -522,6 +522,8 @@ jobs:
           bash "$installer" stop --install-dir "$install_dir" --no-path-update
           bash "$installer" start --install-dir "$install_dir" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+          bash "$installer" reinstall --install-dir "$install_dir" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
           bash "$installer" upgrade \
             --repo "$GITHUB_REPOSITORY" \
             --version "$RELEASE_VERSION" \
@@ -573,6 +575,9 @@ jobs:
           Write-Host "[published-smoke] stop + start"
           & $installer -Action Stop -InstallDir $installDir -NoPathUpdate
           & $installer -Action Start -InstallDir $installDir -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+          Write-Host "[published-smoke] reinstall"
+          & $installer -Action Reinstall -InstallDir $installDir -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
           Write-Host "[published-smoke] upgrade"
           & $installer -Action Upgrade `

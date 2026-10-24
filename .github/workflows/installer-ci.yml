@@ -16,10 +16,6 @@ on:
       - "apps/agena/Cargo.toml"
       - "scripts/agena/install.sh"
       - "scripts/agena/install.ps1"
-      - "scripts/agena/install-service.sh"
-      - "scripts/agena/install-service.ps1"
-      - "scripts/agena/uninstall-service.sh"
-      - "scripts/agena/uninstall-service.ps1"
       - "scripts/agena/tests/**"
       - "scripts/agena/package-backend.sh"
       - "scripts/agena/package-backend.ps1"
@@ -66,7 +62,7 @@ jobs:
           toolchain: 1.97.0
       - name: Validate Unix installer syntax
         shell: bash
-        run: bash -n scripts/agena/install.sh scripts/agena/install-service.sh scripts/agena/uninstall-service.sh
+        run: bash -n scripts/agena/install.sh
       - name: Verify installer roots, rollback and purge without system services
         run: python3 scripts/agena/tests/test_installer_storage.py
       - name: Verify every published target has installer support
@@ -126,6 +122,11 @@ jobs:
           Write-Host '[remote-release] stop + start'
           & $installer -Action Stop -InstallDir $env:INSTALL_DIR -NoPathUpdate
           & $installer -Action Start -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
+
+          Write-Host '[remote-release] reinstall the recorded release'
+          & $installer -Action Reinstall -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
 
           Write-Host '[remote-release] uninstall'
@@ -194,11 +195,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($path in @(
-            'scripts\agena\install.ps1',
-            'scripts\agena\install-service.ps1',
-            'scripts\agena\uninstall-service.ps1'
-          )) {
+          foreach ($path in @('scripts\agena\install.ps1')) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -241,7 +238,7 @@ jobs:
         shell: pwsh
         run: ./scripts/agena/package-backend.ps1 -TargetTriple '${{ matrix.target }}'
 
-      - name: Install, stop, start, restart, upgrade, uninstall (Unix)
+      - name: Install, reinstall, upgrade, lifecycle, uninstall (Unix)
         if: matrix.shell_kind == 'bash'
         shell: bash
         env:
@@ -293,6 +290,16 @@ jobs:
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
 
           "${install[@]}" restart --install-dir "$INSTALL_DIR" --no-path-update
+          curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
+
+          # Reinstalling replaces the program in place and keeps the running
+          # instance running with its saved settings.
+          "${install[@]}" reinstall \
+            --archive "$archive" \
+            --checksum "$checksum" \
+            --install-dir "$INSTALL_DIR" \
+            --no-path-update
+          "${install[@]}" status --install-dir "$INSTALL_DIR" --no-path-update
           curl --retry 20 --retry-delay 1 --retry-connrefused -fsS "http://127.0.0.1:${TEST_PORT}/api/v1/health" >/dev/null
 
           "${install[@]}" upgrade \
@@ -384,7 +391,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install, stop, start, restart, upgrade, uninstall (Windows)
+      - name: Install, reinstall, upgrade, lifecycle, uninstall (Windows)
         if: matrix.shell_kind == 'pwsh'
         shell: pwsh
         env:
@@ -436,6 +443,14 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
 
           & $installer -Action Restart -InstallDir $env:INSTALL_DIR -NoPathUpdate
+          Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
+
+          & $installer -Action Reinstall `
+            -Archive $archive.FullName `
+            -Checksum $checksum `
+            -InstallDir $env:INSTALL_DIR `
+            -NoPathUpdate
+          & $installer -Action Status -InstallDir $env:INSTALL_DIR -NoPathUpdate
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
 
           & $installer -Action Upgrade `

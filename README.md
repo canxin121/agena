@@ -45,10 +45,12 @@ bash scripts/agena/install.sh install --source
 The current checkout is used directly. Pass `--source PATH` to build another
 checkout or `--source GIT_URL` to clone one; see the
 [installation guide](docs/installation.md#install-from-source) for requirements
-and Windows usage. To rebuild an existing installation or change its saved bind
-address, port, workspace, or data root, run `upgrade` with the new options:
+and Windows usage. To rebuild the same version in place, run `reinstall`; to
+move to the newest beta, run `upgrade`. Both keep the saved settings unless a
+flag overrides them:
 
 ```bash
+bash scripts/agena/install.sh reinstall --source
 bash scripts/agena/install.sh upgrade --source --host 0.0.0.0 --port 8080
 ```
 

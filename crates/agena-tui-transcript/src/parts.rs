@@ -94,6 +94,26 @@ pub fn parts_entries_with_folds(
     parts: &[PartResource],
     folds: &[TranscriptFold],
 ) -> Vec<TranscriptEntry<'static>> {
+    // A committed checkpoint references the text stream used to create it.
+    // Keep its original boundary for ownership, but present that summary only
+    // through the compaction part, never again as an assistant answer.
+    let checkpoint_resources = parts
+        .iter()
+        .filter(|part| part.content.get("compaction_through").is_some())
+        .flat_map(text_resource_ids)
+        .collect::<std::collections::BTreeSet<_>>();
+    let summary_sources = parts
+        .iter()
+        .filter(|part| {
+            part.role == "assistant" && matches!(part.kind.as_str(), "text" | "compaction")
+        })
+        .filter(|part| part.content.get("compaction_through").is_none())
+        .filter(|part| {
+            let resources = text_resource_ids(part);
+            !resources.is_empty() && resources.iter().all(|id| checkpoint_resources.contains(id))
+        })
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
     let marker_ids = parts
         .iter()
         .filter(|part| part.is_message_boundary())
@@ -101,7 +121,8 @@ pub fn parts_entries_with_folds(
         .collect::<std::collections::BTreeSet<_>>();
     let mut content_by_run = std::collections::BTreeMap::<i64, Vec<&PartResource>>::new();
     for part in parts {
-        if let Some(run_id) = part.run_id
+        if !summary_sources.contains(&part.part_id)
+            && let Some(run_id) = part.run_id
             && marker_ids.contains(&run_id)
         {
             content_by_run.entry(run_id).or_default().push(part);
@@ -134,7 +155,8 @@ pub fn parts_entries_with_folds(
         }
         // Maintenance runs have their own content lifecycle, separate
         // from the assistant reply that they are displayed beneath.
-        let is_reply = string_field(&part.content, "run_kind").as_deref() != Some("compaction");
+        let is_reply = !summary_sources.contains(&part.part_id)
+            && string_field(&part.content, "run_kind").as_deref() != Some("compaction");
         projected.push((entry, is_reply, part.message_id));
     }
 
@@ -204,6 +226,24 @@ pub fn parts_entries_with_folds(
     entries
         .into_iter()
         .map(|(entry, is_reply, _)| finalize_run_entry(entry, is_reply))
+        .collect()
+}
+
+fn is_compaction_checkpoint(part: &PartResource) -> bool {
+    part.kind == "compaction"
+        // Servers predating the typed projection sent checkpoints as text.
+        || (part.kind == "text" && part.content.get("compaction_through").is_some())
+}
+
+fn text_resource_ids(part: &PartResource) -> Vec<agena_domain::ContentId> {
+    part.content
+        .get("resources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| serde_json::from_value::<agena_domain::ContentRef>(value.clone()).ok())
+        .filter(|resource| resource.kind == agena_domain::ContentKind::Text)
+        .map(|resource| resource.resource_id)
         .collect()
 }
 
@@ -439,6 +479,17 @@ fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
 }
 
 fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
+    if part.kind == "text" && is_compaction_checkpoint(part) {
+        return match decode_part_content::<CompactionContent>(part) {
+            Some(content) => TranscriptPartContent::Activity(
+                TranscriptActivityContent::Compaction(Box::new(CompactionContent {
+                    summary: part_summary(part).or(content.summary),
+                    ..content
+                })),
+            ),
+            None => fallback_text_part(part),
+        };
+    }
     // Every kind decodes through its canonical contract shape: no field is
     // guessed from raw JSON and no kind is re-encoded as another. Content that
     // cannot be decoded degrades to a readable text part, never silently
@@ -895,5 +946,121 @@ fn assistant_reply_lifecycle(state: RunStatus) -> Option<TranscriptAssistantRepl
         RunStatus::Pending | RunStatus::InProgress => {
             Some(TranscriptAssistantReplyLifecycle::Running)
         }
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn part(id: i64, run_id: i64, kind: &str, content: Value) -> PartResource {
+        PartResource {
+            part_id: id,
+            kind: kind.into(),
+            role: "assistant".into(),
+            state: "completed".into(),
+            run_state: (id == run_id).then(|| "completed".into()),
+            run_id: Some(run_id),
+            message_id: Some(1),
+            message_boundary: id == run_id,
+            content,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn committed_compaction_has_one_part_and_preserves_the_original_answer() {
+        for (checkpoint_kind, summary_kind) in [
+            ("compaction", "text"),
+            ("text", "text"),
+            ("compaction", "compaction"),
+        ] {
+            let resource = agena_domain::ContentRef {
+                resource_id: agena_domain::ContentId::new(),
+                kind: agena_domain::ContentKind::Text,
+            };
+            let parts = vec![
+                part(2, 2, "text", json!({"text": "original answer"})),
+                part(
+                    3,
+                    3,
+                    summary_kind,
+                    json!({"text": "", "resources": [resource]}),
+                ),
+                part(
+                    4,
+                    3,
+                    checkpoint_kind,
+                    json!({"resources": [resource], "compaction_through": 2}),
+                ),
+            ];
+            let entries = parts_entries(&parts);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].parts.len(), 2, "{checkpoint_kind}");
+            assert!(matches!(
+                &entries[0].parts[0].content,
+                TranscriptPartContent::Activity(TranscriptActivityContent::Answer(body))
+                    if body.text == "original answer"
+            ));
+            assert_eq!(entries[0].parts[1].id, TranscriptContentId::StoredPart(4));
+            assert!(matches!(
+                entries[0].parts[1].content,
+                TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(_))
+            ));
+            let rendered = crate::render_entry_detailed(
+                &entries[0],
+                120,
+                &agena_tui::i18n::I18n::english(),
+                &crate::TranscriptDetailDefaults::default(),
+                &Default::default(),
+            );
+            let marker = rendered
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(
+                        node.key,
+                        crate::TranscriptNodeKey::Activity {
+                            content_id: TranscriptContentId::StoredPart(4),
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            assert!(
+                marker.toggleable,
+                "a resource-only checkpoint must be expandable"
+            );
+            assert!(
+                rendered
+                    .lines
+                    .iter()
+                    .any(|line| line.text.contains("Compaction"))
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_summary_is_not_an_answer_when_its_original_boundary_is_the_source() {
+        let resource = agena_domain::ContentRef {
+            resource_id: agena_domain::ContentId::new(),
+            kind: agena_domain::ContentKind::Text,
+        };
+        let entries = parts_entries(&[
+            part(3, 3, "text", json!({"text": "", "resources": [resource]})),
+            part(
+                4,
+                3,
+                "compaction",
+                json!({"resources": [resource], "compaction_through": 2}),
+            ),
+        ]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].parts.len(), 1);
+        assert!(matches!(
+            entries[0].parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(_))
+        ));
     }
 }

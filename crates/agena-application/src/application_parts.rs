@@ -284,16 +284,47 @@ pub(crate) async fn project_kernel_entry(
         }
         EntryPayload::Text { content_id } | EntryPayload::Reasoning { content_id } => {
             let reasoning = matches!(&entry.payload, EntryPayload::Reasoning { .. });
+            if let Some(phase) = entry.compaction_phase {
+                let (outcome, state) = match phase {
+                    agena_storage::kernel::ProviderRoundPhase::Running => ("running", "running"),
+                    agena_storage::kernel::ProviderRoundPhase::Succeeded
+                        if entry.compaction_committed =>
+                    {
+                        ("compacted", "completed")
+                    }
+                    agena_storage::kernel::ProviderRoundPhase::Succeeded => {
+                        ("unchanged", "completed")
+                    }
+                    agena_storage::kernel::ProviderRoundPhase::Failed
+                        if entry.execution_phase
+                            == agena_storage::kernel::ExecutionPhase::Cancelled =>
+                    {
+                        ("cancelled", "cancelled")
+                    }
+                    agena_storage::kernel::ProviderRoundPhase::Failed => ("failed", "failed"),
+                    agena_storage::kernel::ProviderRoundPhase::Interrupted => {
+                        ("cancelled", "cancelled")
+                    }
+                };
+                part.kind = "compaction".into();
+                part.visibility = "user".into();
+                part.state = state.into();
+                part.content = serde_json::json!({"outcome":outcome,"run_kind":"compaction",
+                    "resources":[agena_domain::ContentRef {
+                        resource_id:*content_id, kind:agena_domain::ContentKind::Text }]});
+                return Ok(part);
+            }
             part.kind = if reasoning { "think" } else { "text" }.into();
             part.content = serde_json::json!({"text":"","resources":[agena_domain::ContentRef {
                 resource_id:*content_id,kind:agena_domain::ContentKind::Text }],
                 "execution_id":entry.execution_id});
         }
         EntryPayload::Compaction { summary, through } => {
-            part.kind = "text".into();
+            part.kind = "compaction".into();
             part.visibility = "user".into();
-            part.content = serde_json::json!({"text":"","resources":[agena_domain::ContentRef {
-                resource_id:*summary, kind:agena_domain::ContentKind::Text }],"compaction_through":through});
+            part.content = serde_json::json!({"outcome":"compacted","resources":[agena_domain::ContentRef {
+                resource_id:*summary, kind:agena_domain::ContentKind::Text }],"compaction_through":through,
+                "run_kind":"compaction"});
         }
         EntryPayload::Notice { text } => {
             match agena_runtime_contracts::part_content::decode_failure_notice(text) {

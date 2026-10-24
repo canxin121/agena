@@ -1264,8 +1264,34 @@ impl SessionManager {
                 .iter()
                 .rev()
                 .find(|entry| !matches!(entry.entry.payload, EntryPayload::Compaction { .. }))
-                .map(|entry| entry.entry.id)
-                .ok_or_else(|| AppError::Config("there is no history to compact".into()))?;
+                .map(|entry| entry.entry.id);
+            let Some(through) = through else {
+                if status.checkpoint_entry_id.is_none() {
+                    return Err(AppError::Config("there is no history to compact".into()));
+                }
+                // The checkpoint already covers every eligible entry. Retain
+                // a visible unchanged outcome without sending another model
+                // request or installing a second checkpoint.
+                let open = RequestId::new();
+                persist(|| round.begin_text(open, false))
+                    .await
+                    .map_err(kernel_error)?;
+                let finish = RequestId::new();
+                persist(|| round.finish(finish, None, true))
+                    .await
+                    .map_err(kernel_error)?;
+                let command = RequestId::new();
+                persist(|| {
+                    attempt.record_compaction(
+                        command,
+                        policy.clone(),
+                        CompactionPolicyOutcome::Unchanged,
+                    )
+                })
+                .await
+                .map_err(kernel_error)?;
+                return Ok(false);
+            };
             let prompt = self
                 .prompt_hydrator
                 .hydrate_with_executor(
@@ -1309,6 +1335,14 @@ impl SessionManager {
         };
         prompt.install(&mut completion);
         completion.disable_tools = true;
+        // Publish an owned compaction part before awaiting the provider. Its
+        // empty text stream carries the running lifecycle, and is reused for
+        // the eventual checkpoint rather than exposed as an assistant answer.
+        let open = RequestId::new();
+        let output = persist(|| round.begin_text(open, false))
+            .await
+            .map_err(kernel_error)?
+            .value;
         let effect=async {
             let mut native_context=None;
             if native&&!native_unavailable {
@@ -1386,11 +1420,6 @@ impl SessionManager {
         };
         // The provider result is retained from this point. Storage retries
         // below only persist that result, including its exact native replay.
-        let open = RequestId::new();
-        let output = persist(|| round.begin_text(open, false))
-            .await
-            .map_err(kernel_error)?
-            .value;
         super::results::append_text_chunks(&output, &summary)
             .await
             .map_err(kernel_error)?;

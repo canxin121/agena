@@ -246,6 +246,12 @@ pub struct EntryView {
     /// a running attempt alone does not.
     #[serde(default)]
     pub content_state: Option<CaptureState>,
+    /// The summary stream and checkpoint of a maintenance compaction round
+    /// must not be presented as ordinary assistant answers.
+    #[serde(default)]
+    pub compaction_phase: Option<ProviderRoundPhase>,
+    #[serde(default)]
+    pub compaction_committed: bool,
     pub payload: EntryPayload,
 }
 

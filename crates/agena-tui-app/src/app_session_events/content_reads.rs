@@ -407,6 +407,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compaction_expansion_loads_its_summary_once_and_retains_it_after_collapse() {
+        let resource = ContentRef {
+            resource_id: ContentId::new(),
+            kind: ContentKind::Text,
+        };
+        let source = PartResource {
+            part_id: 1,
+            kind: "text".into(),
+            role: "assistant".into(),
+            state: "completed".into(),
+            message_boundary: true,
+            run_id: Some(1),
+            content: json!({"text": "", "resources": [resource]}),
+            ..Default::default()
+        };
+        let checkpoint = PartResource {
+            part_id: 2,
+            kind: "compaction".into(),
+            role: "assistant".into(),
+            state: "completed".into(),
+            run_id: Some(1),
+            content: json!({"resources": [resource], "compaction_through": 1}),
+            ..Default::default()
+        };
+        let mut state = transcript(vec![source, checkpoint]);
+        state.detail_expanded_by_default.activity_default_expanded = false;
+        let node = state
+            .rendered(120)
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::StoredPart(2),
+                        ..
+                    }
+                )
+            })
+            .unwrap()
+            .clone();
+        assert!(node.toggleable);
+        assert!(state.content_read_interest(120, 100, true).is_empty());
+        state.node_expansions.insert(node.key.clone(), true);
+        state.invalidate_render();
+        assert_eq!(
+            state.content_read_interest(120, 100, true),
+            BTreeSet::from([resource.resource_id])
+        );
+        let mut frame = (*terminal_frame(&resource)).clone();
+        frame.resource.kind = ContentKind::Text;
+        frame.terminal_size = None;
+        frame.lines.clear();
+        frame.wrapped.clear();
+        frame.text = Arc::from("COMPACT_SUMMARY_BODY");
+        let (read, _sender, _interest) = observed(Arc::new(frame), true);
+        state.content_reads.insert(resource.resource_id, read);
+        state.invalidate_content_render();
+        let rendered = state.rendered(120);
+        // A compact headline and its expanded body may both mention the
+        // summary. There is only one content owner, and no assistant answer.
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(
+                    node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::StoredPart(2),
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("COMPACT_SUMMARY_BODY"))
+        );
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Answer"))
+        );
+        state.node_expansions.insert(node.key.clone(), false);
+        state.invalidate_render();
+        state.content_read_interest(120, 100, true);
+        state.node_expansions.insert(node.key, true);
+        state.invalidate_render();
+        assert!(
+            state
+                .rendered(120)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("COMPACT_SUMMARY_BODY"))
+        );
+    }
+
+    #[tokio::test]
     async fn historical_output_survives_offscreen_streaming_repaints_and_collapse() {
         let (history, resource) = terminal_part(1);
         let answer_resource = ContentRef {

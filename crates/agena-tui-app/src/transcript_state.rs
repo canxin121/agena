@@ -1678,6 +1678,9 @@ impl TranscriptState {
                             TranscriptPartContent::Activity(
                                 TranscriptActivityContent::Reasoning(body),
                             ) => body.summary = vec![format!("{text}{}", body.summary.join(""))],
+                            TranscriptPartContent::Activity(
+                                TranscriptActivityContent::Compaction(body),
+                            ) => body.summary = Some(text.clone()),
                             _ => {}
                         }
                     }

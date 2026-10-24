@@ -1623,8 +1623,14 @@ pub(crate) fn render_part_node(
             )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(compaction)) => {
-            let summary = if compaction.outcome.as_deref() == Some("unchanged") {
-                i18n.text("message-compaction-unchanged")
+            let summary = if let Some(label) = match compaction.outcome.as_deref() {
+                Some("running") => Some("message-activity-compact-running"),
+                Some("unchanged") => Some("message-compaction-unchanged"),
+                Some("failed") => Some("message-activity-compact-failed"),
+                Some("cancelled") => Some("message-activity-compact-cancelled"),
+                _ => None,
+            } {
+                i18n.text(label)
             } else if let Some(text) = compaction.summary_text().or(compaction.detail.as_deref()) {
                 text.to_owned()
             } else if let Some((before, after)) =
@@ -1647,7 +1653,7 @@ pub(crate) fn render_part_node(
                 ]);
                 i18n.text_args("message-compaction-token-summary", &args)
             } else {
-                String::new()
+                i18n.text("message-compaction-title-manual")
             };
             render_notice_row(
                 message,

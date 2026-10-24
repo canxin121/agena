@@ -313,6 +313,13 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
             .flatten()
             .map(|state| decode(&encode(state)?))
             .transpose()?,
+        compaction_phase: row
+            .try_get::<Option<&str>, _>("compaction_phase")
+            .ok()
+            .flatten()
+            .map(|phase| decode(&encode(phase)?))
+            .transpose()?,
+        compaction_committed: row.try_get("compaction_committed").unwrap_or(false),
         payload,
     })
 }
@@ -394,7 +401,7 @@ pub(super) async fn history(
     if !selected.is_empty() {
         metrics::add(&diagnostics.0.history_queries, 1);
         let rows =
-            sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
+            sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,(SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
                 .bind(encode(&selected)?)
                 .fetch_all(&mut *transaction)
                 .await
@@ -433,7 +440,7 @@ pub(super) async fn entry(
     diagnostics: &KernelDiagnostics,
 ) -> Result<EntryView> {
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT x.response_entry_id FROM agena_attempts x WHERE x.execution_id=e.execution_id AND x.generation=e.generation) AS response_entry_id,(SELECT phase FROM agena_attempts phase_attempt WHERE phase_attempt.execution_id=e.execution_id AND phase_attempt.generation=CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions phase_execution WHERE phase_execution.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state FROM agena_entries e WHERE e.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=e.id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT x.response_entry_id FROM agena_attempts x WHERE x.execution_id=e.execution_id AND x.generation=e.generation) AS response_entry_id,(SELECT phase FROM agena_attempts phase_attempt WHERE phase_attempt.execution_id=e.execution_id AND phase_attempt.generation=CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions phase_execution WHERE phase_execution.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,(SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed FROM agena_entries e WHERE e.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=e.id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(id.get()).bind(session.get()).fetch_optional(pool).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("entry".into()))?;
     entry_row(&row)
 }

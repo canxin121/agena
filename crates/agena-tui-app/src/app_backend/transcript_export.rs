@@ -33,21 +33,46 @@ impl TuiBackend {
         session_id: i64,
     ) -> Result<Option<String>> {
         let parts = self.client().session_all_parts(session_id).await?;
-        let Some(marker) = parts.iter().rev().find(|part| {
-            part.is_message_boundary()
-                && part.role == "assistant"
-                && part
-                    .content
-                    .get("run_kind")
-                    .and_then(serde_json::Value::as_str)
-                    != Some("compaction")
-        }) else {
+        let entries = parts_entries(&parts);
+        let answer_id = entries
+            .iter()
+            .rev()
+            .flat_map(|entry| entry.parts.iter().rev())
+            .find_map(|part| {
+                matches!(
+                    &part.content,
+                    TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
+                )
+                .then_some(part.id)
+            });
+        let Some(TranscriptContentId::StoredPart(answer_id)) = answer_id else {
             return Ok(None);
         };
+        let Some(answer) = parts.iter().find(|part| part.part_id == answer_id) else {
+            return Ok(None);
+        };
+        let visible_text_ids = entries
+            .iter()
+            .flat_map(|entry| &entry.parts)
+            .filter_map(|part| {
+                if matches!(
+                    &part.content,
+                    TranscriptPartContent::Activity(
+                        TranscriptActivityContent::Answer(_)
+                            | TranscriptActivityContent::TextSegment(_)
+                    )
+                ) && let TranscriptContentId::StoredPart(id) = part.id
+                {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let mut text = Vec::new();
         for (index, part) in parts
             .iter()
-            .filter(|part| part.run_id == Some(marker.part_id) && part.kind == "text")
+            .filter(|part| part.run_id == answer.run_id && visible_text_ids.contains(&part.part_id))
             .enumerate()
         {
             if index > 0 {

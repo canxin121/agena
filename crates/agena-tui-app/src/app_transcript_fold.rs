@@ -271,7 +271,7 @@ mod tests {
             .clone();
         assert_eq!(state.fold_hidden_part_count(120, &marker.key), 2);
         let text = &state.rendered(120).lines[marker.start_line].text;
-        assert!(text.starts_with("  … 2 older parts hidden"), "{text}");
+        assert!(text.starts_with("… 2 older parts hidden"), "{text}");
         assert!(!text.contains("n Enter") && !text.contains("load 5"));
         state.select_pointer_line(
             120,

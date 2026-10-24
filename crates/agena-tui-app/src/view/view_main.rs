@@ -187,12 +187,8 @@ impl App {
         let transcript_footer_height =
             self.transcript_footer_height(transcript_host_area.width, transcript_host_area.height);
 
-        let transcript_layout = layout_header_body_footer_surface(
-            transcript_host_area,
-            self.transcript_header_height(transcript_host_area.height),
-            transcript_footer_height,
-            1,
-        );
+        let transcript_layout =
+            self.transcript_surface_layout(transcript_host_area, transcript_footer_height);
         self.layout = LayoutCache {
             transcript_body: transcript_layout.body,
             transcript_scrollbar: agena_tui_transcript::scrollbar_area(
@@ -238,14 +234,27 @@ impl App {
         }
     }
 
-    pub(crate) fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
-        let footer_height = self.transcript_footer_height(area.width, area.height);
-        let layout = layout_header_body_footer_surface(
+    fn transcript_surface_layout(
+        &self,
+        area: Rect,
+        footer_height: u16,
+    ) -> agena_tui_components::HeaderBodyFooterLayout {
+        let mut layout = layout_header_body_footer_surface(
             area,
             self.transcript_header_height(area.height),
             footer_height,
             1,
         );
+        // The renderer owns content indentation. Reserve the rightmost cell
+        // for the scrollbar without adding a second inset at the left edge.
+        layout.body.x = area.x;
+        layout.body.width = area.width.saturating_sub(1);
+        layout
+    }
+
+    pub(crate) fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
+        let footer_height = self.transcript_footer_height(area.width, area.height);
+        let layout = self.transcript_surface_layout(area, footer_height);
         let header_inner = inset_rect(
             ratatui::widgets::Block::default()
                 .borders(ratatui::widgets::Borders::BOTTOM)

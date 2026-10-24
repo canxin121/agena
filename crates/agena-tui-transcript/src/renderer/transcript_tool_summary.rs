@@ -56,7 +56,7 @@ pub(crate) fn push_fold_marker_row(
     let summary = fold_marker_summary(i18n, hidden_count);
     push_single_line(
         out,
-        "  ",
+        "",
         summary.as_str(),
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -201,7 +201,7 @@ pub(crate) fn push_activity_headline_with_summary(
 ) {
     let disclosure = if toggleable && expanded { "▾" } else { "▸" };
     let icon = activity_status_icon(status);
-    let chrome = format!("  {disclosure} {icon} ");
+    let chrome = format!("{disclosure} {icon} ");
     let content_width = usize::from(width).saturating_sub(UnicodeWidthStr::width(chrome.as_str()));
     let (title, summary) = bounded_title_summary_parts(title, summary, content_width);
 
@@ -223,7 +223,6 @@ pub(crate) fn push_activity_headline_with_summary(
         .map(|span| span.content.as_ref())
         .collect::<String>();
     let mut spans = vec![
-        Span::raw("  "),
         Span::styled(
             disclosure,
             Style::default().fg(agena_tui_components::theme::muted_color()),

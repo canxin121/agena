@@ -6,6 +6,7 @@ use super::super::{
     push_single_line, render_expanded_tool_text_block, tool_display_label_localized,
 };
 use super::request_render::render_file_changes;
+use crate::layout::{BODY_PREFIX, DETAIL_PREFIX, NESTED_PREFIX};
 use crate::ui_text;
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart};
 use agena_domain::ViewBlock;
@@ -180,14 +181,14 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     if let Some(error_message) = failure_text {
         push_section_heading(
             out,
-            format!("    › {}", ui_text::t(i18n, "activity-section-error")).as_str(),
+            format!("  › {}", ui_text::t(i18n, "activity-section-error")).as_str(),
             Style::default()
                 .fg(agena_tui_components::theme::danger_color())
                 .add_modifier(Modifier::BOLD),
             width,
         );
         let error_start = out.len();
-        render_expanded_tool_text_block(out, "      ", error_message, width, i18n);
+        render_expanded_tool_text_block(out, DETAIL_PREFIX, error_message, width, i18n);
         patch_rendered_lines_style(
             &mut out[error_start..],
             Style::default().fg(agena_tui_components::theme::danger_color()),
@@ -279,7 +280,7 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         &ui_text::t(i18n, "tool-detail-output"),
         output_expanded,
         width,
-        |body| push_expanded_tool_text(body, "      ", &output_json, Style::default(), width),
+        |body| push_expanded_tool_text(body, DETAIL_PREFIX, &output_json, Style::default(), width),
         output_copy_text.clone(),
     );
     if output_expanded && tool.output_loaded {
@@ -370,7 +371,7 @@ fn render_detail_section_with_body(
     let section_start = out.len();
     push_section_heading(
         out,
-        &format!("    {} {title}", if expanded { "▾" } else { "▸" }),
+        &format!("  {} {title}", if expanded { "▾" } else { "▸" }),
         Style::default()
             .fg(agena_tui_components::theme::special_color())
             .add_modifier(Modifier::BOLD),
@@ -401,7 +402,7 @@ fn render_json_detail_section(
         title,
         expanded,
         width,
-        |body| push_expanded_tool_text(body, "      ", &body_text, Style::default(), width),
+        |body| push_expanded_tool_text(body, DETAIL_PREFIX, &body_text, Style::default(), width),
         text,
     )
 }
@@ -420,7 +421,7 @@ fn render_markdown_detail_section(
         title,
         expanded,
         width,
-        |body| push_expanded_markdown(body, "      ", markdown, width, i18n),
+        |body| push_expanded_markdown(body, DETAIL_PREFIX, markdown, width, i18n),
         copy_text,
     )
 }
@@ -438,7 +439,13 @@ fn render_tool_presentation_body(
     failure_text: Option<&str>,
 ) {
     if tool.presentation.blocks.is_empty() && !tool.presentation.summary.trim().is_empty() {
-        push_expanded_markdown(out, "    ", tool.presentation.summary.as_str(), width, i18n);
+        push_expanded_markdown(
+            out,
+            BODY_PREFIX,
+            tool.presentation.summary.as_str(),
+            width,
+            i18n,
+        );
     }
     render_operation_blocks(
         human_tool_blocks(tool),
@@ -599,7 +606,7 @@ fn render_interaction_notification(
     if !expanded || !tool.presentation.blocks.is_empty() {
         push_single_line(
             out,
-            "  ",
+            "",
             format!("{icon} {title}").as_str(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
             width,
@@ -608,16 +615,16 @@ fn render_interaction_notification(
     }
     push_single_line(
         out,
-        "  ╭─ ",
+        "╭─ ",
         format!("{icon} {title}").as_str(),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
         width,
     );
     let model_text = tool.model_text();
-    push_expanded_markdown(out, "  │  ", model_text.as_str(), width, i18n);
+    push_expanded_markdown(out, "│ ", model_text.as_str(), width, i18n);
     push_single_line(
         out,
-        "  ╰─ ",
+        "╰─ ",
         level,
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -654,18 +661,20 @@ pub(crate) fn render_operation_blocks<'a>(
                 let label = operation_block_copy_text(block, i18n);
                 push_single_line(
                     out,
-                    "    ",
+                    BODY_PREFIX,
                     &label,
                     Style::default().fg(agena_tui_components::theme::accent_color()),
                     width,
                 );
                 if let Some(total) = total.filter(|total| *total > 0) {
-                    let columns = usize::from(width.saturating_sub(8)).min(36);
+                    let columns = usize::from(width)
+                        .saturating_sub(BODY_PREFIX.len() + 2)
+                        .min(36);
                     let filled = (u128::from(*completed).saturating_mul(columns as u128)
                         / u128::from(total)) as usize;
                     push_single_line(
                         out,
-                        "    ",
+                        BODY_PREFIX,
                         &format!(
                             "[{}{}]",
                             "━".repeat(filled.min(columns)),
@@ -695,9 +704,9 @@ pub(crate) fn render_operation_blocks<'a>(
                     continue;
                 }
                 if expanded {
-                    render_expanded_tool_text_block(out, "    ", text, width, i18n);
+                    render_expanded_tool_text_block(out, BODY_PREFIX, text, width, i18n);
                 } else {
-                    push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
+                    push_collapsible_text(out, BODY_PREFIX, text, Style::default(), width, i18n);
                 }
             }
             ViewBlock::Markdown { text, .. } => {
@@ -705,9 +714,9 @@ pub(crate) fn render_operation_blocks<'a>(
                     continue;
                 }
                 if expanded {
-                    push_expanded_markdown(out, "    ", text, width, i18n);
+                    push_expanded_markdown(out, BODY_PREFIX, text, width, i18n);
                 } else {
-                    push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
+                    push_collapsible_text(out, BODY_PREFIX, text, Style::default(), width, i18n);
                 }
             }
             ViewBlock::Command {
@@ -726,23 +735,36 @@ pub(crate) fn render_operation_blocks<'a>(
                 let separator = if command.ends_with('\n') { "" } else { "\n" };
                 push_expanded_markdown(
                     out,
-                    "    ",
+                    BODY_PREFIX,
                     &format!("{fence}sh\n{command}{separator}{fence}\n"),
                     width,
                     i18n,
                 );
                 if !stdout.trim().is_empty() {
                     if expanded {
-                        push_expanded_tool_text(out, "      ", stdout, Style::default(), width);
+                        push_expanded_tool_text(
+                            out,
+                            DETAIL_PREFIX,
+                            stdout,
+                            Style::default(),
+                            width,
+                        );
                     } else {
-                        push_collapsible_text(out, "      ", stdout, Style::default(), width, i18n);
+                        push_collapsible_text(
+                            out,
+                            DETAIL_PREFIX,
+                            stdout,
+                            Style::default(),
+                            width,
+                            i18n,
+                        );
                     }
                 }
                 if !stderr.trim().is_empty() {
                     if expanded {
                         push_expanded_tool_text(
                             out,
-                            "      ",
+                            DETAIL_PREFIX,
                             stderr,
                             Style::default().fg(agena_tui_components::theme::danger_color()),
                             width,
@@ -750,7 +772,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     } else {
                         push_collapsible_text(
                             out,
-                            "      ",
+                            DETAIL_PREFIX,
                             stderr,
                             Style::default().fg(agena_tui_components::theme::danger_color()),
                             width,
@@ -763,7 +785,7 @@ pub(crate) fn render_operation_blocks<'a>(
                 {
                     push_label_value(
                         out,
-                        "      ",
+                        DETAIL_PREFIX,
                         &ui_text::operation_command_exit_line(i18n, *exit_code),
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
@@ -772,11 +794,11 @@ pub(crate) fn render_operation_blocks<'a>(
             }
             ViewBlock::Diff { diff, .. } => {
                 if expanded {
-                    push_expanded_diff_text(out, "    ", diff, width, i18n);
+                    push_expanded_diff_text(out, BODY_PREFIX, diff, width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
-                        "    ",
+                        BODY_PREFIX,
                         diff,
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
@@ -796,7 +818,7 @@ pub(crate) fn render_operation_blocks<'a>(
                 let heading = ui_text::operation_search_heading(i18n, None);
                 push_section_heading(
                     out,
-                    &format!("    {heading}"),
+                    &format!("  {heading}"),
                     Style::default()
                         .fg(agena_tui_components::theme::accent_color())
                         .add_modifier(Modifier::BOLD),
@@ -805,14 +827,14 @@ pub(crate) fn render_operation_blocks<'a>(
                 for result in items {
                     push_label_value(
                         out,
-                        "      - ",
+                        "    - ",
                         result.title.as_str(),
                         Style::default(),
                         width,
                     );
                     push_multiline(
                         out,
-                        "        ",
+                        NESTED_PREFIX,
                         result.url.as_str(),
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
@@ -820,14 +842,14 @@ pub(crate) fn render_operation_blocks<'a>(
                     if let Some(snippet) = &result.snippet
                         && !snippet.trim().is_empty()
                     {
-                        push_multiline(out, "        ", snippet, Style::default(), width);
+                        push_multiline(out, NESTED_PREFIX, snippet, Style::default(), width);
                     }
                 }
             }
             ViewBlock::Media { artifact, .. } => {
                 push_label_value(
                     out,
-                    "    - ",
+                    "  - ",
                     artifact.name.as_deref().unwrap_or(artifact.uri.as_str()),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
@@ -836,11 +858,11 @@ pub(crate) fn render_operation_blocks<'a>(
             ViewBlock::Json { value, .. } => {
                 let text = json_value_to_markdown(value);
                 if expanded {
-                    push_expanded_markdown(out, "    ", &text, width, i18n);
+                    push_expanded_markdown(out, BODY_PREFIX, &text, width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
-                        "    ",
+                        BODY_PREFIX,
                         text.as_str(),
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
@@ -869,11 +891,11 @@ pub(crate) fn render_operation_blocks<'a>(
                     table.push_str(&format!("| {cells} |\n"));
                 }
                 if expanded {
-                    push_expanded_markdown(out, "    ", table.as_str(), width, i18n);
+                    push_expanded_markdown(out, BODY_PREFIX, table.as_str(), width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
-                        "    ",
+                        BODY_PREFIX,
                         table.as_str(),
                         Style::default(),
                         width,
@@ -894,15 +916,15 @@ pub(crate) fn render_operation_blocks<'a>(
                 };
                 push_label_value(
                     out,
-                    "    ",
+                    BODY_PREFIX,
                     &format!("[{stream_name}]"),
                     Style::default().fg(agena_tui_components::theme::accent_color()),
                     width,
                 );
                 if expanded {
-                    push_expanded_tool_text(out, "      ", text, style, width);
+                    push_expanded_tool_text(out, DETAIL_PREFIX, text, style, width);
                 } else {
-                    push_collapsible_text(out, "      ", text, style, width, i18n);
+                    push_collapsible_text(out, DETAIL_PREFIX, text, style, width, i18n);
                 }
             }
             ViewBlock::Custom { presentation, .. } => {
@@ -913,11 +935,11 @@ pub(crate) fn render_operation_blocks<'a>(
                 if value.is_object() {
                     let text = json_value_to_markdown(&value);
                     if expanded {
-                        push_expanded_markdown(out, "    ", text.as_str(), width, i18n);
+                        push_expanded_markdown(out, BODY_PREFIX, text.as_str(), width, i18n);
                     } else {
                         push_collapsible_text(
                             out,
-                            "    ",
+                            BODY_PREFIX,
                             text.as_str(),
                             Style::default(),
                             width,
@@ -930,7 +952,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     if expanded {
                         push_expanded_markdown(
                             out,
-                            "    ",
+                            BODY_PREFIX,
                             format!("```json\n{text}\n```").as_str(),
                             width,
                             i18n,
@@ -938,7 +960,7 @@ pub(crate) fn render_operation_blocks<'a>(
                     } else {
                         push_collapsible_text(
                             out,
-                            "    ",
+                            BODY_PREFIX,
                             text.as_str(),
                             Style::default().fg(agena_tui_components::theme::muted_color()),
                             width,

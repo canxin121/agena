@@ -18,6 +18,7 @@ use super::operation_render::{
 use super::request_render::preview_for_part;
 use crate::activity_presentation::activity_presentation;
 use crate::display_types::TranscriptRun;
+use crate::layout::{BODY_PREFIX, DETAIL_PREFIX};
 use crate::ui_text;
 use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
@@ -701,7 +702,7 @@ fn render_canonical_activity_detail(
             .unwrap_or_default();
         push_section_heading(
             out,
-            format!("    {disclosure} {title}{preview}").as_str(),
+            format!("  {disclosure} {title}{preview}").as_str(),
             accent.map_or_else(
                 || {
                     Style::default()
@@ -717,9 +718,9 @@ fn render_canonical_activity_detail(
         return;
     }
     let body_prefix = if detail.title.is_some() {
-        "      "
+        DETAIL_PREFIX
     } else {
-        "    "
+        BODY_PREFIX
     };
     let body_start = out.len();
     match detail.format {
@@ -841,7 +842,7 @@ fn append_answer_markdown_blocks(
             continue;
         }
         let start_line = out.len();
-        render_markdown_block(out, "    ", block, width, i18n);
+        render_markdown_block(out, BODY_PREFIX, block, width, i18n);
         if out.len() > start_line {
             let semantic_unit_count = out[start_line..]
                 .iter()
@@ -1202,7 +1203,7 @@ pub(crate) fn render_part_node(
             }
         }
         TranscriptPartContent::Text(text) => {
-            push_markdown_document(out, "  ", text.text.as_str(), width, i18n);
+            push_markdown_document(out, BODY_PREFIX, text.text.as_str(), width, i18n);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::Content {
                     entry_id: message.id,
@@ -1342,7 +1343,13 @@ pub(crate) fn render_part_node(
                 // Render reasoning as plain multi-line text, never through the
                 // markdown path, so the full thought trail is shown verbatim
                 // with no ellipsis or reformatting.
-                push_expanded_tool_text(out, "    ", summary.as_str(), Style::default(), width);
+                push_expanded_tool_text(
+                    out,
+                    BODY_PREFIX,
+                    summary.as_str(),
+                    Style::default(),
+                    width,
+                );
                 patch_rendered_lines_style(
                     &mut out[body_start..],
                     Style::default().fg(agena_tui_components::theme::muted_color()),
@@ -1774,8 +1781,8 @@ pub(crate) fn render_part_node(
                         .or(item.filename.as_ref())
                         .cloned()
                         .unwrap_or_else(|| item.mime.clone());
-                    if !render_attachment_image(out, "    ", item, width, i18n) {
-                        push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                    if !render_attachment_image(out, BODY_PREFIX, item, width, i18n) {
+                        push_label_value(out, "  - ", label.as_str(), Style::default(), width);
                     }
                 }
             }
@@ -1872,8 +1879,14 @@ fn render_pending_interaction_body(
     if crate::interaction_view::request_is_review_decision(request) {
         // Plan body: the standard transcript Markdown pipeline with the same
         // activity detail indent as every other expanded part.
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
-        push_markdown_rule(out, "    ", width);
+        push_markdown_document(
+            out,
+            BODY_PREFIX,
+            request.body_markdown.as_str(),
+            width,
+            i18n,
+        );
+        push_markdown_rule(out, BODY_PREFIX, width);
         render_review_decision_rows(out, request, view, width, i18n);
     } else {
         // The transcript cursor owns both option selection and page actions.
@@ -1950,7 +1963,7 @@ fn render_operation_permission(
             };
             push_expanded_tool_text(
                 out,
-                "    ",
+                BODY_PREFIX,
                 &label,
                 Style::default().add_modifier(Modifier::BOLD),
                 width,
@@ -1963,7 +1976,7 @@ fn render_operation_permission(
         };
         push_expanded_tool_text(
             out,
-            "    ",
+            BODY_PREFIX,
             reason,
             Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
@@ -1987,7 +2000,7 @@ fn render_operation_permission(
             let start = out.len();
             push_expanded_tool_text(
                 out,
-                "    ",
+                BODY_PREFIX,
                 &format!("[ {label} ]"),
                 Style::default().fg(if matches!(decision, Some(PermissionReplyKind::DenyOnce)) {
                     agena_tui_components::theme::danger_color()
@@ -2001,7 +2014,7 @@ fn render_operation_permission(
                     .min(usize::from(width))
                     .max(1);
                 row.controls.push(crate::RenderedTranscriptControl {
-                    columns: 4.min(end - 1)..end,
+                    columns: BODY_PREFIX.len().min(end - 1)..end,
                     action: crate::TranscriptControlAction::Permission {
                         request_id: request.request_id.clone(),
                         decision,
@@ -2013,7 +2026,7 @@ fn render_operation_permission(
     }
     push_expanded_tool_text(
         out,
-        "    ",
+        BODY_PREFIX,
         &i18n.text("overlay-user-input-review-footer-hint"),
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -2108,11 +2121,11 @@ fn render_operation_user_input(
             continue;
         }
         let request = crate::parts::user_input_request_resource(record.request.clone());
-        push_markdown_rule(out, "    ", width);
+        push_markdown_rule(out, BODY_PREFIX, width);
         if !request.title.trim().is_empty() {
             push_expanded_tool_text(
                 out,
-                "    ",
+                BODY_PREFIX,
                 request.title.as_str(),
                 Style::default().add_modifier(Modifier::BOLD),
                 width,
@@ -2140,8 +2153,14 @@ fn render_user_input_history_body(
     i18n: &I18n,
 ) {
     if !request.body_markdown.trim().is_empty() {
-        push_markdown_document(out, "    ", request.body_markdown.as_str(), width, i18n);
-        push_markdown_rule(out, "    ", width);
+        push_markdown_document(
+            out,
+            BODY_PREFIX,
+            request.body_markdown.as_str(),
+            width,
+            i18n,
+        );
+        push_markdown_rule(out, BODY_PREFIX, width);
     }
     if let Some(reply) = reply {
         let status = match reply.kind {
@@ -2154,7 +2173,7 @@ fn render_user_input_history_body(
         if let Some(status) = status {
             push_expanded_tool_text(
                 out,
-                "    ",
+                BODY_PREFIX,
                 &i18n.text(status),
                 Style::default().add_modifier(Modifier::BOLD),
                 width,
@@ -2219,7 +2238,7 @@ fn render_answered_question_block(
         question.header.clone()
     };
     out.push(RenderedLine::rich(Line::from(vec![
-        Span::raw("    "),
+        Span::raw(BODY_PREFIX),
         Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
     ])));
     push_interaction_detail_row(out, question.question.as_str(), width);
@@ -2254,7 +2273,7 @@ fn render_committed_answers(
             .unwrap_or_else(|| i18n.text(custom_label));
         push_expanded_tool_text(
             out,
-            "    ✓ ",
+            "  ✓ ",
             &label,
             Style::default().add_modifier(Modifier::BOLD),
             width,
@@ -2281,7 +2300,7 @@ fn mark_interaction_control(
             .min(usize::from(width))
             .max(1);
         line.controls.push(crate::RenderedTranscriptControl {
-            columns: 4.min(end - 1)..end,
+            columns: BODY_PREFIX.len().min(end - 1)..end,
             action: crate::TranscriptControlAction::UserInput {
                 request_id: request_id.to_owned(),
                 kind,
@@ -2302,7 +2321,7 @@ fn push_interaction_control(
     let start = out.len();
     push_expanded_tool_text(
         out,
-        "    ",
+        BODY_PREFIX,
         label,
         Style::default().add_modifier(Modifier::BOLD),
         width,
@@ -2310,7 +2329,7 @@ fn push_interaction_control(
     if !detail.trim().is_empty() {
         push_expanded_tool_text(
             out,
-            "      ",
+            DETAIL_PREFIX,
             detail,
             Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
@@ -2327,8 +2346,11 @@ fn push_interaction_actions(
     actions: &[(crate::InteractionLineKind, String, bool)],
     width: u16,
 ) {
-    let mut line = RenderedLine::plain("    ", Style::default());
-    let mut column = 4;
+    let indent = BODY_PREFIX.len();
+    let new_line =
+        || RenderedLine::plain(BODY_PREFIX, Style::default()).with_copy_projection("", indent);
+    let mut line = new_line();
+    let mut column = indent;
     for (kind, label, enabled) in actions {
         let text = format!("[ {label} ]");
         let style = Style::default().fg(if *enabled {
@@ -2337,30 +2359,39 @@ fn push_interaction_actions(
             agena_tui_components::theme::muted_color()
         });
         let cells = UnicodeWidthStr::width(text.as_str());
-        if column > 4 && column + cells > usize::from(width) {
+        let separator = if line.controls.is_empty() { 0 } else { 2 };
+        if column > indent && column + separator + cells > usize::from(width) {
             out.push(line);
-            line = RenderedLine::plain("    ", Style::default());
-            column = 4;
+            line = new_line();
+            column = indent;
         }
-        if cells + 4 > usize::from(width) {
+        if cells + indent > usize::from(width) {
             if !line.controls.is_empty() {
                 out.push(line);
-                line = RenderedLine::plain("    ", Style::default());
-                column = 4;
+                line = new_line();
+                column = indent;
             }
             let start = out.len();
-            push_expanded_tool_text(out, "    ", &text, style, width);
+            push_expanded_tool_text(out, BODY_PREFIX, &text, style, width);
             mark_interaction_control(&mut out[start..], request_id, *kind, *enabled, width);
             continue;
         }
+        if !line.controls.is_empty() {
+            line.text.push_str("  ");
+            line.rich_line
+                .as_mut()
+                .expect("plain lines have rich text")
+                .spans
+                .push(Span::raw("  "));
+            column += 2;
+        }
         line.text.push_str(&text);
-        line.text.push_str("  ");
         line.copy_text = line.text.trim().to_owned();
         line.rich_line
             .as_mut()
             .expect("plain lines have rich text")
             .spans
-            .extend([Span::styled(text, style), Span::raw("  ")]);
+            .push(Span::styled(text, style));
         line.controls.push(crate::RenderedTranscriptControl {
             columns: column..column + cells,
             action: crate::TranscriptControlAction::UserInput {
@@ -2369,7 +2400,7 @@ fn push_interaction_actions(
             },
             enabled: *enabled,
         });
-        column += cells + 2;
+        column += cells;
     }
     if !line.controls.is_empty() {
         out.push(line);
@@ -2428,7 +2459,7 @@ fn render_review_decision_rows(
     );
     push_expanded_tool_text(
         out,
-        "    ",
+        BODY_PREFIX,
         &i18n.text("overlay-user-input-review-footer-hint"),
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -2442,7 +2473,7 @@ fn push_interaction_detail_row(out: &mut Vec<RenderedLine>, text: &str, width: u
     }
     push_expanded_tool_text(
         out,
-        "        ",
+        DETAIL_PREFIX,
         text,
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -2458,7 +2489,7 @@ fn push_interaction_editor_row(
     width: u16,
 ) {
     let width = usize::from(width.max(1));
-    let indent = width.saturating_sub(1).min(8);
+    let indent = width.saturating_sub(1).min(DETAIL_PREFIX.len());
     let available = width - indent;
     let cursor = draft
         .grapheme_indices(true)
@@ -2530,9 +2561,9 @@ fn render_ask_user_body(
     use crate::InteractionLineKind::*;
     let page = view.question_page.min(request.questions.len());
     if page == 0 {
-        push_markdown_document(out, "    ", &request.body_markdown, width, i18n);
+        push_markdown_document(out, BODY_PREFIX, &request.body_markdown, width, i18n);
     }
-    push_markdown_rule(out, "    ", width);
+    push_markdown_rule(out, BODY_PREFIX, width);
     let summary = page == request.questions.len();
     let title = if summary {
         i18n.text("overlay-user-input-summary")
@@ -2541,7 +2572,7 @@ fn render_ask_user_body(
     };
     push_expanded_tool_text(
         out,
-        "    ",
+        BODY_PREFIX,
         &title,
         Style::default()
             .fg(agena_tui_components::theme::accent_color())
@@ -2560,8 +2591,8 @@ fn render_ask_user_body(
                 width,
             ) {
                 out.push(
-                    RenderedLine::plain(format!("    {line}"), Style::default())
-                        .with_copy_projection(line, 4),
+                    RenderedLine::plain(format!("{BODY_PREFIX}{line}"), Style::default())
+                        .with_copy_projection(line, BODY_PREFIX.len()),
                 );
             }
             mark_interaction_control(
@@ -2606,7 +2637,7 @@ fn render_ask_user_body(
     }
     push_expanded_tool_text(
         out,
-        "    ",
+        BODY_PREFIX,
         &i18n.text("overlay-user-input-question-footer-hint"),
         Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
@@ -2627,13 +2658,19 @@ fn render_ask_user_question_block(
     if !question.header.trim().is_empty() {
         push_expanded_tool_text(
             out,
-            "    ",
+            BODY_PREFIX,
             &question.header,
             Style::default().add_modifier(Modifier::BOLD),
             width,
         );
     }
-    push_expanded_tool_text(out, "    ", &question.question, Style::default(), width);
+    push_expanded_tool_text(
+        out,
+        BODY_PREFIX,
+        &question.question,
+        Style::default(),
+        width,
+    );
     let legacy_custom =
         question.allow_custom && !question.options.iter().any(|option| option.custom);
     let options = question
@@ -2797,7 +2834,11 @@ fn render_activity_canonical(
         i18n,
     );
     if let Some(header) = &retry_headline {
-        let prefix = if width > 8 { "      " } else { "" };
+        let prefix = if usize::from(width) > BODY_PREFIX.len() {
+            BODY_PREFIX
+        } else {
+            ""
+        };
         push_wrapped_rich_line(
             out,
             prefix,
@@ -2816,7 +2857,7 @@ fn render_activity_canonical(
     let render_summary = expanded && error.is_none() && !summary.trim().is_empty();
     if render_summary {
         let summary_start = out.len();
-        render_expanded_tool_text_block(out, "    ", summary.as_str(), width, i18n);
+        render_expanded_tool_text_block(out, BODY_PREFIX, summary.as_str(), width, i18n);
         if !is_text_segment {
             patch_rendered_lines_style(
                 &mut out[summary_start..],
@@ -2875,7 +2916,7 @@ fn render_activity_canonical(
         if let agena_domain::ActivityPayload::Resource(resource) = payload {
             let section_start = out.len();
             let attachment = canonical_resource_attachment(resource);
-            let _ = render_attachment_image(out, "    ", &attachment, width, i18n);
+            let _ = render_attachment_image(out, BODY_PREFIX, &attachment, width, i18n);
             if let Some(child) = rendered_activity_section_node(
                 TranscriptNodeKey::ActivitySection {
                     entry_id: message.id,
@@ -3007,7 +3048,7 @@ fn render_user_document(
         .iter()
         .map(|token| token.text.as_str())
         .collect::<String>();
-    let line_width = usize::from(width).saturating_sub(2).max(1);
+    let line_width = usize::from(width).saturating_sub(BODY_PREFIX.len()).max(1);
     let mut line_tokens = Vec::new();
     let mut used_width = 0_usize;
     let mut last_was_newline = false;
@@ -3038,7 +3079,7 @@ fn push_user_document_line(out: &mut Vec<RenderedLine>, tokens: Vec<UserDocument
         .iter()
         .map(|token| token.text.as_str())
         .collect::<String>();
-    let mut spans = vec![Span::raw("  ")];
+    let mut spans = vec![Span::raw(BODY_PREFIX)];
     for token in tokens {
         if let Some(last) = spans.last_mut()
             && last.style == token.style
@@ -3048,5 +3089,7 @@ fn push_user_document_line(out: &mut Vec<RenderedLine>, tokens: Vec<UserDocument
             spans.push(Span::styled(token.text, token.style));
         }
     }
-    out.push(RenderedLine::rich(Line::from(spans)).with_copy_projection(copy_text, 2));
+    out.push(
+        RenderedLine::rich(Line::from(spans)).with_copy_projection(copy_text, BODY_PREFIX.len()),
+    );
 }

@@ -13,6 +13,7 @@ mod activity_presentation;
 pub mod content;
 pub mod error_part;
 pub mod interaction_view;
+mod layout;
 pub mod markdown;
 pub mod math;
 pub mod navigation;

@@ -19,7 +19,7 @@ pub(crate) fn render_file_changes(
     }
     push_section_heading(
         out,
-        &format!("    {}", ui_text::t(i18n, "message-file-changes")),
+        &format!("  {}", ui_text::t(i18n, "message-file-changes")),
         Style::default()
             .fg(agena_tui_components::theme::special_color())
             .add_modifier(Modifier::BOLD),
@@ -28,7 +28,7 @@ pub(crate) fn render_file_changes(
     for entry in changes {
         push_label_value(
             out,
-            "      - ",
+            "    - ",
             &file_change_list_item_text(entry, i18n),
             file_change_style(entry.kind),
             width,

@@ -2,6 +2,7 @@
 //! Escape sequences are interpreted into cells, never sent to the outer tty.
 
 use crate::RenderedLine;
+use crate::layout::{BODY_PREFIX, CONTENT_GUTTER, CONTENT_PREFIX};
 use agena_domain::{ContentCursor, ContentPage, ContentPayload, ContentResource, ContentState};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -482,7 +483,7 @@ pub fn render_content(
 ) {
     let Some(frame) = frame else {
         out.push(RenderedLine::dim(format!(
-            "    │ {}",
+            "{CONTENT_PREFIX}{}",
             connection_error.unwrap_or(&i18n.text("content-loading"))
         )));
         return;
@@ -497,18 +498,18 @@ pub fn render_content(
         .map(|(rows, cols)| format!(" · {cols}×{rows}"))
         .unwrap_or_default();
     out.push(
-        RenderedLine::dim(format!("    ┌ {}{geometry}", i18n.text(state)))
+        RenderedLine::dim(format!("{BODY_PREFIX}┌ {}{geometry}", i18n.text(state)))
             .with_copy_projection("", 0),
     );
     if frame.gap {
         out.push(
-            RenderedLine::dim(format!("    │ {}", i18n.text("content-gap")))
+            RenderedLine::dim(format!("{CONTENT_PREFIX}{}", i18n.text("content-gap")))
                 .with_copy_projection("", 0),
         );
     }
     if frame.windowed {
         out.push(
-            RenderedLine::dim(format!("    │ {}", i18n.text("content-window")))
+            RenderedLine::dim(format!("{CONTENT_PREFIX}{}", i18n.text("content-window")))
                 .with_copy_projection("", 0),
         );
     }
@@ -516,7 +517,7 @@ pub fn render_content(
         crate::renderer::render_content_document(document, out, width, i18n);
     }
     if frame.resource.kind == agena_domain::ContentKind::Text {
-        let body_width = width.saturating_sub(6).max(1);
+        let body_width = width.saturating_sub(CONTENT_GUTTER).max(1);
         let rows = match format {
             agena_domain::ContentFormat::Diff => {
                 crate::renderer::render_diff_document_with_i18n(&frame.text, body_width, i18n)
@@ -539,15 +540,21 @@ pub fn render_content(
         };
         for mut row in rows {
             let mut spans = vec![Span::styled(
-                "    │ ",
+                CONTENT_PREFIX,
                 Style::default().fg(agena_tui_components::theme::muted_color()),
             )];
             spans.extend(row.rich_line.take().map_or_else(
                 || vec![Span::styled(row.text.clone(), row.style)],
                 |line| line.spans,
             ));
-            row.text = format!("    │ {}", row.text);
-            row.copy_column += 6;
+            row.text = format!("{CONTENT_PREFIX}{}", row.text);
+            row.copy_column += usize::from(CONTENT_GUTTER);
+            for segment in &mut row.copy_segments {
+                segment.display_column += usize::from(CONTENT_GUTTER);
+            }
+            for placement in &mut row.math {
+                placement.column = placement.column.saturating_add(CONTENT_GUTTER);
+            }
             row.rich_line = Some(Line::from(spans));
             out.push(row);
         }
@@ -567,7 +574,7 @@ pub fn render_content(
                 }
             }
         }
-        let available = width.saturating_sub(6).max(1) as usize;
+        let available = width.saturating_sub(CONTENT_GUTTER).max(1) as usize;
         // PTY cells describe an actual screen. Observer width clips its rows
         // rather than changing the source's cursor and line geometry.
         let rows = if frame.resource.kind == agena_domain::ContentKind::Terminal {
@@ -577,7 +584,7 @@ pub fn render_content(
         };
         for wrapped in rows {
             let mut spans = vec![Span::styled(
-                "    │ ",
+                CONTENT_PREFIX,
                 Style::default().fg(agena_tui_components::theme::muted_color()),
             )];
             let copy = wrapped
@@ -588,7 +595,7 @@ pub fn render_content(
             spans.extend(wrapped.spans);
             out.push(
                 RenderedLine::rich(Line::from(spans))
-                    .with_copy_projection(copy, 6)
+                    .with_copy_projection(copy, usize::from(CONTENT_GUTTER))
                     .with_navigation_unit(navigation_base + group_start, group_text.clone()),
             );
         }
@@ -598,11 +605,11 @@ pub fn render_content(
     }
     if let Some(error) = connection_error.or(frame.resource.capture_error.as_deref()) {
         out.push(RenderedLine::plain(
-            format!("    │ {}", agena_tui::sanitize_picker_text(error)),
+            format!("{CONTENT_PREFIX}{}", agena_tui::sanitize_picker_text(error)),
             Style::default().fg(agena_tui_components::theme::danger_color()),
         ));
     }
-    out.push(RenderedLine::dim("    └─").with_copy_projection("", 0));
+    out.push(RenderedLine::dim(format!("{BODY_PREFIX}└─")).with_copy_projection("", 0));
 }
 
 fn clip_cells(line: &Line<'static>, width: usize) -> Line<'static> {
@@ -785,6 +792,46 @@ mod tests {
         let frame = view.frame.as_ref().unwrap();
         assert_eq!(frame.text.as_ref(), "hello");
         assert!(frame.lines.is_empty());
+    }
+
+    #[test]
+    fn compact_content_gutter_keeps_table_copy_segments_on_their_display_cells() {
+        use unicode_width::UnicodeWidthStr;
+
+        let mut view = ContentView::default();
+        let source = "| 项 | 值 |\n| --- | --- |\n| 说明 | 内容完整 |";
+        assert!(view.apply(page(
+            ContentKind::Text,
+            source.len() as u64,
+            ContentPayload::Text {
+                text: source.into(),
+            }
+        )));
+        for width in [24, 48, 80] {
+            let mut lines = Vec::new();
+            render_content(
+                view.frame.as_deref(),
+                &mut lines,
+                width,
+                &agena_tui::i18n::I18n::english(),
+                None,
+                agena_domain::ContentFormat::Markdown,
+            );
+            let mut segments = 0;
+            for line in &lines {
+                assert!(UnicodeWidthStr::width(line.text.as_str()) <= usize::from(width));
+                for segment in &line.copy_segments {
+                    let byte = line.text.find(&segment.text).unwrap();
+                    assert_eq!(
+                        UnicodeWidthStr::width(&line.text[..byte]),
+                        segment.display_column
+                    );
+                    segments += 1;
+                }
+            }
+            assert!(segments >= 4);
+            assert!(lines[0].text.starts_with("  ┌"));
+        }
     }
 
     #[test]

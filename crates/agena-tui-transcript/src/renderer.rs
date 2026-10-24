@@ -10,6 +10,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::layout::BODY_PREFIX;
 use crate::ui_text;
 use crate::{
     RenderedCopySegment, RenderedLine, RenderedTranscriptNode, ToolOutputPreview,
@@ -158,7 +159,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
     if parts.is_empty() {
         let body_start = lines.len();
         lines.push(RenderedLine::dim(format!(
-            "  {}",
+            "{BODY_PREFIX}{}",
             ui_text::t(i18n, "message-empty")
         )));
         nodes.push(RenderedTranscriptNode {
@@ -270,7 +271,7 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     // Keep the message header outside Markdown selections.  A selected code
                     // block or list should be exactly that block, both visually and on copy.
                     let start_line = lines.len();
-                    render_markdown_block(&mut lines, "  ", block, width, i18n);
+                    render_markdown_block(&mut lines, BODY_PREFIX, block, width, i18n);
                     if lines.len() > start_line {
                         let rendered_block = &lines[start_line..];
                         let semantic_unit_count = rendered_block

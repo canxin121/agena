@@ -286,8 +286,12 @@ pub fn ask_user_summary_lines<R: InteractionRequestFacts>(
         .flat_map(|line| {
             textwrap::wrap(
                 line,
-                textwrap::Options::new(usize::from(width.saturating_sub(4)).max(1))
-                    .break_words(true),
+                textwrap::Options::new(
+                    usize::from(width)
+                        .saturating_sub(crate::layout::BODY_PREFIX.len())
+                        .max(1),
+                )
+                .break_words(true),
             )
             .into_iter()
             .map(|s| s.into_owned())

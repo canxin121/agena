@@ -219,7 +219,8 @@ pub(crate) struct TranscriptState {
         BTreeMap<(i64, agena_api::live::ToolDetailSection), (Instant, (String, i64, i64))>,
     pub(crate) tool_detail_tasks:
         BTreeMap<(i64, agena_api::live::ToolDetailSection), tokio::task::AbortHandle>,
-    /// Independent activity output, never written into a launch receipt.
+    /// Observed content retained for loaded parts. Visibility pauses its
+    /// subscription without discarding displayed cells or replay cursors.
     pub(crate) content_reads:
         BTreeMap<agena_domain::ContentId, crate::app_session_events::content_reads::ContentRead>,
     /// Freshness is separate from the displayed value: live patches retain

@@ -1,2 +1,0 @@
-# Captured logs preserve the exact command output, including trailing blank lines.
-*.raw whitespace=-blank-at-eof

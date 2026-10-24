@@ -579,9 +579,9 @@ created in one transaction. A non-empty database must match every declared
 Agena object exactly; missing, extra or changed objects are rejected without
 repair. Startup selects a fresh database path rather than upgrading an old
 Part database. No old tables, derived indexes, row conversion or archive
-conversion are installed beside the new model. See
-[current data contract](current-data-contract.md) for startup and archive
-commands. Never delete or rewrite a user's existing database to run validation.
+conversion are installed beside the new model. Startup and archive behavior
+belong in the storage crates' rustdoc. Never delete or rewrite a user's
+existing database to run validation.
 
 Session commands, executor/attempt handles and typed output capabilities are
 the only production authoring paths. Execution generations fence cancellation
@@ -619,8 +619,9 @@ for its lifetime, including pool clones. A second service owner is rejected;
 clients connect to the owning service. Existing hard-linked database files are
 rejected because separate WAL filenames are unsafe. Lock files are never
 unlinked to release ownership. Current capabilities and production wiring are
-documented in the [kernel contract](session-kernel-contracts-2026-10-18.md).
-Use the maintained [experience probes](../scripts/probes/README.md) to collect measurements in a new owned output directory.
+defined by the storage crates themselves. Use the maintained
+[experience probes](../scripts/probes/README.md) to collect measurements in a
+new owned output directory.
 
 The immutable read cache separates capacity eviction from authority
 invalidation. Reclaiming cached entries does not advance the authority

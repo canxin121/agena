@@ -30,7 +30,7 @@
 | `agent/activity-mechanism-review` | 九份 Activity 调查／设计文档，原始基线 `acaeaf76`；保留原文并为每份文档增加归档说明和当前代码入口 |
 | `docs/notification-display-map` | 两份通知显示盘点／重构文档，原始基线 `4eaebcfd`；同样标明历史语义和当前代码入口 |
 
-这些资料来自 2026-08-07，包含已经退役的路径和类型。保留资料及原分支历史，不将旧设计当作当前架构契约。入口：[Activity 研究](../activity-mechanism-review/README.md)、[通知显示盘点](../notification-and-status-display.md)、[通知重构方案](../notification-refactor-plan.md)。
+这些资料来自 2026-08-07，包含已经退役的路径和类型。保留资料及原分支历史，不将旧设计当作当前架构契约。上述配套的 Activity 研究与通知设计文档已随架构文档清理移除，仅保留本整合记录。
 
 ## 不需要重新合入的历史或实验分支
 

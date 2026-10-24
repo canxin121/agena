@@ -15,17 +15,11 @@ cargo doc --workspace --no-deps --open
 Deployment guides:
 
 - [Installation and upgrades](docs/installation.md)
-- [Public MCP server with built-in OAuth](docs/mcp-public-oauth.md)
 
 Engineering guides:
 
 - [Development validation](docs/development.md)
 - [Git workflow and file recovery](docs/git-workflow.md)
-- [Interactive terminal tools](docs/interactive-terminals.md)
-- [Vendor-hosted cloud tool boundary](docs/provider-hosted-tools.md)
-- [Explicit media input, cloud files and clipboard](docs/media-inputs.md)
-- [Current data and compatibility contract](docs/current-data-contract.md)
-- [Provider adapter gate](docs/provider-adapter-gate.md)
 
 ## Install
 
@@ -81,4 +75,4 @@ the server, then run the TUI.)
 ## Requirements
 
 - Rust (see `rust-toolchain.toml`)
-- One instance data directory: `--data-dir DIR` / `AGENA_DATA_DIR` (default `~/agena`), containing the shared SQLite database, configuration, app-managed encrypted secrets, workspace files and client state. See [the current storage contract](docs/current-data-contract.md#统一数据目录).
+- One instance data directory: `--data-dir DIR` / `AGENA_DATA_DIR` (default `~/agena`), containing the shared SQLite database, configuration, app-managed encrypted secrets, workspace files and client state.

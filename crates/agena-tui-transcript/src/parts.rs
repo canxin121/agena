@@ -217,6 +217,7 @@ pub fn parts_entries_with_folds(
                     anchor_part_id: fold.anchor_part_id,
                 },
                 status: PartExecutionStatusResource::Completed,
+                headline: Default::default(),
                 content: TranscriptPartContent::Activity(TranscriptActivityContent::Fold {
                     hidden_count: usize::try_from(fold.hidden_count).unwrap_or(usize::MAX),
                 }),
@@ -336,6 +337,7 @@ fn finalize_run_entry(
             entry.parts.push(TranscriptEntryPart {
                 id: lifecycle_id,
                 status: part_status_from_state(state),
+                headline: Default::default(),
                 content: TranscriptPartContent::Activity(
                     TranscriptActivityContent::AssistantReplyLifecycle(lifecycle),
                 ),
@@ -449,21 +451,14 @@ fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
                 })
             }
             agena_domain::ActivityPayload::TextArtifact(artifact) => {
-                projected.push(TranscriptEntryPart {
-                    id: TranscriptContentId::Activity(activity.id),
-                    status: PartExecutionStatusResource::Completed,
-                    content: TranscriptPartContent::Text(TextPartResource {
-                        text: artifact.text,
-                        synthetic: true,
-                    }),
-                });
-                continue;
+                TranscriptActivityContent::TextArtifact(Box::new(artifact))
             }
             _ => continue,
         };
         projected.push(TranscriptEntryPart {
             id: TranscriptContentId::Activity(activity.id),
             status: PartExecutionStatusResource::Completed,
+            headline: Default::default(),
             content: TranscriptPartContent::Activity(content),
         });
     }
@@ -474,6 +469,21 @@ fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
     TranscriptEntryPart {
         id: TranscriptContentId::StoredPart(part.part_id),
         status: part_status_from_string(&part.state),
+        headline: crate::TranscriptPartHeadline {
+            title: part
+                .presentation
+                .as_ref()
+                .map(|view| view.title.clone())
+                .unwrap_or_default(),
+            summary: part
+                .presentation
+                .as_ref()
+                .map(|view| view.summary.as_str())
+                .filter(|summary| !summary.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| part_summary(part))
+                .unwrap_or_default(),
+        },
         content: part_content(part),
     }
 }
@@ -630,10 +640,13 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
             let Some(content) = decode_part_content::<PasteRefContent>(part) else {
                 return fallback_text_part(part);
             };
-            TranscriptPartContent::Text(TextPartResource {
-                text: content.text,
-                synthetic: true,
-            })
+            TranscriptPartContent::Activity(TranscriptActivityContent::TextArtifact(Box::new(
+                agena_domain::TextArtifactActivity {
+                    text: content.text,
+                    label: string_field(&part.content, "label"),
+                    language: string_field(&part.content, "language"),
+                },
+            )))
         }
         "skill_ref" => {
             let Some(content) = decode_part_content::<CommandRefContent>(part) else {

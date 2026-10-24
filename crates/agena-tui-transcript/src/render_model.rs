@@ -74,7 +74,16 @@ pub enum TranscriptContentId {
 pub struct TranscriptEntryPart<'a> {
     pub id: TranscriptContentId,
     pub status: PartExecutionStatusResource,
+    /// Server-projected headline metadata, independent of the full body and
+    /// retained when a part is collapsed or its content is still loading.
+    pub headline: TranscriptPartHeadline,
     pub content: TranscriptPartContent<'a>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptPartHeadline {
+    pub title: String,
+    pub summary: String,
 }
 
 /// Current TUI view of a canonical `tool_call` part.
@@ -299,6 +308,7 @@ pub enum TranscriptPartContent<'a> {
 /// Content of a transcript activity.
 pub enum TranscriptActivityContent<'a> {
     Canonical(&'a ActivityPayload),
+    TextArtifact(Box<agena_domain::TextArtifactActivity>),
     /// Projected interstitial reply body text. The snapshot projection turns
     /// every non-final body segment into a collapsible TextSegment activity
     /// without persisting an ActivityNode, so the payload is owned here (it
@@ -472,6 +482,21 @@ impl<'a> From<&TranscriptRun> for TranscriptEntry<'a> {
                     Some(TranscriptEntryPart {
                         id,
                         status: part.status,
+                        headline: TranscriptPartHeadline {
+                            title: part
+                                .presentation
+                                .as_ref()
+                                .map(|view| view.title.clone())
+                                .unwrap_or_default(),
+                            summary: part
+                                .presentation
+                                .as_ref()
+                                .map(|view| view.summary.as_str())
+                                .filter(|summary| !summary.trim().is_empty())
+                                .or(part.summary.as_deref())
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
                         content: transcript_part_content(part)?,
                     })
                 })

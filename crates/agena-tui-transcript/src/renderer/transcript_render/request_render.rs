@@ -1,12 +1,9 @@
 use super::super::{
     I18n, Modifier, RenderedLine, Style, first_non_empty_preview_line, push_label_value,
-    push_section_heading, tool_execution_preview, transcript_part_content,
+    push_section_heading, transcript_part_content,
 };
 use crate::ui_text;
-use crate::{
-    TranscriptActivityContent, TranscriptAssistantReplyLifecycle, TranscriptEntryPart,
-    TranscriptPartContent,
-};
+use crate::{TranscriptActivityContent, TranscriptEntryPart, TranscriptPartContent};
 
 pub(crate) fn render_file_changes(
     changes: &[agena_domain::FileChangeRecord],
@@ -80,76 +77,64 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             first_non_empty_preview_line(document.plain_text().as_str())
         }
         TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
-        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
-            let (_, canonical_title, ..) =
-                crate::activity_presentation::activity_presentation(payload);
-            Some(crate::ui_text::localized_activity_title(
-                i18n,
-                canonical_title.as_str(),
-            ))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
-        | TranscriptPartContent::Activity(TranscriptActivityContent::Answer(segment)) => {
-            let (_, canonical_title, ..) = crate::activity_presentation::activity_presentation(
-                &agena_domain::ActivityPayload::TextSegment(segment.as_ref().clone()),
-            );
-            Some(crate::ui_text::localized_activity_title(
-                i18n,
-                canonical_title.as_str(),
-            ))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
-            let summary = reasoning.preferred_text();
-            first_non_empty_preview_line(summary.as_str())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
-            Some(tool_execution_preview(part, tool, i18n))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            Some(error.problem.user.fallback.clone())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Notice(notice)) => {
-            Some(notice.summary.clone())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
-            Some(hook.summary.clone())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(compaction)) => {
-            compaction.summary.clone()
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::SystemNotification(
-            notification,
-        )) => Some(notification.summary.clone()),
-        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
-            status,
-        )) => Some(match status {
-            TranscriptAssistantReplyLifecycle::Running => {
-                ui_text::t(i18n, "message-activity-response-running")
-            }
-            TranscriptAssistantReplyLifecycle::Completed => {
-                ui_text::t(i18n, "message-activity-response-completed")
-            }
-            TranscriptAssistantReplyLifecycle::Cancelled => {
-                ui_text::t(i18n, "message-activity-response-cancelled")
-            }
-        }),
-        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
-            attachment.attachments.first().map(|item| {
-                item.title
-                    .as_ref()
-                    .or(item.filename.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| item.mime.clone())
-            })
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(reference)) => {
-            reference.commands.first().map(|command| {
-                i18n.text_args(
-                    "activity-command-reference-title",
-                    &agena_tui::fl_args!("name" => command.name.as_str()),
-                )
-            })
-        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
+        TranscriptPartContent::Activity(_) => {
+            let headline = crate::part_headline::part_headline(part, i18n);
+            Some(
+                if headline.summary.is_empty() || headline.summary == headline.title {
+                    headline.title
+                } else {
+                    format!("{} · {}", headline.title, headline.summary)
+                },
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TranscriptContentId;
+    use agena_api::part::{PartExecutionStatusResource, ReasoningPartResource};
+    use agena_domain::TextSegmentActivity;
+    use agena_runtime_contracts::part_content::NoticeContent;
+
+    #[test]
+    fn history_previews_include_the_part_type_and_meaningful_content() {
+        for (content, expected) in [
+            (
+                TranscriptActivityContent::Reasoning(ReasoningPartResource {
+                    summary: vec!["\n\nInspect output\nMore reasoning".into()],
+                    raw_content: vec![],
+                    encrypted_content: None,
+                }),
+                "Thinking · Inspect output",
+            ),
+            (
+                TranscriptActivityContent::Answer(Box::new(TextSegmentActivity {
+                    text: "# Answer topic\nAnswer body".into(),
+                })),
+                "Answer · Answer topic",
+            ),
+            (
+                TranscriptActivityContent::Notice(Box::new(NoticeContent {
+                    summary: " ".into(),
+                    detail: Some("Notice detail\nRemaining detail".into()),
+                    ..Default::default()
+                })),
+                "Notice · Notice detail",
+            ),
+        ] {
+            let part = TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(1),
+                status: PartExecutionStatusResource::Completed,
+                headline: Default::default(),
+                content: TranscriptPartContent::Activity(content),
+            };
+            assert_eq!(
+                preview_for_part(&part, &I18n::english()).as_deref(),
+                Some(expected)
+            );
+        }
     }
 }

@@ -53,6 +53,9 @@ pub fn activity_title_key(canonical: &str) -> Option<&'static str> {
         "Turn limit" => Some("activity-title-turn-limit"),
         "User input requested" => Some("activity-title-user-input"),
         "Pasted text" => Some("activity-title-pasted-text"),
+        "Attachment" => Some("message-input-activity-attachment"),
+        "Command" => Some("message-input-activity-skill"),
+        "System notification" => Some("activity-title-system-notification"),
         _ => None,
     }
 }

@@ -2664,3 +2664,15 @@ insert-content-skill-label = Skill
 insert-content-skill-detail = 附加 Skill 引用，需要时再读取其中的指令。
 flash-skill-attached = 已附加 Skill：{$name}
 flash-skill-count-limit = 一条消息最多可以引用 {$count} 个 Skill。
+
+# Part headlines retain a useful summary through streaming and disclosure.
+activity-title-system-notification = 系统通知
+activity-title-tool-call = 工具调用
+activity-summary-pending = 等待内容
+activity-summary-streaming = 正在接收内容…
+activity-summary-empty = 无文本内容
+activity-summary-policy-denied = 已被策略阻止
+activity-summary-user-declined = 用户已拒绝
+activity-summary-unavailable = 不可用
+activity-summary-reasoning-private = 提供方未返回可见思考内容
+activity-summary-completed = 已完成

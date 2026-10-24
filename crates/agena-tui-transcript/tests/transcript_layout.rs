@@ -23,6 +23,7 @@ fn entry(role: RunRole, content: TranscriptPartContent<'static>) -> TranscriptEn
         parts: vec![TranscriptEntryPart {
             id: TranscriptContentId::StoredPart(1),
             status: PartExecutionStatusResource::InProgress,
+            headline: Default::default(),
             content,
         }],
     }

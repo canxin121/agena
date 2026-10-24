@@ -1,12 +1,3 @@
-pub(crate) fn tool_execution_preview(
-    part: &TranscriptEntryPart,
-    tool: &ToolCallView,
-    _i18n: &I18n,
-) -> String {
-    let label = tool_invocation_label(&tool.operation.invocation);
-    format!("{} {label}", activity_status_icon(part.status))
-}
-
 pub(crate) fn first_non_empty_preview_line(text: &str) -> Option<String> {
     sanitize_terminal_text(text)
         .lines()
@@ -176,20 +167,13 @@ pub(crate) fn push_activity_headline(
     width: u16,
     i18n: &I18n,
 ) {
-    push_activity_headline_with_summary(
-        out,
-        status,
-        expanded,
-        toggleable,
-        title,
-        if expanded { "" } else { summary },
-        width,
-        i18n,
+    push_activity_headline_content(
+        out, status, expanded, toggleable, title, summary, width, i18n, true,
     );
 }
 
-/// Error progress and its reason remain visible even when details are open.
-pub(crate) fn push_activity_headline_with_summary(
+/// File and command names are literal identifiers, including Markdown syntax.
+pub(crate) fn push_literal_activity_headline(
     out: &mut Vec<RenderedLine>,
     status: PartExecutionStatusResource,
     expanded: bool,
@@ -199,29 +183,57 @@ pub(crate) fn push_activity_headline_with_summary(
     width: u16,
     i18n: &I18n,
 ) {
+    push_activity_headline_content(
+        out, status, expanded, toggleable, title, summary, width, i18n, false,
+    );
+}
+
+fn push_activity_headline_content(
+    out: &mut Vec<RenderedLine>,
+    status: PartExecutionStatusResource,
+    expanded: bool,
+    toggleable: bool,
+    title: &str,
+    summary: &str,
+    width: u16,
+    i18n: &I18n,
+    markdown_summary: bool,
+) {
     let disclosure = if toggleable && expanded { "▾" } else { "▸" };
     let icon = activity_status_icon(status);
     let chrome = format!("{disclosure} {icon} ");
     let content_width = usize::from(width).saturating_sub(UnicodeWidthStr::width(chrome.as_str()));
-    let (title, summary) = bounded_title_summary_parts(title, summary, content_width);
-
-    let title_style = Style::default().add_modifier(Modifier::BOLD);
     let summary_style = Style::default().fg(agena_tui_components::theme::muted_color());
-    // Titles contain shell syntax and paths. Interpreting `$...$`, backticks
-    // or underscores as prose changes the command the user sees and copies.
-    let mut content_spans = vec![Span::styled(title.clone(), title_style)];
-    if !summary.is_empty() {
-        content_spans.push(Span::styled(" · ", summary_style));
-        content_spans.extend(
-            markdown_inline_line(summary.as_str(), summary_style, i18n)
-                .map(|line| line.spans)
-                .unwrap_or_else(|| vec![Span::styled(summary.clone(), summary_style)]),
-        );
-    }
-    let copy_text = content_spans
+    let summary = if markdown_summary {
+        let source = crate::part_headline::first_content_line(summary).unwrap_or_default();
+        markdown_inline_line(&source, summary_style, i18n)
+            .unwrap_or_else(|| Line::from(Span::styled(source, summary_style)))
+    } else {
+        Line::from(Span::styled(
+            sanitize_terminal_text(summary)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            summary_style,
+        ))
+    };
+    let summary_text = summary
+        .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
+    let (title, bounded_summary) = bounded_title_summary_parts(title, &summary_text, content_width);
+
+    let title_style = Style::default().add_modifier(Modifier::BOLD);
+    // Titles contain shell syntax and paths. Interpreting `$...$`, backticks
+    // or underscores as prose changes the command the user sees and copies.
+    let mut content_spans = vec![Span::styled(title.clone(), title_style)];
+    if !bounded_summary.is_empty() {
+        content_spans.push(Span::styled(" · ", summary_style));
+        content_spans.extend(
+            truncate_rich_line(summary, UnicodeWidthStr::width(bounded_summary.as_str())).spans,
+        );
+    }
     let mut spans = vec![
         Span::styled(
             disclosure,
@@ -233,10 +245,16 @@ pub(crate) fn push_activity_headline_with_summary(
     ];
     spans.extend(content_spans);
     let line = truncate_rich_line(Line::from(spans), usize::from(width.max(1)));
-    out.push(
-        RenderedLine::rich(line)
-            .with_copy_projection(copy_text, UnicodeWidthStr::width(chrome.as_str())),
-    );
+    let visible = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    let copy_text = visible.strip_prefix(&chrome).unwrap_or_default().to_owned();
+    out.push(RenderedLine::rich(line).with_copy_projection(
+        copy_text,
+        UnicodeWidthStr::width(chrome.as_str()).min(usize::from(width)),
+    ));
 }
 
 pub(crate) const fn transcript_spinner_placeholder() -> &'static str {
@@ -278,7 +296,8 @@ pub(crate) fn bounded_title_summary_parts(
     max_width: usize,
 ) -> (String, String) {
     const SEPARATOR: &str = " · ";
-    const MIN_SUMMARY_WIDTH: usize = 8;
+    const MIN_TITLE_WIDTH: usize = 8;
+    const MIN_SUMMARY_WIDTH: usize = 6;
 
     let title = sanitize_terminal_text(title)
         .split_whitespace()
@@ -292,31 +311,21 @@ pub(crate) fn bounded_title_summary_parts(
         return (String::new(), String::new());
     }
     if title.is_empty() {
-        return (
-            truncate_with_ellipsis(summary.as_str(), max_width),
-            String::new(),
-        );
+        return (truncate_with_ellipsis(&summary, max_width), String::new());
     }
-    let title_width = UnicodeWidthStr::width(title.as_str());
-    if title_width > max_width {
-        return (
-            truncate_with_ellipsis(title.as_str(), max_width),
-            String::new(),
-        );
-    }
-    if summary.is_empty()
-        || normalized_tool_text(title.as_str()) == normalized_tool_text(summary.as_str())
-    {
-        return (title, String::new());
-    }
-
     let separator_width = UnicodeWidthStr::width(SEPARATOR);
-    let summary_width = max_width
-        .saturating_sub(title_width)
-        .saturating_sub(separator_width);
-    if summary_width < MIN_SUMMARY_WIDTH {
-        return (title, String::new());
+    if summary.is_empty()
+        || normalized_tool_text(&title) == normalized_tool_text(&summary)
+        || max_width < MIN_TITLE_WIDTH + separator_width + MIN_SUMMARY_WIDTH
+    {
+        return (truncate_with_ellipsis(&title, max_width), String::new());
     }
+    // Reserve useful subject text even when the title contains a long path or
+    // command. Both pieces stay on one physical line at every disclosure state.
+    let reserved_summary =
+        UnicodeWidthStr::width(summary.as_str()).min((max_width / 3).clamp(MIN_SUMMARY_WIDTH, 32));
+    let title = truncate_with_ellipsis(&title, max_width - separator_width - reserved_summary);
+    let summary_width = max_width - UnicodeWidthStr::width(title.as_str()) - separator_width;
     (
         title,
         truncate_with_ellipsis(summary.as_str(), summary_width),
@@ -411,9 +420,9 @@ use super::transcript_ast::markdown_inline_line;
 use super::{
     Color, I18n, Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, normalized_tool_text,
     push_markdown_document, push_multiline, push_wrapped_line, sanitize_terminal_text,
-    tool_api_display_name, tool_invocation_label, tool_output_preview, truncate_display_width,
+    tool_api_display_name, tool_output_preview, truncate_display_width,
 };
-use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart, truncate_rich_line};
+use crate::{PartExecutionStatusResource, truncate_rich_line};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(test)]

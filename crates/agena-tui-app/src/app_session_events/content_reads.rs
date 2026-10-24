@@ -121,6 +121,24 @@ impl ContentRead {
         self.receiver.borrow().complete
     }
 
+    fn has_headline_preview(&self) -> bool {
+        let latest = self.receiver.borrow();
+        if latest.complete {
+            return true;
+        }
+        let Some(frame) = latest.frame.as_ref() else {
+            return false;
+        };
+        let text = frame.text.as_ref();
+        // A finished first line gives a stable summary while the remainder
+        // keeps streaming. Bound one-line streams as well; expanding resumes
+        // the same reader/cursor instead of replaying the accepted prefix.
+        text.rfind('\n').is_some_and(|end| {
+            agena_tui_transcript::content_headline_preview(&text[..=end]).is_some()
+        }) || (text.chars().take(256).count() == 256
+            && agena_tui_transcript::content_headline_preview(text).is_some())
+    }
+
     fn set_interested(&self, interested: bool) {
         self.interested.send_if_modified(|current| {
             if *current == interested {
@@ -216,7 +234,20 @@ impl TranscriptState {
                     _ => None,
                 })
                 .collect::<BTreeSet<_>>();
-            self.parts
+            let visible_headlines = self
+                .rendered(width)
+                .nodes
+                .iter()
+                .filter(|node| node.start_line < end && node.end_line > top)
+                .filter_map(|node| match node.key {
+                    agena_tui_transcript::TranscriptNodeKey::Activity {
+                        content_id: agena_tui_transcript::TranscriptContentId::StoredPart(id),
+                        ..
+                    } => Some(id),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let mut interested = self.parts
                 .iter()
                 .filter(|part| visible_parts.contains(&part.part_id))
                 .flat_map(resources)
@@ -226,7 +257,49 @@ impl TranscriptState {
                 // a subscription slot or starving later visible resources.
                 .filter(|id| !self.content_reads.get(id).is_some_and(ContentRead::is_complete))
                 .take(MAX_ACTIVE_CONTENT_READS)
-                .collect()
+                .collect::<BTreeSet<_>>();
+            // Collapsed text-backed parts still need a useful headline. Read
+            // only until a preview exists, after scheduling visible bodies.
+            // Terminal/log output remains governed by detail visibility.
+            for part in self.parts.iter().filter(|part| {
+                visible_headlines.contains(&part.part_id)
+                    && !visible_parts.contains(&part.part_id)
+                    && (matches!(part.kind.as_str(), "think" | "compaction")
+                        || (part.kind == "text" && part.role == "assistant"))
+                    && !part
+                        .summary
+                        .as_ref()
+                        .is_some_and(|text| !text.trim().is_empty())
+                    && !part
+                        .presentation
+                        .as_ref()
+                        .is_some_and(|view| !view.summary.trim().is_empty())
+            }) {
+                for id in part
+                    .content
+                    .get("resources")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter(|resource| {
+                        resource.get("kind").and_then(serde_json::Value::as_str) == Some("text")
+                    })
+                    .filter_map(|resource| resource.get("resource_id").cloned())
+                    .filter_map(|value| serde_json::from_value::<ContentId>(value).ok())
+                {
+                    if interested.len() >= MAX_ACTIVE_CONTENT_READS {
+                        break;
+                    }
+                    if !self
+                        .content_reads
+                        .get(&id)
+                        .is_some_and(ContentRead::has_headline_preview)
+                    {
+                        interested.insert(id);
+                    }
+                }
+            }
+            interested
         } else {
             BTreeSet::new()
         };
@@ -407,6 +480,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collapsed_reasoning_reads_a_stable_preview_then_resumes_its_body_on_expand() {
+        let resource = ContentRef {
+            resource_id: ContentId::new(),
+            kind: ContentKind::Text,
+        };
+        let part = PartResource {
+            part_id: 1,
+            kind: "think".into(),
+            role: "assistant".into(),
+            state: "in_progress".into(),
+            message_boundary: true,
+            run_id: Some(1),
+            content: json!({"resources": [resource]}),
+            ..Default::default()
+        };
+        let mut state = transcript(vec![part]);
+        state.detail_expanded_by_default.activity_default_expanded = false;
+        let initial = state.content_read_interest(100, 100, true);
+        assert_eq!(initial, BTreeSet::from([resource.resource_id]));
+        let key = state
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| matches!(node.key, TranscriptNodeKey::Activity { .. }))
+            .unwrap()
+            .key
+            .clone();
+        let mut partial = (*terminal_frame(&resource)).clone();
+        partial.resource.kind = ContentKind::Text;
+        partial.resource.state = ContentState::Active;
+        partial.terminal_size = None;
+        partial.lines.clear();
+        partial.wrapped.clear();
+        partial.text = Arc::from("\n\n**Inspect stream");
+        let (read, sender, interest) = observed(Arc::new(partial.clone()), false);
+        state.content_reads.insert(resource.resource_id, read);
+        state.invalidate_content_render();
+        assert_eq!(state.content_read_interest(100, 100, true), initial);
+        partial.text = Arc::from("\n\n**Inspect streaming**\nBODY_ONLY_DETAIL");
+        let frame = Arc::new(partial);
+        sender.send_replace(ContentUpdate {
+            frame: Some(frame.clone()),
+            complete: false,
+            error: None,
+        });
+        assert!(
+            state
+                .content_reads
+                .get_mut(&resource.resource_id)
+                .unwrap()
+                .sync_display(false)
+        );
+        state.invalidate_content_render();
+        assert!(state.content_read_interest(100, 100, true).is_empty());
+        assert!(!*interest.borrow());
+        let rendered = state.rendered(100);
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Thinking · Inspect streaming"))
+        );
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("BODY_ONLY_DETAIL"))
+        );
+        state.node_expansions.insert(key.clone(), true);
+        state.invalidate_render();
+        assert_eq!(state.content_read_interest(100, 100, true), initial);
+        assert!(*interest.borrow());
+        assert!(
+            state
+                .rendered(100)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("BODY_ONLY_DETAIL"))
+        );
+        state.node_expansions.insert(key, false);
+        state.invalidate_render();
+        assert!(state.content_read_interest(100, 100, true).is_empty());
+        assert!(Arc::ptr_eq(
+            state.content_reads[&resource.resource_id]
+                .displayed
+                .as_ref()
+                .unwrap(),
+            &frame
+        ));
+    }
+
+    #[tokio::test]
     async fn compaction_expansion_loads_its_summary_once_and_retains_it_after_collapse() {
         let resource = ContentRef {
             resource_id: ContentId::new(),
@@ -449,7 +614,10 @@ mod tests {
             .unwrap()
             .clone();
         assert!(node.toggleable);
-        assert!(state.content_read_interest(120, 100, true).is_empty());
+        assert_eq!(
+            state.content_read_interest(120, 100, true),
+            BTreeSet::from([resource.resource_id])
+        );
         state.node_expansions.insert(node.key.clone(), true);
         state.invalidate_render();
         assert_eq!(

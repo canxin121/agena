@@ -30,10 +30,11 @@ impl ReasoningPart {
     }
 
     pub fn preferred_text(&self) -> String {
-        if self.summary.is_empty() {
+        let summary = self.summary_text();
+        if summary.trim().is_empty() {
             self.raw_text()
         } else {
-            self.summary_text()
+            summary
         }
     }
 }

@@ -7,7 +7,7 @@ pub(crate) fn activity_presentation(
     match payload {
         ActivityPayload::Resource(resource) => (
             "resource".to_owned(),
-            resource.name.clone(),
+            nonempty_title(Some(resource.name.as_str()), "Attachment"),
             match &resource.reference {
                 ResourceReference::Artifact { uri, .. } => uri.clone(),
                 ResourceReference::WorkspacePath { path } => path.clone(),
@@ -18,23 +18,28 @@ pub(crate) fn activity_presentation(
         ),
         ActivityPayload::CommandReference(command) => (
             "skill_reference".to_owned(),
-            format!("Command: {}", command.name),
-            command.description.clone(),
+            if command.name.trim().is_empty() {
+                "Command".to_owned()
+            } else {
+                format!("Command: {}", command.name)
+            },
+            if command.description.trim().is_empty() {
+                command.source.clone()
+            } else {
+                command.description.clone()
+            },
             None,
         ),
         ActivityPayload::TextArtifact(artifact) => (
             "text_artifact".to_owned(),
-            artifact
-                .label
-                .clone()
-                .unwrap_or_else(|| "Pasted text".to_owned()),
+            nonempty_title(artifact.label.as_deref(), "Pasted text"),
             artifact.text.clone(),
             None,
         ),
         ActivityPayload::Reasoning(reasoning) => (
             "reasoning".to_owned(),
             "Thinking".to_owned(),
-            reasoning_first_line(reasoning.content.preferred_text().as_str()),
+            reasoning.content.preferred_text(),
             None,
         ),
         ActivityPayload::TextSegment(segment) => (
@@ -44,17 +49,25 @@ pub(crate) fn activity_presentation(
             None,
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
-            agena_domain::InteractionActivity::UserInput { request, .. } => (
-                "user_input".to_owned(),
-                "User input requested".to_owned(),
-                request
+            agena_domain::InteractionActivity::UserInput { request, .. } => {
+                let summary = request
                     .questions
                     .iter()
                     .map(|question| question.question.as_str())
+                    .filter(|question| !question.trim().is_empty())
                     .collect::<Vec<_>>()
-                    .join("\n"),
-                None,
-            ),
+                    .join("\n");
+                (
+                    "user_input".to_owned(),
+                    "User input requested".to_owned(),
+                    if summary.is_empty() {
+                        request.title.clone()
+                    } else {
+                        summary
+                    },
+                    None,
+                )
+            }
         },
         ActivityPayload::Error(error) => (
             "error".to_owned(),
@@ -63,10 +76,10 @@ pub(crate) fn activity_presentation(
             Some(error.problem.clone()),
         ),
         ActivityPayload::Notice(notice) => {
-            let title = notice
-                .title
-                .clone()
-                .unwrap_or_else(|| notice_kind_title(notice.kind.as_str()).to_owned());
+            let title = nonempty_title(
+                notice.title.as_deref(),
+                notice_kind_title(notice.kind.as_str()),
+            );
             ("notice".to_owned(), title, notice.summary.clone(), None)
         }
     }
@@ -78,14 +91,15 @@ fn notice_kind_title(kind: &str) -> &'static str {
         "compaction" => "Compaction",
         "provider_retry" => "Provider retry",
         "max_turns_exhausted" => "Turn limit",
+        "system_notification" => "System notification",
         _ => "Notice",
     }
 }
 
-fn reasoning_first_line(text: &str) -> String {
-    text.lines()
+fn nonempty_title(title: Option<&str>, fallback: &str) -> String {
+    title
         .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Thinking")
+        .filter(|title| !title.is_empty())
+        .unwrap_or(fallback)
         .to_owned()
 }

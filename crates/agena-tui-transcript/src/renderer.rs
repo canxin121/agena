@@ -530,4 +530,5 @@ pub fn entry_activity_summary_keys(entry: &TranscriptEntry<'_>) -> Vec<Transcrip
         .collect()
 }
 
-use self::{should_suppress_markdown_block, tool_invocation_label};
+use self::should_suppress_markdown_block;
+pub(crate) use self::transcript_aux::tool_invocation_label;

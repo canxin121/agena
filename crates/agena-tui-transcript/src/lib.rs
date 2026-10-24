@@ -17,6 +17,7 @@ mod layout;
 pub mod markdown;
 pub mod math;
 pub mod navigation;
+mod part_headline;
 pub mod parts;
 pub mod render_model;
 pub mod renderer;
@@ -27,6 +28,7 @@ pub use interaction_view::*;
 pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
+pub use part_headline::first_content_line as content_headline_preview;
 pub use parts::{
     TranscriptFold, folds_from_run_window, part_state_is_terminal, parts_entries,
     parts_entries_with_folds, parts_have_non_terminal_runs,

@@ -7,6 +7,7 @@ use super::super::{
 };
 use super::request_render::render_file_changes;
 use crate::layout::{BODY_PREFIX, DETAIL_PREFIX, NESTED_PREFIX};
+use crate::part_headline::part_headline;
 use crate::ui_text;
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart};
 use agena_domain::ViewBlock;
@@ -47,7 +48,7 @@ pub(crate) fn render_tool_execution_with_sections(
     expanded: bool,
 ) -> ToolExecutionRender {
     if part.status == PartExecutionStatusResource::Completed && is_interaction_notification(tool) {
-        render_interaction_notification(tool, out, width, expanded, i18n);
+        render_interaction_notification(part, tool, out, width, expanded, i18n);
         let headline_end = out.len();
         let details = render_tool_detail_sections_with_sections(
             part,
@@ -76,7 +77,8 @@ pub(crate) fn render_tool_execution_with_sections(
             ..details
         };
     }
-    let label = tool_display_label_localized(tool, i18n);
+    let headline = part_headline(part, i18n);
+    let label = headline.title;
     if !expanded {
         push_activity_headline(
             out,
@@ -84,7 +86,7 @@ pub(crate) fn render_tool_execution_with_sections(
             false,
             true,
             label.as_str(),
-            tool.summary(),
+            &headline.summary,
             width,
             i18n,
         );
@@ -105,7 +107,7 @@ pub(crate) fn render_tool_execution_with_sections(
         true,
         true,
         label.as_str(),
-        tool.summary(),
+        &headline.summary,
         width,
         i18n,
     );
@@ -586,49 +588,52 @@ fn is_interaction_notification(tool: &ToolCallView) -> bool {
 }
 
 fn render_interaction_notification(
+    part: &TranscriptEntryPart,
     tool: &ToolCallView,
     out: &mut Vec<RenderedLine>,
     width: u16,
     expanded: bool,
     i18n: &I18n,
 ) {
-    let level = tool
+    let headline = part_headline(part, i18n);
+    push_activity_headline(
+        out,
+        part.status,
+        expanded,
+        true,
+        &headline.title,
+        &headline.summary,
+        width,
+        i18n,
+    );
+    // Notification severity is independent of successful delivery. Retain its
+    // warning/error icon while sharing disclosure and summary geometry.
+    if let Some((icon, color)) = match tool
         .metadata_value("agena.notification.level")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("info");
-    let (icon, color) = match level {
-        "success" => ("●", agena_tui_components::theme::success_color()),
-        "warning" => ("▲", agena_tui_components::theme::warning_color()),
-        "error" => ("◆", agena_tui_components::theme::danger_color()),
-        _ => ("●", agena_tui_components::theme::info_color()),
-    };
-    let title = tool_display_label_localized(tool, i18n);
-    if !expanded || !tool.presentation.blocks.is_empty() {
-        push_single_line(
-            out,
-            "",
-            format!("{icon} {title}").as_str(),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-            width,
-        );
-        return;
+    {
+        Some("warning") => Some(("▲", agena_tui_components::theme::warning_color())),
+        Some("error") => Some(("◆", agena_tui_components::theme::danger_color())),
+        Some("success") => Some(("●", agena_tui_components::theme::success_color())),
+        _ => None,
+    } && let Some(line) = out.last_mut()
+        && let Some(rich) = &mut line.rich_line
+        && let Some(span) = rich.spans.get_mut(2)
+    {
+        span.content = icon.into();
+        span.style = Style::default().fg(color);
+        line.text = rich
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
     }
-    push_single_line(
-        out,
-        "╭─ ",
-        format!("{icon} {title}").as_str(),
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
-        width,
-    );
-    let model_text = tool.model_text();
-    push_expanded_markdown(out, "│ ", model_text.as_str(), width, i18n);
-    push_single_line(
-        out,
-        "╰─ ",
-        level,
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-        width,
-    );
+    if expanded && tool.presentation.blocks.is_empty() {
+        let model_text = tool.model_text();
+        if !model_text.trim().is_empty() {
+            push_expanded_markdown(out, BODY_PREFIX, &model_text, width, i18n);
+        }
+    }
 }
 
 pub(crate) struct ContentObservation<'a> {

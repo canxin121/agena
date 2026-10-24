@@ -2664,3 +2664,15 @@ insert-content-skill-label = Skill
 insert-content-skill-detail = Attach a skill reference. Its instructions are read when needed.
 flash-skill-attached = Attached skill: {$name}
 flash-skill-count-limit = A message can include at most {$count} skill references.
+
+# Part headlines retain a useful summary through streaming and disclosure.
+activity-title-system-notification = System notification
+activity-title-tool-call = Tool call
+activity-summary-pending = Waiting for content
+activity-summary-streaming = Receiving content…
+activity-summary-empty = No text content
+activity-summary-policy-denied = Blocked by policy
+activity-summary-user-declined = Declined by user
+activity-summary-unavailable = Unavailable
+activity-summary-reasoning-private = No visible reasoning provided
+activity-summary-completed = Completed

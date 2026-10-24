@@ -4,13 +4,13 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    markdown_blocks, push_activity_headline, push_activity_headline_with_summary,
-    push_expanded_markdown, push_expanded_tool_text, push_label_value, push_markdown_document,
-    push_markdown_rule, push_section_heading, push_wrapped_line, push_wrapped_rich_line,
-    render_entry_detailed, render_expanded_tool_text_block, render_markdown_block,
-    should_suppress_markdown_block, strip_terminal_ansi_sequences, style_for_role,
-    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
-    trim_empty_line_edges, truncate_display_width,
+    markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
+    push_label_value, push_literal_activity_headline, push_markdown_document, push_markdown_rule,
+    push_section_heading, push_wrapped_line, push_wrapped_rich_line, render_entry_detailed,
+    render_expanded_tool_text_block, render_markdown_block, should_suppress_markdown_block,
+    strip_terminal_ansi_sequences, style_for_role, transcript_message_parts,
+    transcript_part_content, transcript_spinner_placeholder, trim_empty_line_edges,
+    truncate_display_width,
 };
 use super::operation_render::{
     render_tool_detail_sections_with_sections, render_tool_execution_with_sections,
@@ -19,6 +19,9 @@ use super::request_render::preview_for_part;
 use crate::activity_presentation::activity_presentation;
 use crate::display_types::TranscriptRun;
 use crate::layout::{BODY_PREFIX, DETAIL_PREFIX};
+use crate::part_headline::{
+    attachment_label, compaction_notice, hook_notice, notification_notice, part_headline,
+};
 use crate::ui_text;
 use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
@@ -1244,6 +1247,19 @@ pub(crate) fn render_part_node(
                 message, part, payload, None, out, width, i18n, defaults, expansions,
             )
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::TextArtifact(artifact)) => {
+            render_activity_canonical(
+                message,
+                part,
+                &agena_domain::ActivityPayload::TextArtifact(artifact.as_ref().clone()),
+                None,
+                out,
+                width,
+                i18n,
+                defaults,
+                expansions,
+            )
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment)) => {
             render_activity_canonical(
                 message,
@@ -1274,13 +1290,14 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or(true);
+            let headline = part_headline(part, i18n);
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                &ui_text::localized_activity_title(i18n, "Answer"),
-                answer.text.as_str(),
+                &headline.title,
+                &headline.summary,
                 width,
                 i18n,
             );
@@ -1319,26 +1336,18 @@ pub(crate) fn render_part_node(
                 defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_REASONING))
             });
             let summary = reasoning.preferred_text();
-            // An empty thought trail still needs a label; the stored English
-            // wording is the fallback when the catalog has no key.
-            let empty_reasoning = ui_text::localized_activity_title(i18n, "Thinking");
-            let headline = summary
-                .lines()
-                .next()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .unwrap_or(empty_reasoning.as_str());
+            let headline = part_headline(part, i18n);
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                &ui_text::localized_activity_title(i18n, "Thinking"),
-                headline,
+                &headline.title,
+                &headline.summary,
                 width,
                 i18n,
             );
-            if expanded {
+            if expanded && !summary.trim().is_empty() {
                 let body_start = out.len();
                 // Render reasoning as plain multi-line text, never through the
                 // markdown path, so the full thought trail is shown verbatim
@@ -1610,18 +1619,7 @@ pub(crate) fn render_part_node(
             render_notice_row(
                 message,
                 part,
-                agena_domain::NoticeActivity {
-                    kind: "hook".to_owned(),
-                    summary: hook.summary.clone(),
-                    detail: hook
-                        .message
-                        .as_deref()
-                        .filter(|text| !text.trim().is_empty())
-                        .map(str::to_owned)
-                        .or_else(|| hook.detail.clone()),
-                    occurred_at_ms: None,
-                    title: None,
-                },
+                hook_notice(hook),
                 out,
                 width,
                 i18n,
@@ -1630,48 +1628,10 @@ pub(crate) fn render_part_node(
             )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Compaction(compaction)) => {
-            let summary = if let Some(label) = match compaction.outcome.as_deref() {
-                Some("running") => Some("message-activity-compact-running"),
-                Some("unchanged") => Some("message-compaction-unchanged"),
-                Some("failed") => Some("message-activity-compact-failed"),
-                Some("cancelled") => Some("message-activity-compact-cancelled"),
-                _ => None,
-            } {
-                i18n.text(label)
-            } else if let Some(text) = compaction.summary_text().or(compaction.detail.as_deref()) {
-                text.to_owned()
-            } else if let Some((before, after)) =
-                compaction.checkpoint.as_ref().and_then(|checkpoint| {
-                    Some((
-                        checkpoint.get("before_tokens")?.as_u64()?,
-                        checkpoint.get("after_tokens")?.as_u64()?,
-                    ))
-                })
-            {
-                let percent = before
-                    .saturating_sub(after)
-                    .saturating_mul(100)
-                    .checked_div(before)
-                    .unwrap_or_default();
-                let args = agena_tui::i18n::FluentArgs::from([
-                    ("before".into(), before.to_string().into()),
-                    ("after".into(), after.to_string().into()),
-                    ("percent".into(), percent.to_string().into()),
-                ]);
-                i18n.text_args("message-compaction-token-summary", &args)
-            } else {
-                i18n.text("message-compaction-title-manual")
-            };
             render_notice_row(
                 message,
                 part,
-                agena_domain::NoticeActivity {
-                    kind: "compaction".to_owned(),
-                    summary,
-                    detail: None,
-                    occurred_at_ms: None,
-                    title: None,
-                },
+                compaction_notice(compaction, i18n),
                 out,
                 width,
                 i18n,
@@ -1684,20 +1644,7 @@ pub(crate) fn render_part_node(
         )) => render_notice_row(
             message,
             part,
-            agena_domain::NoticeActivity {
-                kind: if notification.operation_kind.trim().is_empty() {
-                    "system_notification".to_owned()
-                } else {
-                    notification.operation_kind.clone()
-                },
-                summary: notification.summary.clone(),
-                detail: notification
-                    .detail
-                    .clone()
-                    .or_else(|| (!notification.body.is_empty()).then(|| notification.body.clone())),
-                occurred_at_ms: None,
-                title: None,
-            },
+            notification_notice(notification),
             out,
             width,
             i18n,
@@ -1755,32 +1702,23 @@ pub(crate) fn render_part_node(
             });
             let mut labels = Vec::new();
             for item in &attachment.attachments {
-                let label = item
-                    .title
-                    .as_ref()
-                    .or(item.filename.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| item.mime.clone());
+                let label = attachment_label(item, i18n);
                 labels.push(label);
             }
-            push_activity_headline(
+            let headline = part_headline(part, i18n);
+            push_literal_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                ui_text::t(i18n, "message-input-activity-attachment").as_str(),
-                labels.join(", ").as_str(),
+                &headline.title,
+                &headline.summary,
                 width,
                 i18n,
             );
             if expanded {
                 for item in &attachment.attachments {
-                    let label = item
-                        .title
-                        .as_ref()
-                        .or(item.filename.as_ref())
-                        .cloned()
-                        .unwrap_or_else(|| item.mime.clone());
+                    let label = attachment_label(item, i18n);
                     if !render_attachment_image(out, BODY_PREFIX, item, width, i18n) {
                         push_label_value(out, "  - ", label.as_str(), Style::default(), width);
                     }
@@ -1812,13 +1750,14 @@ pub(crate) fn render_part_node(
             for command in &reference.commands {
                 labels.push(command.name.clone());
             }
-            push_activity_headline(
+            let headline = part_headline(part, i18n);
+            push_literal_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                ui_text::t(i18n, "message-input-activity-skill").as_str(),
-                labels.join(", ").as_str(),
+                &headline.title,
+                &headline.summary,
                 width,
                 i18n,
             );
@@ -2066,36 +2005,14 @@ fn render_operation_user_input(
         return false;
     };
     let request = crate::parts::user_input_request_resource(record.request.clone());
-    // The headline leads with the CALLED TOOL's name — "plan.review" or
-    // "interaction.ask" — not an invented label: the interaction IS this
-    // operation, so its title should be the tool the model invoked. The
-    // question text follows as the summary.
-    let title = tool.operation.invocation.name.trim();
-    let title = if title.is_empty() {
-        // Malformed operation without an invocation name.
-        let key = if request.kind == "review" {
-            "activity-title-plan-review"
-        } else {
-            "activity-title-user-input"
-        };
-        ui_text::t(i18n, key)
-    } else {
-        title.to_owned()
-    };
-    let title = title.as_str();
-    let summary = request
-        .questions
-        .first()
-        .map(|question| question.question.as_str())
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or(request.title.as_str());
+    let headline = part_headline(part, i18n);
     push_activity_headline(
         out,
         part.status,
         expanded,
         true,
-        title,
-        summary,
+        &headline.title,
+        &headline.summary,
         width,
         i18n,
     );
@@ -2789,16 +2706,15 @@ fn render_activity_canonical(
     let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let default_expanded = defaults.default_expanded(activity_kind_id_for_payload(payload));
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
-    let (_, canonical_title, summary, error) = activity_presentation(payload);
+    let (_, _, summary, error) = activity_presentation(payload);
     let retry_headline = match payload {
         agena_domain::ActivityPayload::Error(error) => error.retry.as_ref().map(|retry| {
             crate::error_part::retry_headline(retry, chrono::Utc::now().timestamp_millis(), i18n)
         }),
         _ => None,
     };
-    let localized_title = title_override.map(str::to_owned).unwrap_or_else(|| {
-        crate::ui_text::localized_activity_title(i18n, canonical_title.as_str())
-    });
+    let headline = part_headline(part, i18n);
+    let localized_title = title_override.map(str::to_owned).unwrap_or(headline.title);
     let title = retry_headline
         .as_ref()
         .map(|header| header.title.as_str())
@@ -2808,19 +2724,14 @@ fn render_activity_canonical(
     let headline_summary = match payload {
         agena_domain::ActivityPayload::Notice(notice) => notice
             .occurred_at_ms
-            .map(|ms| format!("{} · {}", summary, format_occurred_time(ms)))
-            .unwrap_or_else(|| summary.clone()),
-        _ => summary.clone(),
+            .map(|ms| format!("{} · {}", headline.summary, format_occurred_time(ms)))
+            .unwrap_or_else(|| headline.summary.clone()),
+        _ => headline.summary.clone(),
     };
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());
     let details = canonical_activity_details(i18n, payload, summary.as_str());
     let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
-    let headline_renderer = if matches!(payload, agena_domain::ActivityPayload::Error(_)) {
-        push_activity_headline_with_summary
-    } else {
-        push_activity_headline
-    };
-    headline_renderer(
+    push_activity_headline(
         out,
         retry_headline
             .as_ref()

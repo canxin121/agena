@@ -9,8 +9,8 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use tui_markdown::from_str as markdown_to_text;
+use unicode_linebreak::linebreaks;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn push_multiline(
@@ -94,59 +94,22 @@ pub fn push_wrapped_line(
     style: Style,
     width: u16,
 ) {
-    if text.is_empty() {
-        out.push(
-            RenderedLine::plain(initial_prefix.to_string(), style)
-                .with_copy_projection(String::new(), UnicodeWidthStr::width(initial_prefix)),
-        );
-        return;
-    }
-
-    let initial = format!("{initial_prefix}{text}");
-    if width <= 1 || UnicodeWidthStr::width(initial.as_str()) <= width as usize {
-        out.push(
-            RenderedLine::plain(initial, style)
-                .with_copy_projection(text, UnicodeWidthStr::width(initial_prefix)),
-        );
-        return;
-    }
-
-    let initial_width = UnicodeWidthStr::width(initial_prefix);
-    let continuation_width = UnicodeWidthStr::width(continuation_prefix);
-    let available_width = width as usize;
-    if available_width <= initial_width.max(continuation_width).saturating_add(1) {
-        out.push(
-            RenderedLine::plain(initial, style)
-                .with_copy_projection(text, UnicodeWidthStr::width(initial_prefix)),
-        );
-        return;
-    }
-
-    let options = WrapOptions::new(available_width)
-        .initial_indent(initial_prefix)
-        .subsequent_indent(continuation_prefix)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
-    let wrapped = wrap(text, options);
-    if wrapped.is_empty() {
-        out.push(
-            RenderedLine::plain(initial_prefix.to_string(), style)
-                .with_copy_projection(String::new(), UnicodeWidthStr::width(initial_prefix)),
-        );
-        return;
-    }
-
-    out.extend(wrapped.into_iter().enumerate().map(|(index, segment)| {
+    // Share the display-cell and Unicode break rules with Markdown prose.
+    // In particular, long identifiers must wrap instead of being clipped.
+    for (index, logical_line) in text.split('\n').enumerate() {
         let prefix = if index == 0 {
             initial_prefix
         } else {
             continuation_prefix
         };
-        let displayed = segment.into_owned();
-        let copy_text = displayed.strip_prefix(prefix).unwrap_or(displayed.as_str());
-        RenderedLine::plain(displayed.clone(), style)
-            .with_copy_projection(copy_text, UnicodeWidthStr::width(prefix))
-    }));
+        push_wrapped_rich_line(
+            out,
+            prefix,
+            continuation_prefix,
+            Line::styled(logical_line.to_owned(), style),
+            width,
+        );
+    }
 }
 
 pub fn push_wrapped_rich_line(
@@ -174,14 +137,7 @@ pub fn push_wrapped_rich_line(
     let plain_text = line_plain_text(&line);
     let available_width = width.max(1) as usize;
     let continuation_prefix_width = UnicodeWidthStr::width(continuation_prefix);
-    let initial_total_width =
-        initial_prefix_width.saturating_add(UnicodeWidthStr::width(plain_text.as_str()));
-    if initial_total_width <= available_width
-        || available_width
-            <= initial_prefix_width
-                .max(continuation_prefix_width)
-                .saturating_add(1)
-    {
+    if available_width <= initial_prefix_width.max(continuation_prefix_width) {
         out.push(
             RenderedLine::rich(prefix_rich_line(initial_prefix, line))
                 .with_copy_projection(plain_text, initial_prefix_width),
@@ -752,17 +708,10 @@ pub fn wrap_table_cell(text: &str, width: usize) -> Vec<String> {
         return vec![String::new()];
     }
 
-    let options = WrapOptions::new(width)
-        .break_words(true)
-        .word_splitter(WordSplitter::NoHyphenation);
-    let wrapped = wrap(normalized.as_str(), options);
-    if wrapped.is_empty() {
-        return vec![String::new()];
-    }
-
-    wrapped
-        .into_iter()
-        .map(|segment| truncate_display_width(segment.as_ref(), width))
+    normalized
+        .split('\n')
+        .flat_map(|line| wrap_rich_line(&[Span::raw(line.to_owned())], width, width))
+        .map(|line| line.to_string())
         .collect()
 }
 
@@ -795,82 +744,130 @@ pub fn wrap_rich_line(
     initial_width: usize,
     continuation_width: usize,
 ) -> Vec<Line<'static>> {
-    let tokens = spans
+    let text = spans
         .iter()
-        .flat_map(|span| {
-            let style = span.style;
-            span.content
-                .as_ref()
-                .graphemes(true)
-                .map(move |grapheme| StyledGrapheme {
-                    text: grapheme.to_string(),
-                    style,
-                    width: UnicodeWidthStr::width(grapheme),
-                    whitespace: grapheme.chars().all(char::is_whitespace),
-                })
-        })
-        .collect::<Vec<_>>();
-    if tokens.is_empty() {
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    if text.is_empty() {
         return vec![Line::default()];
     }
+    if spans.len() == 1 && UnicodeWidthStr::width(text.as_str()) <= initial_width {
+        return vec![Line::from(spans.to_vec())];
+    }
 
-    let mut lines = Vec::new();
-    let mut current = Vec::new();
+    // Segment the complete text, not individual style spans: a style change
+    // can occur inside a word or even an emoji/combining-character sequence.
+    let mut breaks = linebreaks(&text).peekable();
+    let mut span_index = 0;
+    let mut span_end = spans[0].content.len();
+    let tokens = text
+        .grapheme_indices(true)
+        .map(|(start, grapheme)| {
+            let end = start + grapheme.len();
+            while breaks.peek().is_some_and(|(offset, _)| *offset < end) {
+                breaks.next();
+            }
+            while start >= span_end {
+                span_index += 1;
+                span_end += spans[span_index].content.len();
+            }
+            WrapGrapheme {
+                start,
+                end,
+                // Ratatui segments each span separately. A grapheme spanning
+                // styles must therefore use its leading character's style as
+                // a whole, or emoji and combining marks are drawn incorrectly.
+                style: spans[span_index].style,
+                width: UnicodeWidthStr::width(grapheme),
+                break_after: breaks.peek().is_some_and(|(offset, _)| *offset == end),
+                // Non-breaking spaces are content, including at a forced wrap.
+                whitespace: grapheme
+                    .chars()
+                    .all(|ch| ch.is_whitespace() && !matches!(ch, '\u{a0}' | '\u{202f}')),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut end = 0;
     let mut current_width = 0_usize;
     let mut width_limit = initial_width.max(1);
     let mut last_break_index = None;
-
-    for token in tokens {
-        let mut pending = Some(token);
-        while let Some(token) = pending.take() {
-            let token_fits =
-                current.is_empty() || current_width.saturating_add(token.width) <= width_limit;
-            if token_fits {
-                if token.whitespace {
-                    last_break_index = Some(current.len());
-                }
-                current_width = current_width.saturating_add(token.width);
-                current.push(token);
-                continue;
+    while end < tokens.len() {
+        let token = &tokens[end];
+        // Trailing breakable spaces do not consume the row's budget. This
+        // lets an English word occupy the last cell without being moved to
+        // the next row just because its following space did not fit.
+        if end > start
+            && !token.whitespace
+            && current_width.saturating_add(token.width) > width_limit
+        {
+            let split = last_break_index.unwrap_or(end);
+            let mut visible_end = split;
+            while visible_end > start && tokens[visible_end - 1].whitespace {
+                visible_end -= 1;
             }
-
-            if let Some(break_index) = last_break_index.filter(|index| *index > 0) {
-                let line_tokens = current[..break_index].to_vec();
-                let mut carry = current[break_index + 1..].to_vec();
-                while carry.first().is_some_and(|grapheme| grapheme.whitespace) {
-                    carry.remove(0);
-                }
-                lines.push(styled_tokens_to_line(line_tokens));
-                current = carry;
-                current_width = current.iter().map(|grapheme| grapheme.width).sum();
-                width_limit = continuation_width.max(1);
-                last_break_index = current.iter().rposition(|grapheme| grapheme.whitespace);
-                pending = Some(token);
-                continue;
+            if visible_end > start {
+                ranges.push(start..visible_end);
             }
-
-            if current.is_empty() {
-                current_width = current_width.saturating_add(token.width);
-                current.push(token);
-                continue;
+            start = split;
+            while start < tokens.len() && tokens[start].whitespace {
+                start += 1;
             }
-
-            lines.push(styled_tokens_to_line(current));
-            current = Vec::new();
+            end = start;
             current_width = 0;
             width_limit = continuation_width.max(1);
             last_break_index = None;
-            pending = Some(token);
+            continue;
+        }
+        current_width = current_width.saturating_add(token.width);
+        end += 1;
+        if token.break_after {
+            last_break_index = Some(end);
         }
     }
+    if start < tokens.len() {
+        let mut visible_end = tokens.len();
+        if current_width > width_limit {
+            while visible_end > start && tokens[visible_end - 1].whitespace {
+                visible_end -= 1;
+            }
+        }
+        ranges.push(start..visible_end);
+    }
+    if ranges.is_empty() {
+        return vec![Line::default()];
+    }
 
-    if !current.is_empty() {
-        lines.push(styled_tokens_to_line(current));
-    }
-    if lines.is_empty() {
-        lines.push(Line::default());
-    }
-    lines
+    // Merge adjacent graphemes with the same style, keeping both allocation
+    // and reconstruction linear in the paragraph's length.
+    ranges
+        .into_iter()
+        .map(|range| {
+            let mut row = Vec::<Span<'static>>::new();
+            for token in &tokens[range] {
+                let grapheme = &text[token.start..token.end];
+                if let Some(last) = row.last_mut()
+                    && last.style == token.style
+                {
+                    last.content.to_mut().push_str(grapheme);
+                } else {
+                    row.push(Span::styled(grapheme.to_owned(), token.style));
+                }
+            }
+            Line::from(row)
+        })
+        .collect()
+}
+
+struct WrapGrapheme {
+    start: usize,
+    end: usize,
+    style: Style,
+    width: usize,
+    break_after: bool,
+    whitespace: bool,
 }
 
 pub fn styled_tokens_to_line(tokens: Vec<StyledGrapheme>) -> Line<'static> {

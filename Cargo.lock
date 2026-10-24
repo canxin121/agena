@@ -1423,6 +1423,7 @@ dependencies = [
  "textwrap",
  "tracing",
  "tui-markdown",
+ "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width 0.2.2",
  "vt100",

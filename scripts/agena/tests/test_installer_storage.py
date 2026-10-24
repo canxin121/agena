@@ -28,7 +28,7 @@ fi
 [[ "$data_root" == "$TEST_SANDBOX_ROOT/"* ]] || exit 91
 [[ "${1:-}" == "server" ]] || exit 92
 action="${2:-}"
-printf '%s\t%s\n' "$data_root" "$action" >> "$TEST_CALLS_PATH"
+printf '%s\t%s\t%s\n' "$data_root" "$action" "$*" >> "$TEST_CALLS_PATH"
 case "$action" in
   start|install)
     mkdir -p "$data_root/run"
@@ -156,6 +156,15 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertTrue(calls)
         self.assertTrue(all(line.split("\t", 1)[0] == str(self.data_dir) for line in calls), calls)
 
+    def state_value(self, name):
+        state = self.install_dir / "install-state.env"
+        result = subprocess.run(
+            ["bash", "-c", f'source "$1"; printf "%s" "${{{name}}}"', "_", str(state)],
+            env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
     def test_lifecycle_uses_saved_root_with_spaces_despite_poisoned_environment(self):
         self.install()
         for poison in [str(self.install_dir), str(self.home), "/"]:
@@ -196,6 +205,100 @@ class InstallerStorageTests(unittest.TestCase):
         self.invoke("upgrade", "--archive", self.archive, environment={"AGENA_DATA_DIR": "/"})
         self.assertFalse((self.data_dir / "run/stub-running").exists())
         self.assert_only_selected_root_was_called()
+
+    def test_upgrade_applies_explicit_runtime_overrides_and_persists_them(self):
+        self.install()
+        new_data = self.root / "replacement instance data"
+        new_workspace = self.root / "replacement workspace"
+        self.invoke(
+            "upgrade", "--archive", self.archive,
+            "--data-dir", new_data,
+            "--workspace", new_workspace,
+            "--host", "0.0.0.0",
+            "--port", "4321",
+            "--ui-password", "replacement password",
+            "--service-mode", "detached",
+            environment={
+                "AGENA_DATA_DIR": "/",
+                "AGENA_SERVER_HOST": "203.0.113.10",
+                "AGENA_SERVER_PORT": "9999",
+                "AGENA_WORKSPACE_ROOT": "/",
+            },
+        )
+        self.assertEqual(self.state_value("DATA_DIR"), str(new_data))
+        self.assertEqual(self.state_value("HOST"), "0.0.0.0")
+        self.assertEqual(self.state_value("PORT"), "4321")
+        self.assertEqual(self.state_value("WORKSPACE"), str(new_workspace))
+        self.assertEqual(self.state_value("UI_PASSWORD"), "replacement password")
+        self.assertEqual(self.state_value("SERVICE_MODE"), "detached")
+        self.assertTrue(new_workspace.is_dir())
+        self.assertTrue((new_data / "agena.db").is_file())
+        self.assertTrue((new_data / "run/stub-running").is_file())
+        self.assertFalse((self.data_dir / "run/stub-running").exists())
+
+        calls = self.calls_path.read_text().splitlines()
+        self.assertTrue(any(
+            line.startswith(str(self.data_dir) + "\t") and "\tstop\t" in line
+            for line in calls
+        ), calls)
+        self.assertTrue(any(
+            line.startswith(str(new_data) + "\t") and "\tstart\t" in line
+            and "--host 0.0.0.0" in line and "--port 4321" in line
+            and f"--workspace {new_workspace}" in line
+            for line in calls
+        ), calls)
+
+        self.invoke("status", environment={"AGENA_DATA_DIR": "/"})
+        self.assertEqual(self.calls_path.read_text().splitlines()[-1].split("\t", 1)[0], str(new_data))
+
+    def test_upgrade_rejects_an_unsafe_data_override_before_stopping(self):
+        self.install()
+        original_state = (self.install_dir / "install-state.env").read_bytes()
+        original_calls = self.calls_path.read_bytes()
+        self.invoke(
+            "upgrade", "--archive", self.archive,
+            "--data-dir", self.install_dir / "overlapping data",
+            success=False,
+        )
+        self.assertEqual((self.install_dir / "install-state.env").read_bytes(), original_state)
+        extra_calls = self.calls_path.read_bytes()[len(original_calls):].decode().splitlines()
+        self.assertTrue(all("\tstatus\t" in line for line in extra_calls), extra_calls)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_failed_upgrade_with_runtime_overrides_restores_saved_configuration(self):
+        self.install()
+        original_state = (self.install_dir / "install-state.env").read_bytes()
+        bad = self.package("broken overrides", BAD_STUB)
+        replacement_data = self.root / "failed replacement data"
+        replacement_workspace = self.root / "failed replacement workspace"
+        self.invoke(
+            "upgrade", "--archive", bad,
+            "--data-dir", replacement_data,
+            "--workspace", replacement_workspace,
+            "--host", "0.0.0.0",
+            "--port", "4321",
+            success=False,
+        )
+        self.assertEqual((self.install_dir / "install-state.env").read_bytes(), original_state)
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertEqual(self.state_value("HOST"), "127.0.0.1")
+        self.assertEqual(self.state_value("PORT"), "3210")
+        self.assertEqual(self.state_value("WORKSPACE"), str(self.workspace))
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+        self.assert_only_selected_root_was_called()
+
+    def test_source_upgrade_applies_runtime_overrides_from_current_checkout(self):
+        self.install()
+        checkout = self.source_checkout()
+        result = self.invoke(
+            "upgrade", "--source", "--host", "0.0.0.0", "--port", "4321",
+            cwd=checkout,
+        )
+        self.assertIn(f"Building Agena from source at {checkout}", result.stdout)
+        self.assertEqual(self.state_value("HOST"), "0.0.0.0")
+        self.assertEqual(self.state_value("PORT"), "4321")
+        self.assertEqual(self.state_value("DATA_DIR"), str(self.data_dir))
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
 
     def test_install_refuses_unsafe_or_overlapping_data_roots_before_calling_binary(self):
         for root in [self.home, "/", self.install_dir, self.install_dir / "nested", self.root]:

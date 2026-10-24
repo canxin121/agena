@@ -45,7 +45,12 @@ bash scripts/agena/install.sh install --source
 The current checkout is used directly. Pass `--source PATH` to build another
 checkout or `--source GIT_URL` to clone one; see the
 [installation guide](docs/installation.md#install-from-source) for requirements
-and Windows usage.
+and Windows usage. To rebuild an existing installation or change its saved bind
+address, port, workspace, or data root, run `upgrade` with the new options:
+
+```bash
+bash scripts/agena/install.sh upgrade --source --host 0.0.0.0 --port 8080
+```
 
 GitHub Releases remain beta releases. The repository and binaries use version
 `0.1.0`; beta tags use `agena-v0.1.0-beta.N`. The installer discovers the

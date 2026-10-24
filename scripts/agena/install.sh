@@ -23,6 +23,12 @@ UI_PASSWORD="${AGENA_SERVER_UI_PASSWORD:-}"
 SERVICE_MODE="${AGENA_INSTALL_SERVICE_MODE:-auto}"
 UPDATE_PATH=1
 PURGE_DATA=0
+DATA_DIR_SET=0
+HOST_SET=0
+PORT_SET=0
+WORKSPACE_SET=0
+UI_PASSWORD_SET=0
+SERVICE_MODE_SET=0
 
 usage() {
   cat <<'EOF'
@@ -33,6 +39,9 @@ One-click install (latest beta release):
 
 Source install (build from a checkout):
   bash scripts/agena/install.sh install --source
+
+Rebuild and change saved runtime settings:
+  bash scripts/agena/install.sh upgrade --source --host 0.0.0.0 --port 3210
 
 Lifecycle examples:
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash -s -- upgrade
@@ -53,6 +62,7 @@ Options:
   --workspace PATH         Server workspace (default: $HOME)
   --ui-password PASSWORD   Web/TUI operator password
   --service-mode MODE      auto, native, or detached (default: auto)
+  Runtime options supplied to upgrade replace the saved values.
   --no-path-update         Do not add the install bin directory to shell PATH
   --purge-data             With uninstall, also remove the installed instance data root
   -h, --help               Show this help
@@ -82,12 +92,12 @@ while [[ $# -gt 0 ]]; do
     --source=*) SOURCE_MODE=1; SOURCE="${1#*=}"; shift ;;
     --source-ref) SOURCE_REF="${2:-}"; shift 2 ;;
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
-    --data-dir) DATA_DIR="${2:-}"; shift 2 ;;
-    --host) HOST="${2:-}"; shift 2 ;;
-    --port) PORT="${2:-}"; shift 2 ;;
-    --workspace) WORKSPACE="${2:-}"; shift 2 ;;
-    --ui-password) UI_PASSWORD="${2:-}"; shift 2 ;;
-    --service-mode) SERVICE_MODE="${2:-}"; shift 2 ;;
+    --data-dir) DATA_DIR="${2:-}"; DATA_DIR_SET=1; shift 2 ;;
+    --host) HOST="${2:-}"; HOST_SET=1; shift 2 ;;
+    --port) PORT="${2:-}"; PORT_SET=1; shift 2 ;;
+    --workspace) WORKSPACE="${2:-}"; WORKSPACE_SET=1; shift 2 ;;
+    --ui-password) UI_PASSWORD="${2:-}"; UI_PASSWORD_SET=1; shift 2 ;;
+    --service-mode) SERVICE_MODE="${2:-}"; SERVICE_MODE_SET=1; shift 2 ;;
     --no-path-update) UPDATE_PATH=0; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -590,16 +600,33 @@ start_installed() {
 install_or_upgrade() {
   local requested_action="$1"
   local requested_version="$VERSION"
+  local requested_data_dir="$DATA_DIR"
+  local requested_host="$HOST"
+  local requested_port="$PORT"
+  local requested_workspace="$WORKSPACE"
+  local requested_ui_password="$UI_PASSWORD"
+  local requested_service_mode="$SERVICE_MODE"
+  local old_data_dir="$DATA_DIR"
   local old_service_mode="$SERVICE_MODE"
   local old_was_running=0
+  local new_data_dir="$DATA_DIR"
+  local new_service_mode="$SERVICE_MODE"
 
   if [[ "$requested_action" == "upgrade" ]]; then
     load_state
+    old_data_dir="$DATA_DIR"
+    old_service_mode="$SERVICE_MODE"
     server_is_running && old_was_running=1 || true
     VERSION="$requested_version"
-    old_service_mode="$SERVICE_MODE"
+    if (( DATA_DIR_SET )); then DATA_DIR="$requested_data_dir"; fi
+    if (( HOST_SET )); then HOST="$requested_host"; fi
+    if (( PORT_SET )); then PORT="$requested_port"; fi
+    if (( WORKSPACE_SET )); then WORKSPACE="$requested_workspace"; fi
+    if (( UI_PASSWORD_SET )); then UI_PASSWORD="$requested_ui_password"; fi
+    if (( SERVICE_MODE_SET )); then SERVICE_MODE="$requested_service_mode"; fi
+    validate_storage_paths
   elif [[ -f "$STATE_FILE" ]]; then
-    echo "ERROR: Agena is already installed at $INSTALL_DIR; use the upgrade action" >&2
+    echo "ERROR: Agena is already installed at $INSTALL_DIR; use the upgrade action to reinstall or change settings" >&2
     exit 1
   fi
 
@@ -670,10 +697,16 @@ install_or_upgrade() {
   [[ -f "$STATE_FILE" ]] && cp "$STATE_FILE" "$backup/install-state.env"
 
   if [[ -x "$AGENA_BIN" ]]; then
-    SERVICE_MODE="$old_service_mode"
-    stop_for_upgrade
-    if [[ "$requested_action" != "upgrade" ]]; then
+    if [[ "$requested_action" == "upgrade" ]]; then
+      new_data_dir="$DATA_DIR"
+      new_service_mode="$SERVICE_MODE"
+      DATA_DIR="$old_data_dir"
       SERVICE_MODE="$old_service_mode"
+    fi
+    stop_for_upgrade
+    if [[ "$requested_action" == "upgrade" ]]; then
+      DATA_DIR="$new_data_dir"
+      SERVICE_MODE="$new_service_mode"
     fi
   fi
 

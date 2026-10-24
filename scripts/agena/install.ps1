@@ -23,6 +23,13 @@ Param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$DataDirSpecified = $PSBoundParameters.ContainsKey("DataDir")
+$ListenHostSpecified = $PSBoundParameters.ContainsKey("ListenHost")
+$PortSpecified = $PSBoundParameters.ContainsKey("Port")
+$WorkspaceSpecified = $PSBoundParameters.ContainsKey("Workspace")
+$UiPasswordSpecified = $PSBoundParameters.ContainsKey("UiPassword")
+$ServiceModeSpecified = $PSBoundParameters.ContainsKey("ServiceMode")
+
 if (-not $InstallDir) {
   $InstallDir = Join-Path $env:LOCALAPPDATA "Agena"
 }
@@ -453,17 +460,34 @@ function Start-Installed {
 
 function Install-OrUpgrade([string]$RequestedAction) {
   $requestedVersion = $Version
+  $requestedDataDir = $DataDir
+  $requestedListenHost = $ListenHost
+  $requestedPort = $Port
+  $requestedWorkspace = $Workspace
+  $requestedUiPassword = $UiPassword
+  $requestedServiceMode = $ServiceMode
+  $oldDataDir = $DataDir
   $oldServiceMode = $ServiceMode
   $oldWasRunning = $false
   if ($RequestedAction -eq "Upgrade") {
     Load-State
-    $oldWasRunning = Test-ServerRunning
+    $oldDataDir = $DataDir
     $oldServiceMode = $ServiceMode
+    $oldWasRunning = Test-ServerRunning
     $script:Version = $requestedVersion
+    if ($DataDirSpecified) { $script:DataDir = $requestedDataDir }
+    if ($ListenHostSpecified) { $script:ListenHost = $requestedListenHost }
+    if ($PortSpecified) { $script:Port = $requestedPort }
+    if ($WorkspaceSpecified) { $script:Workspace = $requestedWorkspace }
+    if ($UiPasswordSpecified) { $script:UiPassword = $requestedUiPassword }
+    if ($ServiceModeSpecified) { $script:ServiceMode = $requestedServiceMode }
+    Assert-StoragePaths
   } elseif (Test-Path -LiteralPath $StateFile) {
-    throw "Agena is already installed at $InstallDir; use -Action Upgrade"
+    throw "Agena is already installed at $InstallDir; use -Action Upgrade to reinstall or change settings"
   }
   Resolve-ServiceMode
+  $newDataDir = $DataDir
+  $newServiceMode = $ServiceMode
   New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 
   $temp = Join-Path $env:TEMP ("agena-install-" + [Guid]::NewGuid().ToString("N"))
@@ -544,7 +568,15 @@ function Install-OrUpgrade([string]$RequestedAction) {
     }
 
     Write-Host "Stopping existing Agena installation if needed"
+    if ($RequestedAction -eq "Upgrade") {
+      $script:DataDir = $oldDataDir
+      $script:ServiceMode = $oldServiceMode
+    }
     Stop-ForUpgrade
+    if ($RequestedAction -eq "Upgrade") {
+      $script:DataDir = $newDataDir
+      $script:ServiceMode = $newServiceMode
+    }
     Write-Host "Installing Agena files"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     foreach ($name in @("bin", "web-dist")) {

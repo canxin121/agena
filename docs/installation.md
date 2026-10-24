@@ -266,6 +266,31 @@ Use `upgrade --source` to rebuild and replace an existing installation:
 bash scripts/agena/install.sh upgrade --source
 ```
 
+An upgrade also applies any explicitly supplied runtime settings. Omitted
+settings keep their saved values:
+
+```bash
+bash scripts/agena/install.sh upgrade --source \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --workspace /path/to/projects
+```
+
+The same rule applies to `--data-dir`, `--ui-password`, and `--service-mode`.
+The installer stops the saved service, starts the replacement with the new
+settings, and writes them to the installation state. If startup fails, it
+restores the previous binary, settings, active data root, and service.
+
+On Windows, use `-Action Upgrade` with `-ListenHost`, `-Port`, `-Workspace`,
+`-DataDir`, `-UiPassword`, or `-ServiceMode`.
+
+Environment variables are used for a fresh install, but do not override saved
+values during an upgrade; pass the corresponding option explicitly.
+`--data-dir` changes which data root subsequent runs use. Agena does not copy
+or migrate the old database and workspace data into the new root. Changing the
+program installation root is also outside the upgrade path; uninstall while
+preserving data, then reinstall with a different `--install-dir`.
+
 A remote clone is temporary and is removed after installation. A local
 checkout keeps its build output: Cargo output stays in `target/`, the Web build
 stays in `packages/agena-web/dist/`, and the package archive stays in

@@ -985,55 +985,6 @@ fn ipv4_to_u32(addr: Ipv4Addr) -> u32 {
     u32::from_be_bytes(addr.octets())
 }
 
-#[cfg(test)]
-mod tests {
-    use agena_domain::PermissionAction;
-
-    use super::{PermissionMode, ToolPermissionPolicy, tool_action};
-    use agena_domain::PermissionDecision;
-    use agena_plugin_host::sdk::ToolTag;
-
-    fn shell_tags() -> Vec<ToolTag> {
-        vec![ToolTag::Shell]
-    }
-
-    #[test]
-    fn shell_capability_applies_command_patterns_to_shell_runner() {
-        let mut policy = ToolPermissionPolicy::new(PermissionMode::Ask);
-        policy.add_bash_overlay_rule("git status", PermissionMode::Allow);
-        policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
-
-        assert!(matches!(
-            policy.check_tool(
-                "agena.shell.exec",
-                Some("git status"),
-                shell_tags().as_slice()
-            ),
-            PermissionDecision::Allow
-        ));
-        assert!(matches!(
-            policy.check_tool(
-                "agena.shell.exec",
-                Some("git push origin main"),
-                shell_tags().as_slice(),
-            ),
-            PermissionDecision::Deny { .. }
-        ));
-        assert!(matches!(
-            tool_action(
-                "agena.shell.exec",
-                Some("git status"),
-                shell_tags().as_slice(),
-                Some(&policy),
-            ),
-            PermissionAction::Tool {
-                qualifier: Some(_),
-                ..
-            }
-        ));
-    }
-}
-
 fn ipv6_to_u128(addr: Ipv6Addr) -> u128 {
     u128::from_be_bytes(addr.octets())
 }

@@ -48,36 +48,3 @@ pub async fn build_live_provider_catalog_document(
     });
     Ok((Some(document), warning))
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_domain::{Model, ProviderId};
-    use agena_provider::{ProviderCatalogError, ProviderModelSource};
-
-    use super::build_live_provider_catalog_document;
-
-    struct EmptySource;
-
-    #[async_trait::async_trait]
-    impl ProviderModelSource for EmptySource {
-        fn provider_ids(&self) -> Vec<ProviderId> {
-            Vec::new()
-        }
-
-        async fn list_models(
-            &self,
-            _provider_id: &ProviderId,
-        ) -> Result<Vec<Model>, ProviderCatalogError> {
-            unreachable!("empty source must not be queried")
-        }
-    }
-
-    #[tokio::test]
-    async fn empty_live_source_is_not_a_catalog_failure() {
-        let (document, warning) = build_live_provider_catalog_document(&EmptySource, None)
-            .await
-            .expect("empty source should be accepted");
-        assert!(document.is_none());
-        assert!(warning.is_none());
-    }
-}

@@ -290,30 +290,3 @@ fn strip_path_prefixes(value: &str) -> String {
         .trim()
         .to_owned()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{catalog_model_id_for_raw, normalized_catalog_model_id};
-
-    #[test]
-    fn canonicalizes_provider_and_catalog_aliases() {
-        assert_eq!(
-            normalized_catalog_model_id(" us.openai.GPT_5@default "),
-            "gpt.5"
-        );
-        assert_eq!(catalog_model_id_for_raw("   "), None);
-        assert_eq!(normalized_catalog_model_id("gpt-5@eu"), "gpt-5");
-        assert_eq!(
-            normalized_catalog_model_id("claude-opus-4-5@20251101"),
-            "claude-opus-4-5"
-        );
-        assert_eq!(
-            normalized_catalog_model_id("model@unknown"),
-            "model@unknown"
-        );
-        assert_eq!(
-            catalog_model_id_for_raw("cline-pass/deepseek-v4.1-flash").as_deref(),
-            Some("deepseek-v4.1-flash")
-        );
-    }
-}

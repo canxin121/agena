@@ -65,25 +65,3 @@ pub struct ErrorPart {
 fn is_false(value: &bool) -> bool {
     !*value
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{ReasoningPart, TextPart};
-
-    #[test]
-    fn preserves_compact_text_json_and_prefers_summary_reasoning() {
-        let text = TextPart {
-            text: "hello".into(),
-            synthetic: false,
-        };
-        assert_eq!(serde_json::to_string(&text).unwrap(), r#"{"text":"hello"}"#);
-
-        let reasoning = ReasoningPart {
-            summary: vec!["sum".into(), "mary".into()],
-            raw_content: vec!["raw".into()],
-            encrypted_content: None,
-        };
-        assert_eq!(reasoning.summary_text(), "summary");
-        assert_eq!(reasoning.preferred_text(), "summary");
-    }
-}

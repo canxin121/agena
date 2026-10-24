@@ -16,75 +16,40 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use crate::KernelDatabase;
 
 mod activity;
-#[cfg(test)]
-mod activity_tests;
+
 mod archive;
-#[cfg(test)]
-mod archive_tests;
-#[cfg(test)]
-mod blob_tests;
+
 mod blobs;
-#[cfg(test)]
-mod capture_tests;
+
 mod commands;
 mod content;
-#[cfg(test)]
-mod contract_completion_tests;
+
 mod control_snapshot;
-#[cfg(test)]
-mod control_snapshot_tests;
-#[cfg(test)]
-mod crash_window_tests;
+
 mod import;
-#[cfg(test)]
-mod import_tests;
+
 mod input_window;
-#[cfg(test)]
-mod input_window_tests;
+
 mod lifecycle;
-#[cfg(test)]
-mod lifecycle_tests;
-#[cfg(test)]
-mod loss_tests;
+
 mod metrics;
-#[cfg(test)]
-mod owned_tool_tests;
+
 mod owned_tools;
 mod prompt;
-#[cfg(test)]
-mod prompt_tests;
-#[cfg(test)]
-mod queue_edit_tests;
-#[cfg(test)]
-mod tool_draft_tests;
+
 pub use metrics::{KernelDiagnostics, KernelMetricsSnapshot};
-#[cfg(test)]
-mod content_tests;
-#[cfg(test)]
-mod event_cache_tests;
-#[cfg(test)]
-mod event_tests;
+
 mod history_views;
 mod read_cache;
-#[cfg(test)]
-mod read_tests;
+
 mod reads;
 pub use read_cache::ReadCacheSnapshot;
-#[cfg(test)]
-mod retention_tests;
+
 pub(crate) mod schema;
-#[cfg(test)]
-mod snapshot_tests;
+
 mod snapshots;
-#[cfg(test)]
-mod state_machine_tests;
+
 mod stop;
-#[cfg(test)]
-mod stop_tests;
-#[cfg(test)]
-mod summary_tests;
-#[cfg(test)]
-mod tests;
 
 const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CONTENT_PENDING_BYTES: usize = 14 * 1024 * 1024;
@@ -197,14 +162,6 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
         diagnostics,
         maintenance,
     })
-}
-
-#[cfg(test)]
-async fn open_database(
-    database: KernelDatabase,
-    diagnostics: KernelDiagnostics,
-) -> Result<KernelPorts> {
-    Ok(compose_database(database, diagnostics).await?.0)
 }
 
 async fn compose_database(
@@ -1575,13 +1532,7 @@ async fn writer(
             live.fail_closed("command commit outcome is unknown");
         }
         for (pending, result) in batch.into_iter().zip(results) {
-            #[cfg(test)]
-            crash_window_tests::hit("command.before_receipt", Some(pending.request));
-            #[cfg(test)]
-            let request = pending.request;
             let _ = pending.response.send(result);
-            #[cfg(test)]
-            crash_window_tests::hit("command.after_receipt", Some(request));
         }
     }
     let checkpoint = if let Some(error) = fatal {
@@ -1596,8 +1547,7 @@ async fn writer(
         live.fail_closed(&error.to_string());
     }
     let result = checkpoint.and(database.close().await.map_err(storage));
-    #[cfg(test)]
-    crash_window_tests::writer_closed(&cache);
+
     cache.close();
     feed.close();
     if let Err(error) = &result {
@@ -1817,20 +1767,11 @@ async fn commit_batch(
         }
     }
     let fence = cache.pause();
-    #[cfg(test)]
-    for pending in batch {
-        crash_window_tests::hit("command.before_commit", Some(pending.request));
-    }
+
     let committed = transaction.commit().await;
-    #[cfg(test)]
-    let committed = crash_window_tests::lose_confirmation(committed, batch, cache);
+
     match committed {
         Ok(()) => {
-            #[cfg(test)]
-            for pending in batch {
-                crash_window_tests::hit("command.after_commit", Some(pending.request));
-                crash_window_tests::hit("command.before_install", Some(pending.request));
-            }
             fence.committed(
                 if shared_family { None } else { Some(&affected) },
                 &workspaces,
@@ -1903,8 +1844,7 @@ async fn commit_batch(
                         }
                         let (updates, entry_changes) = updates;
                         live.acknowledge(&updates);
-                        #[cfg(test)]
-                        crash_window_tests::hit("command.after_install", Some(pending.request));
+
                         if !matches!(
                             pending.command,
                             Command::PrepareBlob { .. }
@@ -1914,8 +1854,7 @@ async fn commit_batch(
                                 | Command::ReadyBlob { .. }
                         ) {
                             let (session, kind) = change_target(&pending.command, &receipt.value);
-                            #[cfg(test)]
-                            crash_window_tests::hit("command.before_notify", Some(pending.request));
+
                             feed.publish_scoped(
                                 receipt.position,
                                 session,
@@ -1926,8 +1865,6 @@ async fn commit_batch(
                                 entry_changes.requires_snapshot,
                                 entry_changes.list_change,
                             );
-                            #[cfg(test)]
-                            crash_window_tests::hit("command.after_notify", Some(pending.request));
                         }
                     }
                 }

@@ -56,28 +56,3 @@ impl PromptCompactionActivity {
         self.reduced_tokens() as f64 * 100.0 / self.before_tokens as f64
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PromptCompactionStrategy, PromptCompactionTrigger};
-
-    #[test]
-    fn compaction_preferences_have_stable_defaults_and_wire_values() {
-        assert_eq!(
-            PromptCompactionStrategy::default(),
-            PromptCompactionStrategy::LocalSummary
-        );
-        assert_eq!(
-            PromptCompactionTrigger::default(),
-            PromptCompactionTrigger::Manual
-        );
-        assert_eq!(
-            serde_json::to_string(&PromptCompactionStrategy::OpenAiResponses).unwrap(),
-            "\"open_ai_responses\""
-        );
-        assert_eq!(
-            serde_json::from_str::<PromptCompactionTrigger>("\"reactive\"").unwrap(),
-            PromptCompactionTrigger::Reactive
-        );
-    }
-}

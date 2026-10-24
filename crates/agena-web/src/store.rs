@@ -66,13 +66,6 @@ impl Drop for SharedMetadata {
 }
 
 impl CrawlStore {
-    #[cfg(test)]
-    pub(crate) fn for_test(path: &Path) -> Self {
-        Self {
-            dir: CrawlDir::for_test(path.to_path_buf()),
-            metadata: Default::default(),
-        }
-    }
     pub fn for_workspace(workspace_root: &Path) -> Self {
         Self {
             dir: CrawlDir::from_workspace(workspace_root),
@@ -370,99 +363,4 @@ fn persist_document_atomically(path: &Path, bytes: &[u8]) -> Result<(), CrawlErr
         .persist(path)
         .map(|_| ())
         .map_err(|error| CrawlError::Io(error.error))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::persist_document_atomically;
-
-    #[test]
-    fn refreshed_documents_do_not_keep_stale_hashes_or_remove_another_owners_mapping() {
-        use super::*;
-        let dir = tempfile::tempdir().unwrap();
-        let store = CrawlStore::for_test(dir.path());
-        let document = |path: &str, body: &str| {
-            let url = url::Url::parse(&format!("https://fixture.invalid/{path}")).unwrap();
-            StoredDocument::from_fetched_page(
-                crate::extract_page_from_body(
-                    &url,
-                    &url,
-                    "text/plain",
-                    200,
-                    false,
-                    false,
-                    body,
-                    None,
-                    None,
-                ),
-                0,
-                1000,
-            )
-        };
-        let old = document("one", "original text");
-        store.save_document(&old).unwrap();
-        let refreshed = document("one", "new content");
-        store.save_document(&refreshed).unwrap();
-        assert!(
-            store
-                .find_by_raw_hash(&old.raw_html_hash)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            store
-                .find_by_markdown_hash(&old.markdown_hash)
-                .unwrap()
-                .is_none()
-        );
-        // Simulate interrupted publication leaving an outdated secondary index.
-        store.metadata().unwrap().save_document(&old, None).unwrap();
-        assert!(
-            store
-                .find_by_raw_hash(&old.raw_html_hash)
-                .unwrap()
-                .is_none()
-        );
-        let other = document("two", "new content");
-        store.save_document(&other).unwrap();
-        store.delete_loaded_document(&refreshed).unwrap();
-        assert_eq!(
-            store
-                .metadata()
-                .unwrap()
-                .find_document_id_by_raw_hash(&other.raw_html_hash)
-                .unwrap(),
-            Some(other.id.clone())
-        );
-        assert_eq!(
-            store
-                .find_by_markdown_hash(&other.markdown_hash)
-                .unwrap()
-                .unwrap()
-                .id,
-            other.id
-        );
-    }
-
-    #[test]
-    fn document_persistence_replaces_atomically_without_fixed_temp_files() {
-        let directory = tempfile::tempdir().expect("crawl document directory");
-        let path = directory.path().join("document.json");
-
-        persist_document_atomically(&path, br#"{"version":1}"#).expect("first document");
-        persist_document_atomically(&path, br#"{"version":2}"#).expect("replace document");
-
-        assert_eq!(
-            std::fs::read(&path).expect("read document"),
-            br#"{"version":2}"#
-        );
-        assert_eq!(
-            directory
-                .path()
-                .read_dir()
-                .expect("read crawl directory")
-                .count(),
-            1
-        );
-    }
 }

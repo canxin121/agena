@@ -10,9 +10,6 @@ use super::*;
 use crate::effect_scope::PluginEffectLease;
 use crate::sdk::rpc::{ErrorObject, JsonRpcVersion, Request, Response, ResponsePayload, codes};
 
-#[cfg(test)]
-mod tests;
-
 /// Failure to admit an authenticated HTTP plugin callback.
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum PluginCallbackRpcError {

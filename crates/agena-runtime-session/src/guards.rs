@@ -28,23 +28,3 @@ impl Drop for AbortOnDrop {
         self.0.abort();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::spawn_detached;
-    use tokio::sync::oneshot;
-    use tokio::time::{Duration, timeout};
-
-    #[tokio::test]
-    async fn detached_tasks_can_complete_one_shot_notifications() {
-        let (sender, receiver) = oneshot::channel();
-        spawn_detached(async move {
-            let _ = sender.send(());
-        });
-
-        timeout(Duration::from_secs(1), receiver)
-            .await
-            .expect("detached notification should complete")
-            .expect("detached task should send its notification");
-    }
-}

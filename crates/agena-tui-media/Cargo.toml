@@ -6,9 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 description = "Media, image, SVG, and mathematical rendering for Agena's TUI"
 
-[features]
-test-support = []
-
 [dependencies]
 portable-atomic = { workspace = true }
 agena-failure = { workspace = true }

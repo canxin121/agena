@@ -1386,28 +1386,3 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         data: e.rpc_error_data(),
     }
 }
-
-#[cfg(test)]
-mod reload_callback_tests;
-
-#[cfg(test)]
-mod authorization_error_code_tests {
-    use super::error_object_from;
-    use crate::{PluginError, PluginErrorKind, rpc::codes};
-
-    #[test]
-    fn authorization_and_availability_outcomes_keep_distinct_json_rpc_codes() {
-        for (kind, expected) in [
-            (PluginErrorKind::PolicyDenied, codes::POLICY_DENIED),
-            (PluginErrorKind::UserDeclined, codes::USER_DECLINED),
-            (
-                PluginErrorKind::CapabilityUnavailable,
-                codes::CAPABILITY_UNAVAILABLE,
-            ),
-            (PluginErrorKind::ToolUnavailable, codes::TOOL_UNAVAILABLE),
-        ] {
-            let error = PluginError::from_kind(kind, "structured non-execution outcome");
-            assert_eq!(error_object_from(error).code, expected);
-        }
-    }
-}

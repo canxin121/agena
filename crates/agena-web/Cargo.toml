@@ -40,9 +40,6 @@ which = { workspace = true }
 [lints]
 workspace = true
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
-
 [target.'cfg(target_endian = "little")'.dependencies]
 tantivy = { workspace = true }
 

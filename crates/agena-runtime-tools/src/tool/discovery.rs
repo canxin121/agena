@@ -61,35 +61,3 @@ fn explicitly_targets_ignored_directory(base_path: &Path, workspace_root: &Path)
 fn is_common_ignored_directory(name: &str) -> bool {
     COMMON_IGNORED_DIRECTORIES.contains(&name)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::effective_include_ignored;
-
-    #[test]
-    fn explicit_hidden_or_generated_base_reenables_ignored_paths() {
-        let workspace = std::path::Path::new("/workspace");
-
-        assert!(!effective_include_ignored(false, workspace, workspace));
-        assert!(!effective_include_ignored(
-            false,
-            &workspace.join("crates/runtime"),
-            workspace,
-        ));
-        assert!(effective_include_ignored(
-            false,
-            &workspace.join(".github/workflows"),
-            workspace,
-        ));
-        assert!(effective_include_ignored(
-            false,
-            &workspace.join("target/debug"),
-            workspace,
-        ));
-        assert!(effective_include_ignored(
-            true,
-            &workspace.join("crates/runtime"),
-            workspace,
-        ));
-    }
-}

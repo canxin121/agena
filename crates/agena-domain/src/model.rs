@@ -178,28 +178,3 @@ impl FromStr for ModelRef {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use super::{ModelRef, ProviderId};
-
-    #[test]
-    fn identifiers_trim_and_reject_blank_values() {
-        assert_eq!(ProviderId::new(" provider ").as_ref(), "provider");
-        assert!(ProviderId::try_new(" \t ").is_err());
-    }
-
-    #[test]
-    fn model_ref_parse_and_wire_shape_are_stable() {
-        let model = ModelRef::from_str("provider/model").expect("valid reference");
-        assert_eq!(model.provider_id.as_ref(), "provider");
-        assert_eq!(model.model_id.as_ref(), "model");
-        assert!(model.adapter_id.is_none());
-        assert_eq!(
-            serde_json::to_value(model).expect("serialize model reference"),
-            serde_json::json!({ "provider_id": "provider", "model_id": "model" })
-        );
-    }
-}

@@ -1,8 +1,7 @@
 //! Korean tool-headline vocabulary.
 //!
 //! Entries stay paired with their English key rather than index-aligned, so a
-//! translation can never drift onto the wrong key; the key set and structure
-//! still match `tests::every_locale_covers_every_key`.
+//! translation cannot drift onto the wrong key.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
     ("Start agent", "에이전트 시작"),

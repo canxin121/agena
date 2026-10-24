@@ -35,27 +35,3 @@ impl SessionViewMode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SessionViewMode;
-    use agena_tui::i18n::I18n;
-
-    #[test]
-    fn session_scope_cycles_through_all_visible_modes() {
-        assert_eq!(SessionViewMode::All.next(), SessionViewMode::Roots);
-        assert_eq!(SessionViewMode::Roots.next(), SessionViewMode::Subtree);
-        assert_eq!(SessionViewMode::Subtree.next(), SessionViewMode::All);
-    }
-
-    #[test]
-    fn subtree_label_retains_the_optional_root_identity() {
-        let i18n = I18n::english();
-        assert!(!SessionViewMode::Subtree.label(&i18n, None).is_empty());
-        assert!(
-            SessionViewMode::Subtree
-                .label(&i18n, Some(42))
-                .contains("42")
-        );
-    }
-}

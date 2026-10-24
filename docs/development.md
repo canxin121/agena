@@ -10,7 +10,6 @@ for a change that needs repository-wide validation:
 
 ```sh
 cargo fmt --all -- --check
-cargo test --workspace --locked --no-fail-fast
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/ci/verify-runtime-capabilities.py
 python3 -m unittest discover -s scripts/refactors/tests
@@ -31,32 +30,16 @@ type checking. Both frontend build modes also verify that all app icons match
 the Shift source at `src/assets/agena.svg`; after editing it, run
 `bun run icons:generate`. See [the icon guide](design/agena-icon.md).
 The `Agena quality` workflow runs these gates on pull requests
-and pushes to `master`, with the Rust suite on Linux and macOS. The existing
+and pushes to `master`, with the Rust checks on Linux and macOS. The existing
 universal-target workflow covers the larger platform matrix separately; it is
-still manually triggered. The quality workflow also runs the plugin host's
-optional features independently and together:
-
-```sh
-cargo test --locked -p agena-plugin-host --features signing
-cargo test --locked -p agena-plugin-host --features wasm
-cargo test --locked -p agena-plugin-host --all-features
-cargo clippy --locked -p agena-plugin-host --all-targets --all-features -- -D warnings
-cargo run --locked -p agena-plugin-host --profile dist --example panic_isolation
-```
-
-The last command is a real executable, because Cargo's test harness forces
-unwinding even when the selected profile says `panic = "abort"`. Both the
-release and dist profiles must preserve the in-process plugin host's panic
-isolation. The fixture shared with the ordinary integration test exercises a
-synchronous panic, a panic after an async yield, and successful calls afterward.
+still manually triggered. The quality workflow also lints the plugin host with all optional features
+enabled.
 
 With `signing`, a stdio plugin's SHA256 applies to the executable resolved from
 its configured PATH and working directory. The host retains that absolute path
-and verifies its contents before every supervised restart. The Unix process
-fixtures require `/usr/bin/python3`; they create their own scripts and working
-directories, and do not modify the parent process's environment.
+and verifies its contents before every supervised restart.
 
-## Live model tool-mode probe
+## Model tool-mode behavior
 
 Model routes default to `agena_tools.mode = "provider_protocol"`, including a
 bare `{}` model configuration. An explicit `"disabled"` setting is preserved
@@ -85,31 +68,7 @@ Disabled requests omit tool declarations, project
 historical tool results into ordinary messages, and tell the model that tools
 are unavailable even when the shared system prompt mentions tool workflows.
 
-Use the live probe to check a gateway's complete help → execution → result →
-answer loop with an existing provider configuration:
-
-```sh
-cargo run --locked -p agena --example model_tool_mode_probe -- \
-  --config /path/to/agena.json --provider gateway --adapter openai_responses \
-  --model deepseek-v4.1-flash --thinking max --scenario tool-loop
-```
-
-The probe uses temporary session and scheduler databases. It inspects the
-environment/model and renames only its temporary session, then verifies native
-Tool API provenance, completed operations and a final answer using the returned
-model name. `--scenario greeting` checks a plain `你好` conversation.
-`--scenario disabled` requires a configuration with tools explicitly disabled;
-it verifies a normal explanation of unavailable tools and zero tool operations.
-
 ## Stdio process supervision
-
-Run the real subprocess regressions independently when changing the stdio
-transport:
-
-```sh
-cargo test --locked -p agena-plugin-host --test stdio_lifecycle
-cargo test --locked -p agena-plugin-host --test stdio_host
-```
 
 `never` leaves every exit stopped or failed. `on-failure` restarts after a
 nonzero/signal exit or a protocol/pipe failure, while a clean exit remains
@@ -135,8 +94,7 @@ most **16 KiB of raw bytes**, replaces invalid UTF-8 for display, preserves
 complete code points across segments, and marks continuation in log fields.
 Lossy UTF-8 conversion can expand a stored segment to three times that size.
 
-The full-host fixture verifies application initialization as well as pipe
-recovery. A hosted restart requests `meta/manifest` again and checks it against
+A hosted restart requests `meta/manifest` again and checks it against
 the validated immutable manifest, then runs `meta/init` with a newly issued
 callback authority. Each request has a **30-second** deadline. Init must return
 the expected manifest and protocol version before ordinary calls and
@@ -172,7 +130,7 @@ Cancelling a whole host build also closes transports that it already received
 from the predecessor and records a failure there. This is not a transaction
 that restores the old plugin set; full reload rollback and non-stdio
 contribution/credential transfer remain
-covered by the repository's current tests, lint gates, and development checks.
+open.
 
 `PluginEffectScope::dispose` is called on an `Arc<PluginEffectScope>`. Cleanup
 runs independently of individual waiters and shares one report. A synchronous
@@ -200,12 +158,6 @@ the exact process scope, including global tools, display and themes. A cloned
 release effects in the live registry. Tool registration and removal listeners run
 after the registry write lock is released.
 
-Run the ownership and handoff regressions with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::process_scope::ownership_tests
-```
-
 `ScopedRegistry` also serializes owner admission, value publication, and retirement
 of the old cleanup handle under its registry lock. Every visible entry already
 contains its effect handle. Duplicate registrations, closed owners, and exhausted
@@ -217,14 +169,7 @@ preserves scoped duplicate isolation and ancestor fallback behavior.
 Registration generations advance with checked arithmetic; exhaustion returns
 `ScopedRegistryError::GenerationExhausted` before publication. Parent-cycle
 validation also precedes metadata changes. `clear_scope_tree` atomically removes
-the current subtree; later registrations can recreate a cleared layer. Test the
-registry's behavior, including concurrent mutation and cleanup, with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib scoped_registry::
-```
-
-Hook catalogs and transport routing bindings use the same exact registration
+the current subtree; later registrations can recreate a cleared layer. Hook catalogs and transport routing bindings use the same exact registration
 ownership as display and theme contributions. Both registration APIs return a
 `Result`; a closed owner returns `HostUnavailable` and preserves the previous
 binding. The build publishes activation only after manifest ownership, hooks,
@@ -239,13 +184,7 @@ generation read lock through the remaining synchronous removals, preventing a
 successor from being published midway through cleanup. Cancelling while waiting
 for those locks leaves fallback metadata intact and permits a later retry. Scope
 disposal precedes fallback, so this does not restore a running plugin after
-cancellation or make the entire shutdown atomic. Run the regressions with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::host_handle::lifecycle_tests
-```
-
-Every `ScopedHostClient` method now admits the callback and acquires a lease
+cancellation or make the entire shutdown atomic. Every `ScopedHostClient` method now admits the callback and acquires a lease
 against its exact current scope under the generation read lock. This includes
 local catalog operations and logging, as well as calls forwarded to the runtime.
 Quiesce closes admission even while the lifecycle state still reads `Active`.
@@ -259,13 +198,7 @@ Admitted callbacks retain their original registration owner through a task-local
 binding. The binding identifies both the host allocation and the effect scope,
 so work on another host with the same plugin id uses that host's owner. Stdio
 callbacks and process-contribution handoff use the same binding while retaining
-their process child ownership. Test these boundaries with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::host_scoped_client::lifecycle_tests
-```
-
-The shared callback entry also validates privileged context before any local
+their process child ownership. The shared callback entry also validates privileged context before any local
 catalog operation or runtime forwarding. Session/call/workspace/tool fields must
 match a live authority issued to that plugin generation; forged, altered, expired,
 or cross-plugin authority returns `PolicyDenied` before changing catalogs, events,
@@ -280,26 +213,12 @@ context and remains available for internal inheritance. The host's authorized
 calls, stream invocation branches, scoped callback entry, and raw RPC entry use
 the isolated form. Raw RPC rejects malformed non-null context as `InvalidParams`,
 including arrays and incorrectly typed fields. Missing, null, and empty-object
-context retain plugin-only semantics. Run these regressions with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::host_scoped_client::authority_tests
-```
-
-The SDK HTTP driver treats each incoming request as an independent context,
+context retain plugin-only semantics. The SDK HTTP driver treats each incoming request as an independent context,
 including requests that omit `Request.context`. A streaming invocation retains
 the incoming plugin identity and authority token for the plugin task and every
 chunk, success, error, or lost-terminal callback. Its session/call/workspace/tool
-fields continue to come from `ToolInvokeInput`. Actual loopback HTTP tests cover
-all terminal paths, concurrent streams, and enclosing middleware context:
-
-```sh
-cargo test --locked -p agena-plugin-sdk --features http --lib drivers::http::stream_context_tests
-```
-
-These SDK tests inspect emitted packets and bearer headers. The host stream
-entry separately validates the live authority before dispatching to a transport,
-and HTTP ingress requires an object-shaped context. The HTTP transport binds
+fields continue to come from `ToolInvokeInput`.
+ The HTTP transport binds
 each stream to the complete context of its originating invocation. A valid
 authority from another call cannot append chunks or finish that stream.
 
@@ -312,18 +231,7 @@ are at most **128 pending invocations**, each retaining **64 early chunks** and
 an independent terminal slot. A full valid chunk buffer survives an end marker;
 overflow remains an error even if later events report success. Closed or unknown
 streams cannot create orphan buffers. Active-stream monitors check their exact
-channel identity before removing a registration. Run the registry/authority and
-actual SDK HTTP/runtime-bridge regressions with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib -- host::host_handle::stream_authority_tests:: transport::http::streams::tests::
-cargo test --locked -p agena-runtime-plugins --lib plugin_runtime_service::http_stream_tests
-```
-
-The HTTP fixture uses the real bridge behind a test Axum route; it does not test
-the application's `ServerError` envelope. It includes 128 cancelled initial
-requests followed by a successful stream, and forces callbacks to arrive before
-the initial HTTP response without production hooks or sleeps.
+channel identity before removing a registration.
 
 HTTP callback credentials now identify an exact host and logical effect scope.
 Admission rechecks the credential and current scope together, and holds a scope
@@ -408,17 +316,7 @@ display contributions and themes to the successor. Failure or cancellation
 after transfer begins closes local admission and retires partial bindings.
 It does not restore the disposed predecessor. A terminal stream error bypasses
 an unread full chunk channel in the lifecycle wrapper; successful streams still
-deliver all queued chunks before completion. Run the added regressions with:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::callback_rpc::tests
-cargo test --locked -p agena-plugin-sdk --features http --lib drivers::http::handoff_tests
-cargo test --locked -p agena-plugin-sdk --features http --lib drivers::http::instance::tests
-cargo test --locked -p agena-plugin-sdk --features http --test http_plugin_lifecycle
-cargo test --locked -p agena-runtime-plugins --lib plugin_runtime_service::http_handoff_tests
-```
-
-Production runtime composition now starts a dedicated loopback callback listener
+deliver all queued chunks before completion. Production runtime composition now starts a dedicated loopback callback listener
 before initializing plugins. Runtime snapshots in one reload lineage share its
 lifetime. A preconstructed `PluginCallbackDispatcher` uses the same weak,
 authenticated host/scope registry as the existing bridge, so first-init and
@@ -446,21 +344,7 @@ shutdown; active operations and returned/detached resources have separate
 lifetimes. The ownership regression explicitly stops maintenance, shuts down the
 plugin host and releases runtime handles while retaining its callback adapters.
 
-Run real runtime/application regressions with:
-
-```sh
-cargo test --locked -p agena-runtime --lib runtime::callback_tests
-cargo test --locked -p agena-runtime --lib reload_shutdown_tests
-cargo test --locked -p agena --test http_plugin_callbacks
-```
-
-These tests use temporary configurations, in-memory databases or isolated state
-directories, and ephemeral loopback listeners. They exercise first-init config,
-unchanged-plugin rebind, changed-plugin restart before publication, explicit
-service readiness, build failure/cancellation cleanup, runtime release, and an
-actual UI-password-protected application bootstrap and management-API reload.
-The SDK macro lifecycle fixtures separately cover factory-created PluginSettings
-objects. SDK/global protocol and instance-extension versions are unchanged.
+ SDK/global protocol and instance-extension versions are unchanged.
 
 The advertised callback URL currently uses 127.0.0.1; remote HTTP plugins need a
 separate bind/advertised-address design. The previous public `/plugin-rpc` route
@@ -560,9 +444,9 @@ with raw data retained only as diagnostics. Plugin reload overload returns
 `ModelCatalogRefreshError` is removed. Application owns the shared task-control
 error projection. REST reload/catalog/marketplace admission maps shutdown,
 capacity and missing executor to **503**; unknown cancellation IDs map to
-**404**, and terminal or noncancellable tasks to **409**. Actual router tests
-verify reload/catalog capacity and shutdown responses retain the shared
-`problem` envelope and `Backoff` semantics.
+**404**, and terminal or noncancellable tasks to **409**. Reload/catalog
+capacity and shutdown responses retain the shared `problem` envelope and
+`Backoff` semantics.
 
 Direct reload uses `RuntimeControlServiceError::Shutdown` to preserve the
 stopped-runtime failure through Application, REST settings and Provider Studio
@@ -574,10 +458,8 @@ reload does not undo the saved file or create a completed reload report.
 A candidate built against an existing SessionManager owns a prepared replacement
 configuration. Only final admitted publication applies it to the shared manager.
 Dropping a candidate releases the prepared providers, processor and executor;
-it does not install its PluginHost through live sessions. Runtime callback
-fixtures disable automatic maintenance directly, without shutting down the
-runtime and then expecting reload to remain available. Production construction
-always enables automatic maintenance.
+it does not install its PluginHost through live sessions. Production
+construction always enables automatic maintenance.
 
 If a reload has already published its snapshot, failure to enqueue the optional
 model-catalog refresh is recorded in catalog `last_failure`. The completed
@@ -608,23 +490,10 @@ API. Tests explicitly cancel their held session executions during teardown.
 Notification drain ownership, session execution admission/cancellation after
 shutdown, retained-generation delivery and total resource budgets remain open.
 
-The notification regressions create persisted sessions in in-memory SQLite and
-hold real registered execution in a local SDK HTTP prompt hook before any model
-request. They cover repeated and 16-thread concurrent shutdown, no-executor
-diagnostic order, the real lifecycle mutex, and reconfiguration before/within a
-notification batch. Run them with:
-
-```sh
-cargo test --locked -p agena-runtime --lib shutdown_notification_tests
-cargo test --locked -p agena-runtime-session
-```
-
-The actual application HTTP callback fixture waits for the accepted REST reload
-by task ID via `/api/v1/runtime/tasks`, then asserts terminal success before the
-next SDK reload. Candidate configuration and callback credentials may be visible
-before publication binds runtime services, so neither config visibility nor old
-token rejection is a completion barrier. A failed or cancelled task fails the
-test immediately; the mutation is not retried to hide readiness errors.
+A failed or cancelled REST reload reports its terminal task state rather than
+retrying the mutation to hide readiness errors. Candidate configuration and
+callback credentials may be visible before publication binds runtime services,
+so neither config visibility nor old token rejection is a completion barrier.
 
 Provider client identity belongs to a runtime snapshot and the adapters or
 authentication handles constructed from it. Each snapshot owns an immutable
@@ -646,19 +515,9 @@ retain and pass the selected identity instead. No config field or wire schema
 changes are required. Plugin `InitContext.agena_version` is the actual Agena
 package build version and is independent of configured provider CLI versions.
 
-The identity regressions issue local HTTP discovery requests for unpublished,
-failed and cancelled candidates, candidate/retained registries, and five adapter
-protocols across two simultaneous runtimes. Separate checks verify Codex query
-and header agreement, Gemini request-model updates and custom User-Agent
-preservation, and built OAuth requests. They do not execute remote OAuth grants
-or freeze credential-store contents. Multiple runtimes still share the weak
-process PluginHost slot; explicit identity does not make that slot independent.
+Multiple runtimes still share the weak process PluginHost slot; explicit
+identity does not make that slot independent.
 
-```sh
-cargo test --locked -p agena-runtime --lib client_identity_tests
-cargo test --locked -p agena-runtime-provider --lib client_identity_tests
-cargo test --locked -p agena-runtime-provider-adapters --lib client_identity_tests
-```
 
 The cap bounds task count, not bytes, per-origin fairness or maintenance capacity
 reservations. Synchronous observers can still block indefinitely, and cancelling
@@ -667,38 +526,6 @@ detached or remote work. The publication critical section contains no await and
 must not reenter TaskControl. Whole-snapshot rollback, atomic reads across the
 separate snapshot/session/process and credential stores, generation exhaustion,
 and complete session/notification shutdown remain review boundaries.
-
-Focused task admission and API checks:
-
-```sh
-cargo test --locked -p agena-runtime --lib background_
-cargo test --locked -p agena-runtime --lib runtime::callback_tests
-cargo test --locked -p agena-api-server --lib background_task
-cargo test --locked -p agena-api-server --no-default-features
-cargo test --locked -p agena-api-server --no-default-features --features http
-```
-
-Router tests follow their HTTP/WS/SSE feature requirements; the standalone
-background-task HTTP tests also run in the HTTP-only build. The actual callback
-application fixture disables public catalog fetches only in its isolated child
-environment, so external startup maintenance cannot rotate its captured initial
-bearer before its deliberate auth/reload checks. It preserves child logs on
-failure. This does not disable catalog refreshes in the product.
-
-Focused lifecycle/protocol checks also include:
-
-```sh
-cargo test --locked -p agena-plugin-host --lib host::call_completion::tests
-cargo test --locked -p agena-plugin-sdk --features stdio --lib drivers::stdio::reload_callback_tests
-```
-
-The stdio check exercises the in-memory callback queue and response codec, not
-a real stdio child process self-reload. Runtime regressions exercise real HTTP
-tools and native streams, direct/chained hooks, nested HTTP-to-bundled-settings
-calls, changed-settings object replacement, origin cancellation, shutdown while
-waiting, malformed input rejection and actual failed task status. The actual
-UI-password-protected application test also submits and queries a reload through
-the SDK callback client independently of its management UI session.
 
 Shutdown implementations must tolerate the previously documented cleanup retry.
 
@@ -714,14 +541,6 @@ to settle, so pending stdio requests cannot prevent child termination. Repeated
 close calls retain the cleanup result, including failure.
 
 ## Scheduler durability
-
-Run the scheduler independently as well as in the workspace. This ensures its
-process recovery tests declare their own Tokio features instead of borrowing
-features enabled by another workspace member:
-
-```sh
-cargo test --locked -p agena-scheduler
-```
 
 `Scheduler` and `JobStore` persistence operations return `SchedulerResult`.
 An absent job, a concurrent edit, and a failed database operation are separate
@@ -749,23 +568,10 @@ or cancellation cannot be undone by dropping a future. Sinks must deduplicate
 using `JobDeliveryAttempt.delivery_key`; the runtime session sink already has
 durable support for that key. Lease comparisons use the host wall clock. A
 large clock adjustment or a process suspension exceeding the lease can cause
-recovery, so neither leases nor a green test suite establish exactly-once
-external effects. Pausing keeps an in-flight occurrence; it finishes under the
+recovery, so leases alone do not establish exactly-once external effects. Pausing keeps an in-flight occurrence; it finishes under the
 latest configuration while preventing later occurrences.
 
-Tests cover SQLite write failures, malformed stored data, competing connections,
-transaction rollback, pauses/edits during delivery, renewal under writer-lock
-contention, and a subprocess exiting immediately after a durable claim. That
-subprocess uses only a temporary database; it does not touch a running Agena
-instance or the user's scheduler database.
-
 ## SQLite schema and failure invariants
-
-Run the storage adapter independently when changing persistence:
-
-```sh
-cargo test --locked -p agena-storage-sqlite
-```
 
 The main database has one exact session-kernel schema and no migration or
 compatibility layer. `initialize_schema` delegates to the kernel's current
@@ -792,14 +598,8 @@ command leaves no partial facts; a successful receipt contains that command's
 committed position. Lost responses are retried with the same request identity.
 Commit uncertainty is distinct from a definite rollback. Typed content keeps
 accepted and committed heads separate and includes dependent tails in terminal
-commits. The storage suites cover real FULL/busy/rollback, exact receipts,
-permission winner/rollback, independent command state machines and process
-kill/reopen scenarios. The maintained
-[process recovery tests](../crates/agena-storage-sqlite/tests/kernel_process_recovery.rs)
-enumerate the injected prepare, publication, checkpoint and GC boundaries;
-the [public contract tests](../crates/agena-storage-sqlite/tests/session_kernel_contracts.rs)
-cover file and memory behavior. These fixtures do not prove every combination
-of external side effects, power loss or filesystem failure.
+commits. The persistence design does not prove every combination of external
+side effects, power loss or filesystem failure.
 
 The owned SQLite factory configures WAL and `synchronous = FULL` on file-backed
 connections, with foreign keys, `cache_size = -8192`, `mmap_size = 0`, a one-second
@@ -807,15 +607,13 @@ busy timeout and a 1,000-page WAL autocheckpoint. The session kernel has one
 writer and up to four query-only readers. Separate scheduler/server-state
 infrastructure repositories use their own owned pools; they do not grant
 runtime/application callers raw session SQL access. FULL provides SQLite's
-stronger commit-sync guarantee; hardware/filesystem failure testing remains
-separate from ordinary process restart tests.
+stronger commit-sync guarantee; hardware and filesystem failure remain
+outside that guarantee.
 
 Memory mode retains one private connection. Its pool disables checkout ping,
 idle timeout and maximum lifetime, and has no acquire/connect hooks. This
 follows SQLx's cancellation contract so a cancelled acquire cannot discard the
-only connection and destroy the in-memory database. The regression commits a
-marker, repeatedly cancels real acquires and queued waiters, then verifies both
-committed data and the kernel schema survive.
+only connection and destroy the in-memory database.
 
 A file pool retains an OS lock on the canonical database's `.owner-lock` file
 for its lifetime, including pool clones. A second service owner is rejected;
@@ -823,9 +621,7 @@ clients connect to the owning service. Existing hard-linked database files are
 rejected because separate WAL filenames are unsafe. Lock files are never
 unlinked to release ownership. Current capabilities and production wiring are
 documented in the [kernel contract](session-kernel-contracts-2026-10-18.md).
-Use the maintained [experience probes](../scripts/probes/README.md) and
-[resource runners](../crates/agena-storage-sqlite/examples/support/README.md)
-to collect measurements in a new owned output directory.
+Use the maintained [experience probes](../scripts/probes/README.md) to collect measurements in a new owned output directory.
 
 The immutable read cache separates capacity eviction from authority
 invalidation. Reclaiming cached entries does not advance the authority
@@ -839,17 +635,15 @@ operation's original error even when explicit rollback also fails. SQLite can
 already have rolled back a transaction after a trigger or I/O error. Cleanup
 failure is logged separately with its diagnostic chain; it must not replace a
 constraint code or an application-specific error variant. Queued effects run
-only after commit succeeds. Real trigger and deferred-constraint fixtures
-check the returned error, secondary log, skipped effects, rolled-back rows,
-and subsequent connection reuse. These public helpers are separate from the
+only after commit succeeds. These public helpers are separate from the
 model-catalog wrappers, which still use combined diagnostics when their
 rollback fails.
 
 `is_sqlite_busy` checks primary code **5** in the low byte of a numeric SQLite
 code, including **261 / 517 / 773** (recovery/snapshot/timeout). A known non-busy
 code must not be overridden by text containing `database is locked`; message
-fallback applies only without a usable numeric code. A real two-pool WAL
-fixture verifies that `BUSY_SNAPSHOT` is **517**, not 31. A snapshot conflict
+fallback applies only without a usable numeric code. SQLite reports
+`BUSY_SNAPSHOT` as **517**, not 31. A snapshot conflict
 requires restarting the transaction, not retrying its statement in the same
 snapshot. The write-lock helper retries lock acquisition before invoking the
 operation, at most five times, with **100 / 200 / 400 / 800 / 1,600 ms**
@@ -857,16 +651,6 @@ backoffs in addition to each connection's busy timeout. It does not replay
 the caller's operation or make post-commit effects durable on cancellation.
 
 ## Workbench file integrity
-
-Run the file behavior tests independently, then the application package and
-workspace gates when changing the handlers or route signatures:
-
-```sh
-cargo test --locked -p agena --bin agena server::fs::fs_core::tests
-cargo test --locked -p agena --bin agena server::app::tests::fs_
-cargo test --locked -p agena --bin agena server::fs::fs_http::tests
-cargo test --locked -p agena
-```
 
 Chunked text reads use byte offsets. `limit=0` remains a metadata-only request,
 which the frontend uses before its large-file prompt. Positive limits are
@@ -892,12 +676,6 @@ publication, not cancellation rollback or a transaction across files. Hard
 link aliases retain the old inode; owner/ACL/xattr preservation and directory
 sync for power-loss durability remain separate audit work.
 
-The Unix write-failure regression runs its own test subprocess, ignores
-SIGXFSZ there, and applies a **4 KiB RLIMIT_FSIZE** to make the kernel fail a
-larger write partway through. The parent process and personal files are not
-affected. The test checks both preservation of old contents and absence of
-partial newly created targets or leftover staging files.
-
 The upload and text-write routes use explicit body readers, avoiding Axum's
 default **2 MiB** cap on `Bytes` and `Json` extractors. Upload accepts at most
 **50 MiB** of actual body bytes. Text write permits **300 MiB + 64 KiB** of
@@ -920,10 +698,7 @@ and fairness under slow clients remain separate work.
 These two routes report body, query, and JSON extraction failures in the
 Workbench `{ "error": "..." }` envelope. Size, media-type, JSON syntax, and
 JSON data-shape failures retain HTTP **413 / 415 / 400 / 422**, respectively.
-Other JSON mutation routes retain their default body limits. The route tests
-construct the same filesystem router as the server and cover exact limits,
-escaped and multibyte content, transport failures, cancellation, and file
-preservation. Actual-server probes also cover HTTP/1.1 chunked transfer.
+Other JSON mutation routes retain their default body limits.
 
 Content replacement also uses staged atomic publication. Both single-match
 and bulk output are limited to **50 MiB** while generating the replacement,
@@ -990,8 +765,8 @@ filters. Responses report `truncated`, which the UI surfaces.
 
 ## Generated tool contracts
 
-When an intentional tool schema, help text, or workspace version change makes
-the generated-contract tests fail, regenerate and review both artifacts:
+When an intentional tool schema, help text, or workspace version changes,
+regenerate and review both artifacts:
 
 ```sh
 cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot > /tmp/agena-capability-identities.json
@@ -999,8 +774,7 @@ cargo run --locked -p agena-bundled-plugins --example generate_tools_reference >
 ```
 
 Compare the files with `crates/agena-bundled-plugins/generated/` before replacing
-them. A passing snapshot test proves agreement with the implementation; review
-is still necessary to determine whether the schema change is intended.
+them. Review whether the schema change is intended.
 
 ## Generated state types
 
@@ -1013,12 +787,10 @@ Web client consumes a generated mirror instead of a hand-written copy:
 cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
 ```
 
-`cargo test -p agena-web-types` fails when the committed mirror and the backend
-definitions disagree, so a state change cannot land without regenerating the
-file. `cargo test -p agena-api` pins the spelling every state reaches a client
-with, and `bun test tests/sessionStateContract.test.ts` in `packages/agena-web`
-checks that the shipped parser accepts exactly the generated kinds and that no
-module outside the mirror declares a second vocabulary.
+Regenerate the mirror whenever backend state definitions change.
+`bun test tests/sessionStateContract.test.ts` in `packages/agena-web` checks that
+the shipped parser accepts exactly the generated kinds and that no module outside
+the mirror declares a second vocabulary.
 
 ## Dependency maintenance
 

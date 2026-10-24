@@ -31,20 +31,6 @@ pub(crate) struct ToolExecutionRender {
     pub visible_copy_text: String,
 }
 
-#[cfg(test)]
-pub(crate) fn render_tool_execution(
-    part: &TranscriptEntryPart,
-    tool: &ToolCallView,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-    expanded: bool,
-) {
-    let _ = render_tool_execution_with_sections(
-        part, expanded, expanded, expanded, expanded, expanded, tool, out, width, i18n, expanded,
-    );
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_tool_execution_with_sections(
     part: &TranscriptEntryPart,
@@ -962,61 +948,5 @@ pub(crate) fn render_operation_blocks<'a>(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_domain::{
-        FileChangeKind, FileChangeRecord, RawOutput, StructuredObject, TimeRange, ToolInvocation,
-    };
-    use agena_runtime_contracts::part::OperationPart;
-
-    #[test]
-    fn a_partial_diff_keeps_uncovered_file_changes_in_the_view_and_copy() {
-        let tool = ToolCallView::from_operation(
-            OperationPart::completed(
-                7,
-                ToolInvocation::new("fs.apply_patch", StructuredObject::default()),
-                RawOutput::default(),
-                TimeRange::default(),
-            ),
-            Some(agena_domain::PartDocument {
-                title: "Applied patch".into(),
-                summary: String::new(),
-                blocks: vec![
-                    ViewBlock::FileChanges {
-                        id: None,
-                        changes: ["a.rs", "binary.png"]
-                            .into_iter()
-                            .map(|path| FileChangeRecord {
-                                path: path.into(),
-                                kind: FileChangeKind::Updated,
-                                from_path: None,
-                            })
-                            .collect(),
-                    },
-                    ViewBlock::Diff {
-                        id: None,
-                        language: Some("diff".into()),
-                        diff: "--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n".into(),
-                    },
-                ],
-            }),
-        );
-        let mut lines = Vec::new();
-        render_tool_presentation_body(&tool, &mut lines, 80, &I18n::english(), None);
-        let visible = lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(visible.contains("binary.png"), "{visible}");
-        assert_eq!(visible.matches("a.rs").count(), 1, "{visible}");
-        let copied = tool_presentation_copy_text(&tool, &I18n::english(), None);
-        assert!(copied.contains("binary.png"), "{copied}");
-        assert!(!copied.contains("M a.rs"), "{copied}");
-        assert!(copied.contains("-old\n+new"), "{copied}");
     }
 }

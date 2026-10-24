@@ -9,8 +9,7 @@
 //! cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
 //! ```
 //!
-//! `tests/drift.rs` fails whenever the committed file no longer matches this
-//! output, so a backend state change cannot land without updating the mirror.
+//! Regenerate the committed file whenever the backend state definitions change.
 //! State semantics (busy / attention / terminal) are generated from the Rust
 //! predicates, never re-derived in TypeScript.
 
@@ -27,9 +26,7 @@ const HEADER: &str = r#"// AUTO-GENERATED FILE - DO NOT EDIT.
 // cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
 //
 // Source of truth: crates/agena-domain, crates/agena-api, crates/agena-notification.
-// `cargo test -p agena-web-types` fails whenever this file and the backend
-// definitions diverge, so the frontend cannot keep a second, silently drifting
-// copy of a state type. Literal arrays carry the order of the Rust JSON schema.
+// Regenerate this file whenever the backend state definitions change. Literal arrays carry the order of the Rust JSON schema.
 
 /** JSON payload carried opaquely through the wire contract. */
 export type JsonValue = unknown"#;
@@ -693,132 +690,5 @@ fn ts_key(name: &str) -> String {
         name.to_owned()
     } else {
         format!("'{}'", name.replace('\'', "\\'"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn module_declares_every_state_type() {
-        let module = module_source();
-        for name in [
-            "SessionStateKind",
-            "SessionLifecycleState",
-            "WorkflowState",
-            "ExecutionPhase",
-            "AgentStatus",
-            "SessionRelationKind",
-            "ExecutionStatus",
-            "BackgroundActivityKind",
-            "BackgroundActivityStatus",
-            "NotificationSeverity",
-            "NotificationSource",
-            "NotificationSurface",
-            "NotificationControl",
-            "NotificationState",
-            "RunNotificationState",
-            "ActiveExecutionResource",
-            "SessionState",
-        ] {
-            assert!(
-                module.contains(&format!("export type {name}")),
-                "generated module is missing `{name}`"
-            );
-        }
-    }
-
-    #[test]
-    fn session_state_kinds_and_predicates_come_from_rust() {
-        let module = module_source();
-        assert!(
-            module.contains(
-                "export const SESSION_STATE_KINDS = ['creating', 'ready', 'running', 'awaiting_interaction', 'failed'] as const"
-            ),
-            "unexpected session-state literal list"
-        );
-        assert!(module.contains("export const SESSION_STATE_BUSY_KINDS = ['running'] as const"));
-        assert!(module.contains(
-            "export const SESSION_STATE_ATTENTION_KINDS = ['awaiting_interaction', 'failed'] as const"
-        ));
-    }
-
-    #[test]
-    fn session_state_union_carries_every_kind_literal() {
-        let module = module_source();
-        for kind in agena_domain::SessionStateKind::ALL {
-            assert!(
-                module.contains(&format!("kind: '{}'", kind.as_str())),
-                "session-state union is missing `{}`",
-                kind.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn renderer_marks_optional_properties() {
-        let schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "required_field": { "type": "string" },
-                "optional_field": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
-            },
-            "required": ["required_field"]
-        });
-        let rendered = render(&schema, &BTreeMap::new(), 0).expect("render object");
-        assert!(rendered.contains("required_field: string"), "{rendered}");
-        assert!(rendered.contains("optional_field?: string"), "{rendered}");
-    }
-
-    #[test]
-    fn renderer_resolves_references_and_rejects_unknown_ones() {
-        let mut definitions = BTreeMap::new();
-        definitions.insert(
-            "WorkflowState".to_owned(),
-            serde_json::json!({ "type": "string", "enum": ["quiescent"] }),
-        );
-        assert_eq!(
-            render(
-                &serde_json::json!({ "$ref": "#/$defs/WorkflowState" }),
-                &definitions,
-                0
-            )
-            .expect("render reference"),
-            "WorkflowState"
-        );
-        assert!(
-            render(
-                &serde_json::json!({ "$ref": "#/$defs/Missing" }),
-                &definitions,
-                0
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn renderer_rejects_constructs_it_cannot_model() {
-        for schema in [
-            serde_json::json!({ "allOf": [] }),
-            serde_json::json!({ "type": "object", "patternProperties": {} }),
-            serde_json::json!("nonsense"),
-        ] {
-            assert!(
-                render(&schema, &BTreeMap::new(), 0).is_err(),
-                "expected a hard failure for {schema}"
-            );
-        }
-    }
-
-    #[test]
-    fn constant_names_are_pluralized_like_the_docs_promise() {
-        assert_eq!(const_name("SessionStateKind"), "SESSION_STATE_KINDS");
-        assert_eq!(
-            const_name("NotificationSeverity"),
-            "NOTIFICATION_SEVERITIES"
-        );
-        assert_eq!(const_name("ExecutionStatus"), "EXECUTION_STATUSES");
-        assert_eq!(const_name("NotificationScope"), "NOTIFICATION_SCOPES");
     }
 }

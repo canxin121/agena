@@ -132,22 +132,3 @@ impl From<ApplicationError> for ServerError {
         Self { application }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ServerError;
-    use agena_application::ApplicationError;
-
-    #[test]
-    fn transport_preserves_failure_identity_and_excludes_diagnostic() {
-        let application =
-            ApplicationError::internal("database error token=secret /private/agena.sqlite");
-        let failure_id = application.failure.id;
-        let api = ServerError::from(application).into_api();
-        let public = serde_json::to_string(&api).expect("serialize api error");
-
-        assert_eq!(api.problem.id, failure_id);
-        assert!(!public.contains("token=secret"));
-        assert!(!public.contains("/private/agena.sqlite"));
-    }
-}

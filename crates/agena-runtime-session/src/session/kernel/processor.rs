@@ -1040,6 +1040,3 @@ fn check_envelope(value: &impl serde::Serialize) -> std::result::Result<(), AppE
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

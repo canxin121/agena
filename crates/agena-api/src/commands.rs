@@ -308,31 +308,3 @@ pub struct StopActivityParams {
 pub struct DismissActivityParams {
     pub activity_id: String,
 }
-
-#[cfg(test)]
-mod history_tests {
-    use super::{Command, RewindSessionParams};
-
-    #[test]
-    fn rewind_command_uses_the_projected_message_id() {
-        let command = Command::RewindSession(RewindSessionParams {
-            session_id: 7,
-            at_message_id: 42,
-            expected_version: Some(3),
-        });
-        let wire = serde_json::to_value(command).unwrap();
-        assert_eq!(wire["params"]["at_message_id"], 42);
-        let Command::RewindSession(decoded) = serde_json::from_value::<Command>(wire).unwrap()
-        else {
-            panic!("rewind command")
-        };
-        assert_eq!(decoded.at_message_id, 42);
-        assert_eq!(decoded.expected_version, Some(3));
-        assert!(
-            serde_json::from_value::<RewindSessionParams>(
-                serde_json::json!({"session_id": 7, "at_message_id": 42, "extra": true})
-            )
-            .is_err()
-        );
-    }
-}

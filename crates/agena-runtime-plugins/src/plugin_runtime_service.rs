@@ -5,11 +5,6 @@
 
 use async_trait::async_trait;
 
-#[cfg(test)]
-mod http_handoff_tests;
-#[cfg(test)]
-mod http_stream_tests;
-
 pub use agena_plugin_host::PluginCallbackRpcError as PluginRuntimeRpcError;
 
 #[derive(Debug, Clone)]

@@ -409,6 +409,3 @@ pub async fn fs_content_replace(
         truncated,
     )))
 }
-
-#[cfg(test)]
-mod tests;

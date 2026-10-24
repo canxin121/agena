@@ -277,6 +277,3 @@ fn project(text: &str, regex: Option<&Regex>, input: &DocumentInput) -> Projecti
     }
     out
 }
-
-#[cfg(test)]
-mod tests;

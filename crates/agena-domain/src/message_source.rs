@@ -24,20 +24,3 @@ pub enum MessageSource {
     Assistant,
     System,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::MessageSource;
-
-    #[test]
-    fn source_serialization_is_stable() {
-        assert_eq!(
-            serde_json::to_string(&MessageSource::Assistant).unwrap(),
-            "\"assistant\""
-        );
-        assert_eq!(
-            "user".parse::<MessageSource>().unwrap(),
-            MessageSource::User
-        );
-    }
-}

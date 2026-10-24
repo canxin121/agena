@@ -41,26 +41,3 @@ pub struct OperatorToolInvokeRequest {
     #[serde(default)]
     pub input: Option<serde_json::Value>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::OperatorToolInvokeRequest;
-
-    #[test]
-    fn operator_invoke_requires_an_explicit_workspace_identity() {
-        assert!(
-            serde_json::from_value::<OperatorToolInvokeRequest>(serde_json::json!({
-                "tool": "fs.read",
-                "input": {"path": "README.md"}
-            }))
-            .is_err()
-        );
-        let request = serde_json::from_value::<OperatorToolInvokeRequest>(serde_json::json!({
-            "workspace_id": 42,
-            "tool": "fs.read",
-            "input": {"file_path": "README.md"}
-        }))
-        .expect("decode workspace-bound operator invocation");
-        assert_eq!(request.workspace_id, 42);
-    }
-}

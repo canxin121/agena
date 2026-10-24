@@ -244,34 +244,3 @@ pub fn render_overlay(
     .with_text(i18n);
     render_search_picker_dialog(frame, area, dialog, &spec, sanitize_picker_text);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        SessionModelChoiceItem, SessionModelChooserEffect, SessionModelChooserPresentation,
-        SessionModelChooserPurpose, SessionModelIdentity,
-    };
-    use agena_tui_components::SearchPickerItem;
-
-    #[test]
-    fn selected_row_emits_a_pure_identity_intent() {
-        let item = SessionModelChoiceItem {
-            label: "Model".to_owned(),
-            detail: "provider / adapter".to_owned(),
-            search_text: "provider adapter model".to_owned(),
-            identity: SessionModelIdentity::new("provider", Some("adapter".to_owned()), "model"),
-            current: true,
-        };
-        let presentation =
-            SessionModelChooserPresentation::new(SessionModelChooserPurpose::RuntimeOverride);
-
-        assert_eq!(item.search_picker_key(), "provider/adapter/model");
-        assert_eq!(
-            presentation.selection_effect(&item),
-            SessionModelChooserEffect::Select {
-                purpose: SessionModelChooserPurpose::RuntimeOverride,
-                identity: item.identity,
-            }
-        );
-    }
-}

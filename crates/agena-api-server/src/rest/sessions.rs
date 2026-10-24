@@ -310,22 +310,10 @@ pub async fn stream_session_changes(
     AxumQuery(query): AxumQuery<SessionChangeStreamQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let locale = query.locale.clone();
-    // Subscribe before reading the snapshot so mutations committed during the
-    // read remain queued. The snapshot is current state, not replay.
-    #[cfg(test)]
-    let mut subscription = crate::live::subscribe_with_capacity(
-        &state,
-        agena_api::Scope::Session { session_id },
-        query.test_queue_capacity.unwrap_or(256),
-    )?;
-    #[cfg(not(test))]
+
     let mut subscription =
         crate::live::subscribe(&state, agena_api::Scope::Session { session_id })?;
-    #[cfg(test)]
-    if let Some(probe) = query.test_subscription_probe.clone() {
-        super::mark_test_session_stream_subscription(probe.clone());
-        super::wait_test_session_stream_snapshot(&probe, &subscription).await;
-    }
+
     let session_queries = state.application().session_query_service()?;
     let mut initial = crate::live::session_parts(&state, session_id).await?;
     agena_application::part_locale::localize_session_parts(&mut initial, locale.as_deref());

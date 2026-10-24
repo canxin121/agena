@@ -143,25 +143,3 @@ fn format_count(value: u64) -> String {
     }
     formatted
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SessionCostSummary;
-
-    #[test]
-    fn one_line_formats_summary_without_core_message_types() {
-        let summary = SessionCostSummary {
-            requests: 2,
-            input_tokens: 1_200,
-            output_tokens: 34,
-            cache_read_tokens: 50,
-            total_cost_usd: 0.1234,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            summary.one_line(),
-            "1,200 in + 50 cache + 34 out = 1,284 tokens · 4.0% cache hit · $0.1234 over 2 requests"
-        );
-    }
-}

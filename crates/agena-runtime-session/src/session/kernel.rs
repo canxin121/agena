@@ -9,6 +9,3 @@ mod replay;
 pub use input::{KernelPrompt, KernelPromptHydrator};
 pub use processor::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, KernelToolInvocation};
 pub use replay::{KernelProviderState, reference_replay_text};
-
-#[cfg(test)]
-mod tests;

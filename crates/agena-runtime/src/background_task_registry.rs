@@ -16,9 +16,6 @@ use crate::{
 const DEFAULT_TASK_HISTORY_LIMIT: usize = 64;
 pub(crate) const DEFAULT_ACTIVE_TASK_LIMIT: usize = 64;
 
-#[cfg(test)]
-mod tests;
-
 /// Observer hook called when a runtime background task starts or reaches a
 /// terminal state. Lets the runtime surface maintenance tasks through the
 /// unified background-activity registry without coupling the registry to it.

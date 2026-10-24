@@ -176,6 +176,3 @@ pub(super) fn setup() -> Result<()> {
     print_instructions(&bundle);
     open_settings(&bundle)
 }
-
-#[cfg(test)]
-mod tests;

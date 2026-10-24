@@ -12,9 +12,6 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::host_api::HostCallbackContext;
 
-#[cfg(test)]
-mod tests;
-
 /// Caller-selected instance owner: 1–128 ASCII letters, digits, `-`, `_`, or `.`.
 /// This fences lifecycle requests; endpoint authentication is still required.
 pub const INSTANCE_HEADER: &str = "x-agena-plugin-instance";

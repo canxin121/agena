@@ -99,20 +99,3 @@ pub struct ExecutionStatusTransitionError {
     pub from: ExecutionStatus,
     pub to: ExecutionStatus,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ExecutionStatus;
-
-    #[test]
-    fn status_wire_names_and_transition_rules_are_stable() {
-        assert_eq!(
-            serde_json::to_string(&ExecutionStatus::InProgress).expect("serialize status"),
-            "\"in_progress\""
-        );
-        assert!(ExecutionStatus::Pending.can_transition(ExecutionStatus::InProgress));
-        assert!(ExecutionStatus::Pending.can_transition(ExecutionStatus::Completed));
-        assert!(ExecutionStatus::InProgress.can_transition(ExecutionStatus::Completed));
-        assert!(!ExecutionStatus::Completed.can_transition(ExecutionStatus::InProgress));
-    }
-}

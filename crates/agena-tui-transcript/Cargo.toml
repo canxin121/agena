@@ -33,7 +33,3 @@ vt100 = "0.16.2"
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-agena-tui-media = { workspace = true, features = ["test-support"] }
-image = { workspace = true }

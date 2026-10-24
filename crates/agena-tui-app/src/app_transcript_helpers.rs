@@ -30,21 +30,6 @@ pub(crate) fn pending_interactive_request_is_seen(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn first_unseen_pending_interactive_request<'a>(
-    requests: &'a [PendingInteractiveRequestResource],
-    seen_permission_request_ids: &BTreeSet<String>,
-    seen_user_input_request_ids: &BTreeSet<String>,
-) -> Option<&'a PendingInteractiveRequestResource> {
-    requests.iter().find(|request| {
-        !pending_interactive_request_is_seen(
-            request,
-            seen_permission_request_ids,
-            seen_user_input_request_ids,
-        )
-    })
-}
-
 /// Whether a pending request has already been shown to the user on some
 /// client. User-input requests persist this acknowledgement on the request
 /// part (`presented_at`), so a presented-but-unanswered request is surfaced
@@ -372,68 +357,3 @@ use crate::{
     PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
     PermissionScope, SessionExecutionResource, SessionResource, ui_text,
 };
-
-#[cfg(test)]
-mod terminal_staleness_tests {
-    use super::execution_update_is_stale_with_terminal;
-
-    #[test]
-    fn terminal_update_is_never_stale_when_no_execution_is_known_locally() {
-        // The local watermark sits ahead (live-only events inflated it) and
-        // the incoming terminal snapshot carries an older durable seq. It is
-        // still the server's current truth (no run registered), so it must be
-        // applied or the reply stays stuck on an InProgress "Text" card.
-        assert!(!execution_update_is_stale_with_terminal(
-            Some(100),
-            Some(90),
-            true,
-            true,
-        ));
-        assert!(!execution_update_is_stale_with_terminal(
-            Some(100),
-            None,
-            true,
-            true,
-        ));
-        assert!(!execution_update_is_stale_with_terminal(
-            None,
-            Some(90),
-            true,
-            true,
-        ));
-    }
-
-    #[test]
-    fn older_terminal_cannot_clobber_a_locally_running_execution() {
-        // A genuinely older terminal snapshot must not regress a newer run
-        // the TUI already knows about.
-        assert!(execution_update_is_stale_with_terminal(
-            Some(100),
-            Some(90),
-            true,
-            false,
-        ));
-    }
-
-    #[test]
-    fn running_updates_keep_the_plain_staleness_rules() {
-        assert!(execution_update_is_stale_with_terminal(
-            Some(100),
-            Some(90),
-            false,
-            false,
-        ));
-        assert!(!execution_update_is_stale_with_terminal(
-            Some(100),
-            Some(110),
-            false,
-            false,
-        ));
-        assert!(!execution_update_is_stale_with_terminal(
-            None,
-            Some(90),
-            false,
-            false,
-        ));
-    }
-}

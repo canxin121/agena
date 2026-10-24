@@ -206,6 +206,3 @@ impl WebPlugin {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests;

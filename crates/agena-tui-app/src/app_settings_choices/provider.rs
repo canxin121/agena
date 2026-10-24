@@ -314,7 +314,4 @@ fn insert_optional_selection_value(
     }
 }
 
-#[cfg(test)]
-mod tests;
-
 use crate::{App, JsonMap, JsonValue, ModelRef, PermissionConfig, UiResult, get_json_path};

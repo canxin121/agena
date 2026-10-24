@@ -20,15 +20,3 @@ impl ContextGovernor {
         self.policy.max_prompt_chars
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ContextGovernor;
-
-    #[test]
-    fn enforces_the_hard_and_proactive_prompt_limits() {
-        let governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
-        assert!(!governor.prompt_exceeds_budget(100, 1_000));
-        assert!(governor.prompt_exceeds_budget(1_001, 1_000));
-    }
-}

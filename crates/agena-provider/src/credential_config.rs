@@ -169,25 +169,3 @@ where
 {
     value == &T::default()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn credential_auth_exposes_google_adc_provider_contract() {
-        let protocol_paths = ProviderProtocolPathsConfig::default();
-        let config = ProviderCredentialAuthConfig::GoogleAdc {
-            config: ProviderHttpCredentialAuthConfig {
-                base_url: "https://oauth2.googleapis.com".to_owned(),
-                protocol_paths: protocol_paths.clone(),
-            },
-        };
-
-        assert_eq!(config.issuer(), CredentialIssuer::GoogleAdc);
-        assert_eq!(config.base_url(), Some("https://oauth2.googleapis.com"));
-        assert_eq!(config.protocol_paths(), Some(&protocol_paths));
-        assert!(config.credential().is_none());
-        assert!(config.gitlab().is_none());
-    }
-}

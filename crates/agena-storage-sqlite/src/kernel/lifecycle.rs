@@ -121,8 +121,8 @@ async fn configure(
                 "agent identity cannot be removed".into(),
             ));
         }
-        if let Some(agent) = value {
-            if next.relation_kind != SessionRelationKind::Subagent
+        if let Some(agent) = value
+            && (next.relation_kind != SessionRelationKind::Subagent
                 || next.parent_session_id.is_none()
                 || agent.name.is_empty()
                 || agent.name.len() > 64
@@ -131,10 +131,9 @@ async fn configure(
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
                 || matches!(agent.name.as_str(), "parent" | "self")
-                || agent.name.bytes().all(|b| b.is_ascii_digit())
-            {
-                return Err(invalid("invalid agent identity"));
-            }
+                || agent.name.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(invalid("invalid agent identity"));
         }
         if let (Some(old), Some(new)) = (&original.agent, value)
             && (old.name != new.name

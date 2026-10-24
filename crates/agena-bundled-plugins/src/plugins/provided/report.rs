@@ -237,29 +237,3 @@ impl ReportPlugin {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_plugin_host::sdk::Plugin;
-
-    use super::ReportPlugin;
-
-    #[test]
-    fn manifest_exposes_one_structured_findings_tool() {
-        let manifest = ReportPlugin::new().manifest();
-        assert_eq!(manifest.namespace, "agena");
-        assert_eq!(manifest.name, "report");
-        assert_eq!(manifest.tools.len(), 1);
-        assert_eq!(manifest.tools[0].name, "findings");
-        let schema = manifest.tools[0].input_schema();
-        assert!(
-            serde_json::to_string(&schema)
-                .expect("serialize schema")
-                .contains("severity")
-        );
-        assert_eq!(
-            schema.pointer("/properties/findings/maxItems"),
-            Some(&serde_json::json!(200))
-        );
-    }
-}

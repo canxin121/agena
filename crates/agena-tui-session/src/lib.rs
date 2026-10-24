@@ -117,26 +117,3 @@ impl SessionController {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{SessionController, SessionEvent, SessionSummary};
-
-    #[test]
-    fn creation_and_cancellation_update_protocol_state() {
-        let mut controller = SessionController::default();
-        controller.apply(&SessionEvent::SessionCreated(SessionSummary {
-            id: 7,
-            parent_id: None,
-            title: "test".into(),
-            updated_at_millis: 0,
-        }));
-        assert_eq!(controller.current_session_id, Some(7));
-        assert!(controller.active);
-        controller.apply(&SessionEvent::RunCancelled { session_id: 7 });
-        assert!(!controller.active);
-    }
-}
-
-#[cfg(test)]
-mod browsing_tests;

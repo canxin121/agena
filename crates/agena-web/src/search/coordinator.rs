@@ -308,6 +308,3 @@ impl WebSearchCoordinator {
         Ok(response)
     }
 }
-
-#[cfg(test)]
-mod tests;

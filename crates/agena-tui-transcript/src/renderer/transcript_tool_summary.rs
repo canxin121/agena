@@ -273,44 +273,6 @@ pub fn refresh_spinner_line(mut line: Line<'static>, frame: &str) -> Line<'stati
     line
 }
 
-/// Compose a one-line `title · summary` within a display-width budget.
-///
-/// The title has priority and is only truncated when it cannot fit by itself.
-/// A summary is included when at least a useful fragment can fit in the
-/// remaining space. Both fields are already durably bounded by the producer
-/// contract; this final bound only adapts them to the current viewport.
-#[cfg(test)]
-pub(crate) fn bounded_title_summary(title: &str, summary: &str, max_width: usize) -> String {
-    let (title, summary) = bounded_title_summary_parts(title, summary, max_width);
-    if summary.is_empty() {
-        title
-    } else {
-        format!("{title} · {summary}")
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn tool_execution_compact_summary(
-    status: PartExecutionStatusResource,
-    tool: &ToolCallView,
-    width: u16,
-) -> String {
-    const COLLAPSED_PREFIX_WIDTH: usize = 4;
-    const STATUS_WIDTH: usize = 2;
-    let content_width = usize::from(width)
-        .saturating_sub(COLLAPSED_PREFIX_WIDTH)
-        .saturating_sub(STATUS_WIDTH);
-    format!(
-        "{} {}",
-        activity_status_icon(status),
-        bounded_title_summary(
-            super::tool_display_label(tool).as_str(),
-            tool.summary(),
-            content_width,
-        )
-    )
-}
-
 pub(crate) fn bounded_title_summary_parts(
     title: &str,
     summary: &str,

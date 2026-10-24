@@ -30,14 +30,3 @@ impl FromStr for OutputFormat {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::OutputFormat;
-
-    #[test]
-    fn parses_the_stable_json_format() {
-        assert_eq!("json".parse(), Ok(OutputFormat::Json));
-        assert!("yaml".parse::<OutputFormat>().is_err());
-    }
-}

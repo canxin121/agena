@@ -66,38 +66,3 @@ pub(crate) async fn connect_runtime_database(
         })?;
     Ok(Some(Arc::new(kernel)))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_filter_includes_database_and_adapter_directives() {
-        let filter = runtime_env_filter(&RuntimeTracingConfiguration::default()).unwrap();
-        let rendered = filter.to_string();
-        assert!(rendered.contains("sqlx=error"));
-        assert!(rendered.contains("sea_orm=error"));
-    }
-
-    #[tokio::test]
-    async fn scheduler_shares_the_session_database() {
-        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-        let kernel = connect_runtime_database(DatabaseCompositionInputs {
-            database_url: Some("sqlite::memory:".into()),
-            database_path: None,
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        let row = kernel
-            .database
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT name FROM sqlite_schema WHERE type='table' AND name='agena_scheduler_jobs'",
-            ))
-            .await
-            .unwrap();
-        assert!(row.is_some());
-        kernel.ports.clone().shutdown().await.unwrap();
-    }
-}

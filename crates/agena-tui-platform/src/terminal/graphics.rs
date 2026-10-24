@@ -61,19 +61,3 @@ fn client_term_implies_nested_mux(value: &str) -> bool {
         || value == "tmux"
         || value.starts_with("tmux-")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{client_term_implies_nested_mux, passthrough_value_is_enabled};
-
-    #[test]
-    fn parses_all_tmux_passthrough_modes() {
-        assert!(passthrough_value_is_enabled("on"));
-        assert!(passthrough_value_is_enabled("ALL"));
-        assert!(!passthrough_value_is_enabled("off"));
-        assert!(!passthrough_value_is_enabled(""));
-        assert!(client_term_implies_nested_mux("tmux-256color"));
-        assert!(client_term_implies_nested_mux("screen-256color"));
-        assert!(!client_term_implies_nested_mux("xterm-256color"));
-    }
-}

@@ -430,6 +430,3 @@ fn export_resources(
     resources.retain(|source| seen.insert(source.resource_id));
     Ok(resources)
 }
-
-#[cfg(test)]
-mod tests;

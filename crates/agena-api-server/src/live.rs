@@ -92,10 +92,6 @@ impl LiveSubscription {
     pub(crate) async fn recv(&mut self) -> Option<LiveItem> {
         self.rx.recv().await
     }
-    #[cfg(test)]
-    pub(crate) fn has_queued_item(&self) -> bool {
-        !self.rx.is_empty()
-    }
 }
 impl Drop for LiveSubscription {
     fn drop(&mut self) {
@@ -105,14 +101,7 @@ impl Drop for LiveSubscription {
 pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscription, ServerError> {
     subscribe_with_queue_capacity(state, scope, 256)
 }
-#[cfg(test)]
-pub(crate) fn subscribe_with_capacity(
-    state: &AppState,
-    scope: Scope,
-    capacity: usize,
-) -> Result<LiveSubscription, ServerError> {
-    subscribe_with_queue_capacity(state, scope, capacity.max(1))
-}
+
 fn subscribe_with_queue_capacity(
     state: &AppState,
     scope: Scope,

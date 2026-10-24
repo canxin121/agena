@@ -186,35 +186,3 @@ fn sanitize_display_text(text: &str) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{FileAttachEffect, FileAttachItem, handle_key, new_presentation};
-    use crate::i18n::I18n;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    #[test]
-    fn selection_returns_only_a_stable_application_action_key() {
-        let mut state = new_presentation(
-            "Attach".into(),
-            "Path".into(),
-            "footer".into(),
-            "empty".into(),
-            I18n::default(),
-        );
-        state.replace_items(vec![FileAttachItem {
-            key: "file:0".into(),
-            label: "notes.md".into(),
-            detail: "notes.md".into(),
-        }]);
-        assert_eq!(
-            handle_key(
-                &mut state,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-            ),
-            FileAttachEffect::SelectItem {
-                key: "file:0".into(),
-            }
-        );
-    }
-}

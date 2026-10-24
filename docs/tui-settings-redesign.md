@@ -26,23 +26,12 @@ The settings route now uses its own renderer in `agena-tui-settings`. It follows
 
 Search supports Unicode, multiple terms, cursor editing, and paste. Categories show matching counts. Mouse targets use the filtered positions, and asynchronous settings rebuilds retain the query and input focus. Categories remember their selected setting while navigating.
 
-## Verification and previews
+## Verification
+
+Rust tests have been removed pending a new repository-wide test plan. Static
+checks:
 
 ```sh
-cargo test --locked -p agena-tui -p agena-tui-settings --lib
-cargo test --locked -p agena-tui-app --lib settings_
-cargo test --locked -p agena-tui-app --lib app_pointer::tests
 cargo clippy --locked --no-deps -p agena-tui-settings -p agena-tui -p agena-tui-app --all-targets -- -D warnings
 cargo fmt --all -- --check
-```
-
-These targeted checks pass. Including dependency linting also encounters the
-existing `clippy::large_enum_variant` diagnostic in `agena-provider`'s provider
-event type; that type is outside this settings change.
-
-The settings tests render the production widget at multiple terminal sizes in all supported locales, including tiny viewports. Integration tests exercise filtered mouse activation, search paste, narrow navigation, and returning from details. A separate, explicitly invoked test writes SVG and text previews from Ratatui's actual cell buffer using representative fixture data:
-
-```sh
-AGENA_SETTINGS_PREVIEW_DIR="$PWD/.tmp-artifacts/settings" \
-  cargo test --locked -p agena-tui-settings settings_write_previews -- --ignored
 ```

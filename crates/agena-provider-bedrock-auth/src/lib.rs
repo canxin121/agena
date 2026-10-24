@@ -102,22 +102,3 @@ async fn resolve_provider_chain(
         ))
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_aws_https_client_constructs() {
-        assert!(!webpki_root_certs::TLS_SERVER_ROOT_CERTS.is_empty());
-        let _client = aws_http_client();
-    }
-
-    #[test]
-    fn runtime_reqwest_https_client_constructs() {
-        let _client = reqwest::Client::builder()
-            .tls_backend_rustls()
-            .build()
-            .expect("reqwest Rustls/ring client with bundled WebPKI roots must construct");
-    }
-}

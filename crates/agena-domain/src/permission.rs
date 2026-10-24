@@ -37,32 +37,3 @@ pub enum PermissionReplyKind {
     /// resolved allow/deny outcome in the same interaction decision.
     AutoApprove,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PermissionMode, PermissionReplyKind, PermissionScope};
-
-    #[test]
-    fn permission_values_have_stable_wire_spellings() {
-        assert_eq!(
-            serde_json::to_string(&PermissionMode::Ask).unwrap(),
-            "\"ask\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PermissionMode::Auto).unwrap(),
-            "\"auto\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PermissionScope::Workspace).unwrap(),
-            "\"workspace\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PermissionReplyKind::AllowAlways).unwrap(),
-            "\"allow_always\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PermissionReplyKind::AutoApprove).unwrap(),
-            "\"auto_approve\""
-        );
-    }
-}

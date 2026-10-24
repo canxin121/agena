@@ -12,9 +12,6 @@ use serde::{Deserialize, Serialize};
 mod replacement;
 pub use replacement::fs_content_replace;
 
-#[cfg(test)]
-mod tests;
-
 use super::fs_core::{ProjectDirQuery, resolve_project_directory};
 use super::fs_search::{default_respect_gitignore, normalize_relative_search_path};
 use super::{

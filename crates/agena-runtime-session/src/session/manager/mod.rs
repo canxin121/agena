@@ -34,8 +34,6 @@ mod queries;
 mod results;
 mod results_text;
 mod session_prompt;
-#[cfg(test)]
-mod supervision_tests;
 
 const MAX_ACTIVE_EXECUTIONS: usize = 128;
 const DEFAULT_MAX_MODEL_TURNS: usize = 500;

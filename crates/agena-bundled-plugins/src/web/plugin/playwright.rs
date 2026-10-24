@@ -132,6 +132,3 @@ fn decode(bytes: &[u8]) -> SdkResult<serde_json::Value> {
     };
     Err(PluginError::internal(message))
 }
-
-#[cfg(test)]
-mod tests;

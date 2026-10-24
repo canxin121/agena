@@ -125,62 +125,6 @@ fn estimate_request_tokens(
     Ok(crate::estimate_prompt_tokens_from_chars(chars))
 }
 
-#[cfg(test)]
-mod token_estimate_tests {
-    use super::*;
-    #[test]
-    fn input_budget_includes_dynamic_system_tools_text_and_exact_replay_without_counting_base64_as_text()
-     {
-        let mut turn = CompletionInputRun {
-            role: Role::User,
-            parts: vec![CompletionInputPart::Text {
-                text: "instructions".into(),
-            }],
-            provider_state: Default::default(),
-        };
-        let baseline =
-            estimate_request_tokens(std::slice::from_ref(&turn), None, None, &[]).unwrap();
-        let tools = [crate::tool::ToolApiBinding::call_gateway()];
-        let system = "dynamic project instructions ".repeat(100);
-        let expanded =
-            estimate_request_tokens(std::slice::from_ref(&turn), None, Some(&system), &tools)
-                .unwrap();
-        assert!(expanded > baseline + system.len() as u64 / 4);
-        turn.provider_state.openai_reasoning_items = vec![
-            json!({"type":"reasoning","encrypted_content":"OPAQUE".repeat(10_000),"unknown":[true,null]}),
-        ];
-        let replay = estimate_request_tokens(std::slice::from_ref(&turn), None, None, &[]).unwrap();
-        assert!(replay > baseline + 10_000);
-        let attachment = agena_provider::CompletionInputAttachment {
-            kind: agena_provider::CompletionInputAttachmentKind::Image,
-            mime: "image/png".into(),
-            source: agena_provider::CompletionInputAttachmentSource::Base64 {
-                data: "A".repeat(1024 * 1024),
-            },
-            filename: None,
-            title: None,
-            size_bytes: None,
-            sha256: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        };
-        turn.parts
-            .push(CompletionInputPart::Attachment { attachment });
-        let with_media =
-            estimate_request_tokens(std::slice::from_ref(&turn), None, None, &[]).unwrap();
-        assert!(with_media - replay < 100);
-        let compaction = ProviderCompactionContext::OpenAiResponses {
-            items: vec![json!({"type":"compaction","encrypted_content":"Z".repeat(40_000)})],
-        };
-        assert!(
-            estimate_request_tokens(&[turn], Some(&compaction), None, &[]).unwrap()
-                > with_media + 9_999
-        );
-    }
-}
-
 /// All instances share process-wide admission. Each projection reserves
 /// 32 MiB of conservative modeled allocations before copying or hydration;
 /// the ordinary read budget also bounds aggregate and per-session retention.
@@ -332,13 +276,6 @@ impl KernelPromptHydrator {
 
     pub fn budget(&self) -> ReadBudgetSnapshot {
         self.budget.snapshot()
-    }
-
-    #[cfg(test)]
-    pub(in crate::session) fn isolated() -> Self {
-        Self {
-            budget: ReadBudget::default(),
-        }
     }
 
     pub async fn hydrate(

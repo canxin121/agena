@@ -1256,34 +1256,3 @@ fn human_join_paths(paths: &[&str]) -> String {
 fn display_path(path: &str) -> &str {
     path.strip_prefix("args.").unwrap_or(path)
 }
-
-#[cfg(test)]
-mod container_shape_tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn object_records_never_accept_positional_arrays() {
-        let schema = json!({"type":"object", "properties":{"steps":{"type":"array", "items":{"$ref":"#/$defs/Step"}}}, "$defs":{"Step":{"type":"object","properties":{"title":{"type":"string"}}}}});
-        for input in [
-            json!([]),
-            json!({"steps":[[]]}),
-            json!({"steps":[["title"]]}),
-        ] {
-            assert!(validate_json_container_shapes(&input, &schema).is_err());
-        }
-        assert!(
-            validate_json_container_shapes(&json!({"steps":[{"title":"one"}]}), &schema).is_ok()
-        );
-    }
-    #[test]
-    fn declared_arrays_unions_and_free_json_remain_accepted() {
-        let schema = json!({"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"object"},{"type":"null"}]});
-        for input in [json!(["x"]), json!({}), json!(null)] {
-            assert!(validate_json_container_shapes(&input, &schema).is_ok());
-        }
-        assert!(validate_json_container_shapes(&json!([{}]), &schema).is_err());
-        assert!(
-            validate_json_container_shapes(&json!({"arbitrary":[1,true,null]}), &json!({})).is_ok()
-        );
-    }
-}

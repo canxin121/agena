@@ -26,15 +26,11 @@ use crate::rpc::{
 
 const MAX_CALLBACK_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
-#[cfg(test)]
-mod handoff_tests;
 mod host_proxy;
 mod instance;
 pub use instance::{
     EXPECTED_REVISION_HEADER, HTTP_INSTANCE_VERSION, HttpInstanceState, INSTANCE_HEADER,
 };
-#[cfg(test)]
-mod stream_context_tests;
 
 struct HttpDriverState<P: Plugin> {
     factory: Arc<dyn Fn() -> P + Send + Sync>,

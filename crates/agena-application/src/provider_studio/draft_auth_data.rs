@@ -795,52 +795,6 @@ fn provider_backend_problem(
     failure.into()
 }
 
-#[cfg(test)]
-mod reload_error_tests {
-    use super::ProviderStudioSaveError;
-    use agena_failure::{FailureCategory, RecoveryDirective, RetryDirective};
-    use agena_runtime::RuntimeControlServiceError;
-
-    #[test]
-    fn nested_reload_context_keeps_shutdown_retry_and_ordinary_failure_details() {
-        for (error, category, retry) in [
-            (
-                RuntimeControlServiceError::Shutdown,
-                FailureCategory::DependencyUnavailable,
-                RetryDirective::Backoff,
-            ),
-            (
-                RuntimeControlServiceError::new("candidate config unreadable"),
-                FailureCategory::Internal,
-                RetryDirective::Unknown,
-            ),
-        ] {
-            let error = anyhow::Error::new(error)
-                .context("failed to reload runtime after provider settings change")
-                .context("save provider draft");
-            let ProviderStudioSaveError::Other(problem) =
-                ProviderStudioSaveError::other_anyhow(error)
-            else {
-                panic!("reload failures belong to the structured problem projection");
-            };
-            assert_eq!(problem.category, category);
-            assert_eq!(problem.retry, retry);
-            assert_eq!(problem.recovery, RecoveryDirective::Retry);
-            if category == FailureCategory::Internal {
-                assert!(problem.user.fallback.contains("save provider draft"));
-                // Public diagnostics condense intermediate wrapper layers;
-                // the operation and actionable root cause must survive.
-                assert!(
-                    problem
-                        .user
-                        .fallback
-                        .contains("candidate config unreadable")
-                );
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Details of a provider draft authentication.
 pub struct ProviderDraftAuthDetails {

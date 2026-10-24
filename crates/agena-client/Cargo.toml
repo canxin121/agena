@@ -24,8 +24,5 @@ tokio-util = { workspace = true, features = ["codec", "io"] }
 url = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
-axum = { workspace = true }
-
 [lints]
 workspace = true

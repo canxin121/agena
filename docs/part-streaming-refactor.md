@@ -370,7 +370,7 @@ bun audit
 | SQLite 组合 | `agena_storage_sqlite::session_store(database, max_cached_sessions)` | SQLite 引擎、内容后端与 facade 的组合 |
 | 基础设施扩展 | `agena_storage::backend::PersistenceEngine` 与包装工厂 | 具体引擎不能作为业务 SessionStore 的替代实现 |
 
-内存与 SQLite 的选择发生在基础设施组装处。业务读取/写入不判断某个 Part 在内存还是数据库，也不自行更新缓存或发送“已保存”的通知。`session_store_with_contents` 允许基础设施注入内容后端，仍会完整包装相同的 Part 存储边界。底层内存引擎与时钟注入仅通过明确的 `test-support` 特性供后端一致性 fixture 使用。
+内存与 SQLite 的选择发生在基础设施组装处。业务读取/写入不判断某个 Part 在内存还是数据库，也不自行更新缓存或发送“已保存”的通知。`session_store_with_contents` 允许基础设施注入内容后端，仍会完整包装相同的 Part 存储边界。底层内存引擎与时钟注入属于测试专用能力；Rust 测试已移除，相关入口不再暴露。
 
 ### 14.2 命令、事务与提交回执
 
@@ -384,7 +384,7 @@ revision 检查用于本轮迁移的显式更新命令；不将原有单项 faca
 
 ### 14.3 Session 投影与模型读取
 
-`Session.parts` 为私有字段，生产构建没有 `part_mut` 或任意 `Vec<Part>` 安装入口。`Session` 不再支持反序列化，避免通过 JSON 注入未经存储确认的内部行。fixture 注入单独受 `test-support` 限制。
+`Session.parts` 为私有字段，生产构建没有 `part_mut` 或任意 `Vec<Part>` 安装入口。`Session` 不再支持反序列化，避免通过 JSON 注入未经存储确认的内部行。
 
 `PartSnapshot` 的字段与构造器不公开，也不支持反序列化。只有 sealed facade 能签发它。`Session::apply_part_snapshot` 统一校验会话身份、合并行版本、保持顺序并重建派生索引；bounded 快照不会因缺少其他行而清空已加载数据，过期行不能覆盖更新 revision。只有足够新的完整快照可以替换成员集合。命令回执是 bounded 补充，不将一次命令误当成完整历史；它也不承诺回执 metadata 和所有行拥有额外的跨查询事务隔离。
 

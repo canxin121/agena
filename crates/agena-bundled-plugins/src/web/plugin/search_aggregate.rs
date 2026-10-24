@@ -366,6 +366,3 @@ impl HtmlSearchOutput {
         lines.join("\n")
     }
 }
-
-#[cfg(test)]
-mod tests;

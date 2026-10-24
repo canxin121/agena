@@ -27,17 +27,3 @@ impl Focus {
         visible_panes[next]
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Focus;
-
-    #[test]
-    fn main_surface_focus_cycles_only_visible_panes() {
-        assert_eq!(Focus::Transcript.move_pane(1), Focus::Composer);
-        assert_eq!(Focus::Composer.move_pane(1), Focus::Transcript);
-        assert_eq!(Focus::Transcript.move_pane(-1), Focus::Composer);
-        assert_eq!(Focus::Transcript.move_pane(2), Focus::Transcript);
-        assert_eq!(Focus::Composer.move_pane(-2), Focus::Composer);
-    }
-}

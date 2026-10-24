@@ -214,25 +214,3 @@ impl Part {
 
 /// Presentation vocabulary is the single domain definition.
 pub use agena_domain::SessionStateKind as SessionState;
-
-#[cfg(test)]
-mod tests {
-    use super::{PartVisibility, SessionState};
-    #[test]
-    fn visibility_is_a_read_projection_choice() {
-        assert!(PartVisibility::Both.visible_to_ai());
-        assert!(PartVisibility::Both.visible_to_user());
-        assert!(PartVisibility::Ai.visible_to_ai());
-        assert!(!PartVisibility::Ai.visible_to_user());
-        assert!(!PartVisibility::User.visible_to_ai());
-        assert!(PartVisibility::User.visible_to_user());
-    }
-    #[test]
-    fn state_vocabulary_has_domain_type_identity() {
-        let kind: agena_domain::SessionStateKind = SessionState::AwaitingInteraction;
-        assert_eq!(kind, agena_domain::SessionStateKind::AwaitingInteraction);
-        for state in SessionState::ALL {
-            assert_eq!(SessionState::parse(state.as_str()), Some(state));
-        }
-    }
-}

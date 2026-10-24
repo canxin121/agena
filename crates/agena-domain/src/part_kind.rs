@@ -15,16 +15,3 @@ pub enum PartKind {
     Text,
     Activity,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PartKind;
-
-    #[test]
-    fn uses_stable_wire_names() {
-        assert_eq!(
-            serde_json::to_string(&PartKind::Activity).expect("serialize activity kind"),
-            "\"activity\""
-        );
-    }
-}

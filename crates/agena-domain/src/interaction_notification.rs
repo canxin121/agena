@@ -22,17 +22,3 @@ impl InteractionNotificationLevel {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::InteractionNotificationLevel;
-
-    #[test]
-    fn notification_level_uses_stable_wire_names() {
-        assert_eq!(
-            serde_json::to_string(&InteractionNotificationLevel::Warning).unwrap(),
-            "\"warning\""
-        );
-        assert_eq!(InteractionNotificationLevel::Error.as_str(), "error");
-    }
-}

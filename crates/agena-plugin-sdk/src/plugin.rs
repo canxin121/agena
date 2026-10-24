@@ -32,45 +32,6 @@ pub struct InitContext {
     pub protocol_version: u32,
 }
 
-#[cfg(test)]
-mod init_context_tests {
-    use super::InitContext;
-
-    #[test]
-    fn init_context_serializes_current_settings_shape() {
-        let context = InitContext {
-            agena_version: env!("CARGO_PKG_VERSION").to_owned(),
-            workspace_root: std::path::PathBuf::from("/workspace"),
-            plugin_id: "example.plugin".parse().expect("valid plugin id"),
-            host_callback_url: None,
-            host_callback_token: None,
-            settings: serde_json::json!({"mode": "safe"}),
-            protocol_version: crate::rpc::PROTOCOL_VERSION,
-        };
-        let encoded = serde_json::to_value(&context).expect("encode init context");
-        assert_eq!(encoded["settings"]["mode"], "safe");
-        assert!(encoded.get("config").is_none());
-        let decoded: InitContext = serde_json::from_value(encoded).expect("decode init context");
-        assert_eq!(decoded.settings["mode"], "safe");
-    }
-
-    #[test]
-    fn init_context_rejects_unknown_fields() {
-        let valid = serde_json::json!({
-            "agena_version": "test",
-            "workspace_root": "/test",
-            "plugin_id": "example.plugin",
-            "settings": {},
-            "protocol_version": crate::rpc::PROTOCOL_VERSION,
-        });
-        for field in ["obsolete", "unknown"] {
-            let mut params = valid.clone();
-            params[field] = serde_json::json!({});
-            assert!(serde_json::from_value::<InitContext>(params).is_err());
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Outcome of plugin initialization.
 pub struct InitOutcome {

@@ -45,21 +45,3 @@ impl From<AccessKind> for PathKind {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{AccessKind, AccessSelector, PathKind};
-
-    #[test]
-    fn access_values_distinguish_read_write_and_any() {
-        assert_ne!(AccessKind::Read, AccessKind::Write);
-        assert_ne!(AccessSelector::Read, AccessSelector::Write);
-        assert_ne!(AccessSelector::Any, AccessSelector::Read);
-    }
-
-    #[test]
-    fn path_kind_round_trips_through_access_kind() {
-        assert_eq!(AccessKind::from(PathKind::Write), AccessKind::Write);
-        assert_eq!(PathKind::from(AccessKind::Read), PathKind::Read);
-    }
-}

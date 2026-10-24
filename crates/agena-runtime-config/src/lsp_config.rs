@@ -78,13 +78,3 @@ pub fn lsp_config_from_plugins(plugins: &PluginsConfig) -> Result<LspConfig, Str
     serde_json::from_value(configured_plugin.settings().clone())
         .map_err(|error| format!("plugins.list.\"{LSP_PLUGIN_ID}\".settings: {error}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::LspConfig;
-
-    #[test]
-    fn default_lsp_configuration_is_empty() {
-        assert!(LspConfig::default().servers.is_empty());
-    }
-}

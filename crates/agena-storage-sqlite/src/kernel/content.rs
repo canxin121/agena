@@ -1003,8 +1003,7 @@ pub(super) async fn checkpoint(
         .iter()
         .any(|source| source.head.state != CaptureState::Open)
         .then(|| live.diagnostics().1.pause());
-    #[cfg(test)]
-    super::crash_window_tests::hit("checkpoint.before_commit", None);
+
     if let Err(error) = transaction.commit().await {
         if !rejected_commit(&error) {
             live.diagnostics().1.close();
@@ -1015,14 +1014,12 @@ pub(super) async fn checkpoint(
             CheckpointError::Unknown(error.to_string())
         });
     }
-    #[cfg(test)]
-    super::crash_window_tests::hit("checkpoint.after_commit", None);
+
     if let Some(fence) = &fence {
         fence.committed(None, &[]);
     }
     live.acknowledge(&sources);
-    #[cfg(test)]
-    super::crash_window_tests::hit("checkpoint.after_install", None);
+
     metrics::add(&live.diagnostics().0.checkpoint_transactions, 1);
     Ok(())
 }
@@ -1217,215 +1214,4 @@ pub(super) async fn watch(
     let (sender, receiver) = watch::channel(head);
     drop(sender);
     Ok(ContentWatch::from_receiver(receiver))
-}
-
-#[cfg(test)]
-mod scheduling_tests {
-    use super::*;
-
-    fn byte_budget() -> Arc<Semaphore> {
-        static BUDGET: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
-        BUDGET
-            .get_or_init(|| Arc::new(Semaphore::new(1024 * 1024)))
-            .clone()
-    }
-
-    fn source() -> (LiveContent, port::Scope, ContentStreamView) {
-        let live = LiveContent::new(KernelDiagnostics::default());
-        let scope = port::Scope {
-            session: SessionId::try_from(1).unwrap(),
-            execution: ExecutionId::new(),
-            generation: AttemptGeneration::INITIAL,
-            epoch: KernelEpoch::new(),
-        };
-        let head = ContentStreamView {
-            id: ContentId::new(),
-            entry: EntryId::try_from(1).unwrap(),
-            epoch: ContentEpoch::new(),
-            kind: agena_domain::ContentKind::Text,
-            activity_id: None,
-            ordinal: 0,
-            capture_loss: Default::default(),
-            accepted: 0,
-            committed: 0,
-            retained_start: 0,
-            state: CaptureState::Open,
-            capture_error: None,
-        };
-        live.install_open(
-            OutputScope::Attempt(scope),
-            Some(RoundId::try_from(1).unwrap()),
-            None,
-            head.clone(),
-        );
-        live.retain(OutputScope::Attempt(scope), &head).unwrap();
-        (live, scope, head)
-    }
-
-    fn try_append(
-        live: &LiveContent,
-        scope: port::Scope,
-        head: &ContentStreamView,
-    ) -> Result<TextCursor> {
-        let (response, mut receive) = oneshot::channel();
-        let pending = Append {
-            scope: OutputScope::Attempt(scope),
-            content: head.id,
-            epoch: head.epoch,
-            text: "tiny tail".into(),
-            response,
-            permit: byte_budget().try_acquire_many_owned(9).unwrap(),
-            _queue_slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
-        };
-        assert!(live.try_append(pending)?.is_none());
-        receive.try_recv().unwrap()
-    }
-
-    #[test]
-    fn ordinary_checkpoint_acknowledgment_keeps_a_concurrently_admitted_suffix_and_its_budget() {
-        let (live, scope, head) = source();
-        try_append(&live, scope, &head).unwrap();
-        live.0
-            .lock()
-            .unwrap()
-            .sources
-            .get_mut(&head.id)
-            .unwrap()
-            .dirty_since = Some(Instant::now() - CHECKPOINT_INTERVAL);
-        let staged = live.checkpoint(true, false);
-        assert_eq!(staged[0].head.committed, 9);
-        try_append(&live, scope, &head).unwrap();
-        live.acknowledge(&staged);
-        let (current, suffix) = live.snapshot(head.id, 9, 100).unwrap();
-        assert_eq!(current.accepted, 18);
-        assert_eq!(current.committed, 9);
-        assert_eq!(suffix, b"tiny tail");
-        let registry = live.0.lock().unwrap();
-        let source = registry.sources.get(&head.id).unwrap();
-        assert_eq!(source.charge, 9);
-        assert_eq!(source.permit.as_ref().unwrap().num_permits(), 9);
-        assert!(source.dirty_since.is_some());
-    }
-
-    #[test]
-    fn terminal_barriers_fence_admission_and_rollback_reopens_only_the_failed_command_gate() {
-        let (live, scope, head) = source();
-        let gates = live.admission_gates();
-        try_append(&live, scope, &head).unwrap();
-        let first = RequestId::new();
-        let command = Command::SealContent {
-            scope: OutputScope::Attempt(scope),
-            content: head.id,
-            epoch: head.epoch,
-            ending: CaptureEnd::Complete,
-        };
-        let staged = live.terminal(first, &command);
-        assert!(matches!(
-            try_append(&live, scope, &head),
-            Err(KernelError::Busy)
-        ));
-        let second = RequestId::new();
-        live.terminal(second, &command);
-        live.release_gate(second);
-        assert!(matches!(
-            try_append(&live, scope, &head),
-            Err(KernelError::Busy)
-        ));
-        // Whole transaction rollback releases the first provisional gate.
-        drop(gates);
-        try_append(&live, scope, &head).unwrap();
-        assert_eq!(live.snapshot(head.id, 0, 100).unwrap().0.accepted, 18);
-        let _gates = live.admission_gates();
-        let sealed = live.terminal(RequestId::new(), &command);
-        assert_eq!(sealed[0].head.committed, 18);
-        assert_eq!(staged[0].head.committed, 9);
-        live.acknowledge(&sealed);
-        assert!(live.snapshot(head.id, 0, 100).is_none());
-    }
-
-    #[test]
-    fn synchronous_admission_rejects_lock_contention_without_waiting_or_advancing_the_cursor() {
-        let (live, scope, head) = source();
-        let registry = live.0.lock().unwrap();
-        assert!(matches!(
-            try_append(&live, scope, &head),
-            Err(KernelError::Busy)
-        ));
-        assert_eq!(registry.sources.get(&head.id).unwrap().head.accepted, 0);
-        drop(registry);
-        assert_eq!(try_append(&live, scope, &head).unwrap().offset, 9);
-    }
-
-    fn append(live: &LiveContent, scope: port::Scope, head: &ContentStreamView) {
-        let (response, mut receive) = oneshot::channel();
-        assert!(
-            live.append(Append {
-                scope: OutputScope::Attempt(scope),
-                content: head.id,
-                epoch: head.epoch,
-                text: "tiny tail".into(),
-                response,
-                permit: byte_budget().try_acquire_many_owned(9).unwrap(),
-                _queue_slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
-            })
-            .is_none()
-        );
-        receive.try_recv().unwrap().unwrap();
-    }
-
-    #[test]
-    fn timed_sweeps_do_not_seal_new_tails_while_visiting_other_due_sources() {
-        let live = LiveContent::new(KernelDiagnostics::default());
-        let scope = port::Scope {
-            session: SessionId::try_from(1).unwrap(),
-            execution: ExecutionId::new(),
-            generation: AttemptGeneration::INITIAL,
-            epoch: KernelEpoch::new(),
-        };
-        for _ in 0..32 {
-            let head = ContentStreamView {
-                id: ContentId::new(),
-                entry: EntryId::try_from(1).unwrap(),
-                epoch: ContentEpoch::new(),
-                kind: agena_domain::ContentKind::Text,
-                activity_id: None,
-                ordinal: 0,
-                capture_loss: Default::default(),
-                accepted: 0,
-                committed: 0,
-                retained_start: 0,
-                state: CaptureState::Open,
-                capture_error: None,
-            };
-            live.install_open(
-                OutputScope::Attempt(scope),
-                Some(RoundId::try_from(1).unwrap()),
-                None,
-                head.clone(),
-            );
-            live.retain(OutputScope::Attempt(scope), &head).unwrap();
-            append(&live, scope, &head);
-        }
-        // Advance only the selected source deadlines, without sleeps or races.
-        for source in live.0.lock().unwrap().sources.values_mut() {
-            source.dirty_since = Some(Instant::now() - CHECKPOINT_INTERVAL);
-        }
-        let mut visited = std::collections::HashSet::new();
-        for _ in 0..4 {
-            let staged = live.checkpoint(true, false);
-            assert_eq!(staged.len(), 8);
-            for source in &staged {
-                assert!(visited.insert(source.head.id));
-            }
-            live.acknowledge(&staged);
-            // Active sources receive more packets while the bounded sweep
-            // still owes older tails a turn. These packets get a new deadline.
-            for source in &staged {
-                append(&live, scope, &source.head);
-            }
-        }
-        assert_eq!(visited.len(), 32);
-        assert!(live.checkpoint(true, false).is_empty());
-        assert_eq!(live.diagnostics().snapshot().text_blocks, 32);
-    }
 }

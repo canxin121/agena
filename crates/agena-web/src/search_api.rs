@@ -387,6 +387,3 @@ fn parse_response(
     }
     Ok(response)
 }
-
-#[cfg(test)]
-mod tests;

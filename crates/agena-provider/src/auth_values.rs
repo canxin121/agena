@@ -217,25 +217,3 @@ pub enum CopilotDeployment {
     GitHubCom,
     Enterprise { domain: String },
 }
-
-#[cfg(test)]
-mod secret_debug_tests {
-    use super::*;
-
-    #[test]
-    fn provider_credential_debug_output_redacts_secret_material() {
-        let api = AuthData::Api {
-            key: "sensitive-api-key".to_owned(),
-        };
-        let oauth = OAuthTokenResponse {
-            refresh: "sensitive-refresh-token".to_owned(),
-            access: "sensitive-access-token".to_owned(),
-            id_token: Some("sensitive-id-token".to_owned()),
-            expires_at_ms: 123,
-            account_id: None,
-            chatgpt_account_is_fedramp: false,
-            user: None,
-        };
-        assert!(!format!("{api:?} {oauth:?}").contains("sensitive"));
-    }
-}

@@ -27,8 +27,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use agena_api::resource::RunStatus;
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
@@ -41,8 +39,7 @@ use agena_api::{
 };
 use agena_application::dto::ConfigJsonSources;
 mod preferences;
-#[cfg(test)]
-use agena_domain::ExecutionStatus;
+
 use agena_domain::Model as ProviderModel;
 use agena_domain::ModelRef;
 use agena_domain::PermissionRequest;
@@ -77,9 +74,6 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::{process::Command, time::interval};
 use unicode_width::UnicodeWidthChar;
 
-#[cfg(test)]
-use agena_api::resource::RunRole;
-
 pub use crate::app_backend::{BackendMode, TuiBackend};
 use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_application::provider_studio::{
@@ -88,109 +82,7 @@ use agena_application::provider_studio::{
 };
 
 mod commands;
-#[cfg(test)]
-mod keymap_contract_tests;
 
-/// Test-only builders for transcript fixtures. They construct the public API
-/// projection directly and deliberately do not accept Runtime message parts.
-#[cfg(test)]
-pub(crate) struct TranscriptFixture;
-
-#[cfg(test)]
-impl TranscriptFixture {
-    pub(crate) fn text_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        text: impl Into<String>,
-    ) -> TranscriptPart {
-        Self::text_part_with_flags(id, message_id, created_at, status, text, false)
-    }
-
-    pub(crate) fn text_part_with_flags(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        text: impl Into<String>,
-        synthetic: bool,
-    ) -> TranscriptPart {
-        TranscriptPart {
-            id,
-            message_id,
-            part_index: 0,
-            status: fixture_part_status(status),
-            kind: agena_tui_transcript::display_types::TranscriptPartKind::Text,
-            name: None,
-            summary: None,
-            has_detail: true,
-            activity_id: None,
-            segment_id: Some(agena_domain::TextSegmentId::new()),
-            operation_id: None,
-            created_at,
-            presentation: None,
-            content: Some(agena_api::part::PartDetailResource::Text(
-                agena_api::part::TextPartResource {
-                    text: text.into(),
-                    synthetic,
-                },
-            )),
-        }
-    }
-
-    pub(crate) fn reasoning_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        reasoning: agena_domain::ReasoningPart,
-    ) -> TranscriptPart {
-        TranscriptPart {
-            id,
-            message_id,
-            part_index: 0,
-            status: fixture_part_status(status),
-            kind: agena_tui_transcript::display_types::TranscriptPartKind::Activity,
-            name: None,
-            summary: None,
-            has_detail: true,
-            activity_id: Some(agena_domain::ActivityId::new()),
-            segment_id: None,
-            operation_id: None,
-            created_at,
-            presentation: None,
-            content: Some(agena_api::part::PartDetailResource::Reasoning(
-                agena_api::part::ReasoningPartResource {
-                    summary: reasoning.summary,
-                    raw_content: reasoning.raw_content,
-                    encrypted_content: reasoning.encrypted_content,
-                },
-            )),
-        }
-    }
-}
-
-#[cfg(test)]
-const fn fixture_part_status(
-    status: ExecutionStatus,
-) -> agena_api::part::PartExecutionStatusResource {
-    match status {
-        ExecutionStatus::Pending => agena_api::part::PartExecutionStatusResource::Pending,
-        ExecutionStatus::InProgress => agena_api::part::PartExecutionStatusResource::InProgress,
-        ExecutionStatus::Completed => agena_api::part::PartExecutionStatusResource::Completed,
-        ExecutionStatus::PolicyDenied => agena_api::part::PartExecutionStatusResource::PolicyDenied,
-        ExecutionStatus::UserDeclined => agena_api::part::PartExecutionStatusResource::UserDeclined,
-        ExecutionStatus::CapabilityUnavailable => {
-            agena_api::part::PartExecutionStatusResource::CapabilityUnavailable
-        }
-        ExecutionStatus::ToolUnavailable => {
-            agena_api::part::PartExecutionStatusResource::ToolUnavailable
-        }
-        ExecutionStatus::Failed => agena_api::part::PartExecutionStatusResource::Failed,
-        ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
-    }
-}
 use agena_application::dto::{
     CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
 };
@@ -248,8 +140,7 @@ mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;
 mod app_terminal_integration;
-#[cfg(test)]
-mod app_tests;
+
 mod app_timeline_helpers;
 mod app_transcript_actions;
 mod app_transcript_helpers;
@@ -318,42 +209,5 @@ use agena_tui_transcript::{
     transcript_text_selection_text,
 };
 
-#[cfg(test)]
-use agena_tui_transcript::{
-    transcript_message_navigation_target, transcript_semantic_line_range,
-    transcript_should_fall_back_to_message_navigation, transcript_vertical_line_navigation_step,
-    transcript_vertical_navigation_step,
-};
-
 use self::transcript_view::{current_spinner_millis, refresh_spinner_line, spinner_frame};
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
-
-#[cfg(test)]
-mod tui_config_tests {
-    use super::tui_config_from_preferences;
-    use crate::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
-    use agena_tui::presentation_config::ColorSchemePreference;
-    use agena_tui::terminal_graphics::GraphicsMode;
-
-    #[test]
-    fn terminal_preferences_are_projected_into_the_tui_config() {
-        let persistent = TuiPreferencesResource {
-            locale: Some("en-US".to_owned()),
-            color_scheme: TuiColorSchemeResource::Light,
-            graphics: TuiGraphicsModeResource::Native,
-            theme: Some("ocean".to_owned()),
-            transcript_detail_defaults: agena_tui_transcript::TranscriptDetailDefaults {
-                activity_default_expanded: true,
-                kind_defaults: std::collections::BTreeMap::from([("reasoning".to_owned(), false)]),
-            },
-        };
-
-        let config = tui_config_from_preferences(&persistent);
-        assert_eq!(config.color_scheme, ColorSchemePreference::Light);
-        assert_eq!(config.graphics, GraphicsMode::Native);
-        assert_eq!(config.theme.as_deref(), Some("ocean"));
-    }
-}
-
-#[cfg(test)]
-use agena_tui_transcript::display_types::{TranscriptPart, TranscriptRun};

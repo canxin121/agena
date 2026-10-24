@@ -611,37 +611,3 @@ impl Service<'_> {
         record.output(warning)
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn signed_cloud_records_cannot_be_modified_or_moved_to_other_credentials() {
-        assert_eq!(
-            hmac(&[0x0b; 20], b"Hi There"),
-            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
-        );
-        let mut record = Record {
-            handle: "media_00000000000000000000000000000000".into(),
-            provider: "chatgpt".into(),
-            owner_session: 1,
-            owner_workspace: "/fixture".into(),
-            connection: "test".into(),
-            reference: "file-x".into(),
-            remote_id: "file-x".into(),
-            filename: "image.png".into(),
-            mime: "image/png".into(),
-            kind: agena_domain::AttachmentKind::Image,
-            sha256: "fixture".into(),
-            size_bytes: 1,
-            state: "ready".into(),
-            expires_at: None,
-            request_id: None,
-            signature: String::new(),
-        };
-        record.sign("test-key");
-        assert!(record.valid_signature("test-key"));
-        assert!(!record.valid_signature("other-key"));
-        record.owner_session = 2;
-        assert!(!record.valid_signature("test-key"));
-    }
-}

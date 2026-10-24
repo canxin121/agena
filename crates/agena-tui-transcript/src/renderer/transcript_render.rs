@@ -26,5 +26,3 @@ pub fn render_content_document(
 mod request_render;
 
 pub use self::message_render::*;
-#[cfg(test)]
-pub(super) use self::operation_render::render_tool_execution;

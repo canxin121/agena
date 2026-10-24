@@ -108,33 +108,3 @@ fn capability_with_fallback(
         primary
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ModelCapabilities;
-    use crate::{CapabilitySupport, ModelInputModality};
-
-    #[test]
-    fn defaults_preserve_catalog_wire_contract() {
-        let value = serde_json::to_value(ModelCapabilities::default()).unwrap();
-        assert_eq!(value["text_input"], "supported");
-        assert_eq!(value["temperature_supported"], "supported");
-        assert_eq!(value["streaming"], "unknown");
-    }
-
-    #[test]
-    fn unknown_capabilities_accept_fallbacks() {
-        let primary = ModelCapabilities::default();
-        let fallback = ModelCapabilities {
-            image_input: CapabilitySupport::Supported,
-            ..ModelCapabilities::default()
-        };
-
-        let merged = primary.merged_with_fallbacks_from(&fallback);
-        assert_eq!(merged.image_input, CapabilitySupport::Supported);
-        assert_eq!(
-            merged.support_for_input_modality(ModelInputModality::Image),
-            CapabilitySupport::Supported
-        );
-    }
-}

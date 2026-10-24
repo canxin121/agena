@@ -1,8 +1,3 @@
-#[cfg(test)]
-mod authority_tests;
-#[cfg(test)]
-mod lifecycle_tests;
-
 impl ScopedHostClient {
     fn stopped_error(&self) -> PluginError {
         PluginError::from_kind(

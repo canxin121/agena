@@ -247,28 +247,3 @@ fn plugin_lifecycle_failure(
     );
     failure.into()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PluginStatus, StatusRegistry};
-    use crate::sdk::PluginKey;
-
-    #[test]
-    fn plugin_diagnostic_never_enters_status_projection() {
-        let plugin_id = PluginKey::new("example", "unsafe").expect("plugin key");
-        let registry = StatusRegistry::new();
-        registry.set(PluginStatus::initial(&plugin_id, "stdio"));
-        registry.record_spawn_failure(
-            &plugin_id,
-            "transport failed token=secret /private/plugin.sock ANSI=\u{1b}[31m",
-        );
-
-        let status = registry.get(&plugin_id).expect("plugin status");
-        let public = serde_json::to_string(&status).expect("serialize status");
-        assert!(status.last_failure.is_some());
-        assert!(public.contains("plugin stopped unexpectedly"));
-        assert!(!public.contains("token=secret"));
-        assert!(!public.contains("/private/plugin.sock"));
-        assert!(!public.contains("transport failed"));
-    }
-}

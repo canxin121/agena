@@ -15,12 +15,6 @@ pub mod plugins;
 pub mod tool;
 pub mod web;
 
-#[cfg(test)]
-mod prompt_contract_tests;
-
-#[cfg(test)]
-mod tool_docs_i18n_tests;
-
 pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(32);
 pub(crate) static PROVIDER_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =

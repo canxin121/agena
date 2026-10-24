@@ -36,8 +36,3 @@ url = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-agena-bundled-plugins = { workspace = true }
-agena-storage = { workspace = true }
-tempfile = { workspace = true }

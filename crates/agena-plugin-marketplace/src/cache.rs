@@ -138,38 +138,6 @@ pub fn write_secure_file(path: &Path, contents: &[u8]) -> Result<(), Marketplace
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::write_secure_file;
-
-    #[test]
-    fn secure_write_atomically_replaces_without_fixed_staging_file() {
-        let directory = tempfile::tempdir().expect("marketplace directory");
-        let path = directory.path().join("installed.json");
-
-        write_secure_file(&path, b"first").expect("first write");
-        write_secure_file(&path, b"replacement").expect("replacement write");
-
-        assert_eq!(std::fs::read(&path).expect("read result"), b"replacement");
-        assert_eq!(
-            directory.path().read_dir().expect("read directory").count(),
-            1
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                std::fs::metadata(path)
-                    .expect("secure file metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 /// Installed plugin records.

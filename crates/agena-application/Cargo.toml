@@ -37,10 +37,5 @@ tempfile.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
-[dev-dependencies]
-agena-storage-sqlite = { workspace = true }
-sea-orm.workspace = true
-tempfile.workspace = true
-
 [lints]
 workspace = true

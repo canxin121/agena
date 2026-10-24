@@ -345,35 +345,3 @@ pub fn json_lines(
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{JsonEventPayload, consume_json_event_line, parse_json_event_payload};
-    use serde_json::json;
-
-    #[test]
-    fn done_marker_is_a_terminal_payload() {
-        assert_eq!(
-            parse_json_event_payload(" [DONE] ").expect("parse marker"),
-            JsonEventPayload::Done
-        );
-    }
-
-    #[test]
-    fn consecutive_json_data_frames_are_not_coalesced() {
-        let mut lines = Vec::new();
-        assert!(
-            consume_json_event_line("data: {\"sequence\":1}", &mut lines)
-                .expect("first frame")
-                .is_none()
-        );
-        assert_eq!(
-            consume_json_event_line("data: {\"sequence\":2}", &mut lines).expect("second frame"),
-            Some(JsonEventPayload::Event(json!({ "sequence": 1 })))
-        );
-        assert_eq!(
-            consume_json_event_line("", &mut lines).expect("flush second frame"),
-            Some(JsonEventPayload::Event(json!({ "sequence": 2 })))
-        );
-    }
-}

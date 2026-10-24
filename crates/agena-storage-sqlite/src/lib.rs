@@ -41,8 +41,3 @@ pub use transaction::{
     run_transaction_app_effects, run_transaction_effects,
 };
 pub use workspace_repository::SeaWorkspaceRepository;
-
-#[cfg(test)]
-mod concurrency_tests;
-#[cfg(test)]
-mod instance_tests;

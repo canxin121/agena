@@ -59,8 +59,3 @@ url = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-agena-storage-sqlite = { workspace = true }
-async-trait = { workspace = true }
-sea-orm = { workspace = true }

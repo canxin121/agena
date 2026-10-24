@@ -1,6 +1,3 @@
-//! AST rewrite planning only. The host publishes with its file-lock/revision contract.
-#[cfg(test)]
-mod tests;
 use super::*;
 
 #[derive(Debug)]

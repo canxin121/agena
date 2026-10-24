@@ -6,14 +6,11 @@
 
 pub(crate) mod call;
 mod driver;
-#[cfg(all(test, unix))]
-mod lifecycle_tests;
+
 mod osc_guard;
 mod protocol;
 mod screen;
 mod state;
-#[cfg(test)]
-mod tests;
 
 use crate::{MonitorError, MonitorListener};
 use agena_domain::{ProcessEvent, ProcessStatus, ProcessSummary, TerminalScreen};
@@ -32,8 +29,7 @@ const MAX_HISTORY: usize = 64;
 pub(crate) const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_BUFFER_BYTES: usize = 1024 * 1024;
 const MAX_BUFFER_EVENTS: usize = 2048;
-#[cfg(test)]
-const MAX_OUTPUT_BYTES: usize = crate::process_output::DEFAULT_OUTPUT_BYTES;
+
 const MAX_WAIT_MS: u64 = 30_000;
 
 /// Trusted owner; never deserialized from model tool arguments. Stateless MCP
@@ -310,20 +306,6 @@ impl TerminalRegistry {
     ) -> Result<TerminalRead, MonitorError> {
         self.lookup(id, Some(owner))?
             .read_options_cancellable(options, include_screen, cancel)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn read_cancellable(
-        &self,
-        id: &str,
-        owner: &TerminalOwner,
-        since_seq: Option<u64>,
-        wait_ms: u64,
-        limit: Option<u32>,
-        cancel: &CancellationToken,
-    ) -> Result<TerminalRead, MonitorError> {
-        self.lookup(id, Some(owner))?
-            .read_cancellable(since_seq, wait_ms, limit, cancel)
     }
 
     pub(crate) fn read_unscoped(

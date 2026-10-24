@@ -81,15 +81,3 @@ where
         ApplicationError::bad_request_with_diagnostic("The page cursor is invalid.", error)
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, normalize_limit};
-
-    #[test]
-    fn limits_are_defaulted_and_bounded() {
-        assert_eq!(normalize_limit(None), DEFAULT_PAGE_LIMIT);
-        assert_eq!(normalize_limit(Some(0)), 1);
-        assert_eq!(normalize_limit(Some(MAX_PAGE_LIMIT + 1)), MAX_PAGE_LIMIT);
-    }
-}

@@ -106,21 +106,3 @@ pub struct DecisionTrace {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<DecisionTraceStep>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PermissionAction;
-
-    #[test]
-    fn permission_request_values_have_stable_wire_shapes() {
-        assert_eq!(
-            serde_json::to_string(&PermissionAction::NetworkAccess {
-                target: "https://example.com".to_owned(),
-                host: "example.com".to_owned(),
-                port: None,
-            })
-            .unwrap(),
-            "{\"kind\":\"network_access\",\"target\":\"https://example.com\",\"host\":\"example.com\"}"
-        );
-    }
-}

@@ -74,14 +74,5 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"
 [build-dependencies]
 cc = "1.4.3"
 
-[dev-dependencies]
-agena-storage-sqlite = { workspace = true }
-sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
-agena-plugin-sdk = { workspace = true, features = ["http"] }
-tower = { workspace = true }
-# Integration tests spawn the agena binary and reach into the SQLite database
-# to set up lease-staleness scenarios (see tests/server_restart.rs).
-portable-pty = { workspace = true }
-
 [lints]
 workspace = true

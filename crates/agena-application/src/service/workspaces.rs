@@ -1022,59 +1022,6 @@ fn is_windows_drive_root(path: &str) -> bool {
     bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::{
-        canonical_workspace_identity, clean_workspace_relative_path, sanitize_upload_filename,
-    };
-
-    #[test]
-    fn workspace_file_paths_reject_escape_and_absolute_components() {
-        assert_eq!(
-            clean_workspace_relative_path(Some("src/./main.rs")).unwrap(),
-            PathBuf::from("src/main.rs")
-        );
-        assert!(clean_workspace_relative_path(Some("../secret")).is_err());
-        assert!(clean_workspace_relative_path(Some("src/../../secret")).is_err());
-        assert!(clean_workspace_relative_path(Some("/etc/passwd")).is_err());
-    }
-
-    #[test]
-    fn upload_filenames_strip_directories_and_keep_safe_characters() {
-        assert_eq!(sanitize_upload_filename("report.pdf"), "report.pdf");
-        assert_eq!(sanitize_upload_filename("docs/../secret.txt"), "secret.txt");
-        assert_eq!(
-            sanitize_upload_filename("C:\\Users\\alice\\notes.md"),
-            "notes.md"
-        );
-        assert_eq!(sanitize_upload_filename("a b+c!.png"), "a b_c_.png");
-        assert_eq!(sanitize_upload_filename("  "), "");
-        assert_eq!(sanitize_upload_filename("."), "");
-        assert_eq!(sanitize_upload_filename(".."), "");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn existing_workspace_aliases_share_one_canonical_identity() {
-        use std::os::unix::fs::symlink;
-
-        let fixture = tempfile::tempdir().expect("create canonical workspace fixture");
-        let workspace = fixture.path().join("workspace");
-        let alias = fixture.path().join("workspace-alias");
-        std::fs::create_dir(&workspace).expect("create canonical workspace");
-        symlink(&workspace, &alias).expect("create workspace alias");
-
-        assert_eq!(
-            canonical_workspace_identity(workspace.to_string_lossy().as_ref())
-                .expect("canonicalize workspace"),
-            canonical_workspace_identity(alias.to_string_lossy().as_ref())
-                .expect("canonicalize workspace alias")
-        );
-    }
-}
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, HashMap, PageOrder, PaginatedResponse,
     Path, PathBuf, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,

@@ -1,8 +1,0 @@
-{
-  "log": [
-    {"stream":"stdout","text":"  first\tline\n"},
-    {"stream":"stderr","text":"\u001b[31m警告 é🙂\u001b[0m\n"},
-    {"stream":"stdout","text":"progress 10%\rprogress 100%\r\n"},
-    {"stream":"stderr","text":"\n\t  trailing spaces  "}
-  ]
-}

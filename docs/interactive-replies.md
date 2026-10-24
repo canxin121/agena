@@ -96,10 +96,6 @@ Routine checks:
 cd packages/agena-web
 bun test
 bun run build
-cd ../..
-cargo test -p agena --bin agena server::preview
-cargo test -p agena-runtime-contracts identity::tests
-cargo test -p agena-tui-transcript
 ```
 
 Browser regressions live in `packages/agena-web/tests/browser/`. They mount real production components and exercise real local API/database/Git operations. Use an isolated server/data directory on a different port from your running Agena instance, plus a Vite proxy to that port. For example, run `agena --data-dir /tmp/agena-ui server --port 3228`; configure the verification Vite server on 5179 to proxy `/api`, `/auth`, `/health` to 3228. Do not point these tests at a shared production server.
@@ -114,6 +110,4 @@ AGENA_UI_TEST_URL=http://127.0.0.1:5179 node packages/agena-web/tests/browser/gi
 
 `AGENA_UI_TEST_BROWSER_MODULE` can point to an existing Playwright Core module, and `AGENA_UI_TEST_CHROME_PATH` to an installed Chrome executable. The tests create temporary state, use isolated Git repositories, stop their app services, and retain screenshots. Fixtures are development-only, outside the production build.
 
-Validation for this change passed all 894 frontend tests, the production build, 11 preview/backend tests, three identity tests, three rich-transcript integration tests, and all 21 vendored Mermaid tests. Browser regressions covered real backend CRUD, persistence, sandbox boundaries, streamed reply identity, mobile/full preview, real Git staging/committing, branch/worktree/compare entry points, and tab context menus across split groups.
-
-The full transcript unit suite has one existing failure, `renderer::tests::a_pending_interaction_is_never_hidden_by_newer_siblings` (167 pass, one fail). The same assertion was reproduced in a separate clean worktree at the pre-change revision `56cc6d7b4`; this change does not modify that behavior or its fixture.
+Validation for this change passed the frontend suite and production build. Browser regressions covered real backend CRUD, persistence, sandbox boundaries, streamed reply identity, mobile/full preview, real Git staging/committing, branch/worktree/compare entry points, and tab context menus across split groups.

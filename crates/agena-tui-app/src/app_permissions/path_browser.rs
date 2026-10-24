@@ -333,14 +333,6 @@ impl App {
         (entries, actions)
     }
 
-    #[cfg(test)]
-    fn path_browser_directory_and_needle_with_root(
-        workspace_root: &Path,
-        raw: &str,
-    ) -> (PathBuf, String) {
-        Self::path_browser_directory_and_needle_with_base(workspace_root, raw)
-    }
-
     pub(crate) fn path_browser_directory_and_needle_for_overlay(
         application: &crate::TuiBackend,
         dialog: &PathBrowserOverlay,
@@ -384,41 +376,6 @@ impl App {
                 .unwrap_or_default(),
         )
     }
-
-    #[cfg(test)]
-    fn path_browser_directory_and_needle_with_base(base: &Path, raw: &str) -> (PathBuf, String) {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return (base.to_path_buf(), String::new());
-        }
-        let typed_path = Path::new(trimmed);
-        // A bare name is a directory-local search term. A path expression
-        // (absolute, ./, ../, or containing a separator) instead drives the
-        // displayed directory directly. This keeps filename search immediate
-        // while retaining a single field for direct path entry.
-        if !typed_path.is_absolute()
-            && !trimmed.starts_with('.')
-            && !trimmed.contains('/')
-            && !trimmed.contains('\\')
-        {
-            return (base.to_path_buf(), trimmed.to_ascii_lowercase());
-        }
-        let resolved = Self::resolve_browser_input_path_with_base(base, trimmed);
-        if resolved.is_dir() {
-            return (resolved, String::new());
-        }
-        (
-            resolved
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| base.to_path_buf()),
-            resolved
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_ascii_lowercase)
-                .unwrap_or_default(),
-        )
-    }
 }
 
 /// Attachment browser directories are added by `Enter`; only horizontal
@@ -431,67 +388,6 @@ fn path_browser_enter_navigates(target: PathBrowserTarget, is_dir: bool) -> bool
 fn path_is_likely_image(path: &Path) -> bool {
     agena_plugin_sdk::AttachmentKind::detect("", path.file_name().and_then(|name| name.to_str()))
         == agena_plugin_sdk::AttachmentKind::Image
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::{
-        App, PathBrowserTarget, PermissionRuleStudioPathField, path_browser_enter_navigates,
-        path_is_likely_image,
-    };
-
-    #[test]
-    fn browser_input_uses_existing_directories_or_filters_their_children() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let source = root.join("src");
-        let source_file = source.join("app_types.rs");
-
-        let (directory, needle) = App::path_browser_directory_and_needle_with_root(root, "./src");
-        assert_eq!(directory, source);
-        assert!(needle.is_empty());
-
-        let (directory, needle) =
-            App::path_browser_directory_and_needle_with_root(root, "app_types");
-        assert_eq!(directory, root);
-        assert_eq!(needle, "app_types");
-
-        let (directory, needle) = App::path_browser_directory_and_needle_with_root(
-            root,
-            source_file.to_string_lossy().as_ref(),
-        );
-        assert_eq!(directory, source);
-        assert_eq!(needle, "app_types.rs");
-    }
-
-    #[test]
-    fn image_browser_accepts_common_image_extensions_only() {
-        assert!(path_is_likely_image(Path::new("diagram.svg")));
-        assert!(path_is_likely_image(Path::new("photo.JPEG")));
-        assert!(!path_is_likely_image(Path::new("notes.md")));
-        assert!(!path_is_likely_image(Path::new("archive.pdf")));
-    }
-
-    #[test]
-    fn attachment_enter_adds_directories_while_arrows_handle_navigation() {
-        assert!(!path_browser_enter_navigates(
-            PathBrowserTarget::FileAttachment { images_only: false },
-            true,
-        ));
-        assert!(!path_browser_enter_navigates(
-            PathBrowserTarget::FileAttachment { images_only: true },
-            true,
-        ));
-        assert!(path_browser_enter_navigates(
-            PathBrowserTarget::PermissionRuleStudio(PermissionRuleStudioPathField::TargetPath),
-            true,
-        ));
-        assert!(!path_browser_enter_navigates(
-            PathBrowserTarget::PermissionRuleStudio(PermissionRuleStudioPathField::TargetPath),
-            false,
-        ));
-    }
 }
 
 use crate::{

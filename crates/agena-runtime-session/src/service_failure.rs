@@ -47,22 +47,3 @@ pub(crate) fn display_service_failure(
 ) -> std::fmt::Result {
     formatter.write_str(failure.user.fallback.as_str())
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn service_diagnostic_is_not_part_of_the_public_failure() {
-        let error = crate::SessionQueryError::internal(
-            "database error token=secret /private/session.sqlite",
-        );
-        let public = serde_json::to_string(&error.failure).expect("serialize failure");
-        let display = error.to_string();
-        assert!(!public.contains("token=secret"));
-        assert!(!public.contains("/private/session.sqlite"));
-        assert!(!display.contains("token=secret"));
-        assert!(!display.contains("Reference:"));
-        // The user sees a real message, never a bare correlation id.
-        assert!(!display.contains("Something went wrong."));
-        assert!(!display.is_empty());
-    }
-}

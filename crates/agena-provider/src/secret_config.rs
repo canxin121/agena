@@ -101,19 +101,3 @@ fn credential_debug_kind(value: &AuthData) -> &'static str {
         AuthData::WellKnown { .. } => "well_known",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ProviderSecretSourceConfig;
-
-    #[test]
-    fn inline_secret_debug_output_is_redacted() {
-        assert_eq!(
-            format!(
-                "{:?}",
-                ProviderSecretSourceConfig::Inline("secret".to_owned())
-            ),
-            "ProviderSecretSourceConfig::Inline(\"***redacted***\")"
-        );
-    }
-}

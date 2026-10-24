@@ -5,9 +5,7 @@
 // cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts
 //
 // Source of truth: crates/agena-domain, crates/agena-api, crates/agena-notification.
-// `cargo test -p agena-web-types` fails whenever this file and the backend
-// definitions diverge, so the frontend cannot keep a second, silently drifting
-// copy of a state type. Literal arrays carry the order of the Rust JSON schema.
+// Regenerate this file whenever the backend state definitions change. Literal arrays carry the order of the Rust JSON schema.
 
 /** JSON payload carried opaquely through the wire contract. */
 export type JsonValue = unknown

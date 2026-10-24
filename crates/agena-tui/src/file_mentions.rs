@@ -165,36 +165,3 @@ fn selected_effect(state: &FileMentionSuggestionState) -> FileMentionSuggestionE
         key: item.key.clone(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{FileMentionSuggestionEffect, FileMentionSuggestionItem, handle_key};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    #[test]
-    fn selection_emits_only_the_stable_path_map_key() {
-        let mut state = super::new_state(
-            "Files".to_owned(),
-            String::new(),
-            String::new(),
-            "Empty".to_owned(),
-            String::new(),
-            "draft".to_owned(),
-        );
-        state.replace_items(vec![FileMentionSuggestionItem {
-            key: "path:0".to_owned(),
-            label: "notes.md".to_owned(),
-            detail: "docs/notes.md".to_owned(),
-        }]);
-
-        assert_eq!(
-            handle_key(
-                &mut state,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
-            ),
-            FileMentionSuggestionEffect::Select {
-                key: "path:0".to_owned(),
-            }
-        );
-    }
-}

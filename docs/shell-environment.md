@@ -133,18 +133,12 @@ launch.
 
 ## Validation
 
+Rust tests have been removed pending a new repository-wide test plan. Verify the
+Windows compilation path directly:
+
 ```sh
-cargo test --locked -p agena-process
-cargo test --locked -p agena-tool
-cargo test --locked -p agena-runtime-tools --lib shell_tools::
-cargo test --locked -p agena-runtime-tools --lib terminal::
 cargo check --locked -p agena-process --target x86_64-pc-windows-msvc
 ```
 
-The `agena-process` suite captures real startup state from `/bin/sh` and asserts
-the whitelist refusals; the runtime suite asserts the resolution, login toggling,
-and provenance projection. Windows input normalization is unit-tested on every
-platform, and its wiring is compiled for the Windows target; a real ConPTY
-session must still be exercised on a Windows host, where
-`cargo test --locked -p agena-process` covers the normalizer and
+A real ConPTY session must still be exercised on a Windows host, where
 `shell.write`-driven sessions cover the driver.

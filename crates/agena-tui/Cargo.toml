@@ -23,8 +23,5 @@ unicode-width.workspace = true
 url.workspace = true
 tui-markdown = { version = "0.3.8", default-features = false }
 
-[dev-dependencies]
-libc.workspace = true
-
 [lints]
 workspace = true

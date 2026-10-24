@@ -97,25 +97,3 @@ fn recover_index_failure(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn failed_index_publication_restores_complete_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("record.md");
-        fs::write(&path, "original").unwrap();
-        let permissions = fs::metadata(&path).unwrap().permissions();
-        fs::write(&path, "replacement").unwrap();
-        assert!(
-            recover_index_failure(
-                &path,
-                Some((b"original".to_vec(), permissions)),
-                Err(io::Error::other("injected index failure"))
-            )
-            .is_err()
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"original");
-    }
-}

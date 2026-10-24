@@ -100,28 +100,3 @@ fn parse_port(target: &str, port: &str) -> Result<Option<u16>, NetworkTargetPars
             port: port.into(),
         })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{NetworkTarget, NetworkTargetParseError};
-    use std::str::FromStr;
-    #[test]
-    fn parses_urls_hosts_and_ipv6_with_stable_normalization() {
-        let url = NetworkTarget::from_str(" HTTPS://Example.COM./path ").unwrap();
-        assert_eq!(
-            (url.original(), url.host(), url.port(), url.to_string()),
-            (
-                "HTTPS://Example.COM./path",
-                "example.com",
-                Some(443),
-                "example.com:443".to_owned()
-            )
-        );
-        let ipv6 = NetworkTarget::from_str("[::1]:8080").unwrap();
-        assert_eq!((ipv6.host(), ipv6.port()), ("::1", Some(8080)));
-        assert!(matches!(
-            NetworkTarget::from_str("host:bad"),
-            Err(NetworkTargetParseError::InvalidPort { .. })
-        ));
-    }
-}

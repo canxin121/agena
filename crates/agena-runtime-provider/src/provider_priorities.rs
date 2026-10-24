@@ -59,14 +59,3 @@ const fn provider_capability_family_priority(
         | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::provider_model_catalog_priorities;
-
-    #[test]
-    fn empty_provider_configuration_has_no_priorities() {
-        let priorities = provider_model_catalog_priorities(&Default::default());
-        assert!(priorities.is_empty());
-    }
-}

@@ -274,6 +274,3 @@ async fn render(
         ))),
     }
 }
-
-#[cfg(test)]
-mod tests;

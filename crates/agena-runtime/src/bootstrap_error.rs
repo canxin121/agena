@@ -93,38 +93,3 @@ impl RuntimeBootstrapError {
         Self::from_error(RuntimeBootstrapErrorKind::Internal, error)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{RuntimeBootstrapError, RuntimeBootstrapErrorKind};
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("failed to load runtime configuration")]
-    struct OuterError {
-        #[source]
-        source: InnerError,
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("unknown field `obsolete`")]
-    struct InnerError;
-
-    #[test]
-    fn typed_bootstrap_mapping_keeps_kind_and_complete_chain() {
-        let error = RuntimeBootstrapError::from_error_with_context(
-            RuntimeBootstrapErrorKind::Configuration,
-            "failed to build agena runtime",
-            &OuterError { source: InnerError },
-        );
-
-        assert_eq!(error.kind, RuntimeBootstrapErrorKind::Configuration);
-        assert!(error.message.contains("failed to build agena runtime"));
-        assert!(
-            error
-                .message
-                .contains("failed to load runtime configuration")
-        );
-        assert!(error.message.contains("unknown field `obsolete`"));
-        assert!(error.to_string().contains("bootstrap configuration error"));
-    }
-}

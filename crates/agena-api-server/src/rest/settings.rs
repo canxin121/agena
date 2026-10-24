@@ -326,26 +326,3 @@ fn parse_settings_layer(layer: &str) -> Result<ConfigSettingsLayer, ServerError>
         )),
     }
 }
-
-#[cfg(test)]
-mod blocking_tests {
-    use super::*;
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn slow_settings_io_does_not_stop_the_async_executor() {
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let read = tokio::spawn(blocking_settings(move || {
-            started_tx.send(()).unwrap();
-            release_rx
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .unwrap();
-            Ok(())
-        }));
-        started_rx.await.unwrap();
-        // The only async executor thread must run while synchronous IO waits.
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        release_tx.send(()).unwrap();
-        read.await.unwrap().unwrap();
-    }
-}

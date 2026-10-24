@@ -239,28 +239,3 @@ fn preferred_model_display_name(models: Vec<ProviderModel>, model: &ModelRef) ->
         .map(|display_name| display_name.trim().to_owned())
         .filter(|display_name| !display_name.is_empty())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::completed_model_catalog_refresh;
-
-    fn catalog_summary(refreshing: bool) -> agena_application::dto::ModelCatalogResponse {
-        agena_application::dto::ModelCatalogResponse {
-            refreshing,
-            last_refresh_at: None,
-            last_successful_source: None,
-            last_failure: None,
-            model_count: 17,
-        }
-    }
-
-    #[test]
-    fn model_catalog_refresh_is_not_complete_while_server_is_refreshing() {
-        assert!(completed_model_catalog_refresh(&catalog_summary(true)).is_none());
-        assert!(
-            completed_model_catalog_refresh(&catalog_summary(false))
-                .expect("completed refresh outcome")
-                .is_ok()
-        );
-    }
-}

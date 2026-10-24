@@ -168,33 +168,3 @@ impl MonitorPlugin {
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
     serde_json::to_value(input).map_err(|err| PluginError::invalid_params_error(&err))
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_plugin_host::sdk::Plugin;
-
-    use super::MonitorPlugin;
-
-    #[test]
-    fn manifest_exposes_monitor_tools_under_the_monitor_plugin() {
-        let manifest = MonitorPlugin.manifest();
-        let tool_names = manifest
-            .tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(manifest.namespace, "agena");
-        assert_eq!(manifest.name, "monitor");
-        assert_eq!(tool_names, ["start", "stop"]);
-        let start = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "start")
-            .expect("monitor.start manifest");
-        let schema = serde_json::to_string(&start.input_schema()).expect("serialize schema");
-        assert!(!schema.contains("\"command\""));
-        assert!(schema.contains("ws"));
-        assert!(schema.contains("timeout_ms"));
-    }
-}

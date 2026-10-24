@@ -17,9 +17,6 @@ use super::{
     UploadResponse, WriteBody, fs_upload, fs_write,
 };
 
-#[cfg(test)]
-mod tests;
-
 // A decoded byte can occupy six JSON bytes (for example, \u0000). Keep the
 // 50 MiB content contract even for fully escaped input, plus bounded overhead
 // for the path, object syntax, and whitespace. The core handler also checks

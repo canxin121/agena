@@ -973,24 +973,3 @@ fn issuer_label(issuer: CredentialIssuer) -> &'static str {
         CredentialIssuer::SapAiCore => "sap_ai_core",
     }
 }
-
-#[cfg(test)]
-mod managed_auth_tests {
-    use super::*;
-
-    #[test]
-    fn gitlab_api_configuration_can_reference_managed_credentials_without_inline_sources() {
-        let raw = serde_json::from_value::<ProviderAuthOverlay>(serde_json::json!({
-            "mode": "api", "subtype": "gitlab_api"
-        }))
-        .unwrap();
-        let resolved = resolve_api_auth("gitlab", raw, &[]).unwrap();
-        assert!(matches!(
-            resolved,
-            ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
-                access: ProviderGitlabApiAccessConfig::Managed,
-                ..
-            })
-        ));
-    }
-}

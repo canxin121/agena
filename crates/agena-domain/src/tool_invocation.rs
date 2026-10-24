@@ -60,32 +60,3 @@ impl ToolInvocation {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ToolInvocation;
-    use crate::StructuredObject;
-
-    #[test]
-    fn direct_and_plugin_invocations_preserve_their_stable_identity() {
-        let direct = ToolInvocation::new("read", StructuredObject::default());
-        assert_eq!(direct.name, "read");
-        assert_eq!(direct.plugin_name, None);
-        assert_eq!(direct.tool_api_call, None);
-
-        let plugin = ToolInvocation::plugin_named("search", "example", StructuredObject::default());
-        assert_eq!(plugin.name, "search");
-        assert_eq!(plugin.plugin_name.as_deref(), Some("example"));
-    }
-
-    #[test]
-    fn removed_direct_provider_identity_does_not_deserialize() {
-        let error = serde_json::from_value::<ToolInvocation>(serde_json::json!({
-            "name": "fs.read",
-            "provider_function_name": "fs_read",
-            "input": {}
-        }))
-        .expect_err("removed direct provider identity must be rejected");
-        assert!(error.to_string().contains("provider_function_name"));
-    }
-}

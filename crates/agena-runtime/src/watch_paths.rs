@@ -27,23 +27,8 @@ impl WatchPathSet {
         }
     }
 
-    #[cfg(test)]
-    pub fn extend<I>(&mut self, paths: I)
-    where
-        I: IntoIterator<Item = PathBuf>,
-    {
-        for path in paths {
-            self.insert(path);
-        }
-    }
-
     pub fn as_slice(&self) -> &[PathBuf] {
         &self.paths
-    }
-
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.paths.is_empty()
     }
 }
 

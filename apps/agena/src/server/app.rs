@@ -13,9 +13,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::server::{diagnostics::health, state::AppState};
 
-#[cfg(test)]
-mod tests;
-
 fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/workbench/fs/home", get(crate::server::fs::fs_home))

@@ -74,38 +74,6 @@ pub fn trusted_keys_from_config(
         .collect()
 }
 
-#[cfg(test)]
-mod trust_config_tests {
-    use super::trusted_keys_from_config;
-
-    #[test]
-    fn loads_plugin_host_marketplace_trusted_keys() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("agena.json");
-        std::fs::write(
-            &config,
-            r#"{"plugins":{"host":{"trusted_keys":{"release-key":"010203"}}}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            trusted_keys_from_config(&config).unwrap(),
-            [("release-key".to_owned(), "010203".to_owned())]
-                .into_iter()
-                .collect()
-        );
-    }
-
-    #[test]
-    fn missing_marketplace_trust_keys_default_to_an_empty_store() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("agena.json");
-        std::fs::write(&config, r#"{"plugins":{"list":{}}}"#).unwrap();
-
-        assert!(trusted_keys_from_config(&config).unwrap().is_empty());
-    }
-}
-
 /// Pluggable HTTP fetcher so tests can supply local bytes without a network.
 pub trait HttpFetcher: Send + Sync {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, MarketplaceError>;

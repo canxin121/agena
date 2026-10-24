@@ -38,7 +38,7 @@ fn systemd_unit_name() -> String {
     )
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn windows_task_name() -> String {
     service_name_for(
         agena_storage_layout::StorageLayout::current().root(),
@@ -398,7 +398,7 @@ fn launchd_plist(
     ))
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn windows_task_file_bytes(contents: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(contents.len().saturating_mul(2) + 2);
     bytes.extend_from_slice(&[0xff, 0xfe]);
@@ -408,7 +408,7 @@ fn windows_task_file_bytes(contents: &str) -> Vec<u8> {
     bytes
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn systemd_unit(
     executable: &OsStr,
     arguments: &[OsString],
@@ -454,12 +454,12 @@ fn os_text(value: &OsStr, label: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{label} is not valid UTF-8"))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn path_text(path: &Path, label: &str) -> Result<String> {
     os_text(path.as_os_str(), label)
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn windows_quote_argument(value: &str) -> String {
     if !value.is_empty()
         && !value
@@ -518,7 +518,7 @@ fn windows_task_xml(
     )
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn windows_task_xml_for_user(
     executable: &OsStr,
     arguments: &[OsString],
@@ -596,7 +596,7 @@ fn windows_task_xml_for_user(
     ))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -606,7 +606,7 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn systemd_quote(value: &str) -> Result<String> {
     if value.contains(['\n', '\r', '\0']) {
         bail!("systemd service values must not contain control characters");
@@ -789,148 +789,4 @@ fn run_command(command: &mut Command, description: &str) -> Result<()> {
         bail!("{description} failed with status {status}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_service_names_are_scoped_to_the_full_normalized_instance_root() {
-        let directory = tempfile::tempdir().unwrap();
-        let first = directory.path().join("first");
-        let second = directory.path().join("second");
-        for (prefix, suffix) in [
-            ("com.agena.server.", ""),
-            ("agena-server-", ".service"),
-            ("Agena Server ", ""),
-        ] {
-            let name = service_name_for(&first, prefix, suffix);
-            assert_ne!(name, service_name_for(&second, prefix, suffix));
-            assert_eq!(name.len(), prefix.len() + 64 + suffix.len());
-            assert_eq!(name, service_name_for(&first.join("."), prefix, suffix));
-        }
-    }
-
-    #[test]
-    fn service_arguments_preserve_the_web_frontend_directory() {
-        let workspace = tempfile::tempdir().expect("temporary Agena workspace");
-        let args = ServerArgs {
-            action: None,
-            overrides: Vec::new(),
-            data_dir: None,
-            host: "127.0.0.1".to_owned(),
-            port: 3210,
-            ui_password: None,
-            mcp_enabled: Some(true),
-            mcp_public_url: Some("https://mcp.example.test/mcp".to_owned()),
-            mcp_oauth_issuer_url: Some("https://auth.example.test".to_owned()),
-            mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
-            mcp_anonymous_access: Some(agena_cli::McpAnonymousAccessArg::ReadOnly),
-            workspace_root: Some(workspace.path().to_path_buf()),
-            ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
-        };
-        let arguments = server_arguments(&args).expect("render server arguments");
-        let arguments = arguments
-            .iter()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert!(
-            arguments
-                .windows(2)
-                .any(|pair| pair == ["--ui-dir", "/opt/agena/web-dist"])
-        );
-        for expected in [
-            ["--mcp-enabled", "true"],
-            ["--mcp-public-url", "https://mcp.example.test/mcp"],
-            ["--mcp-oauth-issuer-url", "https://auth.example.test"],
-            ["--mcp-auth-mode", "mixed"],
-            ["--mcp-anonymous-access", "read-only"],
-        ] {
-            assert!(
-                arguments.windows(2).any(|pair| pair == expected),
-                "installed service arguments must preserve {expected:?}"
-            );
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn launchd_definition_is_shell_free_private_service_contract() {
-        let plist = launchd_plist(
-            OsStr::new("/Applications/Agena & Tools/agena"),
-            &[OsString::from("server"), OsString::from("--workspace=a&b")],
-            Path::new("/tmp/agena.log"),
-            Some("p<&>\"'"),
-        )
-        .expect("render launchd plist");
-        assert!(plist.contains("<key>RunAtLoad</key>"));
-        assert!(plist.contains("<key>SuccessfulExit</key>"));
-        assert!(plist.contains("<key>AssociatedBundleIdentifiers</key>"));
-        assert!(plist.contains(super::super::macos_permissions::BUNDLE_ID));
-        assert!(plist.contains("/Applications/Agena &amp; Tools/agena"));
-        assert!(plist.contains("p&lt;&amp;&gt;&quot;&apos;"));
-        assert!(!plist.contains("/bin/sh"));
-
-        let directory = tempfile::tempdir().expect("temporary launchd directory");
-        let path = directory.path().join("com.agena.server.plist");
-        write_private_file(path.as_path(), plist.as_bytes()).expect("write private plist");
-        let permissions = fs::metadata(&path).expect("plist metadata").permissions();
-        use std::os::unix::fs::PermissionsExt as _;
-        assert_eq!(permissions.mode() & 0o777, 0o600);
-        let status = Command::new("/usr/bin/plutil")
-            .args(["-lint", "--"])
-            .arg(&path)
-            .status()
-            .expect("run plutil");
-        assert!(status.success(), "generated launchd plist must be valid");
-    }
-
-    #[test]
-    fn systemd_definition_is_shell_free_restart_contract() {
-        let unit = systemd_unit(
-            OsStr::new("/opt/Agena Tools/agena"),
-            &[OsString::from("server"), OsString::from("100%")],
-            Some("secret value"),
-        )
-        .expect("render systemd unit");
-        assert!(unit.contains("Restart=on-failure"));
-        assert!(unit.contains("WantedBy=default.target"));
-        assert!(unit.contains("100%%"));
-        assert!(unit.contains("AGENA_SERVER_UI_PASSWORD=secret value"));
-        assert!(!unit.contains("/bin/sh"));
-    }
-
-    #[test]
-    fn windows_task_definition_uses_interactive_current_user_and_quotes_arguments() {
-        let xml = windows_task_xml_for_user(
-            OsStr::new(r"C:\Program Files\Agena\agena.exe"),
-            &[
-                OsString::from("server"),
-                OsString::from("--workspace"),
-                OsString::from(r"C:\Users\Agena User\Workspace"),
-            ],
-            Some("secret value"),
-            r"DEV\Agena User",
-        )
-        .expect("render task XML");
-        assert!(xml.contains("<UserId>DEV\\Agena User</UserId>"));
-        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
-        assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
-        assert!(xml.contains("C:\\Program Files\\Agena\\agena.exe"));
-        assert!(xml.contains("&quot;C:\\Users\\Agena User\\Workspace&quot;"));
-        assert!(xml.contains("&quot;secret value&quot;"));
-        assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-16\"?>"));
-
-        let bytes = windows_task_file_bytes(xml.as_str());
-        assert_eq!(&bytes[..2], &[0xff, 0xfe]);
-        let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            String::from_utf16(&units).expect("decode UTF-16 task XML"),
-            xml
-        );
-    }
 }

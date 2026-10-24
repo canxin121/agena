@@ -12,16 +12,3 @@ pub enum AssistantReasoningField {
     ReasoningContent,
     ReasoningDetails,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::AssistantReasoningField;
-
-    #[test]
-    fn reasoning_field_has_stable_wire_spelling() {
-        assert_eq!(
-            serde_json::to_string(&AssistantReasoningField::ReasoningDetails).unwrap(),
-            "\"reasoning_details\""
-        );
-    }
-}

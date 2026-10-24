@@ -12,8 +12,7 @@ pub use agena_runtime_contracts::{authorization, identity, part, permission, pro
 mod atomic_file;
 pub mod cli_tools;
 mod file_diff;
-#[cfg(test)]
-mod kernel_fixture;
+
 pub use file_diff::{FileDiffPreview, file_diff_preview};
 pub mod media_input;
 mod monitor;

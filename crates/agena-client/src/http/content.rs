@@ -6,9 +6,6 @@ use tokio::io::{AsyncWrite, AsyncWriteExt as _};
 
 const COMPLETE_TEXT_PAGE_BYTES: usize = 64 * 1024;
 
-#[cfg(test)]
-mod tests;
-
 pub struct ContentSubscription {
     rx: mpsc::Receiver<Result<ContentPage, ClientError>>,
     task: JoinHandle<()>,

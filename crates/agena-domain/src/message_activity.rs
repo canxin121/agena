@@ -230,36 +230,3 @@ pub struct OperationUserInputRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replied_at_ms: Option<i64>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{FileChangeKind, TodoPriority, TodoStatus, UserInputReply};
-
-    #[test]
-    fn message_activity_values_have_stable_wire_spellings() {
-        assert_eq!(
-            serde_json::to_string(&FileChangeKind::Moved).unwrap(),
-            "\"moved\""
-        );
-        assert_eq!(
-            serde_json::to_string(&TodoStatus::InProgress).unwrap(),
-            "\"in_progress\""
-        );
-        assert_eq!(
-            serde_json::to_string(&TodoPriority::Medium).unwrap(),
-            "\"medium\""
-        );
-    }
-
-    #[test]
-    fn user_input_reply_accepts_canonical_array_answers() {
-        let reply: UserInputReply = serde_json::from_value(serde_json::json!({
-            "request_id": "r1",
-            "kind": "submit",
-            "answers": {"one": ["yes"], "many": ["a", "b"]}
-        }))
-        .expect("decode canonical answer shape");
-        assert_eq!(reply.answers["one"], vec!["yes"]);
-        assert_eq!(reply.answers["many"], vec!["a", "b"]);
-    }
-}

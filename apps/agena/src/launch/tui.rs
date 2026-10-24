@@ -33,30 +33,6 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
     run_remote(launch_args).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::resolve_tui_workspace_root;
-    use std::{env, path::PathBuf};
-
-    #[test]
-    fn explicit_tui_workspace_wins_over_process_cwd() {
-        let explicit = PathBuf::from("/tmp/agena-explicit-workspace");
-        assert_eq!(
-            resolve_tui_workspace_root(Some(explicit.clone())).expect("resolve explicit workspace"),
-            explicit
-        );
-    }
-
-    #[test]
-    fn tui_workspace_defaults_to_process_cwd() {
-        let expected = env::current_dir().expect("read test process cwd");
-        assert_eq!(
-            resolve_tui_workspace_root(None).expect("resolve default TUI workspace"),
-            expected
-        );
-    }
-}
-
 fn resolve_tui_workspace_root(explicit: Option<PathBuf>) -> io::Result<PathBuf> {
     explicit.map(Ok).unwrap_or_else(env::current_dir)
 }

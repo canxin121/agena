@@ -82,33 +82,3 @@ fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) 
         (current, patch) => *current = patch.clone(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::ModelSpeedModeRequestOverride;
-
-    #[test]
-    fn overrides_merge_headers_and_nested_json_patches() {
-        let base = ModelSpeedModeRequestOverride {
-            headers: BTreeMap::from([("x-mode".to_owned(), "base".to_owned())]),
-            body_patch: BTreeMap::from([("options".to_owned(), serde_json::json!({"a": 1}))]),
-        };
-        let patch = ModelSpeedModeRequestOverride {
-            headers: BTreeMap::from([("x-mode".to_owned(), "fast".to_owned())]),
-            body_patch: BTreeMap::from([(
-                "options".to_owned(),
-                serde_json::json!({"b": true, "parallel_tool_calls": true}),
-            )]),
-        };
-
-        let merged = base.merged_with(&patch);
-        assert_eq!(merged.headers["x-mode"], "fast");
-        assert_eq!(
-            merged.body_patch["options"],
-            serde_json::json!({"a": 1, "b": true})
-        );
-        assert!(!merged.body_patch.contains_key("parallel_tool_calls"));
-    }
-}

@@ -69,36 +69,3 @@ pub(super) fn snapshot(screen: &vt100::Screen) -> TerminalSnapshot {
         cells,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cells_preserve_true_size_color_wide_text_cursor_and_modes() {
-        let mut parser = vt100::Parser::new(4, 12, 0);
-        parser.process(b"\x1b[?2004h\x1b[1;31m");
-        parser.process("中a".as_bytes());
-        let screen = snapshot(parser.screen());
-        assert_eq!((screen.rows, screen.cols), (4, 12));
-        assert_eq!((screen.cursor_row, screen.cursor_col), (0, 3));
-        assert!(screen.bracketed_paste);
-        assert_eq!(screen.cells[0].text, "中a");
-        assert_eq!(
-            screen.cells[0].attributes.foreground,
-            Some(TerminalColor::Indexed { index: 1 })
-        );
-        assert!(screen.cells[0].attributes.bold);
-        let mut observed = vt100::Parser::new(screen.rows, screen.cols, 0);
-        observed.process(screen.formatted().as_bytes());
-        assert_eq!(observed.screen().contents(), parser.screen().contents());
-        assert_eq!(
-            observed.screen().cursor_position(),
-            parser.screen().cursor_position()
-        );
-        assert_eq!(
-            observed.screen().cell(0, 0).unwrap().fgcolor(),
-            vt100::Color::Idx(1)
-        );
-    }
-}

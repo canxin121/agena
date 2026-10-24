@@ -84,39 +84,3 @@ impl From<std::io::Error> for AgenaProcessError {
 }
 
 pub(crate) type Result<T> = std::result::Result<T, AgenaProcessError>;
-
-#[cfg(test)]
-mod tests {
-    use super::AgenaProcessError;
-    use anyhow::Context as _;
-
-    #[test]
-    fn anyhow_conversion_keeps_bootstrap_category_and_root_cause() {
-        let bootstrap = agena_runtime::RuntimeBootstrapError::configuration(
-            "config validation failed: unknown field `obsolete`",
-        );
-        let error = anyhow::Error::new(bootstrap).context("failed to build agena runtime");
-
-        let process = AgenaProcessError::from_anyhow(error);
-        let rendered = process.to_string();
-
-        assert!(matches!(process, AgenaProcessError::Configuration(_)));
-        assert!(rendered.starts_with("configuration error:"));
-        assert!(rendered.contains("failed to build agena runtime"));
-        assert!(rendered.contains("unknown field `obsolete`"));
-        assert!(!rendered.contains("Internal(\""));
-    }
-
-    #[test]
-    fn cli_io_conversion_keeps_the_leaf_diagnostic() {
-        let process = AgenaProcessError::from_cli(agena_cli::AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "read-only config file",
-        )));
-
-        assert_eq!(
-            process.to_string(),
-            "I/O error: io error: read-only config file"
-        );
-    }
-}

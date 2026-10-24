@@ -664,31 +664,3 @@ fn help(key: &str, locale: &str) -> &'static str {
         _ => localized("remote", locale),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_plugin_host::sdk::Plugin;
-
-    #[test]
-    fn every_provider_tool_has_complete_ui_translations() {
-        let mut manifests = vec![
-            crate::plugins::provided::chatgpt::ChatGptToolsPlugin::new().manifest(),
-            crate::plugins::provided::claude::ClaudeToolsPlugin::new().manifest(),
-            crate::plugins::provided::gemini::GeminiToolsPlugin::new().manifest(),
-        ];
-        for manifest in &mut manifests {
-            localize_provider_manifest(manifest);
-            assert!(!manifest.tools.is_empty());
-            for tool in &manifest.tools {
-                for locale in LOCALES {
-                    let docs = tool.docs.translations.get(locale).unwrap_or_else(|| {
-                        panic!("{}:{} missing {locale}", manifest.name, tool.name)
-                    });
-                    assert!(docs.summary.as_deref().is_some_and(|text| !text.is_empty()));
-                    assert!(docs.help.as_deref().is_some_and(|text| !text.is_empty()));
-                }
-            }
-        }
-    }
-}

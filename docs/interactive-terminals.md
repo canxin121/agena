@@ -360,18 +360,4 @@ validated on its target platform, not inferred from macOS tests.
 
 ## Validation
 
-Core, lifecycle, screen/protocol and executor-route regressions:
-
-```sh
-cargo test --offline --locked -p agena-runtime-tools --lib terminal::
-cargo test --offline --locked -p agena-runtime-contracts --lib current_input_contract_tests
-cargo test --offline --locked -p agena-bundled-plugins --lib
-cargo test --offline --locked -p agena-bundled-plugins --test human_rendering
-cargo test --offline --locked -p agena-mcp-server --lib stateless_tool_policy
-```
-
-The Unix terminal suite launches real Python REPL-style fixtures, an interactive
-bash with foreground job control, and a curses full-screen program. It covers separated typing/Enter, UTF-8, Ctrl-C/EOF,
-SIGINT in raw mode, kernel resizing, terminal queries, alternate-screen drawing,
-output bounds, cancellation, session isolation, child-group cleanup, completion
-callbacks, native tool dispatch, and noninteractive compatibility.
+Rust tests have been removed pending a new repository-wide test plan.

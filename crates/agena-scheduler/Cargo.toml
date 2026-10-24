@@ -21,9 +21,5 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["process"] }
-
 [lints]
 workspace = true

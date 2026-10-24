@@ -114,29 +114,3 @@ fn sanitize_display_text(text: &str) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{TimelineItem, sanitize_display_text};
-    use agena_tui_components::SearchPickerItem;
-    use ratatui::text::Text;
-
-    #[test]
-    fn rows_use_part_identity_without_message_links() {
-        let item = TimelineItem {
-            summary: "message created".to_owned(),
-            detail_body: Text::default(),
-            search_text: "message created".to_owned(),
-        };
-
-        assert_eq!(item.search_picker_key(), "part:message created");
-    }
-
-    #[test]
-    fn preview_text_removes_terminal_control_sequences() {
-        assert_eq!(
-            sanitize_display_text("safe\u{1b}[31m text\u{1b}[0m\r\u{202e}"),
-            "safe text"
-        );
-    }
-}

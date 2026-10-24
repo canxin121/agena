@@ -61,11 +61,6 @@ the slowest first-character observer per trial. Observer samples within one
 trial share a provider and are correlated; the twenty independent trials and
 three separate process repetitions remain identifiable.
 
-The bootstrap barrier belongs only to this public HTTP probe. The existing
-`crates/agena-api-server/examples/content_delivery_probe.rs` workload and all
-old resource evidence are unchanged. Run that example separately against both
-source revisions for the uninterrupted Application→SSE delivery comparison.
-
 ## Isolation and process provenance
 
 The parent environment is never modified. Each probe creates one private

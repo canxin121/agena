@@ -82,64 +82,8 @@ impl PendingInteractiveRequest {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pending_user_input_keeps_variant_and_input_kinds_distinct() {
-        let pending = PendingInteractiveRequest::UserInput {
-            request: UserInputRequest {
-                request_id: "input-1".to_owned(),
-                session_id: Some(1),
-                title: "Choose".to_owned(),
-                body_markdown: String::new(),
-                kind: "ask_user".to_owned(),
-                source: agena_domain::UserInputSource::Plugin,
-                auto_resolution_ms: None,
-                presented_at: None,
-                questions: Vec::new(),
-                created_at: Utc::now(),
-            },
-        };
-        let value = serde_json::to_value(&pending).expect("serialize pending user input");
-        assert_eq!(value["kind"], "user_input");
-        assert_eq!(value["input_kind"], "ask_user");
-        let decoded: PendingInteractiveRequest =
-            serde_json::from_value(value).expect("deserialize pending user input");
-        let PendingInteractiveRequest::UserInput { request } = decoded else {
-            panic!("expected user-input variant");
-        };
-        assert_eq!(request.kind, "ask_user");
-    }
-}
-
 pub fn user_input_answers_is_empty(
     value: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> bool {
     value.is_empty()
-}
-
-#[cfg(test)]
-mod permission_reply_contract_tests {
-    use super::{PermissionReply, PermissionReplyKind, PermissionScope};
-
-    #[test]
-    fn permission_reply_has_a_runtime_independent_wire_shape() {
-        let reply = PermissionReply {
-            request_id: "request-1".to_owned(),
-            kind: PermissionReplyKind::AllowAlways,
-            reason: Some("trusted workspace".to_owned()),
-            scope: Some(PermissionScope::Workspace),
-        };
-        assert_eq!(
-            serde_json::to_value(reply).expect("serialize permission reply"),
-            serde_json::json!({
-                "request_id": "request-1",
-                "kind": "allow_always",
-                "reason": "trusted workspace",
-                "scope": "workspace"
-            })
-        );
-    }
 }

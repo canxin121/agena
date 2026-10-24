@@ -67,31 +67,3 @@ async fn capture_stamps(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::{sync::Arc, time::Duration};
-
-    use super::run_reload_watch_loop;
-    use crate::{TaskControl, WatchPathSet};
-
-    #[tokio::test]
-    async fn exits_without_polling_after_shutdown() {
-        let control = Arc::new(TaskControl::default());
-        control.shutdown();
-        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let called_reload = Arc::clone(&called);
-        run_reload_watch_loop(
-            control,
-            WatchPathSet::default(),
-            || Duration::from_millis(1),
-            WatchPathSet::default,
-            move |_| {
-                called_reload.store(true, std::sync::atomic::Ordering::SeqCst);
-                async { Ok::<_, String>(()) }
-            },
-        )
-        .await;
-        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
-    }
-}

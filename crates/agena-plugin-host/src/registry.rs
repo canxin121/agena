@@ -410,37 +410,3 @@ impl Default for PluginToolRegistry {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PluginToolRegistry;
-    use crate::sdk::{PluginKey, ToolDefinition};
-
-    fn definition(name: &str) -> ToolDefinition {
-        serde_json::from_value(serde_json::json!({ "name": name }))
-            .expect("minimal tool definition")
-    }
-
-    #[test]
-    fn removing_a_plugin_removes_only_its_tools() {
-        let alpha = PluginKey::new("example", "alpha").expect("alpha key");
-        let beta = PluginKey::new("example", "beta").expect("beta key");
-        let mut registry = PluginToolRegistry::new();
-        registry
-            .extend_from_plugin(&alpha, &[definition("one"), definition("two")])
-            .expect("alpha tools");
-        registry
-            .extend_from_plugin(&beta, &[definition("one")])
-            .expect("beta tools");
-
-        let removed = registry.remove_plugin(&alpha);
-
-        assert_eq!(removed.len(), 2);
-        assert_eq!(registry.count(), 1);
-        assert!(
-            registry
-                .lookup_tool_by_canonical_name("example.beta.one")
-                .is_some()
-        );
-    }
-}

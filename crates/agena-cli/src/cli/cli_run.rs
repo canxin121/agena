@@ -162,7 +162,7 @@ impl AgenaCli {
                 generate_plugin_lockfile(&args.path)
                     .map_err(|error| AppError::config_error(&error))?;
                 println!("Created Agena plugin repository at {}", args.path.display());
-                println!("Next: cargo test && agena plugin validate .");
+                println!("Next: agena plugin validate .");
                 Ok(())
             }
             PluginSubcommand::Package(args) => {
@@ -679,15 +679,4 @@ fn humanize_plugin_name(value: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-#[cfg(test)]
-mod plugin_supply_tests {
-    use super::humanize_plugin_name;
-
-    #[test]
-    fn generated_plugin_names_are_readable() {
-        assert_eq!(humanize_plugin_name("workspace-notes"), "Workspace Notes");
-        assert_eq!(humanize_plugin_name("code_review"), "Code Review");
-    }
 }

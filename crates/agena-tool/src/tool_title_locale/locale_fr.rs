@@ -1,7 +1,6 @@
 //! French tool-headline vocabulary.
 //!
-//! Values are the French translations of the English keys; the key set and
-//! structure already match `tests::every_locale_covers_every_key`.
+//! Values are the French translations of the English keys.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
     ("Start agent", "Démarrer un agent"),

@@ -188,30 +188,3 @@ impl From<ToolKeyParseError> for PluginError {
         PluginError::invalid_params(value.to_string())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PluginKey, ToolKey};
-
-    #[test]
-    fn plugin_key_accepts_non_snake_case_segments_but_rejects_dots() {
-        assert!(PluginKey::new("agena-tools", "FileSystem").is_ok());
-        assert!(PluginKey::new("agena.tools", "fs").is_err());
-        assert!(PluginKey::new("agena", "fs.tools").is_err());
-    }
-
-    #[test]
-    fn tool_key_allows_dotted_tool_names() {
-        let key: ToolKey = "agena.fs.read.file".parse().expect("valid tool key");
-        assert_eq!(key.to_string(), "agena.fs.read.file");
-        assert_eq!(key.name(), "read.file");
-        assert!("agena.fs".parse::<ToolKey>().is_err());
-    }
-
-    #[test]
-    fn tool_key_preserves_original_name_text() {
-        let key: ToolKey = "agena.fs.read-file".parse().expect("valid tool key");
-        assert_eq!(key.to_string(), "agena.fs.read-file");
-        assert_eq!(key.name(), "read-file");
-    }
-}

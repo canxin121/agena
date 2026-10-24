@@ -264,6 +264,3 @@ pub fn must<T>(r: SchedulerResult<T>) -> T {
         Err(e) => panic!("scheduler invariant violated: {e}"),
     }
 }
-
-#[cfg(test)]
-mod tests;

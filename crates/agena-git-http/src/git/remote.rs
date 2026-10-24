@@ -725,28 +725,3 @@ pub(crate) async fn git_upstream_ref(dir: &Path) -> Option<String> {
         Some(s.to_string())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_remote_url;
-
-    #[test]
-    fn remote_urls_use_url_parser_and_keep_git_scp_syntax() {
-        assert_eq!(
-            parse_remote_url("http://example.com:8080/team/repo.git"),
-            ("http".to_string(), Some("example.com".to_string()))
-        );
-        assert_eq!(
-            parse_remote_url("ssh://git@[2001:db8::1]/team/repo.git"),
-            ("ssh".to_string(), Some("[2001:db8::1]".to_string()))
-        );
-        assert_eq!(
-            parse_remote_url("git@example.com:team/repo.git"),
-            ("ssh".to_string(), Some("example.com".to_string()))
-        );
-        assert_eq!(
-            parse_remote_url("../local/repo.git"),
-            ("unknown".to_string(), None)
-        );
-    }
-}

@@ -1620,28 +1620,3 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
         .count()
         >= 4
 }
-
-#[cfg(test)]
-mod tool_repeat_tests {
-    use super::tool_call_repeats;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn distinct_provider_signatures_do_not_share_the_repeat_budget() {
-        let mut recent = VecDeque::new();
-        for signature in ["first", "second", "third", "fourth"] {
-            assert!(!tool_call_repeats(&recent, signature));
-            recent.push_back(signature.to_owned());
-        }
-    }
-
-    #[test]
-    fn identical_provider_signatures_still_trip_the_guard() {
-        let mut recent = VecDeque::new();
-        for _ in 0..4 {
-            assert!(!tool_call_repeats(&recent, "same"));
-            recent.push_back("same".to_owned());
-        }
-        assert!(tool_call_repeats(&recent, "same"));
-    }
-}

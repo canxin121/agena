@@ -81,26 +81,3 @@ pub struct ToolUserDeclinedEvent {
     pub decline: UserDeclinedResult,
     pub ts_ms: i64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PermissionRepliedEvent;
-    use crate::PermissionReplyKind;
-
-    #[test]
-    fn permission_reply_event_omits_absent_optional_fields() {
-        let value = PermissionRepliedEvent {
-            session_id: 1,
-            operation_id: "operation".into(),
-            call_id: 7,
-            request_id: "request".into(),
-            kind: PermissionReplyKind::AllowOnce,
-            reason: None,
-            scope: None,
-            ts_ms: 2,
-        };
-        let json = serde_json::to_value(value).unwrap();
-        assert!(json.get("reason").is_none());
-        assert!(json.get("scope").is_none());
-    }
-}

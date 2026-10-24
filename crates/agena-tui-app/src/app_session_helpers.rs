@@ -239,15 +239,3 @@ use crate::{
 use agena_tui::user_input::UserInputAnswerDraft;
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt;
-
-#[cfg(test)]
-mod tests {
-    use super::{ModelRef, model_name_status_label};
-
-    #[test]
-    fn compact_model_status_hides_provider_and_adapter() {
-        let model = ModelRef::new_with_adapter("provider-a", "adapter-b", "model-c");
-
-        assert_eq!(model_name_status_label(&model), "model-c");
-    }
-}

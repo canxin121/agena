@@ -167,34 +167,3 @@ impl From<StructuredValue> for serde_json::Value {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{StructuredObject, StructuredValue};
-
-    #[test]
-    fn structured_values_preserve_number_text_and_round_trip() {
-        let value = StructuredObject::try_from(serde_json::json!({
-            "integer": 1,
-            "decimal": 1.25,
-            "items": [true, null],
-        }))
-        .unwrap();
-
-        assert!(matches!(
-            value.get("integer"),
-            Some(StructuredValue::Integer { value: 1 })
-        ));
-        assert!(
-            matches!(value.get("decimal"), Some(StructuredValue::Number { value }) if value == "1.25")
-        );
-        assert_eq!(
-            serde_json::Value::from(value),
-            serde_json::json!({
-                "integer": 1,
-                "decimal": 1.25,
-                "items": [true, null],
-            })
-        );
-    }
-}

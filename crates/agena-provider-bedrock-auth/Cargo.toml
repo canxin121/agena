@@ -18,6 +18,3 @@ webpki-root-certs = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-reqwest = { workspace = true, features = ["rustls"] }

@@ -1,5 +1,3 @@
-#[cfg(test)]
-mod tests;
 use super::*;
 use agena_tool::code_search::plan_rewrite;
 use sha2::{Digest, Sha256};

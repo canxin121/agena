@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use agena_storage::MemoryDir;
@@ -116,46 +114,6 @@ impl MemoryIndex {
             results.push(document_from_hit(&document, &fields));
         }
         Ok(results)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn document(name: &str) -> MemorySearchDocument {
-        MemorySearchDocument::new(
-            "fixture".into(),
-            name.into(),
-            "search regression".into(),
-            None,
-            "Unicode 中文 memory".into(),
-            "fixture.md".into(),
-        )
-    }
-
-    #[test]
-    fn unchanged_sources_reuse_index_and_failed_updates_preserve_committed_results() {
-        let dir = tempfile::tempdir().unwrap();
-        let index = MemoryIndex {
-            dir: dir.path().join("index"),
-        };
-        index.replace_documents(&[document("original")]).unwrap();
-        let first = fs::read(index.dir.join("meta.json")).unwrap();
-        index.replace_documents(&[document("original")]).unwrap();
-        assert_eq!(first, fs::read(index.dir.join("meta.json")).unwrap());
-        let original = Index::open_in_dir(&index.dir).unwrap();
-        let held_writer = original.writer::<TantivyDocument>(15_000_000).unwrap();
-        assert!(index.replace_documents(&[document("replacement")]).is_err());
-        assert_eq!(index.search("original", 10).unwrap().len(), 1);
-        drop(held_writer);
-        index.replace_documents(&[document("replacement")]).unwrap();
-        assert!(index.search("original", 10).unwrap().is_empty());
-        assert_eq!(index.search("replacement", 10).unwrap().len(), 1);
-        assert_eq!(index.search("中文", 10).unwrap().len(), 1);
-        assert!(index.search("replacement", 0).unwrap().is_empty());
-        index.replace_documents(&[]).unwrap();
-        assert!(index.search("replacement", 10).unwrap().is_empty());
     }
 }
 

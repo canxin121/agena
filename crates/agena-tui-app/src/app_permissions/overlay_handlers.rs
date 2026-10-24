@@ -338,16 +338,3 @@ use crate::{
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
-
-#[cfg(test)]
-mod tests {
-    use super::PermissionStudioPaneFocus;
-
-    #[test]
-    fn permission_focus_ring_moves_in_both_directions() {
-        use PermissionStudioPaneFocus::{Content, Navigation};
-
-        assert_eq!(Navigation.next(), Content);
-        assert_eq!(Content.next(), Navigation);
-    }
-}

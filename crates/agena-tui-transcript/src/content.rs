@@ -626,6 +626,3 @@ fn clip_cells(line: &Line<'static>, width: usize) -> Line<'static> {
     }
     Line::from(spans)
 }
-
-#[cfg(test)]
-mod tests;

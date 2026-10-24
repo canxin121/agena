@@ -19,8 +19,7 @@ use ratatui::{
 use std::time::{Duration, Instant};
 
 mod requests;
-#[cfg(test)]
-mod tests;
+
 mod view;
 
 #[derive(Debug)]

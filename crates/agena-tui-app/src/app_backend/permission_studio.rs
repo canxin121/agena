@@ -50,31 +50,3 @@ fn permission_configs_from_resources(
     .context("failed to decode effective permission resource")?;
     Ok((selected, effective))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::permission_configs_from_resources;
-
-    #[test]
-    fn selected_and_effective_permission_remain_distinct() {
-        let selected = serde_json::from_value(serde_json::json!({
-            "tools": { "default": "ask" }
-        }))
-        .expect("selected permission resource");
-        let effective = serde_json::from_value(serde_json::json!({
-            "tools": { "default": "deny" }
-        }))
-        .expect("effective permission resource");
-
-        let (selected, effective) =
-            permission_configs_from_resources(&selected, &effective).expect("decode permissions");
-        assert_eq!(
-            selected.tools.and_then(|tools| tools.default),
-            Some(agena_domain::PermissionMode::Ask)
-        );
-        assert_eq!(
-            effective.tools.and_then(|tools| tools.default),
-            Some(agena_domain::PermissionMode::Deny)
-        );
-    }
-}

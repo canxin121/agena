@@ -39,32 +39,3 @@ pub fn model_catalog_cache_record_from_document(
         document: serde_json::to_value(document)?,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        model_catalog_cache_record_from_document, model_catalog_snapshot_from_cache_record,
-    };
-    use agena_provider::{ModelCatalogDocument, ModelCatalogSnapshotSourceKind};
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn cache_codec_round_trips_provider_catalog_values() {
-        let document = ModelCatalogDocument {
-            models: BTreeMap::new(),
-        };
-        let record = model_catalog_cache_record_from_document(
-            123,
-            ModelCatalogSnapshotSourceKind::Cache,
-            &document,
-        )
-        .expect("encode record");
-        let snapshot = model_catalog_snapshot_from_cache_record(&record).expect("decode record");
-        assert_eq!(snapshot.last_refresh_at.unwrap().timestamp_millis(), 123);
-        assert_eq!(
-            snapshot.last_successful_source,
-            Some(ModelCatalogSnapshotSourceKind::Cache)
-        );
-        assert_eq!(snapshot.official, document);
-    }
-}

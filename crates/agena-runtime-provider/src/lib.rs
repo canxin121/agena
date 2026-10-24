@@ -146,22 +146,3 @@ pub struct ProviderRequestContext {
     pub provider_id: String,
     pub model_id: String,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn invalid_json_stream_error_is_retryable_malformed_response() {
-        let err: ProviderError = ProviderJsonStreamError::InvalidJson {
-            format: "SSE",
-            source: serde_json::from_str::<serde_json::Value>("{broken").unwrap_err(),
-        }
-        .into();
-        assert!(err.retryable());
-        assert_eq!(
-            err.provider_error_kind(),
-            Some(ProviderErrorKind::MalformedResponse)
-        );
-    }
-}

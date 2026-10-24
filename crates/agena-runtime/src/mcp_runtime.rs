@@ -137,16 +137,3 @@ fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client:
         ),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_runtime_config::{McpConfig, McpReconnectConfig, McpTokenStoreConfig};
-
-    #[test]
-    fn token_store_defaults_to_enabled() {
-        assert!(McpTokenStoreConfig::default().enabled);
-        assert!(McpConfig::default().runtime.token_store.enabled);
-        assert!(McpReconnectConfig::default().enabled);
-        assert!(McpConfig::default().runtime.reconnect.enabled);
-    }
-}

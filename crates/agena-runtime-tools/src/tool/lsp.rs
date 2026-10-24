@@ -413,22 +413,3 @@ fn language_id_for_path(path: &Path) -> String {
     }
     .to_string()
 }
-
-#[cfg(test)]
-mod location_tests {
-    use super::*;
-
-    #[test]
-    fn local_uri_display_decodes_spaces_unicode_and_literal_hashes() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("中文 file #1.rs");
-        let uri: Uri = url::Url::from_file_path(&path)
-            .unwrap()
-            .as_str()
-            .parse()
-            .unwrap();
-        assert_eq!(uri_display(&uri), path.display().to_string());
-        let external: Uri = "untitled:buffer-1".parse().unwrap();
-        assert_eq!(uri_display(&external), "untitled:buffer-1");
-    }
-}

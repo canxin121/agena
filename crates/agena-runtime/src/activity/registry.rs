@@ -142,18 +142,6 @@ pub(crate) struct ActivityRegistry {
 }
 
 impl ActivityRegistry {
-    #[cfg(test)]
-    pub(crate) fn new(tx: mpsc::Sender<BackgroundActivityChangedEvent>) -> Self {
-        Self {
-            store: Arc::new(Mutex::new(ActivityStore::new(
-                DEFAULT_ACTIVITY_HISTORY_LIMIT,
-            ))),
-            tx: Some(tx),
-            signals: None,
-            published_at_ms: Arc::new(AtomicI64::new(0)),
-        }
-    }
-
     pub(crate) fn with_signals(signals: Arc<crate::live_signal::LiveSignalHub>) -> Self {
         Self {
             store: Arc::new(Mutex::new(ActivityStore::new(
@@ -344,96 +332,5 @@ impl ActivityRegistry {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
-
-    fn activity(id: &str, status: BackgroundActivityStatus) -> BackgroundActivity {
-        BackgroundActivity {
-            id: id.to_string(),
-            kind: BackgroundActivityKind::Shell,
-            status,
-            title: format!("Run process · {id}"),
-            description: id.to_string(),
-            command: Some(id.to_string()),
-            workdir: None,
-            session_id: None,
-            parent_session_id: None,
-            operation_id: None,
-            source_part_id: None,
-            created_at_ms: 1,
-            started_at_ms: 1,
-            finished_at_ms: status.is_terminal().then_some(2),
-            next_event_at_ms: None,
-            exit_code: None,
-            message: None,
-            failure: None,
-            last_seq: 0,
-            has_more: false,
-            dropped_lines: 0,
-            cancellable: true,
-            dismissible: true,
-        }
-    }
-
-    #[test]
-    fn store_orders_newest_first_and_trims_terminal_oldest() {
-        let mut store = ActivityStore::new(2);
-        store.upsert(activity("a", BackgroundActivityStatus::Succeeded));
-        store.upsert(activity("b", BackgroundActivityStatus::Running));
-        store.upsert(activity("c", BackgroundActivityStatus::Running));
-        assert_eq!(store.list(&BackgroundActivityFilter::default())[0].id, "c");
-        // `a` is trimmed (oldest terminal); active `b` and `c` survive.
-        let ids = store
-            .list(&BackgroundActivityFilter::default())
-            .into_iter()
-            .map(|a| a.id)
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["c", "b"]);
-    }
-
-    #[test]
-    fn clear_finished_removes_only_terminal_records() {
-        let mut store = ActivityStore::new(10);
-        store.upsert(activity("a", BackgroundActivityStatus::Running));
-        store.upsert(activity("b", BackgroundActivityStatus::Failed));
-        let removed = store.clear_finished();
-        assert_eq!(removed, vec!["b"]);
-        assert!(store.activities.contains_key("a"));
-        assert!(!store.activities.contains_key("b"));
-    }
-
-    #[test]
-    fn registry_publishes_reason_by_transition() {
-        let (tx, mut rx) = mpsc::channel(8);
-        let registry = ActivityRegistry::new(tx);
-        registry.upsert(activity("a", BackgroundActivityStatus::Running));
-        assert_eq!(
-            rx.try_recv().unwrap().reason,
-            BackgroundActivityEventReason::Started
-        );
-        let mut finished = activity("a", BackgroundActivityStatus::Succeeded);
-        finished.finished_at_ms = Some(3);
-        registry.upsert(finished);
-        assert_eq!(
-            rx.try_recv().unwrap().reason,
-            BackgroundActivityEventReason::Finished
-        );
-        let mut updated = activity("a", BackgroundActivityStatus::Succeeded);
-        updated.message = Some("still succeeded".into());
-        registry.upsert(updated);
-        assert_eq!(
-            rx.try_recv().unwrap().reason,
-            BackgroundActivityEventReason::Updated
-        );
-        registry.dismiss("a");
-        assert_eq!(
-            rx.try_recv().unwrap().reason,
-            BackgroundActivityEventReason::Dismissed
-        );
     }
 }

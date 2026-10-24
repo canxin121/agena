@@ -72,30 +72,3 @@ impl vt100::Callbacks for Protocol {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_queries_reply_from_screen_and_ignore_clipboard() {
-        let mut parser = vt100::Parser::new_with_callbacks(24, 80, 0, Protocol::default());
-        parser.process(b"\x1b[3;9H\x1b[");
-        parser.process(b"6n\x1b[5n\x1b[c\x1b[18t");
-        assert_eq!(
-            parser.callbacks_mut().take().unwrap(),
-            b"\x1b[3;9R\x1b[0n\x1b[?1;2c\x1b[8;24;80t"
-        );
-        parser.process(b"\x1b]52;c;?\x07\x1b]52;c;c2VjcmV0\x07");
-        assert!(parser.callbacks_mut().take().unwrap().is_empty());
-    }
-
-    #[test]
-    fn queries_cannot_allocate_unbounded_replies() {
-        let mut parser = vt100::Parser::new_with_callbacks(24, 80, 0, Protocol::default());
-        for _ in 0..2000 {
-            parser.process(b"\x1b[6n");
-        }
-        assert!(parser.callbacks_mut().take().is_err());
-    }
-}

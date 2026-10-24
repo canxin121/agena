@@ -55,10 +55,6 @@ url = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
 tracing = { workspace = true }
 
-[dev-dependencies]
-agena-plugin-sdk = { workspace = true, features = ["http"] }
-tempfile = { workspace = true }
-
 [features]
 default = []
 plugin-wasm = ["agena-plugin-host/wasm"]

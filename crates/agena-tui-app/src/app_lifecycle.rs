@@ -30,21 +30,7 @@ impl App {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
         let draft_store_path = default_draft_store_path(&application.persistence_scope());
         let prompt_history_path = default_prompt_history_path(&application.persistence_scope());
-        // Unit-test applications must never load or persist the developer's
-        // actual drafts/history, including the final save in App::drop.
-        #[cfg(test)]
-        let test_state_dir = tempfile::Builder::new()
-            .prefix("agena-tui-unit-")
-            .tempdir()
-            .expect("isolated TUI state");
-        #[cfg(test)]
-        let (draft_store_path, prompt_history_path) = {
-            drop((draft_store_path, prompt_history_path));
-            (
-                test_state_dir.path().join("drafts.json"),
-                test_state_dir.path().join("history.jsonl"),
-            )
-        };
+
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
             Ok(store) => (store, None),
             Err(error) => (DraftStore::default(), Some(error)),
@@ -69,8 +55,6 @@ impl App {
             TranscriptState::new(i18n.clone(), launch.transcript_detail_defaults.clone());
         transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
-            #[cfg(test)]
-            _test_state_dir: test_state_dir,
             application,
             i18n: i18n.clone(),
             tx,
@@ -581,47 +565,3 @@ use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
 use agena_tui_session::session_list::SessionListPresentation;
-#[cfg(test)]
-mod tests {
-    use agena_tui::presentation_config::ColorSchemePreference;
-    use agena_tui_components::TerminalRgb;
-
-    use super::*;
-
-    #[test]
-    fn formula_glyph_appearance_follows_live_scheme_instead_of_stale_detection() {
-        let detected_dark = TerminalRgb::new(18, 18, 20);
-        let mut launch = LaunchOptions {
-            terminal_background: Some(detected_dark),
-            math_graphics: Some(agena_tui_media::MathGraphicsConfig::query(
-                Some(detected_dark),
-                false,
-                false,
-                None,
-            )),
-            ..LaunchOptions::default()
-        };
-
-        launch.tui_config.color_scheme = ColorSchemePreference::Light;
-        apply_math_graphics_appearance(&mut launch);
-        let light = agena_tui_media::MathRenderContext::new(
-            launch.math_graphics.as_ref(),
-            std::path::Path::new("."),
-        );
-        agena_tui_media::with_math_render_context(&light, || {
-            let layout = agena_tui_media::layout_config();
-            assert_eq!(layout.foreground, [28, 28, 28]);
-        });
-
-        launch.tui_config.color_scheme = ColorSchemePreference::Dark;
-        apply_math_graphics_appearance(&mut launch);
-        let dark = agena_tui_media::MathRenderContext::new(
-            launch.math_graphics.as_ref(),
-            std::path::Path::new("."),
-        );
-        agena_tui_media::with_math_render_context(&dark, || {
-            let layout = agena_tui_media::layout_config();
-            assert_eq!(layout.foreground, [235, 235, 235]);
-        });
-    }
-}

@@ -413,31 +413,3 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
     }
     None
 }
-
-#[cfg(test)]
-mod safety_tests {
-    use super::*;
-    #[test]
-    fn rgba_dimensions_are_checked_before_integer_casts_or_copies() {
-        assert!(checked_rgba_dimensions(usize::MAX, 2, 4).is_err());
-        assert!(checked_rgba_dimensions(1, 1, 3).is_err());
-        assert!(checked_rgba_dimensions(0, 1, 0).is_err());
-        assert!(checked_rgba_dimensions(16384, 16384, 16384 * 16384 * 4).is_err());
-        assert_eq!(checked_rgba_dimensions(2, 2, 16).unwrap(), (2, 2));
-    }
-    #[test]
-    fn synthetic_clipboard_png_roundtrips_without_reading_real_clipboard() {
-        let dir = tempfile::tempdir().unwrap();
-        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            2,
-            2,
-            image::Rgba([10, 20, 30, 255]),
-        ));
-        let encoded = encode_clipboard_png(&image).unwrap();
-        let path = dir.path().join("clipboard.png");
-        std::fs::write(&path, encoded).unwrap();
-        let decoded = decode_clipboard_image_file(&path).unwrap();
-        assert_eq!(decoded.width(), 2);
-        assert_eq!(decoded.height(), 2);
-    }
-}

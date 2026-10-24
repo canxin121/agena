@@ -10,8 +10,6 @@ pub(crate) use agena_tui_session::session_hub::{
     SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
 };
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
-#[cfg(test)]
-use agena_tui_transcript::display_types::TranscriptRun;
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
 /// The TUI sees only opaque display keys; configuration/session effects remain
@@ -184,8 +182,6 @@ pub(crate) struct TranscriptState {
     pub(crate) math_render_context: MathRenderContext,
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
-    #[cfg(test)]
-    pub(crate) messages: Vec<TranscriptRun>,
     /// The session's canonical part transcript (ordered parts, including
     /// `run` markers), mirroring `SessionExecutionResource.parts`.
     pub(crate) parts: Vec<agena_api::part::PartResource>,

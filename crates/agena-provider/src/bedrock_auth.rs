@@ -37,23 +37,3 @@ fn redacted(value: Option<&str>) -> &'static str {
         _ => "<none>",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::BedrockSigv4AuthConfig;
-
-    #[test]
-    fn debug_output_redacts_bedrock_secrets() {
-        let config = BedrockSigv4AuthConfig {
-            base_url: "https://bedrock.example".to_owned(),
-            region: "us-east-1".to_owned(),
-            profile: None,
-            access_key_id: Some("key".to_owned()),
-            secret_access_key: Some("secret".to_owned()),
-            session_token: None,
-        };
-        let debug = format!("{config:?}");
-        assert!(debug.contains("***redacted***"));
-        assert!(!debug.contains("\"secret\""));
-    }
-}

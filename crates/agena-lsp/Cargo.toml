@@ -25,12 +25,5 @@ url = { workspace = true }
 arc-swap = { workspace = true }
 which = { workspace = true }
 
-[features]
-default = []
-test-support = []
-
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile = { workspace = true }

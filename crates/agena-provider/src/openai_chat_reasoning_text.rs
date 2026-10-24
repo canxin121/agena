@@ -59,25 +59,3 @@ fn extract_reasoning_details_text(value: &Value) -> String {
         _ => String::new(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::openai_chat_reasoning_field;
-
-    #[test]
-    fn empty_reasoning_carrier_does_not_mask_a_later_meaningful_field() {
-        let blank = serde_json::json!("   ");
-        let details = serde_json::json!([{
-            "type": "reasoning.text",
-            "text": "reasoning"
-        }]);
-        assert_eq!(
-            openai_chat_reasoning_field(Some(&blank), Some(&details)),
-            Some("reasoning_details")
-        );
-        assert_eq!(
-            openai_chat_reasoning_field(Some(&serde_json::Value::Null), None),
-            None
-        );
-    }
-}

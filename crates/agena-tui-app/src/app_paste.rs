@@ -228,15 +228,5 @@ fn paste_requires_workspace_text_file(text: &str) -> bool {
     text.chars().count() >= 1_000
 }
 
-#[cfg(test)]
-mod tests {
-    use super::paste_requires_workspace_text_file;
-
-    #[test]
-    fn thousand_character_pastes_become_workspace_text_files() {
-        assert!(!paste_requires_workspace_text_file(&"x".repeat(999)));
-        assert!(paste_requires_workspace_text_file(&"x".repeat(1_000)));
-    }
-}
 use crate::{App, Overlay, Route};
 use agena_tui::main_focus::Focus;

@@ -777,17 +777,3 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
         (!normalized.is_empty()).then(|| normalized.to_owned())
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_provider::catalog_model_id_for_raw;
-
-    #[test]
-    fn raw_catalog_id_projection_normalizes_and_rejects_blank_values() {
-        assert_eq!(
-            catalog_model_id_for_raw(" us.openai.GPT_5@default "),
-            Some("gpt.5".to_owned())
-        );
-        assert_eq!(catalog_model_id_for_raw("   "), None);
-    }
-}

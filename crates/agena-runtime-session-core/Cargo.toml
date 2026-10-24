@@ -6,9 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 description = "Neutral Agena session values and runtime state"
 
-[features]
-test-support = []
-
 [dependencies]
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }

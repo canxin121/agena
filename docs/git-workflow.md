@@ -147,13 +147,11 @@ part 是变更记录与展示，不是完整备份。专用文件工具继续提
 
 ## 实现验证与后续行为评测
 
-Rust 测试验证提示词装配、补丁工具契约与路径解析，以及普通 Git 能恢复 add/update/move/delete 和工具之外的写入，同时保留无关用户暂存和未跟踪文件。原有补丁校验、原子写入和失败清理测试继续保留。
+Rust 测试已移除，整体测试方案待重新规划；当前验证依赖编译、lint 与手工检查。
 
 ```sh
-cargo test --locked -p agena-runtime-contracts --lib
-cargo test --locked -p agena-runtime-session --lib
-cargo test --locked -p agena-bundled-plugins --test tool_correctness --test docs_reference --test capability_manifest
 cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 下一步若评估模型实际遵循程度，应在临时仓库中观察完整工具轨迹和最终 Git 状态，至少覆盖以下任务，而不是只检查模型有没有复述规则。本次没有运行真实模型行为评测。

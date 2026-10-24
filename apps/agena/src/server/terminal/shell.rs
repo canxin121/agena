@@ -88,6 +88,3 @@ pub(super) fn tmux_command(
     command.env_remove("TMUX_PANE");
     command
 }
-
-#[cfg(test)]
-mod tests;

@@ -31,15 +31,5 @@ unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
-agena-runtime-session-core = { workspace = true }
-agena-storage = { workspace = true, features = ["test-support"] }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-[[bench]]
-name = "store"
-harness = false
-
 [lints]
 workspace = true

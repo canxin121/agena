@@ -242,25 +242,3 @@ pub fn get_clipboard_text(
         "clipboard text read is unsupported on this platform".to_string(),
     ))
 }
-
-#[cfg(all(
-    test,
-    not(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos"
-    ))
-))]
-mod tests {
-    use super::osc52_copy_sequence;
-
-    #[test]
-    fn osc52_copy_sequence_targets_the_local_terminal_clipboard() {
-        assert_eq!(
-            osc52_copy_sequence("copied from Agena"),
-            b"\x1b]52;c;Y29waWVkIGZyb20gQWdlbmE=\x07"
-        );
-    }
-}

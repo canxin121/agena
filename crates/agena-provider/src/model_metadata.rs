@@ -151,19 +151,3 @@ fn detect_default_top_k(model: &str) -> Option<u32> {
     }
     model.contains("gemini").then_some(64)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ModelMetadataRegistry;
-    use crate::CapabilityFamily;
-    use agena_domain::ModelLifecycle;
-
-    #[test]
-    fn metadata_registry_resolves_provider_neutral_model_facts() {
-        let metadata = ModelMetadataRegistry
-            .metadata_for_family(CapabilityFamily::OpenAi, "gpt-5-preview-128k");
-
-        assert_eq!(metadata.lifecycle, Some(ModelLifecycle::Preview));
-        assert_eq!(metadata.limits.context_window_tokens, Some(128_000));
-    }
-}

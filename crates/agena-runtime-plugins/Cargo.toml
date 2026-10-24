@@ -22,11 +22,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true }
 
-[dev-dependencies]
-axum = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls"] }
-tempfile = { workspace = true }
-
 [features]
 default = []
 plugin-wasm = ["agena-plugin-host/wasm"]

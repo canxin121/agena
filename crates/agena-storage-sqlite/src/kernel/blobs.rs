@@ -511,8 +511,7 @@ pub(super) async fn collect(database: &KernelDatabase, pins: &Pins) -> Result<Bl
             return Err(error);
         }
     };
-    #[cfg(test)]
-    super::crash_window_tests::hit("gc.before_commit", None);
+
     if let Err(error) = tx.commit().await {
         return Err(if rejected_commit(&error) {
             storage(error)
@@ -523,11 +522,9 @@ pub(super) async fn collect(database: &KernelDatabase, pins: &Pins) -> Result<Bl
             }
         });
     }
-    #[cfg(test)]
-    super::crash_window_tests::hit("gc.after_commit", None);
+
     pins.acknowledge(&released);
-    #[cfg(test)]
-    super::crash_window_tests::hit("gc.after_install", None);
+
     Ok(result)
 }
 

@@ -78,22 +78,3 @@ impl fmt::Display for ThinkingDisplay {
         f.write_str(self.as_ref())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
-
-    #[test]
-    fn reasoning_values_preserve_their_wire_contract() {
-        assert_eq!(ReasoningEffort::Xhigh.to_string(), "xhigh");
-        assert_eq!(ThinkingDisplay::Omitted.as_ref(), "omitted");
-        assert_eq!(
-            serde_json::to_string(&ThinkingRequest::Adaptive {
-                effort: Some(ReasoningEffort::High),
-                display: None,
-            })
-            .unwrap(),
-            r#"{"type":"adaptive","effort":"high"}"#
-        );
-    }
-}

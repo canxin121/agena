@@ -40,17 +40,3 @@ The source must be a regular file no larger than 32 MiB. A private temporary cop
 Displayed line records have a combined 128 KiB bound. Individual lines can be shortened at 4 KiB and carry `text_truncated`. Counts cover the complete converted text even when fewer records are shown. Advance `start_line` or narrow the pattern for another range; use the selected converter directly when a complete very long line is needed. These are text-extraction bounds, not a general-purpose sandbox for arbitrary third-party Python packages.
 
 An empty extraction can indicate a scanned PDF that needs OCR. Complex page order, tables, diagrams, scanned text and embedded media require inspection. Docling remains an optional layout/OCR workflow via the managed shell, and `rga` remains an optional multi-format directory search workflow; neither is silently invoked here. The adapter is intended for bounded text reading and search of a selected file.
-
-## Reproduce validation
-
-With the test environment installed, generate four small real files and run the existing local plugin-dispatch fixture:
-
-```sh
-/path/to/document-env/bin/python tools/document_adapter_fixtures.py /tmp/agena-document-fixtures
-AGENA_DOCUMENT_PYTHON=/path/to/document-env/bin/python \
-AGENA_DOCUMENT_FIXTURE_DIR=/tmp/agena-document-fixtures \
-cargo test --locked -p agena-bundled-plugins --test tool_correctness \
-  audit_local_documents_with_real_markitdown -- --ignored --nocapture
-```
-
-This verifies PDF text, Unicode Office text and matching through the actual plugin/executor route, without starting an Agena service or calling a connector. Ordinary unit tests cover literal/regex modes, case handling, line offsets, exact limits, Unicode clipping, output-byte limits and source-snapshot identity. Poppler was not installed on the development host, so its actual conversion quality/latency has not been measured in this work.

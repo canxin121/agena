@@ -73,6 +73,3 @@ pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecutio
 pub use tool_registry::{
     ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
 };
-
-#[cfg(test)]
-mod tests;

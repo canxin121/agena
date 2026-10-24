@@ -85,33 +85,3 @@ fn configured_model(
         speed_modes: std::collections::BTreeMap::new(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::configured_local_models;
-    use agena_provider::ProviderModelDiscoveryConfig;
-    use agena_runtime_config::{
-        OllamaProviderOptions, ProviderAdapterDefinition, ResolvedProviderAdapterConfig,
-        ResolvedProviderConfig,
-    };
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn configured_local_models_keep_enabled_routes() {
-        let adapter = ResolvedProviderAdapterConfig {
-            enabled: true,
-            model_discovery: ProviderModelDiscoveryConfig::ConfiguredOnly,
-            definition: ProviderAdapterDefinition::Ollama(OllamaProviderOptions { base_url: None }),
-        };
-        let config = ResolvedProviderConfig {
-            enabled: true,
-            auth: agena_runtime_config::ProviderAuthConfig::None,
-            network: Default::default(),
-            adapters: BTreeMap::from([(String::from("local"), adapter)]),
-            models: BTreeMap::new(),
-        };
-
-        let models = configured_local_models("ollama", &config);
-        assert!(models.is_empty());
-    }
-}

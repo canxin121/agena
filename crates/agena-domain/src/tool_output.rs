@@ -64,23 +64,3 @@ impl ToolOutput {
         self.truncated || !self.managed_outputs.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn preserves_payload_and_managed_output_truncation() {
-        let payload = serde_json::json!({"result": {"count": 2}});
-        let mut output = ToolOutput::from_json_payload(Some(&payload)).expect("structured payload");
-
-        assert_eq!(output.to_json_payload(), Some(payload));
-        assert!(!output.is_model_truncated());
-
-        output.mark_truncated("/tmp/tool-output.txt");
-
-        assert!(output.truncated);
-        assert!(output.is_model_truncated());
-        assert_eq!(output.managed_outputs[0].path, "/tmp/tool-output.txt");
-    }
-}

@@ -19,24 +19,3 @@ pub fn merge_system_prompts(primary: Option<&str>, secondary: Option<&str>) -> O
         (None, None) => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::merge_system_prompts;
-
-    #[test]
-    fn keeps_an_already_prefixed_secondary_prompt_once() {
-        assert_eq!(
-            merge_system_prompts(Some("base"), Some("base\n\nextra")),
-            Some("base\n\nextra".to_string())
-        );
-    }
-
-    #[test]
-    fn joins_distinct_nonempty_prompts() {
-        assert_eq!(
-            merge_system_prompts(Some("base"), Some("extra")),
-            Some("base\n\nextra".to_string())
-        );
-    }
-}

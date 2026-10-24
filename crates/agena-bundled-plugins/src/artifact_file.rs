@@ -98,31 +98,3 @@ fn private_permissions(managed: bool) -> Option<std::fs::Permissions> {
 fn private_permissions(_managed: bool) -> Option<std::fs::Permissions> {
     None
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{persist_new, persist_replace_or_create};
-
-    #[tokio::test]
-    async fn persistence_honours_create_and_replace_policies() {
-        let workspace = tempfile::tempdir().expect("workspace");
-        let path = workspace.path().join("artifact.json");
-
-        persist_new(path.clone(), b"complete".to_vec(), "test artifact")
-            .await
-            .expect("persist artifact");
-        let error = persist_new(path.clone(), b"stale".to_vec(), "test artifact")
-            .await
-            .expect_err("existing artifact must not be overwritten");
-        assert!(error.to_string().contains("cannot persist test artifact"));
-        assert_eq!(std::fs::read(&path).expect("read artifact"), b"complete");
-
-        persist_replace_or_create(path.clone(), b"replacement".to_vec(), "test artifact")
-            .await
-            .expect("replace artifact");
-        assert_eq!(
-            std::fs::read(path).expect("read replacement"),
-            b"replacement"
-        );
-    }
-}

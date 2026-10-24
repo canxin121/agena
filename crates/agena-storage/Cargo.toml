@@ -6,9 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[features]
-test-support = []
-
 [dependencies]
 urlencoding = { workspace = true }
 libc = { workspace = true }
@@ -26,6 +23,3 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

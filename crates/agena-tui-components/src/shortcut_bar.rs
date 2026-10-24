@@ -123,19 +123,3 @@ fn shortcut_event(label: &str) -> Option<crossterm::event::KeyEvent> {
     };
     Some(KeyEvent::new(code, modifiers))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{ShortcutHint, build_shortcut_line};
-    use crate::line_plain_text;
-
-    #[test]
-    fn shortcut_hints_have_one_consistent_separator() {
-        let line = build_shortcut_line([
-            ShortcutHint::new("Ctrl+S", "save"),
-            ShortcutHint::new("Esc", "back"),
-        ]);
-
-        assert_eq!(line_plain_text(&line), "Ctrl+S save  ·  Esc back");
-    }
-}

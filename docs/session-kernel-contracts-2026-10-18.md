@@ -127,7 +127,7 @@ startup 在索引覆盖的 active 工作集上把 running attempts/rounds/tools 
 
 `SqliteKernel::maintenance` 是基础设施单独持有的能力，`collect_blobs` 与其他命令排在同一 FIFO。Drop 仅标记失去 family，不承担异步成功。GC 在 retain 使用的同一锁中撤销可回收 pin，再在一个事务中清理 pin、检查 refs、标记 retired；新 publication 不接受 retired。每次检查 16 个 blob identities、最多删除 8 chunks（1 MiB），使用持久 scan cursor，避免所有旧 blob 均被引用时全表扫描。出生未取回的 preparation/pin 保留 30 s grace。准备请求在 GC 后可以明确失效，不承诺无限期保留未发布资源。
 
-当前没有自动内容/用户历史删除；周期 GC 只回收无引用、无活跃 pin 的 managed blobs。branch 的公共删除通过 kernel 命令完成，保留仍被其他分支或 snapshot 引用的事实。进程在 prepare、publication、checkpoint 或 GC 边界退出后，重开只恢复已经持久提交的事实；缓存安装、通知和 receipt 发送不替代持久提交。恢复断言由 [crash_window_tests.rs](../crates/agena-storage-sqlite/src/kernel/crash_window_tests.rs) 维护。外部系统没有幂等配合时不承诺 exactly-once。
+当前没有自动内容/用户历史删除；周期 GC 只回收无引用、无活跃 pin 的 managed blobs。branch 的公共删除通过 kernel 命令完成，保留仍被其他分支或 snapshot 引用的事实。进程在 prepare、publication、checkpoint 或 GC 边界退出后，重开只恢复已经持久提交的事实；缓存安装、通知和 receipt 发送不替代持久提交。外部系统没有幂等配合时不承诺 exactly-once。
 
 发生 `SQLITE_FULL` 并由 SQLite 自动 rollback 后，SQLx 0.8 可能保留 transaction depth。内核在从未尝试 COMMIT 的失败路径建立一个可 rollback 的空事务以清理 driver depth；清理失败关闭 writer。COMMIT 不确定仍要求重开，不应用这个修复掩盖不确定性。
 
@@ -370,12 +370,6 @@ fork 的切点解析到所选消息当前可见的最后一条事实，段引用
 
 Scheduler facts 在独立数据库中先读为有界快照，再提交 kernel stop 命令；两库没有跨库原子事务。周期任务或未来一次性任务持续阻止正常停止。尚未收到 scheduler ack 的一次性 claim 只有在其精确 `scheduler:{job_id}:{delivery_key}` 已经由成功 round 观察后才能不再阻止停止，避免等待 execution 释放才能 ack 的互锁。stop 决定之后的新计划或业务到达按后续唤醒处理。`wake:false` 的普通 hook 诊断保留为 Notice，不强制额外模型轮次；定向 guidance 仍必须由其所属 execution 完整观察。
 
-**维护测试**
+**测试状态**
 
-契约断言直接维护在以下源码中；进程 kill/reopen 表达进程崩溃恢复，不等同于设备断电或任意 fsync 失败。
-
-- [contract_completion_tests.rs](../crates/agena-storage-sqlite/src/kernel/contract_completion_tests.rs)：owner 校验、cancel/finish 终态竞争，以及工具、权限与 selection 的独立并发结果。
-- [control_snapshot_tests.rs](../crates/agena-storage-sqlite/src/kernel/control_snapshot_tests.rs)：一致控制观测、running execution 选择，以及返回视图后释放 SQL/admission。
-- [read_cache.rs](../crates/agena-storage-sqlite/src/kernel/read_cache.rs) 与 [event_cache_tests.rs](../crates/agena-storage-sqlite/src/kernel/event_cache_tests.rs)：generation、成员授权、retention、容量回收和 consumer lease。
-- [archive_tests.rs](../crates/agena-storage-sqlite/src/kernel/archive_tests.rs) 与 [import_tests.rs](../crates/agena-storage-sqlite/src/kernel/import_tests.rs)：sink 等待前确认 ROLLBACK、固定 membership/source cut、完整性校验与原子导入。
-- [supervision_tests.rs](../crates/agena-runtime-session/src/session/manager/supervision_tests.rs)：selection group commit、有界 shutdown 和提交后读取耗尽时仍确认 permission reply。
+2026-10-24 起，仓库的 Rust 测试已整体移除，等待重新规划统一的测试体系。本节原先列出的契约测试文件与断言不再存在；上文保留的是实现语义，不是当前测试覆盖证明。

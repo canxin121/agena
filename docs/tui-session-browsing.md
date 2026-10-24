@@ -77,42 +77,10 @@ available without refetching.
 
 ## Verification and visual review
 
+Rust tests have been removed pending a new repository-wide test plan. Static
+checks:
+
 ```sh
-cargo test --locked -p agena-tui -p agena-tui-components -p agena-tui-session -p agena-tui-settings --lib
-cargo test --locked -p agena-tui-app --lib session_
-cargo test --locked -p agena-tui-app --lib app_help::tests
-cargo test --locked -p agena-tui-app --lib app_pointer::tests
 cargo clippy --locked --no-deps -p agena-tui -p agena-tui-components -p agena-tui-session -p agena-tui-settings -p agena-tui-app --all-targets -- -D warnings
 cargo fmt --all -- --check
-```
-
-Tests cover visual pagination and pointer indices, input focus, original session
-IDs in HTTP mutations, request ordering, failed appends, filtering, duplicate
-hub copies, and all eight UI locales. Rendering tests include 80 × 24, wider
-terminals, and tiny viewports. Manual visual review uses the production Ratatui
-renderer with fixture data, including Chinese, light/dark themes, and narrow
-windows:
-
-```sh
-AGENA_SESSION_PREVIEW_DIR="$PWD/.tmp-artifacts/sessions" \
-  cargo test --locked -p agena-tui-session session_browsing_write_previews -- --ignored --nocapture
-```
-
-The export writes SVG and plain text. `sessions-search-before` uses the previous
-generic picker renderer with the same fixture to make the density comparison
-reproducible. These are rendered fixtures, not screenshots of a user's live
-session database.
-
-The broader application suite also has two unrelated failures, reproduced with
-the same assertions in a clean detached worktree at the preceding commit
-`35771413f`: `public_provider_model_maps_to_client_local_picker_metadata`
-(verbosity levels) and
-`one_merged_marker_row_reveals_every_run_of_a_multi_run_reply` (transcript marker
-identity). The session-browsing checks do not depend on these tests. To exercise
-the remainder of the application suite while keeping those failures explicit:
-
-```sh
-cargo test --locked -p agena-tui-app --lib -- \
-  --skip public_provider_model_maps_to_client_local_picker_metadata \
-  --skip one_merged_marker_row_reveals_every_run_of_a_multi_run_reply
 ```

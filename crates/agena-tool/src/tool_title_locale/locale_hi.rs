@@ -1,8 +1,7 @@
 //! Hindi tool-headline vocabulary.
 //!
-//! Entries stay paired with their English key, so a translation can never
-//! drift onto the wrong key; the key set and structure match
-//! `tests::every_locale_covers_every_key`.
+//! Entries stay paired with their English key. The locale file keeps the
+//! same English keys and structure as the canonical vocabulary.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[
     ("Start agent", "एजेंट शुरू करें"),

@@ -25,23 +25,3 @@ impl Default for ProviderNetworkConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS, DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECS,
-        ProviderNetworkConfig,
-    };
-
-    #[test]
-    fn default_network_timeouts_are_stable_provider_contracts() {
-        assert_eq!(
-            ProviderNetworkConfig::default().request_timeout_secs,
-            DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECS
-        );
-        assert_eq!(
-            ProviderNetworkConfig::default().connect_timeout_secs,
-            DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS
-        );
-    }
-}

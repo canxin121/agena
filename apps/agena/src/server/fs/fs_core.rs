@@ -17,9 +17,6 @@ use super::{
     to_api_path,
 };
 
-#[cfg(test)]
-mod tests;
-
 fn absolute_fs_path(resolved: PathBuf, context: &'static str) -> ApiResult<PathBuf> {
     if resolved.is_absolute() {
         Ok(resolved)

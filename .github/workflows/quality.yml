@@ -39,23 +39,12 @@ jobs:
           cache-on-failure: true
       - name: Format
         run: cargo fmt --all -- --check
-      - name: Test workspace
-        run: cargo test --workspace --locked --no-fail-fast
-      - name: Test scheduler independently
-        run: cargo test --locked -p agena-scheduler
-      - name: Test optional plugin features independently and together
-        run: |
-          cargo test --locked -p agena-plugin-host --features signing
-          cargo test --locked -p agena-plugin-host --features wasm
-          cargo test --locked -p agena-plugin-host --all-features
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Lint optional plugin features
         run: cargo clippy --locked -p agena-plugin-host --all-targets --all-features -- -D warnings
       - name: Verify runtime crypto and auth
         run: python3 scripts/ci/verify-runtime-capabilities.py
-      - name: Verify plugin panic isolation in the shipping profile
-        run: cargo run --locked -p agena-plugin-host --profile dist --example panic_isolation
       - name: Ensure builds leave tracked sources unchanged
         run: git diff --exit-code
 

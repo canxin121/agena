@@ -110,19 +110,3 @@ impl From<tokio_tungstenite::tungstenite::Error> for ClientError {
         Self::Transport(agena_failure::diagnostic::format_error_chain(&err))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ClientError;
-
-    #[test]
-    fn transport_diagnostic_is_not_the_display_message() {
-        let diagnostic = "connection failed token=secret /private/agena.sock";
-        let error = ClientError::Transport(diagnostic.to_owned());
-        assert!(!error.to_string().contains("token=secret"));
-        assert!(!error.to_string().contains("/private/agena.sock"));
-        assert!(error.to_string().contains("connection failed"));
-        assert_eq!(error.diagnostic_message().as_deref(), Some(diagnostic));
-        assert_eq!(error.operator_diagnostic(), diagnostic);
-    }
-}

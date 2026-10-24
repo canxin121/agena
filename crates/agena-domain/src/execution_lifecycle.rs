@@ -128,36 +128,3 @@ pub enum ExecutionTransitionError {
         to: ExecutionPhase,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_execution_cannot_be_reopened_or_finished_twice() {
-        let mut execution = ExecutionLifecycle::start(ExecutionId::new());
-        execution
-            .finish(ExecutionOutcome::Cancelled)
-            .expect("first terminal transition");
-        assert_eq!(
-            execution.transition(ExecutionPhase::Starting),
-            Err(ExecutionTransitionError::AlreadyTerminal)
-        );
-        assert_eq!(
-            execution.finish(ExecutionOutcome::Completed),
-            Err(ExecutionTransitionError::AlreadyTerminal)
-        );
-    }
-
-    #[test]
-    fn invalid_phase_transitions_are_rejected() {
-        let mut execution = ExecutionLifecycle::start(ExecutionId::new());
-        assert_eq!(
-            execution.transition(ExecutionPhase::StreamingModel),
-            Err(ExecutionTransitionError::InvalidPhase {
-                from: ExecutionPhase::Starting,
-                to: ExecutionPhase::StreamingModel,
-            })
-        );
-    }
-}

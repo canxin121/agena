@@ -19,20 +19,6 @@ impl Drop for ContentRead {
     }
 }
 
-#[cfg(test)]
-impl ContentRead {
-    pub(crate) fn fixture(frame: Arc<ContentFrame>) -> Self {
-        let (_, receiver) = watch::channel((Some(frame.clone()), None));
-        let task = tokio::spawn(std::future::pending::<()>());
-        Self {
-            receiver,
-            task: task.abort_handle(),
-            displayed: Some(frame),
-            displayed_error: None,
-        }
-    }
-}
-
 impl App {
     /// A local interest set and frame scheduler. Collapsed/offscreen resources
     /// perform no ongoing work; a watch slot coalesces arbitrarily fast output.

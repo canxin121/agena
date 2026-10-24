@@ -8,10 +8,7 @@ use agena_domain::{
 use agena_runtime_tools::media_input;
 pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-#[cfg(test)]
-pub(super) static PREPARATION_BARRIER: StdMutex<
-    Option<(RequestId, tokio::sync::oneshot::Sender<()>)>,
-> = StdMutex::new(None);
+
 impl SessionManager {
     pub(super) async fn prepare_user_media(
         &self,
@@ -46,17 +43,7 @@ impl SessionManager {
         }) {
             return Ok((document, Vec::new()));
         }
-        #[cfg(test)]
-        {
-            let mut barrier = PREPARATION_BARRIER.lock().unwrap();
-            if barrier
-                .as_ref()
-                .is_some_and(|(target, _)| *target == request)
-                && let Some((_, reached)) = barrier.take()
-            {
-                let _ = reached.send(());
-            }
-        }
+
         let _preparation = MEDIA_PREPARATIONS
             .acquire()
             .await

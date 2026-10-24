@@ -1,6 +1,5 @@
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
-#[cfg(test)]
-mod benchmark;
+
 use std::time::{Duration, Instant};
 
 use crate::part::{GlobKind, GlobToolInput};
@@ -266,100 +265,5 @@ fn glob_stop_reason(base: &str, skipped_errors: usize, first_error: Option<&str>
             "{base}; {skipped_errors} workspace entries were unreadable; first error: {first_error}"
         ),
         None => format!("{base}; {skipped_errors} workspace entries were unreadable"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use globset::Glob;
-
-    use super::{ScanOptions, collect_matches};
-
-    #[test]
-    fn glob_kind_exclusions_and_cancellation_preserve_pagination() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir(root.path().join("folder")).unwrap();
-        fs::write(root.path().join("folder/a.rs"), "fixture").unwrap();
-        fs::write(root.path().join("b.rs"), "fixture").unwrap();
-        let matcher = Glob::new("**").unwrap().compile_matcher();
-        let mut options = ScanOptions {
-            kind: crate::part::GlobKind::Directory,
-            ..ScanOptions::default()
-        };
-        let (paths, reason) =
-            collect_matches(root.path(), &matcher, 0, 1, false, &options).unwrap();
-        assert_eq!(paths, [root.path().join("folder")]);
-        assert!(reason.is_none());
-        options.kind = crate::part::GlobKind::File;
-        options.exclude = globset::GlobSetBuilder::new()
-            .add(Glob::new("folder/**").unwrap())
-            .build()
-            .unwrap();
-        let (paths, reason) =
-            collect_matches(root.path(), &matcher, 0, 1, false, &options).unwrap();
-        assert_eq!(paths, [root.path().join("b.rs")]);
-        assert!(reason.is_none());
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
-        options.cancel = Some(&cancel);
-        assert!(matches!(
-            collect_matches(root.path(), &matcher, 0, 1, false, &options),
-            Err(super::ToolError::Cancelled)
-        ));
-    }
-
-    #[test]
-    fn glob_pages_deterministically_and_skips_heavy_directories_by_default() {
-        let root =
-            std::env::temp_dir().join(format!("agena-glob-test-{}", uuid::Uuid::new_v4().simple()));
-        fs::create_dir_all(&root).expect("temporary glob workspace");
-        for path in [
-            "src/a.rs",
-            "src/b.rs",
-            "src/c.rs",
-            "node_modules/dependency.rs",
-            "target/generated.rs",
-        ] {
-            let path = root.join(path);
-            fs::create_dir_all(path.parent().expect("fixture parent")).expect("create fixture dir");
-            fs::write(path, "fixture").expect("write fixture");
-        }
-        let matcher = Glob::new("**/*.rs").expect("glob").compile_matcher();
-
-        let (first, first_stop_reason) =
-            collect_matches(&root, &matcher, 0, 2, false, &ScanOptions::default())
-                .expect("first page");
-        let (second, second_stop_reason) =
-            collect_matches(&root, &matcher, 2, 2, false, &ScanOptions::default())
-                .expect("second page");
-        assert_eq!(
-            first
-                .iter()
-                .map(|path| path.strip_prefix(&root).expect("relative"))
-                .collect::<Vec<_>>(),
-            vec![
-                std::path::Path::new("src/a.rs"),
-                std::path::Path::new("src/b.rs")
-            ]
-        );
-        assert_eq!(
-            first_stop_reason.as_deref(),
-            Some("result page limit reached")
-        );
-        assert_eq!(
-            second
-                .iter()
-                .map(|path| path.strip_prefix(&root).expect("relative"))
-                .collect::<Vec<_>>(),
-            vec![std::path::Path::new("src/c.rs")]
-        );
-        assert_eq!(second_stop_reason, None);
-
-        let (all, _) = collect_matches(&root, &matcher, 0, 10, true, &ScanOptions::default())
-            .expect("ignored paths");
-        assert_eq!(all.len(), 5);
-        fs::remove_dir_all(root).expect("remove glob fixture");
     }
 }

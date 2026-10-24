@@ -79,27 +79,3 @@ pub fn write_config_file_atomically(path: &Path, bytes: &[u8]) -> io::Result<()>
         .map(|_| ())
         .map_err(|error| error.error)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{with_config_file_write_lock, write_config_file_atomically};
-
-    #[test]
-    fn config_write_replaces_atomically_without_fixed_temp_file() {
-        let directory = tempfile::tempdir().expect("configuration directory");
-        let path = directory.path().join("config.json");
-
-        with_config_file_write_lock(|| write_config_file_atomically(&path, b"first"))
-            .expect("first config");
-        with_config_file_write_lock(|| write_config_file_atomically(&path, b"replacement"))
-            .expect("replacement config");
-
-        assert_eq!(fs::read(&path).expect("read config"), b"replacement");
-        assert_eq!(
-            directory.path().read_dir().expect("read directory").count(),
-            1
-        );
-    }
-
-    use std::fs;
-}

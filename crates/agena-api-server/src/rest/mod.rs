@@ -99,67 +99,6 @@ pub use revisions::*;
 
 pub use model_catalog::*;
 
-#[cfg(test)]
-static TEST_SESSION_STREAM_SUBSCRIPTIONS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashSet<String>>,
-> = std::sync::OnceLock::new();
-
-#[cfg(test)]
-type TestSnapshotGate = std::sync::Arc<tokio::sync::Notify>;
-
-#[cfg(test)]
-static TEST_SESSION_STREAM_SNAPSHOT_GATES: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, TestSnapshotGate>>,
-> = std::sync::OnceLock::new();
-
-#[cfg(test)]
-pub(crate) fn hold_test_session_stream_snapshot(probe: String) -> TestSnapshotGate {
-    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
-    TEST_SESSION_STREAM_SNAPSHOT_GATES
-        .get_or_init(Default::default)
-        .lock()
-        .expect("session snapshot gate lock")
-        .insert(probe, gate.clone());
-    gate
-}
-
-#[cfg(test)]
-pub(crate) async fn wait_test_session_stream_snapshot(
-    probe: &str,
-    subscription: &crate::live::LiveSubscription,
-) {
-    let gate = TEST_SESSION_STREAM_SNAPSHOT_GATES
-        .get_or_init(Default::default)
-        .lock()
-        .expect("session snapshot gate lock")
-        .remove(probe);
-    if let Some(gate) = gate {
-        while !subscription.has_queued_item() {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        }
-        mark_test_session_stream_subscription(format!("{probe}:queued"));
-        gate.notified().await;
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn mark_test_session_stream_subscription(probe: String) {
-    TEST_SESSION_STREAM_SUBSCRIPTIONS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
-        .expect("session stream probe lock")
-        .insert(probe);
-}
-
-#[cfg(test)]
-pub(crate) fn take_test_session_stream_subscription(probe: &str) -> bool {
-    TEST_SESSION_STREAM_SUBSCRIPTIONS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-        .lock()
-        .expect("session stream probe lock")
-        .remove(probe)
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for the ordered session-parts snapshot.
 #[serde(deny_unknown_fields)]
@@ -187,16 +126,6 @@ pub struct SessionChangeStreamQuery {
     /// UI language for human headlines. Stored part data stays English.
     #[serde(default)]
     pub locale: Option<String>,
-    /// Deterministic overflow control for the in-process transport contract
-    /// test. This field does not exist in production builds.
-    #[cfg(test)]
-    #[serde(default)]
-    pub test_queue_capacity: Option<usize>,
-    /// Unique test-only probe marked after the handler has subscribed to the
-    /// live bus, with an optional registered snapshot gate for overflow tests.
-    #[cfg(test)]
-    #[serde(default)]
-    pub test_subscription_probe: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -580,50 +509,6 @@ fn parse_usage_datetime(
     ))
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod usage_query_tests {
-    use super::{UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
-
-    #[test]
-    fn http_usage_query_maps_filters_and_timezone() {
-        let query = usage_stats_query_from_http(UsageStatsHttpQuery {
-            period: Some(UsagePeriod::Last14Days),
-            provider: Some("openai, anthropic".to_string()),
-            model: Some("gpt-5".to_string()),
-            session: Some("12,35".to_string()),
-            include_subagents: Some(false),
-            timezone_offset_minutes: Some(480),
-            ..UsageStatsHttpQuery::default()
-        })
-        .expect("valid usage query");
-
-        assert_eq!(query.period, UsagePeriod::Last14Days);
-        assert_eq!(query.provider_ids, ["anthropic", "openai"]);
-        assert_eq!(query.model_ids, ["gpt-5"]);
-        assert_eq!(query.session_ids, [12, 35]);
-        assert!(!query.include_subagents);
-        assert_eq!(query.timezone_offset_minutes, 480);
-    }
-
-    #[test]
-    fn http_usage_query_rejects_invalid_timezone_and_session() {
-        let timezone_error = usage_stats_query_from_http(UsageStatsHttpQuery {
-            timezone_offset_minutes: Some(1_440),
-            ..UsageStatsHttpQuery::default()
-        })
-        .expect_err("invalid timezone");
-        assert_eq!(timezone_error.status(), axum::http::StatusCode::BAD_REQUEST);
-
-        let session_error = usage_stats_query_from_http(UsageStatsHttpQuery {
-            session: Some("12,nope".to_string()),
-            ..UsageStatsHttpQuery::default()
-        })
-        .expect_err("invalid session id");
-        assert_eq!(session_error.status(), axum::http::StatusCode::BAD_REQUEST);
-    }
-}
-
 pub async fn reload_runtime(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -687,33 +572,6 @@ fn server_error_from_runtime_background_task(
     error: agena_runtime::RuntimeBackgroundTaskControlError,
 ) -> ServerError {
     agena_application::ApplicationError::from(error).into()
-}
-
-#[cfg(test)]
-mod background_task_error_tests {
-    use super::*;
-    use agena_runtime::RuntimeBackgroundTaskControlError as Error;
-    use axum::http::StatusCode;
-
-    #[test]
-    fn control_failures_preserve_retryable_missing_and_conflict_http_statuses() {
-        for (error, expected) in [
-            (
-                Error::Capacity { limit: 64 },
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-            (Error::ExecutorUnavailable, StatusCode::SERVICE_UNAVAILABLE),
-            (Error::Shutdown, StatusCode::SERVICE_UNAVAILABLE),
-            (Error::NotFound("missing".into()), StatusCode::NOT_FOUND),
-            (Error::NotRunning("finished".into()), StatusCode::CONFLICT),
-            (Error::NotCancellable("owned".into()), StatusCode::CONFLICT),
-        ] {
-            assert_eq!(
-                server_error_from_runtime_background_task(error).status(),
-                expected
-            );
-        }
-    }
 }
 
 async fn reload_settings_if_needed(

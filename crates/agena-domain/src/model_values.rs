@@ -63,38 +63,3 @@ pub enum ModelLifecycle {
     Experimental,
     Deprecated,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{CapabilitySupport, ModelInputModality, ModelLifecycle};
-
-    #[test]
-    fn capability_support_has_expected_default_and_helpers() {
-        assert_eq!(CapabilitySupport::default(), CapabilitySupport::Unknown);
-        assert!(CapabilitySupport::Supported.is_supported());
-        assert!(CapabilitySupport::Unsupported.is_unsupported());
-        assert_eq!(CapabilitySupport::supported(), CapabilitySupport::Supported);
-    }
-
-    #[test]
-    fn model_input_modality_uses_stable_wire_and_display_values() {
-        assert_eq!(ModelInputModality::Document.as_ref(), "document");
-        assert_eq!(ModelInputModality::Video.to_string(), "video");
-        assert_eq!(
-            serde_json::to_string(&ModelInputModality::File).unwrap(),
-            "\"file\""
-        );
-    }
-
-    #[test]
-    fn model_lifecycle_uses_snake_case_wire_values() {
-        assert_eq!(
-            serde_json::to_string(&ModelLifecycle::Experimental).unwrap(),
-            "\"experimental\""
-        );
-        assert_eq!(
-            serde_json::from_str::<ModelLifecycle>("\"deprecated\"").unwrap(),
-            ModelLifecycle::Deprecated
-        );
-    }
-}

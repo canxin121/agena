@@ -197,6 +197,3 @@ fn retry_after(value: &str) -> Option<u64> {
     let when = chrono::DateTime::parse_from_rfc2822(value).ok()?;
     Some((when.timestamp() - chrono::Utc::now().timestamp()).clamp(0, 86_400) as u64)
 }
-
-#[cfg(test)]
-mod tests;

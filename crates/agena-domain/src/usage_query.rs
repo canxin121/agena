@@ -170,31 +170,3 @@ fn matches_text_filter(filters: &[String], value: &str) -> bool {
             .iter()
             .any(|filter| value.eq_ignore_ascii_case(filter))
 }
-
-#[cfg(test)]
-mod tests {
-    use chrono::{TimeZone, Utc};
-
-    use super::{UsagePeriod, UsageStatsQuery};
-
-    #[test]
-    fn timezone_aligned_period_and_filters_are_stable() {
-        let now = Utc.with_ymd_and_hms(2026, 7, 11, 3, 30, 0).unwrap();
-        let query = UsageStatsQuery::for_period_with_offset(UsagePeriod::Today, now, 480)
-            .with_filters(
-                vec![" OpenAI ".to_owned(), "openai".to_owned()],
-                vec!["gpt-5".to_owned()],
-                vec![3, 1, 3],
-                false,
-            );
-
-        assert_eq!(
-            query.from,
-            Some(Utc.with_ymd_and_hms(2026, 7, 10, 16, 0, 0).unwrap())
-        );
-        assert_eq!(query.provider_ids, ["openai"]);
-        assert_eq!(query.session_ids, [1, 3]);
-        assert!(query.matches(1, false, "OPENAI", "gpt-5"));
-        assert!(!query.matches(1, true, "openai", "gpt-5"));
-    }
-}

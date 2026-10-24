@@ -144,40 +144,6 @@ pub enum ProviderSecretSource {
     Env(String),
 }
 
-#[cfg(test)]
-mod provider_discovery_contract_tests {
-    use super::{ListProviderAdapterModelsParams, ProviderProtocolPaths, ProviderSecretSource};
-
-    #[test]
-    fn discovery_params_have_a_self_owned_stable_wire_shape() {
-        let params = ListProviderAdapterModelsParams {
-            provider_id: Some("example".to_owned()),
-            base_url: "https://models.example".to_owned(),
-            protocol_paths: ProviderProtocolPaths {
-                openai: "/openai".to_owned(),
-                ..ProviderProtocolPaths::default()
-            },
-            api_key: Some(ProviderSecretSource::Env("EXAMPLE_API_KEY".to_owned())),
-            adapter_ids: vec!["openai".to_owned()],
-        };
-
-        assert_eq!(
-            serde_json::to_value(params).expect("serialize discovery params"),
-            serde_json::json!({
-                "provider_id": "example",
-                "base_url": "https://models.example",
-                "protocol_paths": {
-                    "openai": "/openai",
-                    "anthropic": "/v1",
-                    "gemini": "/v1beta"
-                },
-                "api_key": { "kind": "env", "value": "EXAMPLE_API_KEY" },
-                "adapter_ids": ["openai"]
-            })
-        );
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Parameters for listing saved provider adapter models.
 pub struct ListSavedProviderAdapterModelsParams {

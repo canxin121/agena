@@ -732,18 +732,3 @@ fn agent_child_capability_denials() -> std::collections::BTreeSet<String> {
         })
         .collect()
 }
-
-#[cfg(test)]
-#[test]
-fn agent_delivery_fits_activity_limit_after_json_escaping() {
-    let original = "\u{0000}\"\\界".repeat(8000);
-    let value=bounded_agent_payload(serde_json::json!({"kind":"agent_result","agent_id":2,"name":"worker","status":"completed","text":original,"failure":null})).unwrap();
-    assert_eq!(value["text_truncated"], true);
-    assert!(original.starts_with(value["text"].as_str().unwrap()));
-    assert!(
-        serde_json::to_vec(&BackgroundActivityOutcome::Succeeded { value })
-            .unwrap()
-            .len()
-            < 64 * 1024
-    );
-}

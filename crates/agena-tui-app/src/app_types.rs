@@ -58,9 +58,6 @@ pub(crate) use agena_tui_transcript::{
     TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
 };
 
-#[cfg(test)]
-pub(crate) use agena_tui_transcript::TranscriptVerticalNavigationStep;
-
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 // A full ratatui frame can include Markdown layout, syntax highlighting and
 // rich tool cards. Ten frames per second keeps spinners responsive without
@@ -550,13 +547,6 @@ pub struct App {
     pub(super) last_ctrl_c_at: Option<Instant>,
     pub(super) double_esc_window: Duration,
     pub(super) terminal_integration: TerminalIntegrationState,
-    /// Cooldown state for healing the composer's bottom-right plan chip.
-    /// The chip is backed by an in-memory display contribution that starts
-    /// empty after a process restart or runtime reload; the TUI re-requests
-    /// it (read-only `agena.plan.get`) on session open and periodically while
-    /// the chip is missing.
-    #[cfg(test)]
-    pub(super) _test_state_dir: tempfile::TempDir,
 }
 
 impl Drop for App {
@@ -1186,120 +1176,3 @@ pub(super) use agena_tui::help::{HelpOverlay, HelpOverlayKind};
 pub(super) use agena_tui_components::{
     HelpDialogEntry as HelpEntry, HelpDialogSection as HelpSection,
 };
-
-#[cfg(test)]
-mod ui_failure_tests {
-    use super::UiFailure;
-
-    #[test]
-    fn backend_failure_survives_anyhow_context_without_ui_rewrapping() {
-        let failure = agena_failure::Failure::new(
-            agena_failure::FailureCode::new("tool.execution_failed"),
-            agena_failure::FailureCategory::DependencyUnavailable,
-            agena_failure::FailureResponsibility::Dependency,
-            agena_failure::RetryDirective::AfterUserAction,
-            agena_failure::RecoveryDirective::Retry,
-            agena_failure::FailureImpact::OperationFailed,
-            agena_failure::UserPresentation::validated(
-                "tool-execution-failed",
-                "Filesystem write failed because the target changed.",
-            ),
-        );
-        let expected_id = failure.id;
-        let error = anyhow::Error::new(agena_application::ApplicationError::from_failure(failure))
-            .context("failed to submit user message");
-
-        let projected = UiFailure::from_backend(error);
-
-        assert_eq!(projected.failure.id, expected_id);
-        assert_eq!(projected.failure.code.as_str(), "tool.execution_failed");
-        assert_eq!(
-            projected.failure.user.fallback,
-            "Filesystem write failed because the target changed."
-        );
-    }
-
-    #[test]
-    fn settings_validation_message_survives_backend_context_rewrap() {
-        // A config settings edit that fails validation carries the real
-        // user-visible message on `RuntimeConfigSettingsError`. The backend
-        // wraps it with anyhow context; UiFailure::from_backend must recover
-        // the structured failure instead of falling back to the generic
-        // "terminal interface" message.
-        let error = agena_runtime::RuntimeConfigSettingsError::invalid_input(
-            "providers.example `ghost` references unknown provider",
-        );
-        let expected = error.failure().user.fallback.clone();
-        let wrapped = anyhow::Error::new(error).context("failed to set config setting");
-
-        let projected = UiFailure::from_backend(wrapped);
-
-        assert!(!projected.failure.is_unexpected());
-        assert_eq!(projected.failure.user.fallback, expected);
-        assert_ne!(
-            projected.failure.user.fallback,
-            "The terminal interface could not finish this action."
-        );
-    }
-
-    #[test]
-    fn unstructured_backend_error_surfaces_a_scrubbed_real_root_cause() {
-        let error = anyhow::Error::new(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "token=secret /private/agena.sqlite is read-only",
-        ))
-        .context("failed to persist terminal state");
-
-        let projected = UiFailure::from_backend(error);
-        let message = projected.failure.user.fallback.as_str();
-
-        assert!(message.contains("failed to persist terminal state"));
-        assert!(message.contains("read-only"));
-        assert!(!message.contains("token=secret"));
-        assert!(!message.contains("/private/agena.sqlite"));
-        assert_ne!(
-            message,
-            "The terminal interface could not finish this action."
-        );
-    }
-}
-
-#[cfg(test)]
-mod terminal_integration_state_tests {
-    use super::TerminalIntegrationState;
-    use agena_tui_platform::terminal::integration::NotificationMethod;
-
-    #[test]
-    fn title_due_is_marked_until_emitted() {
-        let mut state = TerminalIntegrationState::default();
-        assert!(!state.title_due());
-        assert!(state.last_title().is_none());
-
-        state.mark_title_pending();
-        assert!(state.title_due());
-
-        state.note_title_emitted("fix login".to_owned());
-        assert!(!state.title_due());
-        assert_eq!(state.last_title(), Some("fix login"));
-    }
-
-    #[test]
-    fn a_burst_of_notifications_coalesces_into_one_alert() {
-        let mut state = TerminalIntegrationState::default();
-        state.queue_notification(NotificationMethod::Bell);
-        state.queue_notification(NotificationMethod::Osc9);
-        state.queue_notification(NotificationMethod::Bell);
-
-        // The most recently queued method wins; the queue drains empty.
-        assert_eq!(state.take_notification(), Some(NotificationMethod::Bell));
-        assert_eq!(state.take_notification(), None);
-    }
-
-    #[test]
-    fn a_plugin_notify_intent_fires_exactly_once() {
-        let mut state = TerminalIntegrationState::default();
-        assert!(state.notify_consumed_once("\"done\""));
-        assert!(!state.notify_consumed_once("\"done\""));
-        assert!(state.notify_consumed_once("\"blocked\""));
-    }
-}

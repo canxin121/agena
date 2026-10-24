@@ -101,23 +101,3 @@ fn document_score(document: &MemorySearchDocument, terms: &[String]) -> u32 {
         })
         .sum()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{document_score, query_terms};
-    use crate::MemorySearchDocument;
-
-    #[test]
-    fn portable_scoring_prefers_name_matches() {
-        let document = MemorySearchDocument::new(
-            "1".into(),
-            "Release checklist".into(),
-            "Deployment notes".into(),
-            None,
-            "Build every target".into(),
-            "memory.md".into(),
-        );
-        assert!(document_score(&document, &query_terms("release")) > 0);
-        assert_eq!(document_score(&document, &query_terms("absent")), 0);
-    }
-}

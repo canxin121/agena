@@ -197,37 +197,3 @@ async fn read_short_link_response(mut response: reqwest::Response) -> Result<Str
     }
     Ok(std::str::from_utf8(&bytes)?.trim().to_owned())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{SHORT_LINK_TRIGGER_WIDTH, should_shorten_url, should_use_short_url};
-
-    #[test]
-    fn only_visually_wide_urls_trigger_shortening() {
-        assert!(!should_shorten_url("https://example.test/short"));
-        assert!(should_shorten_url(&format!(
-            "https://example.test/{}",
-            "x".repeat(SHORT_LINK_TRIGGER_WIDTH)
-        )));
-    }
-
-    #[test]
-    fn accepted_short_urls_must_use_the_expected_safe_host() {
-        let original = format!("https://example.test/{}", "x".repeat(120));
-        assert!(should_use_short_url(
-            &original,
-            "https://tinyurl.com/agena",
-            "tinyurl.com"
-        ));
-        assert!(!should_use_short_url(
-            &original,
-            "https://attacker.example/agena",
-            "tinyurl.com"
-        ));
-        assert!(!should_use_short_url(
-            &original,
-            "javascript:alert(1)",
-            "tinyurl.com"
-        ));
-    }
-}

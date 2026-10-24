@@ -1,10 +1,5 @@
-//! Bounded in-process ripgrep search. Count limits apply to files, not lines.
-#[cfg(test)]
-mod benchmark;
 mod parallel;
 mod scan;
-#[cfg(test)]
-mod tests;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,

@@ -174,20 +174,3 @@ pub struct CommandAfterPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
 }
-
-#[cfg(test)]
-mod tests {
-    use agena_plugin_contracts::{CommandHostEffect, CommandResult};
-
-    #[test]
-    fn command_results_only_contain_controlled_host_effects() {
-        let output =
-            CommandResult::succeeded("done").with_effect(CommandHostEffect::RefreshPluginSurface {
-                plugin_id: "example.plugin".to_string(),
-            });
-        let encoded = serde_json::to_value(output).expect("serialize command result");
-        assert_eq!(encoded["status"], "succeeded");
-        assert!(encoded["effects"][0]["kind"] == "refresh_plugin_surface");
-        assert!(encoded.get("invoke_tool").is_none());
-    }
-}

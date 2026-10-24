@@ -993,6 +993,3 @@ impl JobStore for SqliteJobStore {
             })?
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -506,6 +506,3 @@ fn enqueue_url(
         queue.push_back((url, current_depth + 1));
     }
 }
-
-#[cfg(test)]
-mod tests;

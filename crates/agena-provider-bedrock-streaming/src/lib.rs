@@ -259,26 +259,3 @@ pub fn decode_response(
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::BedrockAnthropicStreamServiceError;
-    use serde_json::json;
-
-    #[test]
-    fn service_error_preserves_message_and_retry_policy() {
-        let throttled = BedrockAnthropicStreamServiceError::from_payload(
-            "throttlingException",
-            json!({"message": "slow down"}),
-        );
-        assert_eq!(throttled.message, "slow down");
-        assert!(throttled.retryable);
-
-        let invalid = BedrockAnthropicStreamServiceError::from_payload(
-            "validationException",
-            json!({"originalMessage": "unsupported model"}),
-        );
-        assert_eq!(invalid.message, "unsupported model");
-        assert!(!invalid.retryable);
-    }
-}

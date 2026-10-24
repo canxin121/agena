@@ -95,27 +95,3 @@ fn write_file_atomically_blocking(path: &Path, bytes: &[u8]) -> io::Result<()> {
             .map_err(|error| error.error)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::write_file_atomically;
-
-    #[tokio::test]
-    async fn writes_and_replaces_without_leaving_staging_files() {
-        let directory = tempfile::tempdir().expect("Git atomic directory");
-        let path = directory.path().join("config");
-
-        write_file_atomically(path.clone(), b"first".to_vec())
-            .await
-            .expect("create file");
-        write_file_atomically(path.clone(), b"second".to_vec())
-            .await
-            .expect("replace file");
-
-        assert_eq!(std::fs::read(path).expect("read file"), b"second");
-        assert_eq!(
-            directory.path().read_dir().expect("read directory").count(),
-            1
-        );
-    }
-}

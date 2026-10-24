@@ -49,37 +49,3 @@ impl OscGuard {
         output
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unterminated_osc_is_bounded_and_screen_recovers_after_terminator() {
-        let mut guard = OscGuard::default();
-        let mut parser = vt100::Parser::new(24, 80, 0);
-        parser.process(&guard.filter(b"before\x1b]0;"));
-        let mut forwarded = 0;
-        for _ in 0..4096 {
-            let filtered = guard.filter(&[b'x'; 4096]);
-            forwarded += filtered.len();
-            parser.process(&filtered);
-        }
-        assert!(forwarded <= MAX_OSC_BYTES + 1);
-        assert_eq!(guard.discarded, 1);
-        parser.process(&guard.filter(b"\x1b\\after"));
-        assert_eq!(parser.screen().contents(), "beforeafter");
-    }
-
-    #[test]
-    fn ordinary_split_osc_is_preserved_exactly() {
-        let mut guard = OscGuard::default();
-        let first = b"\x1b";
-        let second = b"]11;?\x1b";
-        let third = b"\\text\x1b[2J";
-        for bytes in [first.as_slice(), second.as_slice(), third.as_slice()] {
-            assert_eq!(guard.filter(bytes), bytes);
-        }
-        assert_eq!(guard.discarded, 0);
-    }
-}

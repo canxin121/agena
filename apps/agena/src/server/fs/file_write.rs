@@ -12,9 +12,6 @@ use axum::body::Bytes;
 
 use super::{ApiResult, AppError};
 
-#[cfg(test)]
-mod tests;
-
 // Keep file syncs and other blocking filesystem work off Tokio's workers.
 // The permit lives in the blocking task even if the HTTP waiter is dropped.
 static FILE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);

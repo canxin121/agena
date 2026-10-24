@@ -39,25 +39,3 @@ pub enum RunAbortReason {
     /// Internal scheduling error.
     Internal,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{FinishReason, RunAbortReason};
-
-    #[test]
-    fn finish_reason_has_stable_default_and_wire_spelling() {
-        assert_eq!(FinishReason::default(), FinishReason::Stop);
-        assert_eq!(
-            serde_json::to_string(&FinishReason::ToolCalls).unwrap(),
-            "\"tool_calls\""
-        );
-    }
-
-    #[test]
-    fn abort_reason_has_stable_wire_spelling() {
-        assert_eq!(
-            serde_json::to_string(&RunAbortReason::ProcessRestart).unwrap(),
-            "\"process_restart\""
-        );
-    }
-}

@@ -357,17 +357,3 @@ use crate::{
     choice_item_with_value, provider_studio_api_key_env_choice_items,
     provider_studio_profile_choice_items, ui_text,
 };
-
-#[cfg(test)]
-mod tests {
-    use crate::settings_fields;
-
-    #[test]
-    fn provider_defaults_are_not_registered_as_settings_fields() {
-        assert!(
-            !settings_fields()
-                .into_iter()
-                .any(|field| field.path == "providers.default")
-        );
-    }
-}

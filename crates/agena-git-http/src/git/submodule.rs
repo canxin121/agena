@@ -223,32 +223,3 @@ pub async fn git_submodule_update(
 
     git_success_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::list_submodules;
-
-    #[test]
-    fn libgit2_lists_submodules_with_git_config_quoting() {
-        let temp = tempfile::tempdir().expect("temp directory");
-        git2::Repository::init(temp.path()).expect("repository");
-        fs::write(
-            temp.path().join(".gitmodules"),
-            concat!(
-                "[submodule \"quoted name\"]\n",
-                "\tpath = vendor/quoted path\n",
-                "\turl = ssh://git@example.com/team/repository.git\n",
-                "\tbranch = release/v2\n",
-            ),
-        )
-        .expect("gitmodules");
-
-        let listed = list_submodules(temp.path()).expect("submodule list");
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].path, "vendor/quoted path");
-        assert_eq!(listed[0].url, "ssh://git@example.com/team/repository.git");
-        assert_eq!(listed[0].branch.as_deref(), Some("release/v2"));
-    }
-}

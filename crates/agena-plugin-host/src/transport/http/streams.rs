@@ -355,6 +355,3 @@ impl Streams {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

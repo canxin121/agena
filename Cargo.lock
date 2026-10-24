@@ -93,12 +93,10 @@ dependencies = [
  "agena-failure",
  "agena-git-http",
  "agena-mcp-server",
- "agena-plugin-sdk",
  "agena-runtime",
  "agena-secret-store",
  "agena-storage",
  "agena-storage-layout",
- "agena-storage-sqlite",
  "agena-tui",
  "agena-tui-app",
  "agena-tui-platform",
@@ -132,13 +130,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "sqlx 0.9.0",
  "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
  "tokio-tungstenite 0.30.0",
- "tower",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
@@ -171,7 +167,6 @@ dependencies = [
  "agena-api",
  "agena-application",
  "agena-async",
- "agena-client",
  "agena-domain",
  "agena-failure",
  "agena-notification",
@@ -180,7 +175,6 @@ dependencies = [
  "agena-runtime",
  "agena-runtime-contracts",
  "agena-runtime-notifications",
- "agena-runtime-tools",
  "agena-storage",
  "async-stream",
  "async-trait",
@@ -188,23 +182,16 @@ dependencies = [
  "blake3",
  "chrono",
  "futures-util",
- "http 1.5.0",
  "lru",
  "portable-atomic",
- "reqwest 0.13.4",
- "sea-orm",
  "semver",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "smol_str",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.30.0",
  "tokio-util",
- "tower",
  "tracing",
  "uuid",
 ]
@@ -228,7 +215,6 @@ dependencies = [
  "agena-scheduler",
  "agena-storage",
  "agena-storage-layout",
- "agena-storage-sqlite",
  "agena-tool",
  "anyhow",
  "base64 0.22.1",
@@ -236,7 +222,6 @@ dependencies = [
  "ignore",
  "libc",
  "path-clean",
- "sea-orm",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -257,7 +242,6 @@ dependencies = [
 name = "agena-bundled-plugins"
 version = "0.1.0"
 dependencies = [
- "agena-api",
  "agena-async",
  "agena-domain",
  "agena-failure",
@@ -277,7 +261,6 @@ dependencies = [
  "agena-tool",
  "agena-web",
  "async-trait",
- "axum",
  "base64 0.22.1",
  "chrono",
  "futures-util",
@@ -342,7 +325,6 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-storage-layout",
- "axum",
  "chrono",
  "futures-util",
  "portable-atomic",
@@ -375,27 +357,6 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "agena-e2e"
-version = "0.1.0"
-dependencies = [
- "agena-api",
- "agena-application",
- "agena-domain",
- "agena-mcp-client",
- "agena-mcp-server",
- "agena-runtime",
- "agena-runtime-contracts",
- "agena-storage",
- "agena-storage-layout",
- "anyhow",
- "async-trait",
- "clap",
- "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -443,7 +404,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "dashmap",
- "futures-util",
  "git2",
  "ignore",
  "notify",
@@ -475,7 +435,6 @@ dependencies = [
  "portable-atomic",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -629,7 +588,6 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-async",
- "agena-domain",
  "agena-failure",
  "agena-plugin-sdk",
  "agena-process",
@@ -644,11 +602,9 @@ dependencies = [
  "jsonschema",
  "portable-atomic",
  "reqwest 0.13.4",
- "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -657,7 +613,6 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
- "wat",
  "which",
 ]
 
@@ -699,33 +654,18 @@ dependencies = [
  "axum",
  "bitflags 2.13.1",
  "bytes",
- "fs4",
  "futures-util",
- "jsonschema",
- "nix 0.28.0",
- "notify",
  "portable-atomic",
- "proc-macro-error2",
- "prometheus",
- "ratatui-image",
- "ratex-unicode-font",
  "regex",
  "reqwest 0.13.4",
- "rmcp",
  "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
- "spider_fingerprint",
- "tantivy",
- "term-maths",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
- "tower-http 0.7.0",
  "tracing",
- "tree-sitter",
- "trybuild",
  "url",
  "uuid",
 ]
@@ -738,7 +678,6 @@ dependencies = [
  "libc",
  "portable-pty",
  "process-wrap",
- "tempfile",
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
@@ -761,7 +700,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
- "tokio",
  "tracing",
 ]
 
@@ -775,7 +713,6 @@ dependencies = [
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
  "base64 0.22.1",
- "reqwest 0.13.4",
  "thiserror 2.0.20",
  "webpki-root-certs",
 ]
@@ -876,7 +813,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -959,11 +895,8 @@ dependencies = [
  "agena-secret-store",
  "agena-storage-layout",
  "async-trait",
- "axum",
  "hex",
- "reqwest 0.13.4",
  "serde_json",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -999,7 +932,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -1012,7 +944,6 @@ name = "agena-runtime-provider-adapters"
 version = "0.1.0"
 dependencies = [
  "agena-async",
- "agena-bundled-plugins",
  "agena-domain",
  "agena-failure",
  "agena-plugin-host",
@@ -1024,7 +955,6 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-provider",
  "agena-runtime-tools",
- "agena-storage",
  "async-stream",
  "async-trait",
  "bytes",
@@ -1035,7 +965,6 @@ dependencies = [
  "reqwest 0.13.4",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
@@ -1075,7 +1004,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -1110,9 +1038,7 @@ dependencies = [
  "agena-scheduler",
  "agena-storage",
  "agena-storage-layout",
- "agena-storage-sqlite",
  "agena-tool",
- "async-trait",
  "base64 0.22.1",
  "blake3",
  "chrono",
@@ -1135,7 +1061,6 @@ dependencies = [
  "rayon",
  "regex",
  "schemars",
- "sea-orm",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1166,7 +1091,6 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -1225,7 +1149,6 @@ name = "agena-storage-layout"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "tempfile",
 ]
 
 [[package]]
@@ -1236,7 +1159,6 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-provider",
- "agena-runtime-session-core",
  "agena-scheduler",
  "agena-storage",
  "agena-storage-layout",
@@ -1272,10 +1194,8 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.20",
  "tree-sitter",
- "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1287,7 +1207,6 @@ dependencies = [
  "anyhow",
  "crossterm",
  "fluent-templates",
- "libc",
  "ratatui",
  "ratatui-image",
  "reqwest 0.13.4",
@@ -1496,7 +1415,6 @@ dependencies = [
  "chrono",
  "codex-mermaid",
  "comrak",
- "image",
  "ratatui",
  "regex",
  "serde_json",
@@ -4306,7 +4224,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6b1dac7e7f07f8a60aa844f616bede13deeffaf24e9e35ae9e4979a7dac4a5c"
 dependencies = [
- "flume 0.11.1",
+ "flume",
  "ignore",
  "proc-macro2",
  "quote",
@@ -4324,7 +4242,7 @@ dependencies = [
  "fluent-langneg",
  "fluent-syntax",
  "fluent-template-macros",
- "flume 0.11.1",
+ "flume",
  "ignore",
  "intl-memoizer",
  "log",
@@ -4357,17 +4275,6 @@ name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
-dependencies = [
- "futures-core",
- "futures-sink",
- "spin",
-]
-
-[[package]]
-name = "flume"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -4880,15 +4787,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
-]
-
-[[package]]
-name = "hashlink"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
-dependencies = [
- "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -5598,8 +5496,6 @@ dependencies = [
  "percent-encoding",
  "referencing",
  "regex",
- "reqwest 0.13.4",
- "rustls",
  "serde",
  "serde_json",
  "unicode-general-category",
@@ -7189,40 +7085,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prometheus"
-version = "0.14.0"
-dependencies = [
- "cfg-if",
- "fnv",
- "lazy_static",
- "memchr",
- "parking_lot",
- "portable-atomic",
- "protobuf",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "protobuf"
-version = "3.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
-dependencies = [
- "once_cell",
- "protobuf-support",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "protobuf-support"
-version = "3.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
-dependencies = [
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8423,7 +8285,7 @@ dependencies = [
  "sea-query-binder",
  "serde",
  "serde_json",
- "sqlx 0.8.6",
+ "sqlx",
  "strum 0.26.3",
  "thiserror 2.0.20",
  "time",
@@ -8465,7 +8327,7 @@ checksum = "b0019f47430f7995af63deda77e238c17323359af241233ec768aba1faea7608"
 dependencies = [
  "sea-query",
  "serde_json",
- "sqlx 0.8.6",
+ "sqlx",
 ]
 
 [[package]]
@@ -9099,22 +8961,11 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fefb893899429669dcdd979aff487bd78f4064e5e7907e4269081e0ef7d97dc"
 dependencies = [
- "sqlx-core 0.8.6",
- "sqlx-macros 0.8.6",
+ "sqlx-core",
+ "sqlx-macros",
  "sqlx-mysql",
  "sqlx-postgres",
- "sqlx-sqlite 0.8.6",
-]
-
-[[package]]
-name = "sqlx"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "378620ccc25c62c89d8be1c819e76a88d59bdcc3304733330788948e619bfd71"
-dependencies = [
- "sqlx-core 0.9.0",
- "sqlx-macros 0.9.0",
- "sqlx-sqlite 0.9.0",
+ "sqlx-sqlite",
 ]
 
 [[package]]
@@ -9134,7 +8985,7 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hashbrown 0.15.5",
- "hashlink 0.10.0",
+ "hashlink",
  "indexmap",
  "log",
  "memchr",
@@ -9154,41 +9005,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqlx-core"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05b44e85bf579a8eeb4ceaa77a3a523baf2bf0e9bac7e40f405d537b5d2d5ccb"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "cfg-if",
- "crc",
- "crossbeam-queue",
- "either",
- "event-listener",
- "futures-core",
- "futures-intrusive",
- "futures-io",
- "futures-util",
- "hashbrown 0.16.1",
- "hashlink 0.11.1",
- "indexmap",
- "log",
- "memchr",
- "percent-encoding",
- "rustls",
- "serde",
- "sha2 0.10.9",
- "smallvec",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
- "webpki-roots 1.0.9",
-]
-
-[[package]]
 name = "sqlx-macros"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9196,21 +9012,8 @@ checksum = "a2d452988ccaacfbf5e0bdbc348fb91d7c8af5bee192173ac3636b5fb6e6715d"
 dependencies = [
  "proc-macro2",
  "quote",
- "sqlx-core 0.8.6",
- "sqlx-macros-core 0.8.6",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "sqlx-macros"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd2b84f2bc39a5705ef27ec785a11c934a41bbd4a24941e257927cddc26b60bf"
-dependencies = [
- "proc-macro2",
- "quote",
- "sqlx-core 0.9.0",
- "sqlx-macros-core 0.9.0",
+ "sqlx-core",
+ "sqlx-macros-core",
  "syn 2.0.119",
 ]
 
@@ -9230,33 +9033,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx-core 0.8.6",
+ "sqlx-core",
  "sqlx-mysql",
  "sqlx-postgres",
- "sqlx-sqlite 0.8.6",
- "syn 2.0.119",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "sqlx-macros-core"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb8d96de5fdc85a5c4ec813432b523ec637e80ba98f046555f75f7908ddac7c3"
-dependencies = [
- "cfg-if",
- "dotenvy",
- "either",
- "heck 0.5.0",
- "hex",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sqlx-core 0.9.0",
- "sqlx-sqlite 0.9.0",
+ "sqlx-sqlite",
  "syn 2.0.119",
  "tokio",
  "url",
@@ -9297,7 +9077,7 @@ dependencies = [
  "sha1 0.10.7",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core 0.8.6",
+ "sqlx-core",
  "stringprep",
  "thiserror 2.0.20",
  "tracing",
@@ -9334,7 +9114,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
- "sqlx-core 0.8.6",
+ "sqlx-core",
  "stringprep",
  "thiserror 2.0.20",
  "tracing",
@@ -9348,7 +9128,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi",
- "flume 0.11.1",
+ "flume",
  "futures-channel",
  "futures-core",
  "futures-executor",
@@ -9359,31 +9139,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_urlencoded",
- "sqlx-core 0.8.6",
- "thiserror 2.0.20",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "sqlx-sqlite"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "488e99c397a62007e4229aec669a179816339afc6d2620ca6fa420dbee2e982c"
-dependencies = [
- "atoi",
- "flume 0.12.0",
- "form_urlencoded",
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-intrusive",
- "futures-util",
- "libsqlite3-sys",
- "log",
- "percent-encoding",
- "serde",
- "sqlx-core 0.9.0",
+ "sqlx-core",
  "thiserror 2.0.20",
  "tracing",
  "url",
@@ -9819,12 +9575,6 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
-
-[[package]]
-name = "target-triple"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tempfile"
@@ -10697,21 +10447,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "trybuild"
-version = "1.0.120"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e605bf6b39357663d8ba4e984f8be8da8df6bb32e81031d6889024ea8fd68e4"
-dependencies = [
- "glob",
- "serde",
- "serde_derive",
- "serde_json",
- "target-triple",
- "termcolor",
- "toml",
-]
-
-[[package]]
 name = "tstr"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11546,28 +11281,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wast"
-version = "254.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "febc59cde513fc8f39b8ffd487893723c555fdd024e2e3dc7d165181e6397ea0"
-dependencies = [
- "bumpalo",
- "leb128fmt",
- "memchr",
- "unicode-width 0.2.2",
- "wasm-encoder",
-]
-
-[[package]]
-name = "wat"
-version = "1.254.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db96351e51a3a1bbe6812f029e1100b4d9a5e02161fb63104bd2271fc847e7e"
-dependencies = [
- "wast 254.0.2",
-]
-
-[[package]]
 name = "web-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12312,7 +12025,7 @@ dependencies = [
  "anyhow",
  "log",
  "thiserror 1.0.69",
- "wast 35.0.2",
+ "wast",
 ]
 
 [[package]]
@@ -12565,6 +12278,10 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "prometheus"
+version = "0.14.0"
 
 [[patch.unused]]
 name = "xxhash-rust"

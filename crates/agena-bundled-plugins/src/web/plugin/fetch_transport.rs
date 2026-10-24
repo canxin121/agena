@@ -264,6 +264,3 @@ pub(super) async fn extract(
         .await
         .map_err(crawl_error_to_plugin)
 }
-
-#[cfg(test)]
-mod tests;

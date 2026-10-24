@@ -171,7 +171,6 @@ agena plugin init ./my-plugin \
 cd my-plugin
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
 agena-plugin validate .
 ```
 

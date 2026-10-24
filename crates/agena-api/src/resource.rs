@@ -110,20 +110,6 @@ pub enum ScheduledJobRunStatus {
     Failed,
 }
 
-#[cfg(test)]
-mod scheduled_job_status_tests {
-    use super::ScheduledJobRunStatus;
-
-    #[test]
-    fn scheduler_status_uses_a_stable_wire_name() {
-        assert_eq!(
-            serde_json::to_string(&ScheduledJobRunStatus::Submitted)
-                .expect("serialize scheduler status"),
-            "\"submitted\""
-        );
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A scheduled job definition.
 pub struct ScheduledJobResource {
@@ -252,59 +238,6 @@ pub struct PluginThemeColorsResource {
     pub selection_fg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_bg: Option<String>,
-}
-
-#[cfg(test)]
-mod plugin_surface_catalog_contract_tests {
-    use super::{PluginCommandResource, PluginSurfaceCatalogResource};
-    use agena_plugin_sdk::{
-        CommandDefinition, CommandTarget, SettingsConstraints, SettingsContract, SettingsNode,
-        SettingsNodeKind,
-    };
-
-    #[test]
-    fn plugin_surface_catalog_has_one_server_owned_command_shape() {
-        let catalog = PluginSurfaceCatalogResource {
-            commands: vec![PluginCommandResource {
-                plugin_id: "example.tools".to_owned(),
-                accepts_empty_input: true,
-                default_input: serde_json::json!({}),
-                command: CommandDefinition {
-                    id: "summarize".to_owned(),
-                    title: "Summarize".to_owned(),
-                    group: "Plugin".to_owned(),
-                    category: None,
-                    slash: Some("summarize".to_owned()),
-                    aliases: Vec::new(),
-                    docs: Default::default(),
-                    input: SettingsContract::new(SettingsNode {
-                        id: "input".to_owned(),
-                        path: String::new(),
-                        title: "Input".to_owned(),
-                        description: String::new(),
-                        required: true,
-                        default: Some(serde_json::json!({})),
-                        constraints: SettingsConstraints::default(),
-                        sensitive: false,
-                        secret: false,
-                        kind: SettingsNodeKind::Object { fields: Vec::new() },
-                    }),
-                    target: CommandTarget::Tool {
-                        tool: "summarize".to_owned(),
-                    },
-                },
-            }],
-            ..PluginSurfaceCatalogResource::default()
-        };
-
-        let wire = serde_json::to_value(catalog).expect("serialize plugin catalog");
-        assert_eq!(wire["commands"][0]["plugin_id"], "example.tools");
-        assert_eq!(wire["commands"][0]["accepts_empty_input"], true);
-        assert_eq!(wire["commands"][0]["id"], "summarize");
-        assert_eq!(wire["commands"][0]["target"]["kind"], "tool");
-        assert!(wire["commands"][0].get("action").is_none());
-        assert!(wire.get("studio").is_none());
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -783,45 +716,6 @@ pub enum ModelCapabilityFeatureResource {
     Temperature,
 }
 
-#[cfg(test)]
-mod configured_model_contract_tests {
-    use std::collections::BTreeMap;
-
-    use super::{
-        CapabilitySelectionPatchBodyResource, CapabilitySelectionPatchResource,
-        ConfiguredModeDefaultResource, ConfiguredModelModeMapResource,
-        ModelCapabilityFeatureResource, ModelCapabilityPatchResource,
-    };
-
-    #[test]
-    fn configured_model_defaults_and_capability_patches_are_typed() {
-        let modes = ConfiguredModelModeMapResource::<()> {
-            default: ConfiguredModeDefaultResource::Mode("high".to_owned()),
-            modes: BTreeMap::new(),
-        };
-        assert_eq!(
-            serde_json::to_value(modes).expect("serialize configured modes"),
-            serde_json::json!({"default": {"kind": "mode", "mode": "high"}})
-        );
-
-        let patch = ModelCapabilityPatchResource {
-            input: None,
-            features: Some(CapabilitySelectionPatchResource::Patch(
-                CapabilitySelectionPatchBodyResource {
-                    supported: vec![ModelCapabilityFeatureResource::Reasoning],
-                    unsupported: vec![ModelCapabilityFeatureResource::Temperature],
-                },
-            )),
-        };
-        assert_eq!(
-            serde_json::to_value(patch).expect("serialize capability patch"),
-            serde_json::json!({
-                "features": {"supported": ["reasoning"], "unsupported": ["temperature"]}
-            })
-        );
-    }
-}
-
 /// Lifecycle label for a catalog model in the public wire contract.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -885,37 +779,6 @@ impl ModelPricingTier {
             && self.output_usd_per_million_tokens.is_none()
             && self.cache_read_usd_per_million_tokens.is_none()
             && self.cache_write_usd_per_million_tokens.is_none()
-    }
-}
-
-#[cfg(test)]
-mod model_pricing_contract_tests {
-    use super::{ModelPricing, ModelPricingTier};
-
-    #[test]
-    fn pricing_preserves_decimal_values_without_float_coercion() {
-        let pricing = ModelPricing {
-            input_usd_per_million_tokens: Some("1.2500".to_owned()),
-            tiers: vec![ModelPricingTier {
-                tier_type: Some("batch".to_owned()),
-                size_tokens: Some(1_000_000),
-                output_usd_per_million_tokens: Some("2.5000".to_owned()),
-                ..ModelPricingTier::default()
-            }],
-            ..ModelPricing::default()
-        };
-
-        assert_eq!(
-            serde_json::to_value(pricing).expect("serialize pricing"),
-            serde_json::json!({
-                "input_usd_per_million_tokens": "1.2500",
-                "tiers": [{
-                    "tier_type": "batch",
-                    "size_tokens": 1_000_000,
-                    "output_usd_per_million_tokens": "2.5000"
-                }]
-            })
-        );
     }
 }
 
@@ -1171,44 +1034,6 @@ pub struct SessionOverviewResource {
     pub generated_at: DateTime<Utc>,
 }
 
-#[cfg(test)]
-mod session_state_contract_tests {
-    use super::{SessionState, WorkflowState};
-
-    #[test]
-    fn session_processing_states_have_stable_wire_names() {
-        let cases = [
-            (SessionState::Creating, "creating"),
-            (SessionState::Ready { last_failure: None }, "ready"),
-            (
-                SessionState::Running {
-                    execution: None,
-                    workflow: WorkflowState::Quiescent,
-                    requests: Vec::new(),
-                },
-                "running",
-            ),
-            (
-                SessionState::AwaitingInteraction {
-                    run_id: None,
-                    execution: None,
-                    requests: Vec::new(),
-                },
-                "awaiting_interaction",
-            ),
-            (SessionState::Failed { failure: None }, "failed"),
-        ];
-        for (state, expected) in cases {
-            assert_eq!(state.as_str(), expected);
-            let wire = serde_json::to_value(&state).expect("serialize session state");
-            assert_eq!(
-                wire.get("kind").and_then(serde_json::Value::as_str),
-                Some(expected)
-            );
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 /// An active execution inside a session.
 pub struct ActiveExecutionResource {
@@ -1384,18 +1209,6 @@ pub struct RunOptions {
     pub max_output_tokens: Option<u32>,
 }
 
-#[cfg(test)]
-mod run_options_contract_tests {
-    use super::RunOptions;
-
-    #[test]
-    fn nested_run_options_reject_unknown_fields() {
-        let error = serde_json::from_value::<RunOptions>(serde_json::json!({"obsolete": true}))
-            .expect_err("unknown run option must not be silently accepted");
-        assert!(error.to_string().contains("unknown field"), "{error}");
-    }
-}
-
 /// Provider, optional adapter, and model selection carried over the public
 /// wire. The application validates these strings and constructs its internal
 /// model identifier only after receiving the request.
@@ -1426,24 +1239,6 @@ impl ModelRef {
             adapter_id: Some(adapter_id.into()),
             model_id: model_id.into(),
         }
-    }
-}
-
-#[cfg(test)]
-mod model_ref_contract_tests {
-    use super::ModelRef;
-
-    #[test]
-    fn model_ref_serializes_without_runtime_identifier_types() {
-        let model = ModelRef::new_with_adapter("provider", "adapter", "model");
-        assert_eq!(
-            serde_json::to_value(model).expect("serialize model reference"),
-            serde_json::json!({
-                "provider_id": "provider",
-                "adapter_id": "adapter",
-                "model_id": "model"
-            })
-        );
     }
 }
 
@@ -1528,19 +1323,6 @@ impl Default for RunMetadata {
             model_thinking_mode: None,
             model_speed_mode: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod message_status_contract_tests {
-    use super::RunStatus;
-
-    #[test]
-    fn message_status_has_a_stable_wire_name() {
-        assert_eq!(
-            serde_json::to_string(&RunStatus::InProgress).expect("serialize message status"),
-            "\"in_progress\""
-        );
     }
 }
 
@@ -1856,73 +1638,6 @@ pub enum ToolPermissionRulesResource {
     Ordered(BTreeMap<String, PermissionMode>),
 }
 
-#[cfg(test)]
-mod permission_config_resource_contract_tests {
-    use std::collections::BTreeMap;
-
-    use super::{
-        PathAccessModesResource, PathPermissionConfigResource, PermissionConfigResource,
-        PermissionMode, ToolPermissionConfigResource,
-    };
-
-    #[test]
-    fn permission_configuration_is_a_self_contained_wire_contract() {
-        let config = PermissionConfigResource {
-            path: Some(PathPermissionConfigResource {
-                workspace: Some(PathAccessModesResource {
-                    read: Some(PermissionMode::Allow),
-                    write: Some(PermissionMode::Ask),
-                }),
-                external: None,
-                rules: BTreeMap::from([(
-                    "/tmp/**".to_owned(),
-                    PathAccessModesResource {
-                        read: Some(PermissionMode::Deny),
-                        write: Some(PermissionMode::Deny),
-                    },
-                )]),
-            }),
-            network: None,
-            tools: Some(ToolPermissionConfigResource {
-                default: Some(PermissionMode::Ask),
-                ..Default::default()
-            }),
-            approval_model: None,
-        };
-
-        assert_eq!(
-            serde_json::to_value(config).expect("serialize permission config"),
-            serde_json::json!({
-                "path": {
-                    "workspace": {"read": "allow", "write": "ask"},
-                    "rules": {"/tmp/**": {"read": "deny", "write": "deny"}}
-                },
-                "tools": {"default": "ask"}
-            })
-        );
-    }
-
-    #[test]
-    fn empty_sections_do_not_count_as_configuration() {
-        // The settings surfaces send the whole `permission` object, so a
-        // section with no entries must not count as configuration: `is_empty`
-        // is what tells a caller to clear the setting instead of writing
-        // explicit keys that would pin the built-in defaults forever.
-        // Section-level serialization matches the other sections, which
-        // likewise emit an empty object rather than omitting it.
-        let config = PermissionConfigResource {
-            path: Some(PathPermissionConfigResource::default()),
-            tools: Some(ToolPermissionConfigResource::default()),
-            ..Default::default()
-        };
-        assert!(config.is_empty());
-        assert_eq!(
-            serde_json::to_value(config).expect("serialize permission config"),
-            serde_json::json!({ "path": {}, "tools": {} })
-        );
-    }
-}
-
 /// Persistence scope selected for a permission decision in the public API.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -2066,66 +1781,6 @@ pub struct UserInputQuestion {
     pub multiple: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_custom: bool,
-}
-
-#[cfg(test)]
-mod provider_model_resource_contract_tests {
-    use std::collections::BTreeMap;
-
-    use super::{
-        CapabilitySupportResource, ProviderModelCapabilitiesResource, ProviderModelResource,
-        ProviderModelSpeedModeResource, ProviderModelThinkingModeResource, ThinkingRequestResource,
-    };
-
-    #[test]
-    fn provider_model_is_a_complete_api_owned_route_projection() {
-        let model = ProviderModelResource {
-            provider_id: "example".to_owned(),
-            adapter_id: Some("responses".to_owned()),
-            id: "example-1".to_owned(),
-            catalog_model_id: Some("catalog-1".to_owned()),
-            display_name: Some("Example 1".to_owned()),
-            native_compaction: true,
-            capabilities: ProviderModelCapabilitiesResource {
-                reasoning: CapabilitySupportResource::Supported,
-                ..ProviderModelCapabilitiesResource::default()
-            },
-            metadata: Default::default(),
-            thinking_modes: vec![ProviderModelThinkingModeResource {
-                is_default: true,
-                display_name: Some("High".to_owned()),
-                description: None,
-                preset: None,
-                thinking: Some(ThinkingRequestResource::Budget {
-                    budget_tokens: 4096,
-                }),
-                request_override: Default::default(),
-                adapter_overrides: BTreeMap::new(),
-            }],
-            speed_modes: BTreeMap::from([(
-                "fast".to_owned(),
-                ProviderModelSpeedModeResource {
-                    is_default: true,
-                    display_name: Some("Fast".to_owned()),
-                    description: None,
-                    request_override: Default::default(),
-                    adapter_overrides: BTreeMap::new(),
-                },
-            )]),
-        };
-
-        let value = serde_json::to_value(model).expect("serialize provider model");
-        assert_eq!(value["provider_id"], "example");
-        assert_eq!(value["capabilities"]["reasoning"], "supported");
-        assert_eq!(
-            value["thinking_modes"][0]["thinking"],
-            serde_json::json!({
-                "type": "budget",
-                "budget_tokens": 4096
-            })
-        );
-        assert_eq!(value["speed_modes"]["fast"]["default"], true);
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

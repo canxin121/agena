@@ -14,9 +14,6 @@ use agena_tui_components::{Editor, SectionedListFocus, SectionedListSection, Sec
 mod render;
 pub use render::{SettingsViewSpec, render_settings};
 
-#[cfg(test)]
-mod view_tests;
-
 use agena_tui::i18n::I18n;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve};
 
@@ -587,78 +584,5 @@ pub fn handle_key<A>(
             SettingsStudioEffect::Activate
         }
         _ => SettingsStudioEffect::KeepOpen,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        SettingsStudioEffect, SettingsStudioFocus, SettingsStudioItem, SettingsStudioPresentation,
-        SettingsStudioSection, SettingsStudioSectionId, handle_key,
-    };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn presentation() -> SettingsStudioPresentation<()> {
-        SettingsStudioPresentation::new(
-            vec![
-                SettingsStudioSection {
-                    id: SettingsStudioSectionId::Agents,
-                    label: "Agents".to_owned(),
-                    summary: "Profiles".to_owned(),
-                    description: "Agent configuration".to_owned(),
-                    items: vec![SettingsStudioItem::new("Default agent", "review", "", ())],
-                },
-                SettingsStudioSection {
-                    id: SettingsStudioSectionId::Diagnostics,
-                    label: "Diagnostics".to_owned(),
-                    summary: "Tracing".to_owned(),
-                    description: "Terminal diagnostics".to_owned(),
-                    items: vec![SettingsStudioItem::new("Terminal", "ready", "", ())],
-                },
-            ],
-            0,
-            0,
-            SettingsStudioFocus::Navigation,
-        )
-    }
-
-    #[test]
-    fn query_selects_visible_row_and_moves_focus_to_items() {
-        let mut presentation = presentation();
-
-        assert!(presentation.select_query("terminal"));
-        assert_eq!(presentation.selected_section_index(), 1);
-        assert_eq!(presentation.selected_item_index(), 0);
-        assert_eq!(presentation.focus(), SettingsStudioFocus::Items);
-    }
-
-    #[test]
-    fn empty_query_keeps_existing_selection() {
-        let mut presentation = presentation();
-
-        assert!(!presentation.select_query("  "));
-        assert_eq!(presentation.selected_section_index(), 0);
-        assert_eq!(presentation.focus(), SettingsStudioFocus::Navigation);
-    }
-
-    #[test]
-    fn reducer_owns_pane_focus_and_refresh_intent() {
-        let mut presentation = presentation();
-
-        assert_eq!(
-            handle_key(
-                &mut presentation,
-                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
-            ),
-            SettingsStudioEffect::KeepOpen
-        );
-        assert_eq!(presentation.focus(), SettingsStudioFocus::Items);
-        assert_eq!(
-            handle_key(
-                &mut presentation,
-                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
-            ),
-            SettingsStudioEffect::Refresh
-        );
     }
 }

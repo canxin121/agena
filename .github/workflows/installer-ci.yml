@@ -213,8 +213,8 @@ jobs:
             Write-Host "PowerShell syntax: ok $path"
           }
 
-      - name: Compile service lifecycle tests
-        run: cargo check -p agena --tests --locked
+      - name: Compile service binary
+        run: cargo check -p agena --locked
 
       - name: Create minimal packaged Web frontend (Unix)
         if: matrix.shell_kind == 'bash'

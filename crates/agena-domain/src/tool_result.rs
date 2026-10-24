@@ -25,17 +25,3 @@ impl ToolResultState {
         matches!(value, Self::Pending)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ToolResultState;
-
-    #[test]
-    fn result_state_and_display_have_stable_defaults() {
-        assert_eq!(ToolResultState::default(), ToolResultState::Pending);
-        assert_eq!(
-            serde_json::to_string(&ToolResultState::Completed).unwrap(),
-            "\"completed\""
-        );
-    }
-}

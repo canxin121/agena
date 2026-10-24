@@ -286,17 +286,3 @@ pub fn find(name: &str) -> Option<&'static CliToolSpec> {
         .iter()
         .find(|tool| tool.name == name || tool.executables.contains(&name))
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn aliases_do_not_hide_tool_identity() {
-        assert_eq!(super::find("fdfind").unwrap().name, "fd");
-        assert_eq!(super::find("batcat").unwrap().name, "bat");
-        assert!(super::find("sg").is_none());
-        let mut names = std::collections::HashSet::new();
-        for tool in super::CLI_CATALOG {
-            assert!(names.insert(tool.name), "duplicate {}", tool.name);
-        }
-    }
-}

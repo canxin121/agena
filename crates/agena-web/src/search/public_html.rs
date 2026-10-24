@@ -229,24 +229,3 @@ pub(super) fn parse_results(
     }
     results
 }
-
-#[cfg(test)]
-fn parse_page(
-    engine: WebSearchEngine,
-    html: &str,
-    final_url: &Url,
-    _limit: usize,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    status::parse_page(
-        engine,
-        &WebSearchPage {
-            final_url: final_url.clone(),
-            status: 200,
-            html: html.into(),
-            retry_after_secs: None,
-        },
-    )
-}
-
-#[cfg(test)]
-mod tests;

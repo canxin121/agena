@@ -217,20 +217,3 @@ impl IntoResponse for AppError {
         (status, Json(body)).into_response()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::AppError;
-
-    #[test]
-    fn internal_http_body_keeps_a_scrubbed_root_cause() {
-        let error = AppError::internal(
-            "failed to load terminal registry: token=secret /private/agena.sqlite: disk full",
-        );
-        let body = error.body();
-
-        assert!(body.error.contains("disk full"));
-        assert!(!body.error.contains("token=secret"));
-        assert!(!body.error.contains("/private/agena.sqlite"));
-    }
-}

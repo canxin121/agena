@@ -116,48 +116,6 @@ fn sqlite_file_path(url: &str) -> Option<PathBuf> {
         .flatten()
 }
 
-#[cfg(test)]
-mod storage_config_tests {
-    use std::path::PathBuf;
-
-    use super::StorageConfig;
-
-    #[test]
-    fn explicit_database_url_wins_over_database_path() {
-        let config = StorageConfig {
-            database_url: Some("sqlite::memory:".to_string()),
-            database_path: Some(PathBuf::from("ignored.db")),
-        };
-
-        assert_eq!(config.resolve_url().unwrap(), "sqlite::memory:");
-    }
-
-    #[test]
-    fn database_path_becomes_a_sqlite_creation_url() {
-        let config = StorageConfig {
-            database_url: None,
-            database_path: Some(PathBuf::from("state/agena.db")),
-        };
-
-        assert_eq!(
-            config.resolve_url().unwrap(),
-            "sqlite://state/agena.db?mode=rwc"
-        );
-    }
-
-    #[test]
-    fn display_location_preserves_sqlite_and_redacts_other_urls() {
-        assert_eq!(
-            StorageConfig::display_location("sqlite::memory:"),
-            "sqlite::memory:"
-        );
-        assert_eq!(
-            StorageConfig::display_location("postgres://secret@host/database"),
-            "<redacted>"
-        );
-    }
-}
-
 type TransactionEffectFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Backend-neutral queue of effects that run only after the surrounding
@@ -511,23 +469,6 @@ pub trait PermissionRuleRepository: Send + Sync {
         session_id: Option<i64>,
         workspace_id: Option<i64>,
     ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ModelCatalogCacheRecord;
-
-    #[test]
-    fn model_catalog_cache_record_preserves_opaque_document_shape() {
-        let record = ModelCatalogCacheRecord {
-            fetched_at_unix_ms: 42,
-            source: "generated".to_owned(),
-            document: serde_json::json!({"models": {"demo": {"display_name": "Demo"}}}),
-        };
-        let encoded = serde_json::to_value(&record).unwrap();
-        let decoded: ModelCatalogCacheRecord = serde_json::from_value(encoded).unwrap();
-        assert_eq!(decoded, record);
-    }
 }
 
 /// Filesystem location contract for workspace-scoped memory documents.

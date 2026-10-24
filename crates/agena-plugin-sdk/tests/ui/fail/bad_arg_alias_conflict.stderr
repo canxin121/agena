@@ -1,5 +1,0 @@
-error: duplicate ToolInput field wire name or alias `foo`
- --> tests/ui/fail/bad_arg_alias_conflict.rs:6:19
-  |
-6 |     #[arg(alias = "foo")]
-  |                   ^^^^^

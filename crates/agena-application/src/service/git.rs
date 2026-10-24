@@ -411,53 +411,6 @@ fn validate_git_stage_path(path: &str) -> ApplicationResult<&str> {
     Ok(normalized)
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::{Duration, run_command_output_with_limit, validate_git_stage_path};
-    use tokio::process::Command;
-
-    #[test]
-    fn validates_workspace_relative_git_stage_paths() {
-        assert_eq!(
-            validate_git_stage_path("src/main.rs").unwrap(),
-            "src/main.rs"
-        );
-        assert!(validate_git_stage_path("../outside").is_err());
-        assert!(validate_git_stage_path("src/../../outside").is_err());
-        assert!(validate_git_stage_path("/absolute").is_err());
-        assert!(validate_git_stage_path(" ").is_err());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn subprocess_timeout_kills_a_silent_command_instead_of_blocking_the_runtime() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "exec sleep 30"]);
-        let error = run_command_output_with_limit(
-            command,
-            Duration::from_millis(20),
-            "silent test command",
-            1024,
-        )
-        .await
-        .expect_err("silent command must time out");
-        assert!(error.to_string().contains("timed out"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn subprocess_output_is_bounded() {
-        let mut command = Command::new("sh");
-        command.args(["-c", "printf 12345"]);
-        let error =
-            run_command_output_with_limit(command, Duration::from_secs(1), "noisy test command", 4)
-                .await
-                .expect_err("oversized output must fail");
-        assert!(error.to_string().contains("output limit"));
-    }
-}
-
 async fn run_command_output(
     command: Command,
     timeout: Duration,

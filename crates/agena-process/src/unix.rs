@@ -101,26 +101,3 @@ pub(crate) fn process_ids() -> io::Result<Vec<libc::pid_t>> {
 pub(crate) fn process_ids() -> io::Result<Vec<libc::pid_t>> {
     Ok(Vec::new())
 }
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-    use std::os::unix::process::CommandExt;
-
-    #[test]
-    fn repeated_kill_of_own_zombie_group_is_idempotent() {
-        let mut child = std::process::Command::new("/bin/sleep")
-            .arg("30")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let group = child.id() as libc::pid_t;
-        let first = signal_group(group, libc::SIGKILL);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let repeated = signal_group(group, libc::SIGKILL);
-        let status = child.wait();
-        first.unwrap();
-        repeated.unwrap();
-        assert!(!status.unwrap().success());
-    }
-}

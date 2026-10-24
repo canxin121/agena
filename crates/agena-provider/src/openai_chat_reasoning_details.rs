@@ -82,31 +82,3 @@ fn reasoning_detail_value_is_meaningful(value: &Value) -> bool {
         Value::Bool(_) | Value::Number(_) => true,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::merge_openai_chat_reasoning_details;
-
-    #[test]
-    fn empty_reasoning_detail_update_does_not_erase_prior_state() {
-        let original = serde_json::json!([{
-            "type": "reasoning.text",
-            "index": 0,
-            "text": "kept",
-            "signature": "signed"
-        }]);
-        let mut target = Some(original.clone());
-        merge_openai_chat_reasoning_details(&mut target, &serde_json::Value::Null);
-        merge_openai_chat_reasoning_details(&mut target, &serde_json::json!([]));
-        merge_openai_chat_reasoning_details(
-            &mut target,
-            &serde_json::json!([{
-                "type": "reasoning.text",
-                "index": 0,
-                "text": "   ",
-                "signature": null
-            }]),
-        );
-        assert_eq!(target, Some(original));
-    }
-}

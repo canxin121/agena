@@ -1,7 +1,6 @@
 //! Spanish tool-headline vocabulary.
 //!
-//! Keys mirror the shared English table verbatim, so the pairing verified by
-//! `tests::every_locale_covers_every_key` can never drift; only the values are
+//! Keys mirror the shared English table verbatim; only the values are
 //! translated.
 
 pub(crate) const ACTIONS: &[(&str, &str)] = &[

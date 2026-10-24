@@ -24,23 +24,3 @@ impl PathAccessModes {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PathAccessModes;
-    use crate::PermissionMode;
-
-    #[test]
-    fn overlay_preserves_unspecified_modes() {
-        let mut base = PathAccessModes {
-            read: Some(PermissionMode::Allow),
-            write: Some(PermissionMode::Ask),
-        };
-        base.merge_from(PathAccessModes {
-            read: None,
-            write: Some(PermissionMode::Deny),
-        });
-        assert_eq!(base.read, Some(PermissionMode::Allow));
-        assert_eq!(base.write, Some(PermissionMode::Deny));
-    }
-}

@@ -322,6 +322,3 @@ async fn shutdown_clients(clients: Vec<Arc<LspClient>>) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

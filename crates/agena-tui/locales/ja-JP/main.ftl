@@ -2732,7 +2732,10 @@ message-compaction-generation-line = 生成 {$generation}
 message-permission = 権限
 message-tool-summary = [tool] {$status} | {$label}
 message-tool-output-collapsed =     … 残り {$lines} 行
-message-activity-run-collapsed = Enter: 5件読み込む · n Enter · Ctrl+Shift+Enter: すべて読み込む · … 古いパート {$count} 件を非表示
+message-activity-run-collapsed = … 古いパート {$count} 件を非表示 · Enter: 件数を指定 · Ctrl+Shift+Enter: すべて読み込む
+transcript-load-count-title = 古いパートを読み込む
+transcript-load-count-prompt = 読み込む件数（1–{$max}）
+transcript-load-count-invalid = 1 から {$max} までの整数を入力してください。
 
 transcript-export-session-id = - セッション ID: {$id}
 transcript-node-kind-math = 数式

@@ -160,6 +160,9 @@ impl App {
                 Overlay::SettingsValueEdit(dialog) => {
                     dialog.input.insert_str(text.as_str());
                 }
+                Overlay::TranscriptFoldLoad(dialog) => {
+                    dialog.input.insert_str(text.as_str());
+                }
                 Overlay::QueueEditor(dialog) => dialog.paste(text.as_str()),
                 Overlay::Choice(dialog) => {
                     let _ = agena_tui::choice::reduce(

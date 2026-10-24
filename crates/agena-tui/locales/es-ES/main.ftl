@@ -2807,7 +2807,10 @@ message-compaction-generation-line = Generación {$generation}
 message-permission = permiso
 message-tool-summary = [herramienta] {$status} | {$label}
 message-tool-output-collapsed = … {$lines} más
-message-activity-run-collapsed = Intro: cargar 5 · n Intro: cargar siguiente · Ctrl+Mayús+Intro: cargar todo · … {$count} partes anteriores ocultas
+message-activity-run-collapsed = … {$count} partes anteriores ocultas · Intro: elegir cantidad · Ctrl+Mayús+Intro: cargar todo
+transcript-load-count-title = Cargar partes anteriores
+transcript-load-count-prompt = Cantidad de partes a cargar (1–{$max})
+transcript-load-count-invalid = Introduce un número entero entre 1 y {$max}.
 
 btw-title = BTW · pregunta de solo lectura
 btw-description = Pregunta por separado mientras continúa la conversación principal. Herramientas de solo lectura; no se modifica la conversación principal.

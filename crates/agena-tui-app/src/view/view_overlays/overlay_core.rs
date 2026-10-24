@@ -23,6 +23,17 @@ impl App {
                     &dialog.input,
                 );
             }
+            Overlay::TranscriptFoldLoad(dialog) => {
+                render_overlay_line_input_dialog(
+                    frame,
+                    area,
+                    SurfaceMode::Overlay,
+                    sanitize_display_text(dialog.title.as_str()).into(),
+                    sanitize_display_text(dialog.prompt.as_str()).into(),
+                    sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into(),
+                    &dialog.input,
+                );
+            }
             Overlay::SettingsValueEdit(dialog) => {
                 let title = sanitize_display_text(dialog.title.as_str()).into();
                 let prompt = sanitize_display_text(dialog.prompt.as_str()).into();

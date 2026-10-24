@@ -1740,7 +1740,10 @@ message-tool-cancelled = cancelled: {$label}
 message-tool-summary = [tool] {$status} | {$label}
 message-tool-result-blocks = {$count} result blocks
 message-tool-output-collapsed =     … {$lines} more
-message-activity-run-collapsed = Enter: load 5 · n Enter · Ctrl+Shift+Enter: load all · … {$count} older parts hidden
+message-activity-run-collapsed = … {$count} older parts hidden · Enter: choose count · Ctrl+Shift+Enter: load all
+transcript-load-count-title = Load older parts
+transcript-load-count-prompt = Number of parts to load (1–{$max})
+transcript-load-count-invalid = Enter a whole number from 1 to {$max}.
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

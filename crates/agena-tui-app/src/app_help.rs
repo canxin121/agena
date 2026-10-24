@@ -170,6 +170,9 @@ impl App {
                 self.help_for_editor(dialog.title.clone(), false)
             }
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
+            Overlay::TranscriptFoldLoad(dialog) => {
+                self.help_for_editor(dialog.title.clone(), false)
+            }
             Overlay::QueueEditor(_) => {
                 self.help_for_editor(ui_text::t(&self.i18n, "queue-edit"), true)
             }

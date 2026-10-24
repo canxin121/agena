@@ -465,6 +465,21 @@ fn entry_fold_marker(
     })
 }
 
+/// Number represented by the entry's merged fold control, including both
+/// unloaded server parts and locally hidden activities.
+pub fn entry_hidden_part_count(
+    entry: &TranscriptEntry<'_>,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    summary_visible_counts: &std::collections::BTreeMap<TranscriptNodeKey, usize>,
+) -> usize {
+    if entry.role == Some(RunRole::User) {
+        return 0;
+    }
+    let runs = activity_run_plans(entry, &entry.parts, expansions, summary_visible_counts);
+    let folds = fold_marker_plans(entry, &entry.parts);
+    entry_fold_marker(&runs, &folds, expansions).map_or(0, |marker| marker.hidden_count)
+}
+
 /// Emit the single collapsed-run row of an entry. The row is a UI marker,
 /// never real content: copying the collapsed block must copy the visible
 /// marker line, never the hidden activities' full text.

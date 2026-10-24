@@ -211,6 +211,23 @@ impl App {
                 }
             )
         });
+        if list_visibility_control && reveal_count.is_none() {
+            self.open_transcript_fold_load();
+            return;
+        }
+        let reveal_count = if list_visibility_control {
+            reveal_count.map(|count| {
+                count.clamp(1, 50).min(
+                    current_node
+                        .as_ref()
+                        .map(|node| self.transcript.fold_hidden_part_count(width, &node.key))
+                        .unwrap_or(1)
+                        .max(1),
+                )
+            })
+        } else {
+            reveal_count
+        };
         let server_fold = current_node
             .as_ref()
             .and_then(|node| self.transcript.transcript_fold_for_node(&node.key));

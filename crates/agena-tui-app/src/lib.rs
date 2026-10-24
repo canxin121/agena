@@ -143,6 +143,7 @@ mod app_terminal_integration;
 
 mod app_timeline_helpers;
 mod app_transcript_actions;
+mod app_transcript_fold;
 mod app_transcript_helpers;
 mod app_transcript_input;
 mod app_types;

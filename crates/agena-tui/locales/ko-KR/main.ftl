@@ -264,7 +264,10 @@ message-activity-input-cancelled = 사용자 입력 제출 취소됨
 message-permission = 권한
 message-tool-summary = [도구] {$status} | {$label}
 message-tool-output-collapsed =     … {$lines}개 더
-message-activity-run-collapsed = Enter: 5개 불러오기 · n Enter · Ctrl+Shift+Enter: 모두 불러오기 · … 이전 파트 {$count}개 숨김
+message-activity-run-collapsed = … 이전 파트 {$count}개 숨김 · Enter: 개수 선택 · Ctrl+Shift+Enter: 모두 불러오기
+transcript-load-count-title = 이전 파트 불러오기
+transcript-load-count-prompt = 불러올 개수 (1–{$max})
+transcript-load-count-invalid = 1에서 {$max} 사이의 정수를 입력하세요.
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

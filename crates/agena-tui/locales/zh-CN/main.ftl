@@ -1740,7 +1740,10 @@ message-tool-cancelled = 已取消：{$label}
 message-tool-summary = [工具] {$status} | {$label}
 message-tool-result-blocks = {$count} 个结果块
 message-tool-output-collapsed =     … 还有 {$lines} 行
-message-activity-run-collapsed = Enter 加载 5 个 · n Enter · Ctrl+Shift+Enter 加载全部 · … 隐藏 {$count} 个较早 part
+message-activity-run-collapsed = … 隐藏 {$count} 个较早片段 · Enter 选择数量 · Ctrl+Shift+Enter 加载全部
+transcript-load-count-title = 加载较早片段
+transcript-load-count-prompt = 加载数量（1–{$max}）
+transcript-load-count-invalid = 请输入 1 到 {$max} 之间的整数。
 
 todo-status-pending = 待处理
 todo-status-in-progress = 进行中

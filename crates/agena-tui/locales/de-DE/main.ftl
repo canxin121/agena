@@ -210,7 +210,10 @@ message-tool-result-blocks = {$count} Ergebnisbloecke
 message-permission = Berechtigung
 message-tool-summary = [Werkzeug] {$status} | {$label}
 message-tool-output-collapsed =     … {$lines} weitere
-message-activity-run-collapsed = Enter: 5 laden · n Enter · Ctrl+Shift+Enter: alle laden · … {$count} ältere Teile ausgeblendet
+message-activity-run-collapsed = … {$count} ältere Teile ausgeblendet · Enter: Anzahl wählen · Ctrl+Shift+Enter: alle laden
+transcript-load-count-title = Ältere Teile laden
+transcript-load-count-prompt = Anzahl der zu ladenden Teile (1–{$max})
+transcript-load-count-invalid = Geben Sie eine ganze Zahl von 1 bis {$max} ein.
 
 todo-status-pending = pending
 todo-status-in-progress = in_progress

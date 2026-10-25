@@ -114,6 +114,13 @@ def main() -> int:
         checkpoint(client, "root-escape-preserves-hub-selection-and-loading")
         fixture.require("Esc back" not in client.text(), "root Hub still advertises Escape back")
 
+        client.send("aqXZ09中".encode(), "ordinary-text-with-search-closed")
+        time.sleep(0.4)
+        fixture.require("Filter:" not in client.text() and "A-pin-23" in client.text(),
+                        "ordinary text opened or filtered Hub search")
+        wait_selected(client, "+ New session")
+        checkpoint(client, "ordinary-text-does-not-open-search")
+
         client.send(b"\x06", "open-empty-hub-search")
         client.wait_text("Filter:", "empty-search-active")
         client.send(b"\x1b", "cancel-empty-hub-search")
@@ -131,6 +138,10 @@ def main() -> int:
         time.sleep(0.2)
         fixture.require("Session Hub" in client.text(), "Escape after clearing search dismissed the Hub")
         checkpoint(client, "escape-clears-search-and-keeps-hub-as-root")
+        client.send("aqXZ09中".encode(), "ordinary-text-after-closing-search")
+        time.sleep(0.4)
+        fixture.require("Filter:" not in client.text(), "ordinary text reopened canceled search")
+        checkpoint(client, "ordinary-text-does-not-reopen-canceled-search")
         client.send(b"\x1b[H", "select-launch-project-after-search")
         client.wait_text("Pinned  24", "catalog-restored-after-search")
         client.send(b"\x1b[B", "select-new-session-after-search")

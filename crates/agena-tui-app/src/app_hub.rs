@@ -455,18 +455,8 @@ impl App {
             Some(KeyAction::NextTab) => state.presentation.move_selection_section(1),
             Some(KeyAction::PreviousTab) => state.presentation.move_selection_section(-1),
             Some(KeyAction::Open) => return self.activate_hub_row(state),
-            _ => {
-                if let KeyCode::Char(c) = key.code
-                    && !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                {
-                    state.search_active = true;
-                    state.query.push(c);
-                    state.presentation.set_query(&state.query);
-                    self.schedule_hub_search(state);
-                }
-            }
+            // Search input belongs only to the explicitly opened search box.
+            _ => {}
         }
         false
     }

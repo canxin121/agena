@@ -386,16 +386,13 @@ impl App {
                 }
             }
             Some(KeyAction::Close) => {
+                // The Hub is a root route, not a dismissible overlay. Escape
+                // only cancels its search; it must not reveal an empty Main.
                 if state.search_active || !state.query.is_empty() {
                     state.search_active = false;
                     state.query.clear();
                     state.presentation.set_query("");
                     self.schedule_hub_search(state);
-                } else {
-                    if let Some(task) = state.request_task.take() {
-                        task.abort();
-                    }
-                    return true;
                 }
             }
             Some(KeyAction::HubCreateSession) => {

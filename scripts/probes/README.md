@@ -223,6 +223,7 @@ creates two projects, 24 older pinned sessions and 22 newer unmarked sessions.
 It checks the initial project-local New Session selection, Enter creating in
 the launch or selected project, independent project buckets, pin pagination,
 selection after a live refresh, independent pin/favorite mutations, and compact
-rows with explicit name/status/time columns. All
+rows with explicit name/status/time columns. Root Escape stays on the Hub and
+preserves selection; Escape cancels empty or populated searches in place. All
 fixture data, HTTP traces and terminal captures stay in the new output directory;
 the installed instance and user conversations are untouched.

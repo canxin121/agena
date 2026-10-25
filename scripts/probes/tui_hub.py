@@ -99,7 +99,42 @@ def main() -> int:
 
         client = launch(alpha, "alpha-create")
         wait_selected(client, "+ New session")
+        # Root Escape must neither reveal the empty conversation route nor
+        # cancel the catalog request that may still be loading.
+        client.send(b"\x1b", "escape-on-startup-hub")
+        time.sleep(0.2)
+        fixture.require("Session Hub" in client.text(), "Escape dismissed the startup Hub")
         client.wait_text("A-pin-23", "old-pin-visible")
+        for _ in range(2):
+            client.send(b"\x1b", "escape-on-loaded-hub")
+            time.sleep(0.15)
+            fixture.require("Session Hub" in client.text(), "repeated Escape dismissed the Hub")
+            wait_selected(client, "+ New session")
+        fixture.require(len(sessions(aid)) == 46, "Escape unexpectedly created a session")
+        checkpoint(client, "root-escape-preserves-hub-selection-and-loading")
+        fixture.require("Esc back" not in client.text(), "root Hub still advertises Escape back")
+
+        client.send(b"\x06", "open-empty-hub-search")
+        client.wait_text("Filter:", "empty-search-active")
+        client.send(b"\x1b", "cancel-empty-hub-search")
+        time.sleep(0.2)
+        fixture.require("Session Hub" in client.text() and "Filter:" not in client.text(),
+                        "Escape did not cancel empty search inside the Hub")
+        checkpoint(client, "escape-cancels-empty-search-without-leaving-hub")
+        client.send(b"/A-pin-23", "filter-hub-sessions")
+        client.wait_text("Filter: A-pin-23", "search-query-active")
+        client.send(b"\x1b", "clear-hub-search")
+        time.sleep(0.2)
+        fixture.require("Session Hub" in client.text() and "Filter:" not in client.text(),
+                        "Escape did not clear search inside the Hub")
+        client.send(b"\x1b", "escape-after-clearing-search")
+        time.sleep(0.2)
+        fixture.require("Session Hub" in client.text(), "Escape after clearing search dismissed the Hub")
+        checkpoint(client, "escape-clears-search-and-keeps-hub-as-root")
+        client.send(b"\x1b[H", "select-launch-project-after-search")
+        client.wait_text("Pinned  24", "catalog-restored-after-search")
+        client.send(b"\x1b[B", "select-new-session-after-search")
+        wait_selected(client, "+ New session")
         left = project_text(client).splitlines()
         fixture.require(next(i for i, line in enumerate(left) if "workspace" in line)
                         < next(i for i, line in enumerate(left) if "+ New session" in line),

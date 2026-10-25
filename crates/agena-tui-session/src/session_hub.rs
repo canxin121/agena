@@ -1000,14 +1000,19 @@ pub fn render_session_hub(
         _ => (String::new(), String::new()),
     };
     crate::session_chrome::render_details(frame, details, &title, &detail);
-    let hints = build_shortcut_line([
+    let mut hints = vec![
         ShortcutHint::new("↑↓", i18n.text("hub-hint-move")),
         ShortcutHint::new("←→", i18n.text("session-action-page")),
         ShortcutHint::new("PgUp/Dn", i18n.text("session-action-scroll")),
         ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
-        ShortcutHint::new("Esc", i18n.text("hub-hint-back")),
-    ]);
-    frame.render_widget(Paragraph::new(hints), footer);
+    ];
+    if search_active || !query.is_empty() {
+        hints.push(ShortcutHint::new(
+            "Esc",
+            i18n.text("hub-action-clear-search"),
+        ));
+    }
+    frame.render_widget(Paragraph::new(build_shortcut_line(hints)), footer);
 }
 
 fn hub_layout(area: Rect, has_error: bool) -> [Rect; 5] {

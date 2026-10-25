@@ -19,6 +19,8 @@ on:
       - "scripts/agena/tests/**"
       - "scripts/agena/package-backend.sh"
       - "scripts/agena/package-backend.ps1"
+      - "scripts/agena/build-web.mjs"
+      - "scripts/agena/package-cache.py"
       - "Cargo.toml"
       - "Cargo.lock"
   pull_request:
@@ -62,9 +64,14 @@ jobs:
           toolchain: 1.97.0
       - name: Validate Unix installer syntax
         shell: bash
-        run: bash -n scripts/agena/install.sh
+        run: |
+          bash -n scripts/agena/install.sh
+          bash -n scripts/agena/package-backend.sh
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
       - name: Verify installer roots, rollback and purge without system services
-        run: python3 scripts/agena/tests/test_installer_storage.py
+        run: python3 -m unittest discover -s scripts/agena/tests -v
       - name: Verify every published target has installer support
         run: python3 scripts/agena/verify-target-coverage.py
 
@@ -83,14 +90,16 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path 'scripts\agena\install.ps1'),
-            [ref]$tokens,
-            [ref]$errors
-          )
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            throw 'PowerShell syntax validation failed'
+          foreach ($script in @('install.ps1', 'package-backend.ps1')) {
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "scripts\agena\$script"),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell syntax validation failed: $script"
+            }
           }
 
       - name: Install current latest beta release through remote URLs

@@ -336,6 +336,19 @@ checkout keeps its build output: Cargo output stays in `target/`, the Web build
 stays in `packages/agena-web/dist/`, and the package archive stays in
 `artifacts/agena/`.
 
+On Unix, native source installs reuse the same Cargo cache as
+`cargo build --release`, including a configured `CARGO_TARGET_DIR`; no extra
+host `--target` is added. Repeated `reinstall --source` commands also reuse a
+successful Web build when its inputs and complete output match, and reuse a
+verified package archive when its contents have not changed. Cargo still runs
+to detect Rust changes, and the normal install, verification and activation
+steps still run. The build output identifies which stages were reused.
+
+Use `AGENA_WEB_FORCE_BUILD=1 bash scripts/agena/install.sh reinstall --source`
+to force the Web checks and build. Cross compilation and build-std retain
+their target-specific caches. For an explicitly selected host-target graph,
+set `AGENA_FORCE_EXPLICIT_TARGET=1`.
+
 ### Windows
 
 ```powershell

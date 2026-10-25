@@ -90,16 +90,20 @@ can be skipped in either profile, but only incremental compilation can reuse
 codegen within a changed workspace crate. sccache does not cache final binary
 linking and does not replace that incremental cache.
 
-Keep the target selection consistent when measuring or rebuilding. Packaging
-and source installs pass `--target` explicitly, even for the host, and reuse
-`target/<triple>/release/`. A plain `cargo build --release` uses
-`target/release/`; these are separate Cargo caches. To reuse a Unix source
-install's cache directly, run:
+Unix source installs and packaging use the same native Cargo graph as a plain
+`cargo build --release`: `target/release/`, or the target directory selected by
+Cargo configuration / `CARGO_TARGET_DIR`. They preserve inherited Rust flags
+and read Cargo's reported executable instead of guessing an artifact path.
+To build the executable before a source reinstall, run:
 
 ```sh
-cargo build --release -p agena --bin agena --locked \
-  --target "$(rustc --print host-tuple)"
+cargo build --release -p agena --bin agena --locked
 ```
+
+Cross compilation, build-std and extra target-specific Rust flags still use
+an explicit `--target` and a separate `target/<triple>/release/` graph. Set
+`AGENA_FORCE_EXPLICIT_TARGET=1` to select that graph for a host build too,
+for example when overriding a different `build.target` in Cargo configuration.
 
 Windows packaging deliberately uses the shorter `.agena-target/` root to keep
 compiler command lines within the Windows process limit. Pass that same
@@ -288,7 +292,7 @@ For installer changes, also run:
 
 ```sh
 bash -n scripts/agena/install.sh
-python3 scripts/agena/tests/test_installer_storage.py
+python3 -m unittest discover -s scripts/agena/tests -v
 python3 scripts/agena/verify-target-coverage.py
 ```
 
@@ -438,6 +442,13 @@ the first argument:
 ```sh
 bash scripts/agena/package-backend.sh aarch64-unknown-linux-gnu
 ```
+
+Unchanged frontend sources and verified build output reuse the successful
+Web build, including its validation gates. Changes to sources, environment,
+tool version or built files trigger a complete frontend build. Set
+`AGENA_WEB_FORCE_BUILD=1` to run it explicitly. Unix packaging also reuses an
+unchanged archive after verifying its full SHA-256 and checksum file; binary,
+Web output and packaging recipe changes invalidate that cache.
 
 On Windows:
 

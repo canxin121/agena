@@ -47,24 +47,8 @@ foreach ($tool in @("cargo", "rustc")) {
 if ($env:AGENA_WEB_DIST_PREBUILT -ne "1") {
   $bun = Get-Command bun -ErrorAction SilentlyContinue
   if (-not $bun) { throw "bun is required to build the Agena Web frontend" }
-  if (-not (Test-Path -LiteralPath (Join-Path $WebProjectDir "node_modules") -PathType Container)) {
-    Push-Location $WebProjectDir
-    try {
-      & $bun.Source install --frozen-lockfile
-      if ($LASTEXITCODE -ne 0) { throw "bun install failed with exit code $LASTEXITCODE" }
-    }
-    finally {
-      Pop-Location
-    }
-  }
-  Push-Location $WebProjectDir
-  try {
-    & $bun.Source run build
-    if ($LASTEXITCODE -ne 0) { throw "bun run build failed with exit code $LASTEXITCODE" }
-  }
-  finally {
-    Pop-Location
-  }
+  & $bun.Source (Join-Path $PSScriptRoot "build-web.mjs") $WebProjectDir
+  if ($LASTEXITCODE -ne 0) { throw "Agena Web build failed with exit code $LASTEXITCODE" }
 }
 
 if (-not $TargetTriple) {

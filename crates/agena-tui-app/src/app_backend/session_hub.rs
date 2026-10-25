@@ -96,6 +96,24 @@ impl TuiBackend {
                         ..Default::default()
                     },
                 ));
+                if search.is_none() {
+                    for (kind, bucket) in [
+                        (SessionHubSectionKind::Pinned, SessionListBucket::Pinned),
+                        (
+                            SessionHubSectionKind::Favorites,
+                            SessionListBucket::Favorite,
+                        ),
+                    ] {
+                        requests.push((
+                            HubPageTarget::DirectorySection(workspace.id, kind),
+                            ListSessionsParams {
+                                workspace_id: Some(workspace.id),
+                                bucket: Some(bucket),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                }
             }
         }
         if search.is_some() {
@@ -108,11 +126,6 @@ impl TuiBackend {
             ));
         } else {
             for (kind, bucket) in [
-                (SessionHubSectionKind::Pinned, SessionListBucket::Pinned),
-                (
-                    SessionHubSectionKind::Favorites,
-                    SessionListBucket::Favorite,
-                ),
                 (SessionHubSectionKind::Running, SessionListBucket::Running),
                 (
                     SessionHubSectionKind::Attention,

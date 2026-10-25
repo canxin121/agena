@@ -182,7 +182,7 @@ class Screen:
 
 
 class Pty:
-    def __init__(self, binary: Path, api: Any, workspace: Path, session_id: int,
+    def __init__(self, binary: Path, api: Any, workspace: Path, session_id: int | None,
                  directory: Path, environment: dict[str, str]):
         import fcntl
         import pty
@@ -204,7 +204,9 @@ class Pty:
                             "AGENA_RUNTIME_BOOTSTRAP_FORBIDDEN": "1",
                             "AGENA_TUI_NATIVE_CLIPBOARD": "false", "AGENA_TUI_OSC52": "true"}
         self.command = [str(binary), "--server", f"http://127.0.0.1:{api.port}", "tui",
-                        "--workspace", str(workspace), "--session", str(session_id)]
+                        "--workspace", str(workspace)]
+        if session_id is not None:
+            self.command.extend(["--session", str(session_id)])
         started = fixture.now_ns()
         self.process = subprocess.Popen(self.command, cwd=workspace, env=self.environment,
                                         stdin=slave, stdout=slave, stderr=slave, start_new_session=True)

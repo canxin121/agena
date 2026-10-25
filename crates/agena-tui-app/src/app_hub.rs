@@ -6,16 +6,12 @@
 //! this module owns the overview request/response plumbing and the session-open
 //! / create / session-list effects that only the App can perform.
 
-use agena_api::resource::SessionOverviewResource;
 use agena_tui_session::session_hub::{HubPageTarget, HubRow, SessionHubDirectory};
 
 use super::{App, AppMessage, HubState, KeyEvent, Route};
 use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionResource, ui_text};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-
-/// Number of most-recently-used sessions in the quick-access region.
-const HUB_RECENT_LIMIT: u64 = 20;
 
 impl App {
     /// Opens the session hub as the current route and kicks off the overview
@@ -55,10 +51,20 @@ impl App {
             }
         }));
         let mut state = HubState::new();
-        state.presentation.set_sections(vec![SessionHubSection::new(
-            SessionHubSectionKind::New,
-            vec![self.hub_new_session_item()],
-        )]);
+        let workspace_id = self.application.workspace_id();
+        let path = self.application.workspace_root().display().to_string();
+        state
+            .presentation
+            .set_directories(vec![SessionHubDirectory {
+                workspace_id,
+                new_session: self.hub_new_session_item(workspace_id, &path),
+                path,
+                sections: Vec::new(),
+                items: Vec::new(),
+                expanded: true,
+                visible_limit: 20,
+            }]);
+        state.presentation.select_new_session(workspace_id);
         self.spawn_hub_overview_request(&mut state);
         self.route_stack.clear();
         self.current_route = Route::Hub(state);
@@ -78,10 +84,7 @@ impl App {
         let request_id = state.request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let mut expanded = state.presentation.expanded_directories();
-        if state.pages.is_empty() {
-            expanded.insert(self.application.workspace_id());
-        }
+        let expanded = state.presentation.expanded_directories();
         let query = crate::app_backend::session_hub::HubCatalogQuery {
             pages: state.pages.clone(),
             expanded,
@@ -118,6 +121,9 @@ impl App {
     }
 
     pub(crate) fn refresh_hub_after_mutation(&mut self) {
+        if let Route::Hub(state) = &mut self.current_route {
+            state.dirty = true;
+        }
         if !matches!(&self.current_route, Route::Hub(state) if state.loading) {
             return;
         }
@@ -141,52 +147,6 @@ impl App {
         state.loading = false;
     }
 
-    fn hub_sections(
-        &self,
-        overview: SessionOverviewResource,
-        pinned: Vec<SessionHubItem>,
-    ) -> Vec<SessionHubSection> {
-        vec![
-            SessionHubSection::new(
-                SessionHubSectionKind::New,
-                vec![self.hub_new_session_item()],
-            ),
-            SessionHubSection::new(
-                SessionHubSectionKind::Running,
-                overview
-                    .running
-                    .iter()
-                    .map(|session| self.hub_session_item(session))
-                    .collect(),
-            ),
-            SessionHubSection::new(
-                SessionHubSectionKind::Attention,
-                overview
-                    .attention
-                    .iter()
-                    .map(|session| self.hub_session_item(session))
-                    .collect(),
-            ),
-            SessionHubSection::new(SessionHubSectionKind::Pinned, pinned),
-            SessionHubSection::new(
-                SessionHubSectionKind::Favorites,
-                overview
-                    .favorites
-                    .iter()
-                    .map(|session| self.hub_session_item(session))
-                    .collect(),
-            ),
-            SessionHubSection::new(
-                SessionHubSectionKind::Recent,
-                overview
-                    .recent
-                    .iter()
-                    .map(|session| self.hub_session_item(session))
-                    .collect(),
-            ),
-        ]
-    }
-
     pub(crate) fn handle_hub_catalog_loaded(
         &mut self,
         request_id: u64,
@@ -206,66 +166,56 @@ impl App {
                 return;
             }
         };
-        let mut overview = SessionOverviewResource {
-            favorites: Vec::new(),
-            attention: Vec::new(),
-            running: Vec::new(),
-            recent: Vec::new(),
-            generated_at: chrono::Utc::now(),
-        };
-        let mut pinned = Vec::new();
-        for session in &catalog.sessions {
-            if session.pinned {
-                pinned.push(self.hub_session_item(session));
-            }
-            if session.favorite {
-                overview.favorites.push(session.clone());
-            }
-            if session.state.is_attention() {
-                overview.attention.push(session.clone());
-            } else if session.state.is_running()
-                || matches!(session.state, agena_api::resource::SessionState::Creating)
-            {
-                overview.running.push(session.clone());
-            } else {
-                overview.recent.push(session.clone());
-            }
-        }
-        if catalog.pages.is_empty() {
-            overview.recent.truncate(HUB_RECENT_LIMIT as usize);
-        }
-        let mut sections = self.hub_sections(overview, pinned);
-        if !catalog.members.is_empty() {
-            for section in &mut sections {
-                if section.kind == SessionHubSectionKind::New {
-                    continue;
-                }
-                let members = catalog.members.get(&HubPageTarget::Section(section.kind));
-                section
-                    .items
-                    .retain(|item| members.is_some_and(|ids| ids.contains(&item.session_id)));
-            }
-            if let Some(ids) = catalog
-                .members
-                .get(&HubPageTarget::Section(SessionHubSectionKind::Search))
-            {
-                sections.push(SessionHubSection::new(
-                    SessionHubSectionKind::Search,
-                    catalog
-                        .sessions
-                        .iter()
-                        .filter(|session| ids.contains(&session.id))
-                        .map(|session| self.hub_session_item(session))
-                        .collect(),
-                ));
-            }
-        }
+        let mut sections = [
+            SessionHubSectionKind::Running,
+            SessionHubSectionKind::Attention,
+            SessionHubSectionKind::Recent,
+            SessionHubSectionKind::Search,
+        ]
+        .into_iter()
+        .filter_map(|kind| {
+            let ids = catalog.members.get(&HubPageTarget::Section(kind))?;
+            Some(SessionHubSection::new(
+                kind,
+                catalog
+                    .sessions
+                    .iter()
+                    .filter(|session| ids.contains(&session.id))
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ))
+        })
+        .collect::<Vec<_>>();
         let mut directories = catalog
             .workspaces
             .iter()
             .map(|workspace| SessionHubDirectory {
                 workspace_id: workspace.id,
                 path: workspace.path.clone(),
+                new_session: self.hub_new_session_item(workspace.id, &workspace.path),
+                sections: [
+                    SessionHubSectionKind::Pinned,
+                    SessionHubSectionKind::Favorites,
+                ]
+                .into_iter()
+                .map(|kind| {
+                    let ids = catalog
+                        .members
+                        .get(&HubPageTarget::DirectorySection(workspace.id, kind));
+                    SessionHubSection::new(
+                        kind,
+                        catalog
+                            .sessions
+                            .iter()
+                            .filter(|session| {
+                                session.workspace_id == workspace.id
+                                    && ids.is_some_and(|ids| ids.contains(&session.id))
+                            })
+                            .map(|session| self.hub_session_item(session))
+                            .collect(),
+                    )
+                })
+                .collect(),
                 items: catalog
                     .sessions
                     .iter()
@@ -604,18 +554,17 @@ impl App {
         }
     }
 
-    /// The synthetic first row of the hub: Entering on it creates a fresh
-    /// session, so the hub supports "Enter → new session" directly.
-    fn hub_new_session_item(&self) -> SessionHubItem {
+    /// A project-local create action, available before metadata has loaded.
+    fn hub_new_session_item(&self, workspace_id: i64, path: &str) -> SessionHubItem {
         SessionHubItem {
             session_id: 0,
-            workspace_id: self.application.workspace_id(),
+            workspace_id,
             pinned: false,
             title: String::new(),
             favorite: false,
             label: self.i18n.text("hub-item-new"),
             summary: String::new(),
-            detail: self.i18n.text("hub-item-new-detail"),
+            detail: format!("{} | {}", path, self.i18n.text("hub-item-new-detail")),
             is_new_session: true,
         }
     }

@@ -209,3 +209,17 @@ This is a functional regression fixture for the current implementation; its
 six cases are separate from HTTP latency distributions and are not a new
 performance baseline. Authoring the script does not establish a pass: retain
 the actual run result from the final binary, including any failed run.
+
+## Project-scoped TUI Hub
+
+```sh
+python3 scripts/probes/tui_hub.py --binary target/release/agena --output target/hub-validation/run-1
+```
+
+This probe starts an isolated instance and drives real PTY keyboard input. It
+creates two projects, 24 older pinned sessions and 22 newer unmarked sessions.
+It checks the initial project-local New Session selection, Enter creating in
+the launch or selected project, independent project buckets, pin pagination,
+selection after a live refresh, and independent pin/favorite mutations. All
+fixture data, HTTP traces and terminal captures stay in the new output directory;
+the installed instance and user conversations are untouched.

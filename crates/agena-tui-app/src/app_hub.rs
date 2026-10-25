@@ -11,6 +11,41 @@ use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionRes
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 
+impl HubState {
+    fn resize_page_size(&mut self, size: usize) -> bool {
+        let size = size.clamp(1, agena_api::pagination::MAX_LIMIT as usize);
+        if self.page_size == size {
+            return false;
+        }
+        let old_size = self.page_size;
+        let selected = (self.pending_page.is_none()
+            && self.search_changed_at.is_none()
+            && self.loaded_query == self.query)
+            .then(|| self.presentation.selected_page_position())
+            .flatten();
+        for (target, page) in &mut self.pages {
+            let offset = page.saturating_mul(old_size);
+            let offset = if self.pending_page == Some((*target, true)) {
+                offset.saturating_add(old_size.saturating_sub(1))
+            } else {
+                offset
+            };
+            *page = offset / size;
+        }
+        if let Some((target, page, ordinal)) = selected {
+            // Loaded rows may still use an older size after several quick
+            // resizes. Anchor to their actual page and the selected session,
+            // rather than repeatedly rounding the in-flight page's offset.
+            let offset = page
+                .saturating_mul(self.loaded_page_size)
+                .saturating_add(ordinal);
+            self.pages.insert(target, offset / size);
+        }
+        self.page_size = size;
+        true
+    }
+}
+
 impl App {
     /// Opens the session hub as the current route and kicks off the overview
     /// load. Used as the bootstrap landing view and from the hub itself.
@@ -70,7 +105,7 @@ impl App {
                 sections: Vec::new(),
                 items: Vec::new(),
                 expanded: true,
-                visible_limit: 20,
+                visible_limit: state.page_size,
             }]);
         state.presentation.select_new_session(workspace_id);
     }
@@ -84,10 +119,37 @@ impl App {
         state.presentation = crate::SessionHubPresentation::empty();
         state.presentation.set_view(view);
         state.pages.clear();
+        state.page_size = crate::app_backend::session_hub::HUB_PAGE_SIZE as usize;
+        state.loaded_page_size = state.page_size;
+        state.loaded_query.clear();
         state.pending_page = None;
         self.seed_hub_project(state);
         state.presentation.set_query(&state.query);
         self.spawn_hub_overview_request(state);
+    }
+
+    /// Use the actual route rectangle, including on the first draw. Keeping
+    /// this outside the cloned render projection also handles resize events
+    /// without relying on stale viewport cells or the previous frame's layout.
+    pub(crate) fn resize_hub_page(&mut self, area: ratatui::layout::Rect) {
+        let Route::Hub(state) = &mut self.current_route else {
+            return;
+        };
+        if state.presentation.view() != HubView::CurrentProject {
+            return;
+        }
+        let size = agena_tui_session::session_hub::current_project_page_size(
+            area,
+            !state.query.trim().is_empty(),
+        );
+        if !state.resize_page_size(size) {
+            return;
+        }
+        let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
+            return;
+        };
+        self.spawn_hub_overview_request(&mut state);
+        self.current_route = Route::Hub(state);
     }
 
     pub(crate) fn spawn_hub_overview_request(&mut self, state: &mut HubState) {
@@ -111,6 +173,7 @@ impl App {
         let expanded = state.presentation.expanded_directories();
         let query = crate::app_backend::session_hub::HubCatalogQuery {
             view: state.presentation.view(),
+            page_size: Some(state.page_size),
             pages: state.pages.clone(),
             expanded,
             search: state.query.clone(),
@@ -187,9 +250,10 @@ impl App {
         request_id: u64,
         result: super::UiResult<crate::app_backend::session_hub::HubCatalog>,
     ) {
-        if !matches!(&self.current_route, Route::Hub(state) if state.request_id == request_id) {
-            return;
-        }
+        let page_size = match &self.current_route {
+            Route::Hub(state) if state.request_id == request_id => state.page_size,
+            _ => return,
+        };
         if !self.session_mark_writes.is_idle() {
             return;
         }
@@ -267,7 +331,7 @@ impl App {
                     .map(|session| self.hub_session_item(session))
                     .collect(),
                 expanded: workspace.id == self.application.workspace_id(),
-                visible_limit: 20,
+                visible_limit: page_size,
             })
             .collect::<Vec<_>>();
         directories.sort_by(|a, b| {
@@ -288,6 +352,8 @@ impl App {
         }
         if let Route::Hub(state) = &mut self.current_route {
             state.loading = false;
+            state.loaded_page_size = state.page_size;
+            state.loaded_query.clone_from(&state.query);
             state.error = None;
             state.pages = catalog
                 .pages
@@ -618,3 +684,6 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

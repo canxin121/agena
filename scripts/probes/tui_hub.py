@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--cols", type=int, default=120)
+    parser.add_argument("--rows", type=int, default=36)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
@@ -37,6 +38,7 @@ def main() -> int:
     clients = []
     tui.fixture = fixture
     tui.COLS = args.cols
+    tui.ROWS = args.rows
     try:
         alpha = fixture.prepare_configuration(out, "http://127.0.0.1:1/v1")
         beta = out / "project-beta"
@@ -301,20 +303,26 @@ def main() -> int:
         clients.remove(client)
 
         client = launch(alpha, "project-buckets")
+        # This fixture has 24 pins; keep exercising its later page with the
+        # terminal-sized current-project page rather than assuming 20 rows.
+        page_size = max(1, args.rows - 14)
+        fixture.require(page_size < 24, "use fewer than 38 rows for this navigation probe")
+        pin_index = 23 - page_size
+        paged_pin = f"A-pin-{pin_index:02}"
         client.wait_text("A-pin-23", "pins-loaded")
         client.send(b"\x1b[B", "select-project-pins")
         wait_selected(client, "A-pin-23")
         client.send(b"]", "next-project-pin-page")
-        wait_selected(client, "A-pin-03")
+        wait_selected(client, paged_pin)
         checkpoint(client, "old-pins-second-page")
         project = project_text(client)
         fixture.require("Name" in project and "Status" in project and "Updated" in project,
                         "Hub has no explicit name/status/time headings")
-        selected_line = next(line for line in project.splitlines() if "›" in line and "A-pin-03" in line)
+        selected_line = next(line for line in project.splitlines() if "›" in line and paged_pin in line)
         fixture.require("Idle" in selected_line and selected_line.count("│") >= 3
                         and re.search(r"\d{2}-\d{2} \d{2}:\d{2}", selected_line),
                         "session metadata is missing or not in separate columns")
-        fixture.require(selected_line.index("A-pin-03") - selected_line.index("›") == 2,
+        fixture.require(selected_line.index(paged_pin) - selected_line.index("›") == 2,
                         "session name still has excessive leading padding")
         checkpoint(client, "explicit-name-status-time-columns")
         # A server-side metadata change causes a real catalog refresh.
@@ -322,19 +330,19 @@ def main() -> int:
         # survives, so preserving a raw row index would focus the wrong session.
         api.call("PUT", f"/api/v1/sessions/{pins[0]}", {"title": "A-pin-00-renamed"})
         client.wait_text("A-pin-00-renamed", "live-refresh")
-        wait_selected(client, "A-pin-03")
+        wait_selected(client, paged_pin)
         checkpoint(client, "refresh-keeps-project-and-page")
         client.send(b"f", "favorite-old-pin")
-        fixture.poll(lambda: api.state(pins[3])["session"]["favorite"], 30, "TUI favorite toggle failed")
+        fixture.poll(lambda: api.state(pins[pin_index])["session"]["favorite"], 30, "TUI favorite toggle failed")
         client.wait_text("Favorites  2", "favorite-bucket-updated")
         # Updating metadata can move this session out of page 2 of Pins.
         # Selection follows its identity into Recent, so navigate to Favorites
         # explicitly instead of assuming the old bucket is still selected.
-        select_bucket_item(client, "A-pin-03", "Favorites")
+        select_bucket_item(client, paged_pin, "Favorites")
         def favorite_selected() -> bool:
             lines = project_text(client).splitlines()
             index = next((i for i, line in enumerate(lines)
-                          if "›" in line and "A-pin-03" in line), None)
+                          if "›" in line and paged_pin in line), None)
             if index is None:
                 return False
             header = next((line for line in reversed(lines[:index])
@@ -342,8 +350,8 @@ def main() -> int:
             return "Favorites  " in header
         fixture.poll(favorite_selected, 30, "target was not selected in Favorites")
         client.send(b"p", "unpin-while-keeping-favorite")
-        fixture.poll(lambda: not api.state(pins[3])["session"]["pinned"], 30, "TUI unpin failed")
-        fixture.require(api.state(pins[3])["session"]["favorite"], "unpin cleared favorite")
+        fixture.poll(lambda: not api.state(pins[pin_index])["session"]["pinned"], 30, "TUI unpin failed")
+        fixture.require(api.state(pins[pin_index])["session"]["favorite"], "unpin cleared favorite")
         checkpoint(client, "pin-favorite-independent")
         client.send(b"\t", "switch-projects-for-create")
         client.wait_text("h/l ←→ project", "projects-ready-for-create")

@@ -147,6 +147,7 @@ impl App {
             };
             self.layout = LayoutCache::default();
             self.layout.overlay_area = body;
+            self.resize_hub_page(body);
             self.render_route(frame, body);
             if let Some(footer) = footer {
                 self.render_transcript_footer_row(frame, footer);

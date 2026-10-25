@@ -43,7 +43,8 @@ class Screen:
     """
 
     def __init__(self) -> None:
-        self.cells = [[" "] * COLS for _ in range(ROWS)]
+        self.rows, self.cols = ROWS, COLS
+        self.cells = [[" "] * self.cols for _ in range(self.rows)]
         self.row = self.col = 0
         self.saved = (0, 0)
         self.pending = ""
@@ -106,24 +107,24 @@ class Screen:
                 self.col = 0
             elif char == "\n":
                 self.row += 1
-                if self.row >= ROWS:
+                if self.row >= self.rows:
                     self.cells.pop(0)
-                    self.cells.append([" "] * COLS)
-                    self.row = ROWS - 1
+                    self.cells.append([" "] * self.cols)
+                    self.row = self.rows - 1
             elif char == "\b":
                 self.col = max(0, self.col - 1)
             elif char == "\t":
-                self.col = min(COLS - 1, ((self.col // 8) + 1) * 8)
+                self.col = min(self.cols - 1, ((self.col // 8) + 1) * 8)
             elif ord(char) >= 32 and char != "\x7f":
                 if unicodedata.combining(char):
                     self.cells[self.row][max(0, self.col - 1)] += char
                 else:
                     width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-                    if self.col >= COLS:
+                    if self.col >= self.cols:
                         self.col = 0
-                        self.row = min(ROWS - 1, self.row + 1)
+                        self.row = min(self.rows - 1, self.row + 1)
                     self.cells[self.row][self.col] = char
-                    if width == 2 and self.col + 1 < COLS:
+                    if width == 2 and self.col + 1 < self.cols:
                         self.cells[self.row][self.col + 1] = ""
                     self.col += width
             index += 1
@@ -133,45 +134,45 @@ class Screen:
     def csi(self, parameters: str, final: str) -> None:
         if parameters.startswith("?"):
             if parameters == "?1049" and final == "h":
-                self.cells = [[" "] * COLS for _ in range(ROWS)]
+                self.cells = [[" "] * self.cols for _ in range(self.rows)]
                 self.row = self.col = 0
             return
         numbers = [int(value) if value.isdigit() else 0 for value in parameters.split(";")]
         value = numbers[0] if numbers else 0
         distance = value or 1
         if final in ("H", "f"):
-            self.row = min(ROWS - 1, max(0, distance - 1))
-            self.col = min(COLS - 1, max(0, (numbers[1] if len(numbers) > 1 else 1) - 1))
+            self.row = min(self.rows - 1, max(0, distance - 1))
+            self.col = min(self.cols - 1, max(0, (numbers[1] if len(numbers) > 1 else 1) - 1))
         elif final == "A":
             self.row = max(0, self.row - distance)
         elif final in ("B", "e"):
-            self.row = min(ROWS - 1, self.row + distance)
+            self.row = min(self.rows - 1, self.row + distance)
         elif final in ("C", "a"):
-            self.col = min(COLS - 1, self.col + distance)
+            self.col = min(self.cols - 1, self.col + distance)
         elif final == "D":
             self.col = max(0, self.col - distance)
         elif final in ("G", "`"):
-            self.col = min(COLS - 1, distance - 1)
+            self.col = min(self.cols - 1, distance - 1)
         elif final == "d":
-            self.row = min(ROWS - 1, distance - 1)
+            self.row = min(self.rows - 1, distance - 1)
         elif final == "J":
             if value in (2, 3):
-                self.cells = [[" "] * COLS for _ in range(ROWS)]
+                self.cells = [[" "] * self.cols for _ in range(self.rows)]
             elif value == 0:
-                self.cells[self.row][min(self.col, COLS):] = [" "] * (COLS - min(self.col, COLS))
-                for row in range(self.row + 1, ROWS):
-                    self.cells[row] = [" "] * COLS
+                self.cells[self.row][min(self.col, self.cols):] = [" "] * (self.cols - min(self.col, self.cols))
+                for row in range(self.row + 1, self.rows):
+                    self.cells[row] = [" "] * self.cols
             elif value == 1:
                 for row in range(self.row):
-                    self.cells[row] = [" "] * COLS
-                self.cells[self.row][:min(self.col + 1, COLS)] = [" "] * min(self.col + 1, COLS)
+                    self.cells[row] = [" "] * self.cols
+                self.cells[self.row][:min(self.col + 1, self.cols)] = [" "] * min(self.col + 1, self.cols)
         elif final == "K":
             if value == 2:
-                self.cells[self.row] = [" "] * COLS
+                self.cells[self.row] = [" "] * self.cols
             elif value == 0:
-                self.cells[self.row][min(self.col, COLS):] = [" "] * (COLS - min(self.col, COLS))
+                self.cells[self.row][min(self.col, self.cols):] = [" "] * (self.cols - min(self.col, self.cols))
             elif value == 1:
-                self.cells[self.row][:min(self.col + 1, COLS)] = [" "] * min(self.col + 1, COLS)
+                self.cells[self.row][:min(self.col + 1, self.cols)] = [" "] * min(self.col + 1, self.cols)
         elif final == "s":
             self.saved = self.row, self.col
         elif final == "u":
@@ -258,6 +259,29 @@ class Pty:
     def text(self) -> str:
         with self.lock:
             return self.screen.text()
+
+    def resize(self, rows: int, cols: int | None = None) -> None:
+        import fcntl
+        import termios
+
+        with self.lock:
+            cols = self.screen.cols if cols is None else cols
+            if rows < 1 or cols < 1:
+                raise ValueError("PTY dimensions must be positive")
+            old = self.screen.cells
+            self.screen.cells = [
+                (old[index][:cols] if index < len(old) else []) +
+                [" "] * max(0, cols - (len(old[index]) if index < len(old) else 0))
+                for index in range(rows)
+            ]
+            self.screen.rows, self.screen.cols = rows, cols
+            self.screen.row = min(self.screen.row, rows - 1)
+            self.screen.col = min(self.screen.col, cols - 1)
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        # The fixture starts a session without a controlling tty. Explicitly
+        # deliver the same resize signal a terminal sends its foreground job.
+        os.kill(self.process.pid, signal.SIGWINCH)
+        self.events.add({"kind": "resize", "rows": rows, "cols": cols, "sent_ns": fixture.now_ns()})
 
     def wait_text(self, marker: str, checkpoint: str) -> dict[str, Any]:
         def visible() -> Any:

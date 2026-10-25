@@ -72,6 +72,56 @@ fn select_item(hub: &mut SessionHubPresentation, target: HubPageTarget, id: i64)
 }
 
 #[test]
+fn current_project_capacity_uses_the_rendered_table_height() {
+    for (height, expected) in [(24, 10), (36, 22), (60, 46)] {
+        let area = Rect::new(0, 0, 100, height);
+        assert_eq!(current_project_page_size(area, false), expected);
+        assert_eq!(current_project_page_size(area, true), expected + 1);
+    }
+    for height in 0..=16 {
+        assert!(current_project_page_size(Rect::new(0, 0, 80, height), false) >= 1);
+    }
+}
+
+#[test]
+fn terminal_sized_server_page_is_not_truncated_by_the_old_local_limit() {
+    let area = Rect::new(0, 0, 100, 60);
+    let capacity = current_project_page_size(area, false);
+    let mut project = directory(1);
+    project.items = (1..=capacity as i64).map(|id| item(1, id)).collect();
+    let mut hub = SessionHubPresentation::empty();
+    hub.set_directories(vec![project]);
+    let target = HubPageTarget::Directory(1);
+    hub.set_pagination(BTreeMap::from([(
+        target,
+        HubPagination {
+            page: 0,
+            has_more: true,
+            total: Some(200),
+        },
+    )]));
+    hub.select_new_session(1);
+    let regions = hub_row_regions(hub_layout(area, false)[3], &hub);
+    let displayed = regions
+        .rows
+        .iter()
+        .filter(
+            |(index, _)| matches!(&hub.rows[*index], HubRow::Item(item) if !item.is_new_session),
+        )
+        .count();
+    assert_eq!(displayed, capacity);
+    assert_eq!(scoped_ids(&hub, target).len(), capacity);
+    assert!(
+        regions
+            .rows
+            .iter()
+            .any(|(index, _)| matches!(hub.rows[*index], HubRow::Page { forward: true, .. }))
+    );
+    // The next button fits too; only the unused previous-button slot is spare.
+    assert_eq!(regions.rows.len() + 1, hub.directory_height.get());
+}
+
+#[test]
 fn three_views_cycle_in_both_directions() {
     let mut view = HubView::default();
     assert_eq!(view, HubView::CurrentProject);

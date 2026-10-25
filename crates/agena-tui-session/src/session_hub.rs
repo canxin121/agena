@@ -331,7 +331,9 @@ impl SessionHubPresentation {
                 .find(|old| old.workspace_id == directory.workspace_id)
             {
                 directory.expanded = old.expanded;
-                directory.visible_limit = old.visible_limit;
+                if self.view != HubView::CurrentProject {
+                    directory.visible_limit = old.visible_limit;
+                }
             }
         }
         self.directories = directories;
@@ -393,6 +395,23 @@ impl SessionHubPresentation {
 
     pub fn selected_page_target(&self) -> HubPageTarget {
         self.row_page_target(self.selection)
+    }
+
+    /// Position within the loaded server page, independent of duplicate rows
+    /// in other buckets and of project headings/create/pagination actions.
+    pub fn selected_page_position(&self) -> Option<(HubPageTarget, usize, usize)> {
+        if !matches!(self.selected_row(), Some(HubRow::Item(item)) if !item.is_new_session) {
+            return None;
+        }
+        let target = self.selected_page_target();
+        let page = self.pagination.get(&target)?;
+        let ordinal = (0..self.selection)
+            .filter(|&index| {
+                self.row_page_target(index) == target
+                    && matches!(&self.rows[index], HubRow::Item(item) if !item.is_new_session)
+            })
+            .count();
+        Some((target, page.page, ordinal))
     }
 
     pub fn page_request(&self, forward: bool) -> Option<(HubPageTarget, usize)> {
@@ -932,13 +951,15 @@ impl SessionHubPresentation {
                     kind: SessionHubSectionKind::Recent,
                 });
             }
-            let remaining = items.len().saturating_sub(directory.visible_limit);
-            directory_rows.extend(
-                items
-                    .into_iter()
-                    .take(directory.visible_limit)
-                    .map(HubRow::Item),
-            );
+            // The server already bounded this page. Applying the legacy
+            // local limit again would silently drop sessions on tall terminals.
+            let visible_limit = if self.pagination.contains_key(&target) {
+                items.len()
+            } else {
+                directory.visible_limit
+            };
+            let remaining = items.len().saturating_sub(visible_limit);
+            directory_rows.extend(items.into_iter().take(visible_limit).map(HubRow::Item));
             directory_rows.extend(controls);
             if !self.pagination.contains_key(&target) && remaining > 0 {
                 directory_rows.push(HubRow::More {
@@ -1212,6 +1233,18 @@ fn hub_layout(area: Rect, has_error: bool) -> [Rect; 6] {
     ])
     .split(inner);
     [rows[0], rows[1], rows[2], rows[4], rows[5], rows[6]]
+}
+
+/// Each independently paged project bucket can occupy the available table.
+/// Reserve the project, create and bucket headings plus both paging controls;
+/// a first/last page may leave one spare row. Error banners are transient and
+/// must not change offsets or start a resize/retry feedback loop.
+pub fn current_project_page_size(area: Rect, searching: bool) -> usize {
+    let content = hub_layout(area, false)[3];
+    let table_heading = u16::from(content.height >= 3);
+    usize::from(content.height.saturating_sub(table_heading))
+        .saturating_sub(5 - usize::from(searching))
+        .max(1)
 }
 
 /// Use the same terminal-cell geometry for view labels and mouse targets.

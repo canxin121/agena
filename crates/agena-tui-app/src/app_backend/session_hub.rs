@@ -18,9 +18,22 @@ pub(crate) const HUB_PAGE_SIZE: u64 = 20;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HubCatalogQuery {
     pub view: HubView,
+    pub page_size: Option<usize>,
     pub pages: BTreeMap<HubPageTarget, usize>,
     pub expanded: BTreeSet<i64>,
     pub search: String,
+}
+
+impl HubCatalogQuery {
+    fn session_page_size(&self) -> u64 {
+        if self.view == HubView::CurrentProject {
+            self.page_size
+                .unwrap_or(HUB_PAGE_SIZE as usize)
+                .clamp(1, agena_api::pagination::MAX_LIMIT as usize) as u64
+        } else {
+            HUB_PAGE_SIZE
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,12 +106,13 @@ impl TuiBackend {
         let requests = session_requests(&query, &catalog.workspaces, self.workspace_id());
         let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
         let mut tasks = tokio::task::JoinSet::new();
+        let page_size = query.session_page_size();
         for (target, mut params) in requests {
             let backend = self.clone();
             let semaphore = semaphore.clone();
             let mut index = *query.pages.get(&target).unwrap_or(&0);
-            params.limit = Some(HUB_PAGE_SIZE);
-            params.offset = index as u64 * HUB_PAGE_SIZE;
+            params.limit = Some(page_size);
+            params.offset = (index as u64).saturating_mul(page_size);
             params.include_total = true;
             params.exclude_subagents = true;
             tasks.spawn(async move {
@@ -109,8 +123,8 @@ impl TuiBackend {
                     && let Some(total) = page.total
                     && params.offset >= total
                 {
-                    index = (total.saturating_sub(1) / HUB_PAGE_SIZE) as usize;
-                    params.offset = index as u64 * HUB_PAGE_SIZE;
+                    index = (total.saturating_sub(1) / page_size) as usize;
+                    params.offset = (index as u64).saturating_mul(page_size);
                     page = backend.list_sessions(params).await?;
                 }
                 Ok::<_, anyhow::Error>((target, index, page))
@@ -298,6 +312,23 @@ fn session_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_current_project_uses_terminal_sized_pages() {
+        let mut query = HubCatalogQuery::default();
+        assert_eq!(query.session_page_size(), 20);
+        query.page_size = Some(47);
+        assert_eq!(query.session_page_size(), 47);
+        query.page_size = Some(0);
+        assert_eq!(query.session_page_size(), 1);
+        query.page_size = Some(usize::MAX);
+        assert_eq!(query.session_page_size(), agena_api::pagination::MAX_LIMIT);
+        for view in [HubView::Projects, HubView::AllSessions] {
+            query.view = view;
+            query.page_size = Some(47);
+            assert_eq!(query.session_page_size(), 20);
+        }
+    }
 
     fn workspaces() -> Vec<WorkspaceResource> {
         [1, 2, 3]

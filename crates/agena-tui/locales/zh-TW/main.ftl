@@ -84,7 +84,7 @@ transcript-more-older = 還有更早的訊息。向上捲動或按 PageUp 繼續
 transcript-empty-session = 目前工作階段還沒有訊息。
 
 session-state-creating = 正在建立
-session-state-ready = 最近結束
+session-state-ready = 閒置
 session-state-running = 正在執行
 session-state-awaiting-interaction = 等待你處理
 session-state-interrupted = 已中斷
@@ -2492,7 +2492,6 @@ session-work-requests = 請求
 session-work-waiting = 等待工具
 session-work-status = 執行狀態
 session-work-workspace = 工作階段記錄的編輯 · 工具路徑原文
-session-work-ready = 就緒
 session-work-back = 返回
 session-work-switch = 切換 →
 session-work-staged = 暫存區 ⇄

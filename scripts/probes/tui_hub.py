@@ -225,15 +225,15 @@ def main() -> int:
         client.send(b"/B-only-marked", "search-current-project-only")
         client.wait_text("Filter: B-only-marked", "current-search-started")
         time.sleep(0.6)
-        fixture.require(not any("B-only-marked" in line and "Ready" in line for line in client.text().splitlines()),
+        fixture.require(not any("B-only-marked" in line and "Idle" in line for line in client.text().splitlines()),
                         "current-project search escaped its scope")
         client.send(b"\t", "keep-search-in-projects")
-        fixture.poll(lambda: any("B-only-marked" in line and "Ready" in line
+        fixture.poll(lambda: any("B-only-marked" in line and "Idle" in line
                                  for line in client.text().splitlines()), 30, "grouped search did not load")
         client.wait_text("project-beta", "grouped-search-project")
         checkpoint(client, "project-search-groups-cross-project-results")
         client.send(b"\t", "keep-search-in-all-sessions")
-        fixture.poll(lambda: any("B-only-marked" in line and "Ready" in line for line in client.text().splitlines())
+        fixture.poll(lambda: any("B-only-marked" in line and "Idle" in line for line in client.text().splitlines())
                      and "▾" not in client.text(), 30, "flat search did not load")
         client.wait_text("Pinned  1", "global-pin-search")
         client.wait_text("Favorites  1", "global-favorite-search")
@@ -311,7 +311,7 @@ def main() -> int:
         fixture.require("Name" in project and "Status" in project and "Updated" in project,
                         "Hub has no explicit name/status/time headings")
         selected_line = next(line for line in project.splitlines() if "›" in line and "A-pin-03" in line)
-        fixture.require("Ready" in selected_line and selected_line.count("│") >= 3
+        fixture.require("Idle" in selected_line and selected_line.count("│") >= 3
                         and re.search(r"\d{2}-\d{2} \d{2}:\d{2}", selected_line),
                         "session metadata is missing or not in separate columns")
         fixture.require(selected_line.index("A-pin-03") - selected_line.index("›") == 2,

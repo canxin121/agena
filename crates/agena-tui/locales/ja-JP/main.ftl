@@ -198,7 +198,7 @@ transcript-more-older = さらに古いメッセージがあります。上に�
 transcript-empty-session = このセッションにはまだメッセージがありません。
 
 session-state-creating = 作成中
-session-state-ready = 最近完了
+session-state-ready = 待機中
 session-state-running = 実行中
 session-state-awaiting-interaction = 入力待ち
 session-state-interrupted = 中断
@@ -2356,7 +2356,6 @@ session-work-requests = リクエスト
 session-work-waiting = ツール待ち
 session-work-status = 実行状況
 session-work-workspace = セッションの記録済み編集 · ツールのパスをそのまま表示
-session-work-ready = 準備完了
 session-work-back = 戻る
 session-work-switch = 切替 →
 session-work-staged = ステージ済み ⇄

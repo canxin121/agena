@@ -86,7 +86,7 @@ transcript-fold-loading = … 이전 응답 파트 불러오는 중
 transcript-fold-error = 불러오기 실패 · Enter로 재시도 · { $error }
 
 session-state-creating = 생성 중
-session-state-ready = 최근 완료
+session-state-ready = 유휴
 session-state-running = 실행 중
 session-state-awaiting-interaction = 사용자 입력 대기
 session-state-interrupted = 중단됨
@@ -2903,7 +2903,6 @@ session-work-requests = 요청
 session-work-waiting = 도구 대기 중
 session-work-status = 실행 상태
 session-work-workspace = 세션에 기록된 편집 · 리터럴 도구 경로
-session-work-ready = 준비됨
 session-work-back = 뒤로
 session-work-switch = 전환 →
 session-work-staged = 스테이징 ⇄

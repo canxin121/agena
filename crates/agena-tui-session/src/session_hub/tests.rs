@@ -9,7 +9,7 @@ pub(super) fn item(workspace_id: i64, session_id: i64) -> SessionHubItem {
         favorite: false,
         title: format!("session-{session_id}"),
         label: format!("session-{session_id}"),
-        status: "Ready".to_owned(),
+        status: "Idle".to_owned(),
         updated: "10-25 17:00".to_owned(),
         detail: String::new(),
         is_new_session: false,
@@ -761,7 +761,7 @@ fn normal_terminals_use_full_width_tables_with_sticky_column_headings() {
             .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
             .collect::<String>();
         assert!(
-            text.contains("session-101") && text.contains("Ready") && text.contains("10-25 17:00"),
+            text.contains("session-101") && text.contains("Idle") && text.contains("10-25 17:00"),
             "{text}"
         );
     }

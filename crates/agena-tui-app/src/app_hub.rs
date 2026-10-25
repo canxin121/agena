@@ -589,9 +589,6 @@ impl App {
             favorite: session.favorite,
             label: session.title.clone(),
             status: match session.state {
-                agena_api::resource::SessionState::Ready { .. } => {
-                    self.i18n.text("session-work-ready")
-                }
                 agena_api::resource::SessionState::AwaitingInteraction { .. } => {
                     self.i18n.text("session-work-status-waiting")
                 }

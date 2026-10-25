@@ -124,7 +124,8 @@ pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTi
 /// Localized label for the server-derived processing state shown in session
 /// pickers. This is deliberately based on the shared API value rather than a
 /// TUI-local request flag, so reconnecting clients describe the server's
-/// current durable truth.
+/// current durable truth. Ready means idle (no active run or pending input),
+/// not that a task was recently completed or completed successfully.
 pub fn session_state_label(i18n: &I18n, state: &SessionState) -> String {
     let key = match state.kind() {
         SessionStateKind::Creating => "session-state-creating",

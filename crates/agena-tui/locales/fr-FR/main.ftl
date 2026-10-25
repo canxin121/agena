@@ -64,7 +64,7 @@ transcript-more-older = D'anciens messages sont disponibles. Faites defiler vers
 transcript-empty-session = Aucun message dans cette session pour le moment.
 
 session-state-creating = creation
-session-state-ready = terminee recemment
+session-state-ready = Inactive
 session-state-running = en cours
 session-state-awaiting-interaction = en attente de votre reponse
 session-state-interrupted = interrompue
@@ -2597,7 +2597,6 @@ session-work-requests = Demandes
 session-work-waiting = En attente des outils
 session-work-status = État d’exécution
 session-work-workspace = Modifications consignées de la session · chemins littéraux des outils
-session-work-ready = Prêt
 session-work-back = Retour
 session-work-switch = Basculer →
 session-work-staged = Préparé ⇄

@@ -86,7 +86,7 @@ transcript-fold-loading = … Cargando partes anteriores de la respuesta
 transcript-fold-error = Error al cargar · Intro para reintentar · { $error }
 
 session-state-creating = creando
-session-state-ready = finalizada recientemente
+session-state-ready = Inactiva
 session-state-running = en ejecucion
 session-state-awaiting-interaction = esperando tu respuesta
 session-state-interrupted = interrumpida
@@ -2306,7 +2306,6 @@ session-work-requests = Solicitudes
 session-work-waiting = Esperando herramientas
 session-work-status = Estado de ejecución
 session-work-workspace = Cambios registrados de la sesión · rutas literales de herramientas
-session-work-ready = Listo
 session-work-back = Atrás
 session-work-switch = Cambiar →
 session-work-staged = Preparado ⇄

@@ -60,6 +60,20 @@ impl Clock {
         self.local.clear();
     }
     fn observe_signal(&mut self, signal: &RuntimeLiveSignal) {
+        // Plans live in plugin storage, so their mutations need not produce
+        // a kernel session change. Invalidate their HTTP representation at
+        // commit notification time, before any client can read it again.
+        if let RuntimeLiveSignal::Plugin {
+            session_id: Some(id),
+            kind_label,
+            ..
+        } = signal
+            && kind_label == "plan.changed"
+        {
+            let revision = self.tick();
+            self.set(format!("session:{id}:plan"), revision);
+            return;
+        }
         let RuntimeLiveSignal::Activity(activity) = signal else {
             return;
         };
@@ -322,6 +336,15 @@ impl ResourceRevisions {
             keys.push("activities".to_owned());
             if let Some(id) = signal.session_id {
                 keys.push(format!("session:{id}:state"));
+                if signal.kind == "plugin"
+                    && signal
+                        .payload
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("plan.changed")
+                {
+                    keys.push(format!("session:{id}:plan"));
+                }
             }
         }
         keys.into_iter()
@@ -332,6 +355,7 @@ impl ResourceRevisions {
             .collect()
     }
 }
+
 /// Capture the token BEFORE reading data. A mutation during the read then
 /// forces another read instead of attaching a newer token to an older body.
 pub(crate) struct ConditionalRead {
@@ -412,5 +436,79 @@ impl ConditionalRead {
             HeaderValue::from_static("Authorization, Cookie"),
         );
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn revisions() -> ResourceRevisions {
+        ResourceRevisions {
+            epoch: "test-server".into(),
+            clock: Arc::new(Mutex::new(Clock::new())),
+            _signal_observation: None,
+        }
+    }
+
+    fn plugin_signal(session_id: Option<i64>, kind: &str) -> RuntimeLiveSignal {
+        RuntimeLiveSignal::Plugin {
+            session_id,
+            plugin_id: "agena.plan".parse().unwrap(),
+            kind_label: kind.into(),
+            payload: serde_json::json!({"revision": "new-plan-revision"}),
+        }
+    }
+
+    #[test]
+    fn plan_mutations_invalidate_only_the_owning_sessions_cached_plan() {
+        let revisions = revisions();
+        let old_plan = revisions.token("session:7:plan");
+        let other_plan = revisions.token("session:8:plan");
+        let old_state = revisions.token("session:7:state");
+        revisions
+            .clock
+            .lock()
+            .unwrap()
+            .observe_signal(&plugin_signal(Some(7), "plan.changed"));
+        let new_plan = revisions.token("session:7:plan");
+        assert_ne!(new_plan, old_plan);
+        assert_eq!(revisions.token("session:8:plan"), other_plan);
+        assert_eq!(revisions.token("session:7:state"), old_state);
+
+        // The same version must travel on SSE so live clients cannot reuse
+        // the old body before even issuing an If-None-Match request.
+        let tokens = revisions.live_tokens(
+            None,
+            Some(&RuntimeSignalResource {
+                kind: "plugin".into(),
+                session_id: Some(7),
+                payload: serde_json::json!({"kind": "plan.changed"}),
+            }),
+        );
+        assert_eq!(tokens.get("session:7:plan"), Some(&new_plan));
+        assert!(!tokens.contains_key("session:8:plan"));
+    }
+
+    #[test]
+    fn unrelated_plugin_signals_do_not_invalidate_cached_plans() {
+        let revisions = revisions();
+        let old_plan = revisions.token("session:7:plan");
+        for signal in [
+            plugin_signal(Some(7), "other.changed"),
+            plugin_signal(None, "plan.changed"),
+        ] {
+            revisions.clock.lock().unwrap().observe_signal(&signal);
+        }
+        assert_eq!(revisions.token("session:7:plan"), old_plan);
+        let tokens = revisions.live_tokens(
+            None,
+            Some(&RuntimeSignalResource {
+                kind: "plugin".into(),
+                session_id: Some(7),
+                payload: serde_json::json!({"kind": "other.changed"}),
+            }),
+        );
+        assert!(!tokens.contains_key("session:7:plan"));
     }
 }

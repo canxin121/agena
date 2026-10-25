@@ -484,10 +484,9 @@ impl App {
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {
         // Status chips live on the border rows: the main status sits at the
         // top border's left corner, the top-right corner holds
-        // history/approval, the bottom-left corner holds the session surface
-        // chips (file edits, background tasks, BTW),
-        // and the bottom-right corner holds plan progress. The layout gets no
-        // dedicated row.
+        // history/approval, and the bottom-left corner holds plan progress and
+        // the session surface chips (file edits, background tasks, BTW).
+        // The layout gets no dedicated row.
         let layout = layout_composer_surface(area);
         let texts = self.composer_chip_texts();
         let placements = composer_chip_placements(layout.outer, &texts);
@@ -519,32 +518,20 @@ impl App {
                 x = x.saturating_add(width).saturating_add(5);
             }
         }
-        for (placement, y, action) in [
-            (
-                placements.top_right.as_ref(),
-                layout.outer.y,
-                if self.prompt_history_search.is_some() {
-                    "history"
-                } else {
-                    "approval"
-                },
-            ),
-            (
-                placements.bottom_right.as_ref(),
-                layout.outer.bottom().saturating_sub(1),
-                "plan",
-            ),
-        ] {
-            if let Some(placement) = placement {
-                pointer::register(
-                    Rect::new(placement.column, y, placement.chip_width, 1),
-                    Some(PointerAction::Named(action)),
-                    None,
-                );
-            }
+        if let Some(placement) = placements.top_right.as_ref() {
+            let action = if self.prompt_history_search.is_some() {
+                "history"
+            } else {
+                "approval"
+            };
+            pointer::register(
+                Rect::new(placement.column, layout.outer.y, placement.chip_width, 1),
+                Some(PointerAction::Named(action)),
+                None,
+            );
         }
         // The bottom-left chip carries one clickable segment per surface
-        // (changes / tasks / BTW); each segment opens its own full-screen
+        // (plan / changes / tasks / BTW); each segment opens its own full-screen
         // view instead of expanding a docked row above the input.
         if let Some(placement) = placements.bottom_left.as_ref() {
             let row = layout.outer.bottom().saturating_sub(1);
@@ -595,7 +582,6 @@ impl App {
         let status = placements.status.as_ref().map(chip);
         let status_top_right = placements.top_right.as_ref().map(chip);
         let status_bottom_left = placements.bottom_left.as_ref().map(chip);
-        let status_bottom_right = placements.bottom_right.as_ref().map(chip);
 
         // The border and its chips are drawn by the surface renderer even
         // when the composer is too small to host editor content, so render
@@ -611,7 +597,7 @@ impl App {
                     status,
                     status_top_right,
                     status_bottom_left,
-                    status_bottom_right,
+                    status_bottom_right: None,
                 },
             );
             self.render_surface_selection_highlight(
@@ -650,7 +636,7 @@ impl App {
                 status,
                 status_top_right,
                 status_bottom_left,
-                status_bottom_right,
+                status_bottom_right: None,
             },
         );
 
@@ -773,7 +759,7 @@ impl App {
             if contribution.contribution.id.starts_with("agena.terminal.") {
                 continue;
             }
-            // Plan progress has a dedicated composer bottom-right chip; keeping
+            // Plan progress has a dedicated composer bottom-left chip; keeping
             // it in the footer would duplicate it above the input box. The plan
             // contribution is qualified by its contributing session
             // (`plan:{id}`) so stale contributions from other sessions are
@@ -939,39 +925,17 @@ impl App {
         })
     }
 
-    /// Text for the composer's bottom-right chip: plan progress contributed
-    /// by the planning plugin as a declarative display contribution.
+    /// Plan progress for the composer's bottom-left chip, read from the
+    /// current session's durable plan resource.
     pub(crate) fn composer_plan_progress_part(&self) -> Option<String> {
         let session_id = self.transcript.session_id?;
-        let expected_id = format!("plan:{session_id}");
-        crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
-            .into_iter()
-            .find(|contribution| {
-                contribution.contribution.id == expected_id
-                    && matches!(
-                        (
-                            contribution.contribution.kind,
-                            &contribution.contribution.content,
-                        ),
-                        (
-                            agena_plugin_host::ContributionKind::StatusLineText,
-                            agena_plugin_host::PluginDisplayContent::Text { .. },
-                        )
-                    )
-            })
-            .and_then(|contribution| match contribution.contribution.content {
-                agena_plugin_host::PluginDisplayContent::Text { text } => Some(text),
-                _ => None,
-            })
-            .map(|text| text.trim().to_string())
-            .filter(|content| !content.is_empty())
+        self.session_plan_progress(session_id).map(str::to_owned)
     }
 
-    /// The four status-chip texts for the current frame. The top-left border
+    /// The status-chip texts for the current frame. The top-left border
     /// chip keeps the remaining session status parts; the corner chips carry
-    /// the session surfaces (bottom-left: file edits, background tasks, BTW),
-    /// history search or pending approval (top-right), and plan progress
-    /// (bottom-right).
+    /// the session surfaces (bottom-left: plan, file edits, background tasks,
+    /// BTW) and history search or pending approval (top-right).
     fn composer_chip_texts(&self) -> ComposerChipTexts {
         ComposerChipTexts {
             status: sanitize_display_text(
@@ -987,9 +951,6 @@ impl App {
                 .or_else(|| self.composer_pending_approval_part())
                 .map(|text| sanitize_display_text(text.as_str())),
             bottom_left: self.composer_bottom_left_text(),
-            bottom_right: self
-                .composer_plan_progress_part()
-                .map(|text| sanitize_display_text(text.as_str())),
         }
     }
 
@@ -1008,10 +969,13 @@ impl App {
     }
 
     /// Clickable segments of the composer's bottom-left chip. The web composer
-    /// carries Changes / SessionWork / BTW chips on its bottom border; the TUI
+    /// carries Plan / Changes / SessionWork / BTW chips on its bottom border; the TUI
     /// mirrors them here instead of reserving rows above the input.
     pub(crate) fn composer_bottom_left_segments(&self) -> Vec<(String, &'static str)> {
         let mut segments = Vec::new();
+        if let Some(progress) = self.composer_plan_progress_part() {
+            segments.push((progress, "plan"));
+        }
         if let Some(count) = self.session_work_file_count() {
             segments.push((
                 self.i18n.text_args(
@@ -1214,20 +1178,18 @@ impl App {
     }
 }
 
-/// The four status-chip texts for the current composer frame. The centered
+/// The status-chip texts for the current composer frame. The
 /// top-border chip keeps the session-status parts; the corner chips carry
-/// the session surfaces (bottom-left: file edits, background tasks, BTW),
-/// history search or pending approval (top-right), and plan progress
-/// (bottom-right).
+/// the session surfaces (bottom-left: plan, file edits, background tasks,
+/// BTW) and history search or pending approval (top-right).
 #[derive(Debug, Clone, Default)]
 struct ComposerChipTexts {
     status: String,
     top_right: Option<String>,
     bottom_left: Option<String>,
-    bottom_right: Option<String>,
 }
 
-/// Geometry of the four composer chips for the current frame. Produced by
+/// Geometry of the composer chips for the current frame. Produced by
 /// [`composer_chip_placements`] with the same placement functions the surface
 /// renderer uses, so the selection/copy projection matches the drawn pixels.
 #[derive(Debug, Clone, Default)]
@@ -1235,7 +1197,6 @@ struct ComposerChipPlacements {
     status: Option<ComposerStatusPlacement>,
     top_right: Option<ComposerStatusPlacement>,
     bottom_left: Option<ComposerStatusPlacement>,
-    bottom_right: Option<ComposerStatusPlacement>,
 }
 
 /// Computes where each composer chip sits on its border row. Order matters:
@@ -1254,25 +1215,14 @@ fn composer_chip_placements(outer: Rect, texts: &ComposerChipTexts) -> ComposerC
             .map(|placement| placement.chip_width)
             .unwrap_or(0),
     );
-    let bottom_right = texts
-        .bottom_right
+    let bottom_left = texts
+        .bottom_left
         .as_deref()
-        .and_then(|text| composer_corner_placement_right(outer, text));
-    let bottom_left = texts.bottom_left.as_deref().and_then(|text| {
-        agena_tui_components::composer_corner_placement_left_reserving(
-            outer,
-            text,
-            bottom_right
-                .as_ref()
-                .map(|placement| placement.chip_width)
-                .unwrap_or(0),
-        )
-    });
+        .and_then(|text| agena_tui_components::composer_corner_placement_left(outer, text));
     ComposerChipPlacements {
         status,
         top_right,
         bottom_left,
-        bottom_right,
     }
 }
 

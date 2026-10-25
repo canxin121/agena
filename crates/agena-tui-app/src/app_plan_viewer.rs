@@ -23,24 +23,6 @@ impl App {
         self.refresh_plan_viewer();
     }
 
-    /// Ask the planning plugin to republish its status-line contribution for
-    /// `session_id`. Reads never mutate the plan, but every read re-syncs the
-    /// contribution, so the composer's bottom-right chip survives a restart or
-    /// runtime reload without any docked plan surface.
-    pub(crate) fn request_plan_display_refresh(&mut self, session_id: i64) {
-        let application = self.application.clone();
-        tokio::spawn(async move {
-            let _ = application
-                .invoke_plugin_tool(
-                    "agena.plan",
-                    "get",
-                    serde_json::json!({ "view": "summary" }),
-                    Some(session_id),
-                )
-                .await;
-        });
-    }
-
     /// Reload the full plan markdown and the compact display summary,
     /// tracking the request id on the active plan-viewer state. Returns the
     /// request id so callers that hold a detached route state (during route
@@ -72,6 +54,7 @@ impl App {
                 .await
                 .map(|response| PlanViewerData {
                     markdown: crate::app_plan_document::plan_document(&response.output_text),
+                    summary: crate::app_plan_document::plan_progress(response.payload.as_ref()),
                     autorun: response
                         .payload
                         .as_ref()
@@ -109,6 +92,7 @@ impl App {
             Ok(data) => {
                 state.markdown = Some(data.markdown);
                 state.autorun = data.autorun;
+                state.summary = data.summary;
                 state.error = None;
             }
             Err(error) => state.error = Some(error.to_string()),
@@ -133,6 +117,7 @@ impl App {
                 Ok(data) => {
                     state.markdown = Some(data.markdown);
                     state.autorun = data.autorun;
+                    state.summary = data.summary;
                     state.error = None;
                 }
                 Err(error) => state.error = Some(error.to_string()),
@@ -143,10 +128,7 @@ impl App {
                 Route::PlanViewer(state) => state.session_id,
                 _ => return,
             };
-            let summary = self.plan_viewer_summary(session_id);
-            if let Route::PlanViewer(state) = &mut self.current_route {
-                state.summary = summary;
-            }
+            self.request_plan_display_refresh(session_id);
         }
     }
 
@@ -221,6 +203,7 @@ impl App {
                 .await
                 .map(|response| PlanViewerData {
                     markdown: crate::app_plan_document::plan_document(&response.output_text),
+                    summary: crate::app_plan_document::plan_progress(response.payload.as_ref()),
                     autorun: response
                         .payload
                         .as_ref()
@@ -236,31 +219,9 @@ impl App {
         state.toggle_request_id = request_id;
     }
 
-    /// Compact display text contributed by the planning plugin for
-    /// `session_id` (for example `▶ 2/5 ↻`).
+    /// Last canonical plan progress for `session_id` (for example `▶ 2/5 ↻`).
     fn plan_viewer_summary(&self, session_id: i64) -> Option<String> {
-        let expected_id = format!("plan:{session_id}");
-        crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
-            .into_iter()
-            .find(|contribution| {
-                contribution.contribution.id == expected_id
-                    && matches!(
-                        (
-                            contribution.contribution.kind,
-                            &contribution.contribution.content,
-                        ),
-                        (
-                            agena_plugin_host::ContributionKind::StatusLineText,
-                            agena_plugin_host::PluginDisplayContent::Text { .. },
-                        )
-                    )
-            })
-            .and_then(|contribution| match contribution.contribution.content {
-                agena_plugin_host::PluginDisplayContent::Text { text } => Some(text),
-                _ => None,
-            })
-            .map(|text| text.trim().to_string())
-            .filter(|content| !content.is_empty())
+        self.session_plan_progress(session_id).map(str::to_owned)
     }
 
     fn plan_viewer_page_size(&self) -> u16 {

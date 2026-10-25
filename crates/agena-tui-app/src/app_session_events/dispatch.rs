@@ -497,7 +497,6 @@ impl App {
             Ok(page) => {
                 let next_cursor = page.next_cursor.clone();
                 let has_more = page.has_more;
-                let empty = page.parts.iter().all(|part| part.is_message_boundary());
                 let seen = self
                     .transcript
                     .transcript_fold_seen_cursors
@@ -522,6 +521,9 @@ impl App {
                         .insert(run_id, self.i18n.text("transcript-history-stalled"));
                     return;
                 }
+                let entry_id = self
+                    .transcript
+                    .fold_entry_id(self.layout.transcript_body.width, run_id);
                 let loaded = self.transcript.merge_fold_parts(
                     run_id,
                     anchor_part_id,
@@ -533,7 +535,7 @@ impl App {
                     if let Some(execution) = self.transcript.execution.as_mut() {
                         execution.parts = self.transcript.parts.clone();
                     }
-                    if (expand_all || empty)
+                    if expand_all
                         && page.has_more
                         && let Some(next_fold) = self
                             .transcript
@@ -542,11 +544,14 @@ impl App {
                             .find(|fold| fold.run_id == run_id || fold.run_ids.contains(&run_id))
                             .cloned()
                     {
-                        self.request_transcript_fold_parts(
-                            next_fold,
-                            expand_all,
-                            if expand_all { 50 } else { 5 },
-                        );
+                        self.request_transcript_fold_parts(next_fold, expand_all, 50);
+                    } else if !expand_all && let Some(entry_id) = entry_id {
+                        let requests = self
+                            .transcript
+                            .fold_requests_in_window(self.layout.transcript_body.width, entry_id);
+                        for (fold, count) in requests {
+                            self.request_transcript_fold_parts(fold, false, count);
+                        }
                     }
                 }
             }

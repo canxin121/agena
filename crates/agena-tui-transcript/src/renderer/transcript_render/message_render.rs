@@ -1236,7 +1236,7 @@ pub(crate) fn render_part_node(
                 key,
                 kind: TranscriptNodeKind::Activity,
                 copy_text: summary,
-                toggleable: true,
+                toggleable: false,
                 expanded,
                 end_line: None,
                 children: Vec::new(),

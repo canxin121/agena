@@ -32,7 +32,7 @@ pub(crate) fn push_label_value(
 pub(crate) fn fold_marker_summary(i18n: &I18n, hidden_count: usize) -> String {
     i18n.text_args(
         "message-activity-run-collapsed",
-        &agena_tui::fl_args!("count" => hidden_count as i64),
+        &agena_tui::fl_args!("count" => hidden_count as i64, "load" => super::COLLAPSED_ACTIVITY_VISIBLE_COUNT as i64),
     )
 }
 

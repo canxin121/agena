@@ -268,6 +268,7 @@ impl TranscriptState {
             last_event_seq: None,
             detail_expanded_by_default,
             node_expansions: BTreeMap::new(),
+            fold_load_count: agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT,
             activity_summary_visible_counts: BTreeMap::new(),
             activity_summary_collapsed_entries: BTreeSet::new(),
             interaction_views: BTreeMap::new(),
@@ -707,7 +708,10 @@ impl TranscriptState {
                     .parts
                     .iter()
                     .filter(|part| {
-                        part.run_id.is_some_and(|id| run_ids.contains(&id))
+                        // Run windows already include their owner boundary in
+                        // `returned`. It was never part of the omitted prefix.
+                        !part.is_message_boundary()
+                            && part.run_id.is_some_and(|id| run_ids.contains(&id))
                             && (part.created_at_ms, part.part_id) < *anchor
                     })
                     .count();
@@ -734,7 +738,6 @@ impl TranscriptState {
                 self.transcript_folds.push(fold);
             }
         }
-        self.reveal_loaded_fold_activities();
         self.invalidate_render();
     }
 
@@ -852,7 +855,6 @@ impl TranscriptState {
                 anchor_part_id: fold.anchor_part_id,
             }
         };
-        self.reveal_loaded_fold_activities();
         // The fold's cursor changes as older content is revealed. Keep the
         // navigation cursor on its control, or the first revealed part once
         // the control disappears.
@@ -873,42 +875,6 @@ impl TranscriptState {
         }
         self.invalidate_render();
         true
-    }
-
-    fn reveal_loaded_fold_activities(&mut self) {
-        if self.transcript_revealed_part_ids.is_empty() {
-            return;
-        }
-        for entry in
-            agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds)
-        {
-            if self.activity_summary_collapsed_entries.contains(&entry.id) {
-                // An explicit collapse also applies to a late page response
-                // and subsequent snapshots. Keep loaded parts cached.
-                continue;
-            }
-            if !entry.parts.iter().any(|part| matches!(part.id,
-                TranscriptContentId::StoredPart(id) if self.transcript_revealed_part_ids.contains(&id)
-            )) {
-                continue;
-            }
-            // Only change list visibility. Detail expansion for each real
-            // part remains independent, including default-expanded answers.
-            for part in &entry.parts {
-                if matches!(&part.content,
-                    agena_tui_transcript::TranscriptPartContent::Activity(content)
-                        if !matches!(content, agena_tui_transcript::TranscriptActivityContent::Fold { .. })
-                ) {
-                    self.activity_summary_visible_counts.insert(
-                        TranscriptNodeKey::ActivitySummary {
-                            entry_id: entry.id,
-                            first_content_id: part.id,
-                        },
-                        entry.parts.len(),
-                    );
-                }
-            }
-        }
     }
 
     /// Prepend one older cursor page and keep the same logical content under
@@ -944,9 +910,6 @@ impl TranscriptState {
     /// from persisted parts, just like assistant entries.
     fn apply_parts_change(&mut self, change: impl FnOnce(&mut Vec<agena_api::part::PartResource>)) {
         change(&mut self.parts);
-        // Keep explicitly revealed rows visible as the reply grows; an
-        // explicitly collapsed entry still keeps its bounded part window.
-        self.reveal_loaded_fold_activities();
     }
 
     /// Remove a withdrawn run from the local transcript immediately. The live
@@ -1713,7 +1676,31 @@ impl TranscriptState {
                         &self.activity_summary_visible_counts,
                         &self.interaction_views,
                     );
-                for node in &rendered.nodes {
+                let hidden = agena_tui_transcript::entry_hidden_part_count(
+                    &current,
+                    &self.node_expansions,
+                    &self.activity_summary_visible_counts,
+                );
+                for node in &mut rendered.nodes {
+                    if matches!(
+                        node.key,
+                        TranscriptNodeKey::ActivitySummary { .. }
+                            | TranscriptNodeKey::Activity {
+                                content_id: TranscriptContentId::TranscriptFold { .. },
+                                ..
+                            }
+                    ) {
+                        let summary = self.i18n.text_args("message-activity-run-collapsed",
+                            &agena_tui::fl_args!("count" => hidden as i64, "load" => self.fold_load_count as i64));
+                        if let Some(line) = rendered.lines.get_mut(node.start_line) {
+                            *line = RenderedLine::dim(agena_tui_components::truncate_display_text(
+                                &summary,
+                                width as usize,
+                            ))
+                            .with_copy_projection(summary.clone(), 0);
+                        }
+                        node.copy_text = summary.into();
+                    }
                     if let TranscriptNodeKey::Activity {
                         content_id: TranscriptContentId::TranscriptFold { run_id, .. },
                         ..
@@ -3538,7 +3525,7 @@ impl TranscriptState {
         &mut self,
         width: u16,
         height: u16,
-        reveal_count: Option<usize>,
+        _reveal_count: Option<usize>,
     ) -> Option<(TranscriptNodeKind, bool)> {
         let node = self.current_cursor_node_cloned(width)?;
         if !node.toggleable {
@@ -3561,61 +3548,6 @@ impl TranscriptState {
             .as_ref()
             .map(|cursor| cursor.direction)
             .unwrap_or(TranscriptMoveDirection::Down);
-
-        if matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) {
-            self.allow_reply_part_reveal(node.key.entry_id());
-            let reveal_count = reveal_count
-                .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-                .clamp(1, 50);
-            // One merged marker row can stand for several activity runs of its
-            // entry, so a single reveal must raise the visible count of every
-            // run: otherwise the parts hidden by a sibling run stay
-            // unreachable behind a row that no longer hides anything.
-            let mut keys = self.entry_activity_summary_keys(node.key.entry_id());
-            if keys.is_empty() {
-                keys.push(node.key.clone());
-            }
-            for key in keys {
-                let current = self
-                    .activity_summary_visible_counts
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT);
-                self.activity_summary_visible_counts
-                    .insert(key.clone(), current.saturating_add(reveal_count));
-                // A summary action is progressive. `Enter` reveals five, a Vim
-                // count followed by Enter reveals that many, and the explicit
-                // show-all action uses the all-visible path below.
-                self.node_expansions.remove(&key);
-            }
-            self.invalidate_render();
-            let total_lines = self.rendered(width).lines.len();
-            let target_line = self.focusable_line_near(
-                width,
-                cursor_line.min(total_lines.saturating_sub(1)),
-                true,
-            );
-            self.viewport.top = self.viewport.top.min(self.max_scroll(width, height));
-            self.install_cursor(width, height, target_line, block_cursor, true);
-            self.refresh_cursor_screen_row(height);
-            self.sync_follow_tail(width, height);
-            return Some((node.kind, true));
-        }
-
-        // A server fold is also a list-visibility control, not a real part
-        // detail. The app starts the requested page fetch after this returns;
-        // do not put the synthetic marker into the ordinary expansion map.
-        if matches!(
-            &node.key,
-            TranscriptNodeKey::Activity {
-                content_id: TranscriptContentId::TranscriptFold { .. },
-                ..
-            }
-        ) {
-            self.allow_reply_part_reveal(node.key.entry_id());
-            self.node_expansions.remove(&node.key);
-            return Some((node.kind, true));
-        }
 
         let expanded = !node.expanded;
         self.node_expansions.insert(node.key.clone(), expanded);
@@ -3684,20 +3616,10 @@ impl TranscriptState {
         self.ensure_visual_focus(width, height);
     }
 
-    /// Every activity-summary key of one projected entry. A merged marker row
-    /// controls all of the entry's activity runs.
-    fn entry_activity_summary_keys(
-        &self,
+    pub(crate) fn allow_reply_part_reveal(
+        &mut self,
         entry_id: agena_tui_transcript::TranscriptEntryId,
-    ) -> Vec<TranscriptNodeKey> {
-        self.projected_entries
-            .as_ref()
-            .and_then(|entries| entries.iter().find(|entry| entry.id == entry_id))
-            .map(|entry| agena_tui_transcript::entry_activity_summary_keys(entry))
-            .unwrap_or_default()
-    }
-
-    fn allow_reply_part_reveal(&mut self, entry_id: agena_tui_transcript::TranscriptEntryId) {
+    ) {
         if self.activity_summary_collapsed_entries.remove(&entry_id) {
             self.activity_summary_visible_counts
                 .retain(|key, _| key.entry_id() != entry_id);

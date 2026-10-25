@@ -1756,9 +1756,12 @@ message-tool-cancelled = 已取消：{$label}
 message-tool-summary = [工具] {$status} | {$label}
 message-tool-result-blocks = {$count} 个结果块
 message-tool-output-collapsed =     … 还有 {$lines} 行
-message-activity-run-collapsed = … 隐藏 {$count} 个较早片段 · Enter 选择数量 · Ctrl+Shift+Enter 加载全部
-transcript-load-count-title = 加载较早片段
-transcript-load-count-prompt = 加载数量（1–{$max}）
+message-activity-run-collapsed = … 隐藏 {$count} 个 · Ctrl+Enter 展开 {$load} 个 · Alt+Enter 改数量
+context-help-key-load-older-parts = 按设定数量展开当前回复的较早片段，无需选中折叠提示行。
+context-help-key-fold-count = 设置 Ctrl+Enter 每次展开的片段数量，可在 transcript 任意位置使用。
+transcript-load-count-title = 每次展开的片段数量
+transcript-load-count-prompt = 每次展开的数量（1–{$max}）。保存数量后不会立即展开片段。
+transcript-load-count-footer = Enter 保存 · Esc 取消
 transcript-load-count-invalid = 请输入 1 到 {$max} 之间的整数。
 
 todo-status-pending = 待处理
@@ -2195,7 +2198,7 @@ transcript-history-start = 已到会话开头
 transcript-history-error = ↑ 重试加载历史 · { $error }
 transcript-history-stalled = 历史游标未前进，请重试加载。
 transcript-fold-loading = … 正在加载回复片段
-transcript-fold-error = 加载失败 · Enter 重试 · { $error }
+transcript-fold-error = 加载失败 · Ctrl+Enter 重试 · { $error }
 
 hub-section-directories = 工作目录
 hub-section-pinned = 置顶

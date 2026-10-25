@@ -3,6 +3,20 @@ impl App {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
         self.transcript.ensure_visual_focus(width, height);
+        let action = resolve_tui_key(KeyContext::Transcript, key);
+        match action {
+            Some(KeyAction::LoadOlderParts) => {
+                self.clear_transcript_pending_command();
+                self.load_older_transcript_parts();
+                return;
+            }
+            Some(KeyAction::EditFoldCount) => {
+                self.clear_transcript_pending_command();
+                self.open_transcript_fold_load();
+                return;
+            }
+            _ => {}
+        }
         // An expanded pending interaction part is the interaction surface.
         // The thin action layer only intercepts Enter-on-decision-row,
         // Ctrl+X, `e`-on-custom, and Esc-to-collapse; every other key (j/k/
@@ -11,7 +25,6 @@ impl App {
         if self.handle_active_interaction_action(key) {
             return;
         }
-        let action = resolve_tui_key(KeyContext::Transcript, key);
         if self.handle_pending_transcript_key(key, action, width, height) {
             return;
         }

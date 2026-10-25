@@ -130,6 +130,8 @@ pub fn preset_specs(
                         ("Ctrl+]", "context-help-key-work-toggle"),
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
+                        ("Ctrl+Enter", "context-help-key-load-older-parts"),
+                        ("Alt+Enter", "context-help-key-fold-count"),
                         ("Ctrl+Shift+Enter", "context-help-key-expand-all"),
                         ("zc / zC", "context-help-key-collapse-parts"),
                         ("v / V / Ctrl+V", "context-help-key-visual-select"),

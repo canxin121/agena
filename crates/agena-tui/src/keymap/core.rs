@@ -41,6 +41,10 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Transcript => match key.code {
+            K::Enter if only_ctrl(key) => Some(A::LoadOlderParts),
+            K::Enter if key.modifiers == crossterm::event::KeyModifiers::ALT => {
+                Some(A::EditFoldCount)
+            }
             K::Char('k') if only_ctrl(key) => Some(A::PreviousMessage),
             K::Char('j') if only_ctrl(key) => Some(A::NextMessage),
             K::Char(digit @ '1'..='9') if unmodified(key) => {
@@ -287,6 +291,21 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers as M;
+
+    #[test]
+    fn transcript_fold_shortcuts_keep_plain_enter_for_part_details() {
+        for (modifiers, action) in [
+            (M::NONE, A::Toggle),
+            (M::CONTROL, A::LoadOlderParts),
+            (M::ALT, A::EditFoldCount),
+            (M::CONTROL | M::SHIFT, A::ExpandAll),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::Transcript, KeyEvent::new(K::Enter, modifiers)),
+                Some(action)
+            );
+        }
+    }
 
     #[test]
     fn hub_tabs_switch_views_and_horizontal_keys_switch_projects() {

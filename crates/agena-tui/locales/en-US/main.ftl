@@ -1756,9 +1756,12 @@ message-tool-cancelled = cancelled: {$label}
 message-tool-summary = [tool] {$status} | {$label}
 message-tool-result-blocks = {$count} result blocks
 message-tool-output-collapsed =     … {$lines} more
-message-activity-run-collapsed = … {$count} older parts hidden · Enter: choose count · Ctrl+Shift+Enter: load all
-transcript-load-count-title = Load older parts
-transcript-load-count-prompt = Number of parts to load (1–{$max})
+message-activity-run-collapsed = … {$count} older parts hidden · Ctrl+Enter: load {$load} · Alt+Enter: count
+context-help-key-load-older-parts = Reveal the next older parts of the current reply, using the configured batch size.
+context-help-key-fold-count = Set how many older parts Ctrl+Enter reveals. Works anywhere in the transcript.
+transcript-load-count-title = Older-part batch size
+transcript-load-count-prompt = Parts to reveal each time (1–{$max}). Saving does not expand parts.
+transcript-load-count-footer = Enter save · Esc cancel
 transcript-load-count-invalid = Enter a whole number from 1 to {$max}.
 
 todo-status-pending = pending
@@ -2195,7 +2198,7 @@ transcript-history-start = Beginning of conversation
 transcript-history-error = ↑ Retry loading history · { $error }
 transcript-history-stalled = The history cursor did not advance. Retry loading.
 transcript-fold-loading = … Loading earlier reply parts
-transcript-fold-error = Load failed · Enter to retry · { $error }
+transcript-fold-error = Load failed · Ctrl+Enter to retry · { $error }
 
 hub-section-directories = Directories
 hub-section-pinned = Pinned

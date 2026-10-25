@@ -257,7 +257,20 @@ class Provider:
                     self.end_headers()
                     self.close_connection = True
                     self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    if step.mode == "permission":
+                    if step.mode == "fold-tools":
+                        self.event({"type": "response.reasoning_summary_text.delta",
+                                    "delta": "EARLIEST_REASONING_SENTINEL"})
+                        for index in range(40):
+                            call = {"type": "function_call", "id": f"fc_fold_{index}",
+                                    "call_id": f"call_fold_{index}", "name": "tools_call"}
+                            arguments = json.dumps({"tool": "fs.read", "input": {
+                                "file_path": f"fold-item-{index:03}.txt"}})
+                            self.event({"type": "response.output_item.added", "output_index": index,
+                                        "item": {**call, "arguments": ""}})
+                            self.event({"type": "response.output_item.done", "output_index": index,
+                                        "item": {**call, "arguments": arguments}})
+                        self.complete(step, tool=True)
+                    elif step.mode == "permission":
                         call = {"type": "function_call", "id": f"fc_{step.name}",
                                 "call_id": f"call_{step.name}", "name": "tools_call"}
                         arguments = json.dumps({"tool": "fs.read", "input": {"file_path": step.fixture_path}})

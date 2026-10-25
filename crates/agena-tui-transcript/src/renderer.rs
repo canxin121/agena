@@ -179,10 +179,9 @@ pub fn render_entry_detailed_with_progressive_expansion(
         // A reply entry renders exactly ONE collapsed-run marker row, like
         // Web. Two producers can supply one: server fold markers that omit a
         // page prefix (one per run window) and the client's visible budget
-        // for long activity runs. Consecutive assistant runs merge into one
-        // entry, so an entry can carry several of each; the row renders once
-        // — at the first server fold when one exists — and carries the total
-        // hidden count of the whole entry.
+        // for the whole reply. Consecutive assistant runs merge into one
+        // entry, so an entry can carry several gaps. The row precedes the
+        // first hidden part and counts all hidden parts in the entry.
         let fold_markers = if message.role == Some(RunRole::User) {
             Vec::new()
         } else {
@@ -194,11 +193,9 @@ pub fn render_entry_detailed_with_progressive_expansion(
             activity_run_plans(message, parts, expansions, summary_visible_counts)
         };
         let marker = entry_fold_marker(&activity_runs, &fold_markers, expansions);
-        // The single row counts the unloaded server prefix and the budget-hidden
-        // window activities together, and both stay reachable: `Enter` loads the
-        // next older page and the entry-wide reveal (show all) raises every
-        // run's visible count, and an entry whose folds are fully loaded falls
-        // back to the ordinary budget row.
+        // The single informational row counts remote gaps and locally hidden
+        // activities together. Reply shortcuts reveal the chronological window
+        // without requiring selection of this row.
         let mut part_index = 0_usize;
         let mut run_index = 0_usize;
         while part_index < parts.len() {
@@ -221,7 +218,8 @@ pub fn render_entry_detailed_with_progressive_expansion(
                     // Run folding is purely positional. Individual Activity
                     // expansion controls that Activity's body only and must not
                     // exempt an old Activity from the collapsed prefix.
-                    let hidden = activity_index < run.hidden_prefix_len;
+                    let hidden = activity_index < run.hidden_prefix_len
+                        && !is_pending_activity_interaction(part);
                     activity_index += 1;
                     if hidden {
                         continue;
@@ -335,6 +333,7 @@ struct ActivityRunPlan {
     end: usize,
     key: TranscriptNodeKey,
     hidden_prefix_len: usize,
+    hidden_count: usize,
 }
 
 /// One server-projected fold marker part of an entry.
@@ -363,8 +362,45 @@ fn activity_run_plans(
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
     summary_visible_counts: &std::collections::BTreeMap<TranscriptNodeKey, usize>,
 ) -> Vec<ActivityRunPlan> {
+    // One reply owns one recent-part budget. Server gaps consume positions in
+    // that same window, so a loaded boundary before a gap cannot reappear as
+    // an apparently recent part.
+    let show_all = expansions.iter().any(|(key, expanded)| {
+        matches!(key, TranscriptNodeKey::ActivitySummary { .. })
+            && key.entry_id() == message.id
+            && *expanded
+    });
+    let visible_count = if show_all {
+        usize::MAX
+    } else {
+        summary_visible_counts
+            .iter()
+            .filter(|(key, _)| key.entry_id() == message.id)
+            .map(|(_, count)| *count)
+            .max()
+            .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+    };
+    let total = parts.iter().fold(0_usize, |total, part| {
+        total.saturating_add(match transcript_part_content(part) {
+            TranscriptPartContent::Activity(crate::TranscriptActivityContent::Fold {
+                hidden_count,
+            }) => *hidden_count,
+            _ => usize::from(is_activity_node(part)),
+        })
+    });
+    let mut remaining_hidden = total.saturating_sub(visible_count);
+    let mut previous_end = 0;
     let mut plans = Vec::new();
     for (start, end) in activity_runs(parts) {
+        for part in &parts[previous_end..start] {
+            if let TranscriptPartContent::Activity(crate::TranscriptActivityContent::Fold {
+                hidden_count,
+            }) = transcript_part_content(part)
+            {
+                remaining_hidden = remaining_hidden.saturating_sub(*hidden_count);
+            }
+        }
+        previous_end = end;
         let activities = parts[start..end]
             .iter()
             .filter(|part| is_activity_node(part))
@@ -372,45 +408,37 @@ fn activity_run_plans(
         let Some(first) = activities.first() else {
             continue;
         };
-        // Every activity folds uniformly, exactly like a consecutive
-        // tool-call block: when the run exceeds the visible budget the oldest
-        // activities collapse into the entry's marker row and the newest
-        // `COLLAPSED_ACTIVITY_VISIBLE_COUNT` stay visible. Session notices
-        // injected mid-reply (hook runs, background notices) are no
-        // exception.
+        // All activity runs share the reply's chronological window,
+        // including session notices injected mid-reply.
         let key = TranscriptNodeKey::ActivitySummary {
             entry_id: message.id,
             first_content_id: first.id,
         };
-        let foldable_count = activities.len();
-        let show_all = expansions.get(&key).copied().unwrap_or(false);
-        let mut visible_count = if show_all {
-            foldable_count
-        } else {
-            summary_visible_counts
-                .get(&key)
-                .copied()
-                .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-        };
-        // A request awaiting user action must remain reachable even when
-        // later siblings exceed the ordinary recent-part budget.
-        if let Some(index) = activities.iter().position(|part| {
-            matches!(
-                &part.content,
-                TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
-                    if !part.status.is_terminal() && tool.has_pending_interaction()
-            )
-        }) {
-            visible_count = visible_count.max(foldable_count - index);
-        }
+        let hidden_prefix_len = remaining_hidden.min(activities.len());
+        remaining_hidden = remaining_hidden.saturating_sub(activities.len());
+        // Keep the pending request itself reachable without revealing all of
+        // the unrelated old activities that follow it.
+        let hidden_count = activities[..hidden_prefix_len]
+            .iter()
+            .filter(|part| !is_pending_activity_interaction(part))
+            .count();
         plans.push(ActivityRunPlan {
             start,
             end,
             key,
-            hidden_prefix_len: foldable_count.saturating_sub(visible_count),
+            hidden_prefix_len,
+            hidden_count,
         });
     }
     plans
+}
+
+fn is_pending_activity_interaction(part: &TranscriptEntryPart<'_>) -> bool {
+    matches!(
+        &part.content,
+        TranscriptPartContent::Activity(crate::TranscriptActivityContent::Operation(tool))
+            if !part.status.is_terminal() && tool.has_pending_interaction()
+    )
 }
 
 fn fold_marker_plans(
@@ -446,19 +474,22 @@ fn entry_fold_marker(
 ) -> Option<EntryFoldMarker> {
     if let Some(first) = folds.first() {
         return Some(EntryFoldMarker {
-            position: first.position,
+            position: runs
+                .iter()
+                .find(|run| run.hidden_count > 0)
+                .map_or(first.position, |run| run.start.min(first.position)),
             key: first.key.clone(),
             hidden_count: folds.iter().map(|fold| fold.hidden_count).sum::<usize>()
-                + runs.iter().map(|run| run.hidden_prefix_len).sum::<usize>(),
+                + runs.iter().map(|run| run.hidden_count).sum::<usize>(),
             expanded: expansions.get(&first.key).copied().unwrap_or(false),
             atomic: false,
         });
     }
-    let first_hiding = runs.iter().find(|run| run.hidden_prefix_len > 0)?;
+    let first_hiding = runs.iter().find(|run| run.hidden_count > 0)?;
     Some(EntryFoldMarker {
         position: first_hiding.start,
         key: first_hiding.key.clone(),
-        hidden_count: runs.iter().map(|run| run.hidden_prefix_len).sum(),
+        hidden_count: runs.iter().map(|run| run.hidden_count).sum(),
         // A summary row is progressive: it stays collapsed and reveals
         // through `summary_visible_counts`.
         expanded: false,
@@ -505,9 +536,28 @@ fn push_entry_fold_marker_row(
         end_line: lines.len(),
         copy_text: summary.into(),
         atomic: marker.atomic,
-        toggleable: true,
+        toggleable: false,
         expanded: marker.expanded,
     });
+}
+
+/// Loaded activities in the recent window, excluding old pending requests
+/// retained separately for interaction.
+pub fn entry_visible_activity_count(
+    entry: &TranscriptEntry<'_>,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    summary_visible_counts: &std::collections::BTreeMap<TranscriptNodeKey, usize>,
+) -> usize {
+    let hidden = activity_run_plans(entry, &entry.parts, expansions, summary_visible_counts)
+        .iter()
+        .map(|run| run.hidden_prefix_len)
+        .sum::<usize>();
+    entry
+        .parts
+        .iter()
+        .filter(|part| is_activity_node(part))
+        .count()
+        .saturating_sub(hidden)
 }
 
 /// Activity-summary node keys of one entry: one per contiguous activity run,

@@ -199,38 +199,6 @@ impl App {
             return;
         }
         let current_node = self.transcript.current_cursor_node_cloned(width);
-        let list_visibility_control = current_node.as_ref().is_some_and(|node| {
-            matches!(
-                &node.key,
-                agena_tui_transcript::TranscriptNodeKey::ActivitySummary { .. }
-            ) || matches!(
-                &node.key,
-                agena_tui_transcript::TranscriptNodeKey::Activity {
-                    content_id: agena_tui_transcript::TranscriptContentId::TranscriptFold { .. },
-                    ..
-                }
-            )
-        });
-        if list_visibility_control && reveal_count.is_none() {
-            self.open_transcript_fold_load();
-            return;
-        }
-        let reveal_count = if list_visibility_control {
-            reveal_count.map(|count| {
-                count.clamp(1, 50).min(
-                    current_node
-                        .as_ref()
-                        .map(|node| self.transcript.fold_hidden_part_count(width, &node.key))
-                        .unwrap_or(1)
-                        .max(1),
-                )
-            })
-        } else {
-            reveal_count
-        };
-        let server_fold = current_node
-            .as_ref()
-            .and_then(|node| self.transcript.transcript_fold_for_node(&node.key));
         let tool_detail = current_node.as_ref().and_then(|node| {
             let agena_tui_transcript::TranscriptNodeKey::ActivitySection {
                 content_id,
@@ -265,24 +233,6 @@ impl App {
         }
         if expanded {
             self.request_expanded_tool_details(&[]);
-        }
-        if expanded && let Some(fold) = server_fold {
-            self.request_transcript_fold_parts(
-                fold,
-                false,
-                reveal_count.unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT),
-            );
-        }
-        if list_visibility_control {
-            self.flash_info(self.i18n.text_args(
-                "flash-transcript-parts-revealed",
-                &agena_tui::fl_args!(
-                    "count" => reveal_count
-                        .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT)
-                        .clamp(1, 50) as i64
-                ),
-            ));
-            return;
         }
         self.flash_info(self.i18n.text_args(
             if expanded {

@@ -66,7 +66,8 @@ impl App {
                     SurfaceMode::Overlay,
                     sanitize_display_text(dialog.title.as_str()).into(),
                     sanitize_display_text(dialog.prompt.as_str()).into(),
-                    sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into(),
+                    sanitize_display_text(ui_text::t(&self.i18n, "transcript-load-count-footer"))
+                        .into(),
                     &dialog.input,
                 );
             }

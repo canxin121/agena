@@ -116,6 +116,8 @@ pub enum KeyContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Action bound to a key.
 pub enum KeyAction {
+    LoadOlderParts,
+    EditFoldCount,
     Interrupt,
     Help,
     Close,

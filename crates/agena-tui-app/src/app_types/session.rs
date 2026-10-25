@@ -244,9 +244,10 @@ pub(crate) struct TranscriptState {
     pub(crate) last_event_seq: Option<i64>,
     pub(crate) detail_expanded_by_default: TranscriptDetailDefaults,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
-    /// Number of older activities currently revealed for each folded
-    /// assistant run. The renderers keep the newest few visible by default;
-    /// repeated expansion reveals another bounded chunk.
+    /// Shared batch size for the direct older-part shortcut.
+    pub(crate) fold_load_count: usize,
+    /// Recent-part budget shared by the summary keys of each assistant reply.
+    /// Remote gaps and loaded activities occupy the same chronological window.
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
     /// Explicit list collapses survive page responses and session snapshots.
     pub(crate) activity_summary_collapsed_entries:

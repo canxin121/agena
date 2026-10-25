@@ -363,22 +363,36 @@ lto = false
 codegen-units = 256
 
 [profile.release]
-lto = "thin"
-codegen-units = 1
+# Optimized local builds must reuse codegen after edits. Whole-program LTO and
+# a single codegen unit made even a one-line change re-optimize the large CLI.
+lto = false
+codegen-units = 256
+incremental = true
 strip = "symbols"
 opt-level = 3
+
+# Dependencies change infrequently: keep them eligible for compiler caches,
+# including the patched path dependencies under third_party/.
+[profile.release.package."*"]
+codegen-units = 16
+incremental = false
 
 # Smaller, slower-to-build profile for shipping CLI and service artifacts.
 # Use with `cargo build --profile dist`.
 [profile.dist]
 inherits = "release"
 lto = "fat"
+codegen-units = 1
 # Plugin transports isolate panics with catch_unwind; shipped binaries must
 # preserve that behavior too.
 panic = "unwind"
 strip = "symbols"
 debug = false
 incremental = false
+
+# Package overrides take precedence over the profile's own codegen setting.
+[profile.dist.package."*"]
+codegen-units = 1
 
 [patch.crates-io]
 notify = { path = "third_party/notify" }

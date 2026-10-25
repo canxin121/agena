@@ -72,6 +72,48 @@ Build the executable:
 cargo build -p agena --bin agena
 ```
 
+For an optimized local executable, use `cargo build --release -p agena --bin
+agena --locked`. The release profile keeps optimization level 3, enables
+incremental compilation for workspace crates, uses 256 codegen units, and
+disables whole-program LTO. Dependencies use 16 codegen units and remain
+non-incremental so compiler caches such as sccache can reuse them. The first
+build after changing a profile rebuilds its affected artifacts; later edits
+can reuse the new cache.
+
+Use `cargo build --profile dist -p agena --bin agena --locked` when optimizing
+the shipped artifact matters more than rebuild time. That profile uses fat
+LTO, one codegen unit, and no incremental compilation. Both optimized profiles
+preserve panic unwinding for plugin isolation.
+
+Cargo's crate cache and Rust's incremental cache are different. A fresh crate
+can be skipped in either profile, but only incremental compilation can reuse
+codegen within a changed workspace crate. sccache does not cache final binary
+linking and does not replace that incremental cache.
+
+Keep the target selection consistent when measuring or rebuilding. Packaging
+and source installs pass `--target` explicitly, even for the host, and reuse
+`target/<triple>/release/`. A plain `cargo build --release` uses
+`target/release/`; these are separate Cargo caches. To reuse a Unix source
+install's cache directly, run:
+
+```sh
+cargo build --release -p agena --bin agena --locked \
+  --target "$(rustc --print host-tuple)"
+```
+
+Windows packaging deliberately uses the shorter `.agena-target/` root to keep
+compiler command lines within the Windows process limit. Pass that same
+`--target-dir` when reusing its artifacts. Changing the toolchain, target,
+features, profile overrides, or `RUSTFLAGS` can invalidate existing artifacts.
+
+To diagnose a slow rebuild, add `--timings` to the actual build command and
+inspect the report under the target directory's `cargo-timings/`. Compare an
+unchanged second build with a build after editing a workspace source file.
+For unexpected recompilation, set
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` for one invocation to see
+which inputs Cargo considers dirty. Measure the Rust build separately from
+the frontend build and archive compression performed by the packaging script.
+
 Start the server in the foreground:
 
 ```sh

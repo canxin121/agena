@@ -76,6 +76,7 @@ impl App {
             current_route: Route::Main,
             btw_sessions: BTreeMap::new(),
             session_work: BTreeMap::new(),
+            session_plan: Default::default(),
             route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
@@ -355,6 +356,7 @@ impl App {
         self.refresh_activities_panel_if_due(now);
         self.refresh_hub_if_due();
         self.heal_session_work();
+        self.retry_session_plan_if_due(now);
         self.heal_tool_detail_reads();
         self.heal_content_reads();
         if let Some(error) = self.pending_draft_store_error.take() {

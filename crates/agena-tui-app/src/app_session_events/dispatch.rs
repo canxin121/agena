@@ -36,6 +36,11 @@ impl App {
             AppMessage::PlanViewerLoaded { request_id, result } => {
                 self.handle_plan_viewer_loaded(request_id, result)
             }
+            AppMessage::SessionPlanLoaded {
+                session_id,
+                request_id,
+                result,
+            } => self.handle_session_plan_loaded(session_id, request_id, result),
             AppMessage::PlanAutorunToggled { request_id, result } => {
                 self.handle_plan_autorun_toggled(request_id, result)
             }

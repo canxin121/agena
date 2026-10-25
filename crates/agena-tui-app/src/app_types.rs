@@ -462,6 +462,7 @@ pub struct App {
     pub(super) current_route: Route,
     pub(super) btw_sessions: BTreeMap<i64, crate::app_btw::BtwState>,
     pub(super) session_work: BTreeMap<i64, crate::app_session_work::SessionWorkState>,
+    pub(super) session_plan: crate::app_session_plan::SessionPlanState,
     pub(super) route_stack: Vec<Route>,
     pub(super) overlay: Option<Overlay>,
     pub(super) overlay_stack: Vec<Overlay>,
@@ -634,6 +635,11 @@ pub(super) enum AppMessage {
     PlanViewerLoaded {
         request_id: u64,
         result: UiResult<PlanViewerData>,
+    },
+    SessionPlanLoaded {
+        session_id: i64,
+        request_id: u64,
+        result: UiResult<Option<String>>,
     },
     PlanAutorunToggled {
         request_id: u64,
@@ -1201,6 +1207,7 @@ impl PlanViewerState {
 pub(super) struct PlanViewerData {
     pub(super) markdown: String,
     pub(super) autorun: Option<bool>,
+    pub(super) summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

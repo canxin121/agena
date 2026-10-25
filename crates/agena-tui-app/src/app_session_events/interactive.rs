@@ -42,10 +42,9 @@ impl App {
             self.transcript
                 .restore_cache(cache, session_id, self.transcript.session_title.clone());
         }
-        // Re-publish the plan display contribution for the opened session so
-        // the composer's bottom-right chip appears immediately even when the
-        // in-memory contribution was lost (process restart, runtime reload, or
-        // a plan created while another session was visible).
+        // Read durable plan state for this session, independently of the
+        // plugin host's in-memory display contributions.
+        self.session_plan = Default::default();
         self.request_plan_display_refresh(session_id);
         // A refresh requested for the previous session must not be re-issued
         // against the newly opened one.
@@ -353,6 +352,7 @@ impl App {
             }
         }
         if live.session_deleted && self.transcript.session_id == Some(session_id) {
+            self.session_plan = Default::default();
             self.transcript_cache.remove(&session_id);
             self.transcript.reset(session_id, String::new());
             self.transcript.session_id = None;
@@ -372,13 +372,16 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
+        // The subscription snapshot also closes the gap between opening the
+        // session and subscribing, and heals missed plan events on reconnect.
+        if live.plan_changed || !changed || live.force_refresh {
+            self.request_plan_display_refresh(session_id);
+        }
         if let Some((time, dismissed, activity)) = live.activity_update {
             self.apply_session_activity(session_id, time, dismissed, activity);
             return;
         }
         if live.plan_changed {
-            // The planning plugin republishes its status-line contribution on
-            // every plan mutation; the composer chip reads that directly.
             return;
         }
         if let Some((origin, part)) = live.part_update {

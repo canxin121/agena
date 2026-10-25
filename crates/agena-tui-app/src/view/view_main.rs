@@ -358,7 +358,8 @@ impl App {
                         rendered_line = apply_cursor_cell_highlight(rendered_line, range.clone());
                     }
                     if let Some(range) = selection_ranges.get(idx).and_then(Clone::clone) {
-                        rendered_line = apply_line_cell_highlight(rendered_line, range);
+                        rendered_line =
+                            apply_line_cell_highlight(rendered_line, range, layout.body.width);
                     }
                     refresh_spinner_line(rendered_line, spinner)
                 })

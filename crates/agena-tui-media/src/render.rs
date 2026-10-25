@@ -288,6 +288,7 @@ fn cache_dynamic_image(
         id,
         image,
         size: Size::new(width, height),
+        foreground: None,
         row_layout_weights: Vec::new(),
     });
     ARTIFACT_CACHE
@@ -677,7 +678,7 @@ fn explicit_latex_fallback(source: &str) -> Vec<String> {
 /// Renderer for math graphics.
 pub struct MathGraphicsRenderer {
     picker: Picker,
-    protocols: HashMap<(u64, u16, u16), SlicedProtocol>,
+    protocols: HashMap<(u64, u16, u16), (u64, SlicedProtocol)>,
     generation: u64,
 }
 
@@ -709,26 +710,52 @@ impl MathGraphicsRenderer {
             if y >= i64::from(area.height) || y + i64::from(placement.size.height) <= 0 {
                 continue;
             }
+            // Images are sent as one terminal control sequence. Consume the
+            // text-cell highlight as pixels, then leave neutral control cells
+            // so SGR underline/reverse/bold cannot leak into that sequence.
+            let highlights = crate::graphics_selection::take_graphic_highlights(
+                frame.buffer_mut(),
+                area,
+                scroll,
+                placement,
+            );
+            let mut style_hash = DefaultHasher::new();
+            highlights.hash(&mut style_hash);
             let key = (
                 placement.artifact.id,
                 placement.size.width,
                 placement.size.height,
             );
-            if !self.protocols.contains_key(&key) {
-                if self.protocols.len() >= MAX_PROTOCOLS {
+            let style_hash = style_hash.finish();
+            if self
+                .protocols
+                .get(&key)
+                .is_none_or(|(cached_hash, _)| *cached_hash != style_hash)
+            {
+                // Keep one highlight variant per image size. A long pointer
+                // drag must not retain every intermediate encoded raster.
+                if !self.protocols.contains_key(&key) && self.protocols.len() >= MAX_PROTOCOLS {
                     self.protocols.clear();
                 }
+                let Some(image) = crate::graphics_selection::highlighted_graphic(
+                    &placement.artifact,
+                    placement.size,
+                    self.picker.font_size(),
+                    &highlights,
+                ) else {
+                    continue;
+                };
                 let Ok(protocol) = SlicedProtocol::new_with_resize(
                     &self.picker,
-                    placement.artifact.image.clone(),
+                    image,
                     placement.size,
                     Resize::Scale(None),
                 ) else {
                     continue;
                 };
-                self.protocols.insert(key, protocol);
+                self.protocols.insert(key, (style_hash, protocol));
             }
-            let Some(protocol) = self.protocols.get(&key) else {
+            let Some((_, protocol)) = self.protocols.get(&key) else {
                 continue;
             };
             let x = i16::try_from(placement.column).unwrap_or(i16::MAX);
@@ -753,3 +780,7 @@ pub fn formula_foreground_for_background(background: TerminalRgb) -> TerminalRgb
         TerminalRgb::new(235, 235, 235)
     }
 }
+
+#[cfg(test)]
+#[path = "graphics_tests.rs"]
+mod graphics_tests;

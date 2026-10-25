@@ -44,6 +44,7 @@ use ratex_layout::{
 };
 use ratex_parser::parser::parse;
 
+mod graphics_selection;
 mod render;
 use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
@@ -293,6 +294,9 @@ pub struct MathArtifact {
     pub id: u64,
     pub image: DynamicImage,
     pub size: Size,
+    /// Default formula ink, used to recolor selected glyphs while preserving
+    /// authored colors. Ordinary image/SVG artifacts leave this unset.
+    pub foreground: Option<[u8; 3]>,
     /// Relative heights of the outermost native array/alignment rows. Image
     /// artifacts leave this empty; transcript math uses it only when its
     /// independently scanned structural row count matches.
@@ -493,6 +497,7 @@ pub fn render_formula(source: &str, display: bool) -> Result<Arc<MathArtifact>, 
         id,
         image,
         size,
+        foreground: Some(config.foreground),
         row_layout_weights,
     });
     ARTIFACT_CACHE

@@ -75,7 +75,15 @@ fn apply_full_line_highlight(line: Line<'static>, width: u16, style: Style) -> L
 pub(crate) fn apply_line_cell_highlight(
     line: Line<'static>,
     range: std::ops::Range<usize>,
+    width: u16,
 ) -> Line<'static> {
+    // Both Visual-line selection and atomic graphical pointer selections use
+    // an unbounded end column. Resolve it against the viewport before adding
+    // padding, including rows whose only visible content is a native image.
+    let range = range.start.min(usize::from(width))..range.end.min(usize::from(width));
+    if range.start >= range.end {
+        return line;
+    }
     apply_line_cell_highlight_with_style(line, range, text_range_highlight_style())
 }
 
@@ -167,6 +175,50 @@ fn merge_highlight_style(mut base: Style, highlight: Style) -> Style {
     }
     base = base.add_modifier(highlight.add_modifier);
     base.remove_modifier(highlight.sub_modifier)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn visual_line_and_pointer_ranges_highlight_the_same_full_graphical_rows() {
+        for width in [1, 24, 40, 80] {
+            let line = Line::from(if width > 1 { "  " } else { "" });
+            let keyboard = apply_line_cell_highlight(line.clone(), 0..usize::MAX, width);
+            let pointer = apply_line_cell_highlight(line, 0..usize::from(width), width);
+            assert_eq!(keyboard, pointer);
+            assert_eq!(
+                UnicodeWidthStr::width(keyboard.to_string().as_str()),
+                usize::from(width)
+            );
+            assert!(
+                keyboard
+                    .spans
+                    .iter()
+                    .all(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+            );
+        }
+    }
+
+    #[test]
+    fn viewport_clipping_preserves_text_and_does_not_allocate_offscreen_padding() {
+        let line = Line::from(vec![
+            Span::raw("前缀 "),
+            Span::styled("formula", Style::default().add_modifier(Modifier::BOLD)),
+        ]);
+        let selected = apply_line_cell_highlight(line.clone(), 100..usize::MAX, 24);
+        assert_eq!(selected, line);
+        let selected = apply_line_cell_highlight(line, 5..usize::MAX, 24);
+        assert_eq!(UnicodeWidthStr::width(selected.to_string().as_str()), 24);
+        assert!(selected.spans.iter().any(|span| {
+            span.content == "formula"
+                && span
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD | Modifier::UNDERLINED)
+        }));
+    }
 }
 
 pub(crate) fn sanitize_display_text(text: impl AsRef<str>) -> String {

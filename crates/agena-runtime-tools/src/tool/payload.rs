@@ -588,6 +588,26 @@ impl ToolPayloadOutput {
             _ => return None,
         };
         let payload_name = payload_name_for_output_tool(tool_name)?;
+        if payload_name == "web_search" {
+            // The web plugin reports its selected engine and descriptions;
+            // the transcript's typed output uses backend and snippet. Adapt
+            // that boundary without changing the original plugin payload.
+            if !object.contains_key("backend")
+                && let Some(engine) = object.get("engine").cloned()
+            {
+                object.insert("backend".into(), engine);
+            }
+            if let Some(serde_json::Value::Array(results)) = object.get_mut("results") {
+                for result in results {
+                    if let Some(result) = result.as_object_mut()
+                        && !result.contains_key("snippet")
+                        && let Some(description) = result.get("description").cloned()
+                    {
+                        result.insert("snippet".into(), description);
+                    }
+                }
+            }
+        }
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         match serde_json::from_value(serde_json::Value::Object(object)) {
             Ok(payload) => Some(payload),
@@ -861,6 +881,9 @@ fn shell_action_for_name(name: &str) -> Option<&'static str> {
 }
 
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
+    if tool_name == "web_search" {
+        return Some("web_search".to_owned());
+    }
     // Shell/process tools share one `shell` payload variant; the subcommand
     // (`run`/`list`/`logs`/`stop`) lives in `action`, not in the variant tag.
     // Monitor tools share one `monitor` payload variant; the subcommand
@@ -881,4 +904,78 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         return Some("shell".to_string());
     }
     payload_name_for_table(tool_name)
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn web_plugin_results_keep_their_engine_and_descriptions_in_typed_projection() {
+        for engine in ["auto", "duckduckgo", "brave", "searxng"] {
+            let output = ToolOutput {
+                payload: StructuredObject::try_from(serde_json::json!({
+                    "query": "fixture query",
+                    "engine": engine,
+                    "attempted_engines": ["duckduckgo", "bing"],
+                    "partial": true,
+                    "engine_errors": ["controlled unavailable engine"],
+                    "results": [{
+                        "title": "Fixture result", "url": "https://example.com/",
+                        "description": "Readable search snippet", "source": "example.com",
+                        "engine": "duckduckgo", "engines": ["duckduckgo", "bing"]
+                    }]
+                }))
+                .unwrap(),
+                managed_outputs: Vec::new(),
+                truncated: false,
+            };
+            let original = output.clone();
+            for name in [
+                "web.search",
+                "agena.web.search",
+                "agena_web__search",
+                "web_search",
+            ] {
+                let Some(ToolPayloadOutput::WebSearch {
+                    query,
+                    backend,
+                    results,
+                }) = ToolPayloadOutput::from_tool_output(name, &output)
+                else {
+                    panic!("plugin output did not project for {name}");
+                };
+                assert_eq!(query, "fixture query");
+                assert_eq!(backend, engine);
+                assert_eq!(results.len(), 1);
+                assert_eq!(
+                    results[0].snippet.as_deref(),
+                    Some("Readable search snippet")
+                );
+            }
+            assert_eq!(output.payload, original.payload);
+        }
+    }
+
+    #[test]
+    fn canonical_search_output_keeps_its_backend_and_snippet() {
+        let output = ToolOutput {
+            payload: StructuredObject::try_from(serde_json::json!({
+                "query": "fixture query", "backend": "canonical", "engine": "other",
+                "results": [{"title":"Fixture", "url":"https://example.com/",
+                    "snippet":"Canonical snippet", "description":"Other description"}]
+            }))
+            .unwrap(),
+            managed_outputs: Vec::new(),
+            truncated: false,
+        };
+        let Some(ToolPayloadOutput::WebSearch {
+            backend, results, ..
+        }) = ToolPayloadOutput::from_tool_output("web.search", &output)
+        else {
+            panic!("canonical output did not project")
+        };
+        assert_eq!(backend, "canonical");
+        assert_eq!(results[0].snippet.as_deref(), Some("Canonical snippet"));
+    }
 }

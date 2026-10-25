@@ -3064,9 +3064,12 @@ async fn token(
             "grant_type is too long",
         );
     }
+    let issuer = state.issuer_for_headers(&headers);
     let result = match request.grant_type.as_str() {
-        "authorization_code" => exchange_authorization_code(&state, &headers, &request).await,
-        "refresh_token" => refresh_access_token(&state, &headers, &request).await,
+        "authorization_code" => {
+            exchange_authorization_code(&state.oauth, issuer.as_str(), &request).await
+        }
+        "refresh_token" => refresh_access_token(&state.oauth, issuer.as_str(), &request).await,
         _ => Err(OAuthTokenError::new(
             "unsupported_grant_type",
             "grant_type must be authorization_code or refresh_token",
@@ -3079,8 +3082,8 @@ async fn token(
 }
 
 async fn exchange_authorization_code(
-    state: &McpServerState,
-    headers: &HeaderMap,
+    oauth: &OAuthState,
+    issuer: &str,
     request: &TokenRequest,
 ) -> Result<TokenResponse, OAuthTokenError> {
     let client_id = request
@@ -3103,13 +3106,9 @@ async fn exchange_authorization_code(
                 "code is required and must be at most 8192 bytes",
             )
         })?;
-    let (_, record) = state
-        .oauth
-        .authorization_codes
-        .remove(code)
-        .ok_or_else(|| {
-            OAuthTokenError::new("invalid_grant", "authorization code is invalid or expired")
-        })?;
+    let (_, record) = oauth.authorization_codes.remove(code).ok_or_else(|| {
+        OAuthTokenError::new("invalid_grant", "authorization code is invalid or expired")
+    })?;
     if record.expires_at <= Instant::now()
         || record.client_id != client_id
         || request
@@ -3147,14 +3146,13 @@ async fn exchange_authorization_code(
             "requested scope is not granted",
         ));
     }
-    if record.issuer != state.issuer_for_headers(headers) {
+    if record.issuer != issuer {
         return Err(OAuthTokenError::new(
             "invalid_grant",
             "authorization code issuer binding is invalid",
         ));
     }
-    let response = state
-        .oauth
+    let response = oauth
         .issue_tokens(
             client_id,
             record.issuer.as_str(),
@@ -3172,7 +3170,7 @@ async fn exchange_authorization_code(
                 "the authorization server could not issue an access token",
             )
         })?;
-    state.oauth.persist().await.map_err(|error| {
+    oauth.persist().await.map_err(|error| {
         tracing::error!(
             diagnostic = %error,
             "MCP OAuth issued token could not be persisted"
@@ -3186,8 +3184,8 @@ async fn exchange_authorization_code(
 }
 
 async fn refresh_access_token(
-    state: &McpServerState,
-    headers: &HeaderMap,
+    oauth: &OAuthState,
+    issuer: &str,
     request: &TokenRequest,
 ) -> Result<TokenResponse, OAuthTokenError> {
     let client_id = request
@@ -3213,9 +3211,8 @@ async fn refresh_access_token(
     let refresh_key = refresh_token_fingerprint(refresh_token);
     // Serialize rotation so two concurrent uses of the same refresh token can
     // never both observe `used == false` and mint independent token families.
-    let _rotation_guard = state.oauth.refresh_rotation_lock.lock().await;
-    let mut current = state
-        .oauth
+    let _rotation_guard = oauth.refresh_rotation_lock.lock().await;
+    let mut current = oauth
         .refresh_tokens
         .get_mut(refresh_key.as_str())
         .ok_or_else(|| {
@@ -3223,7 +3220,7 @@ async fn refresh_access_token(
         })?;
     if current.expires_at <= unix_timestamp()
         || current.client_id != client_id
-        || current.issuer != state.issuer_for_headers(headers)
+        || current.issuer != issuer
         || request
             .resource
             .as_deref()
@@ -3239,12 +3236,12 @@ async fn refresh_access_token(
     if current.used {
         let family_id = current.family_id.clone();
         drop(current);
-        for mut entry in state.oauth.refresh_tokens.iter_mut() {
+        for mut entry in oauth.refresh_tokens.iter_mut() {
             if entry.family_id == family_id {
                 entry.revoked = true;
             }
         }
-        if let Err(error) = state.oauth.persist().await {
+        if let Err(error) = oauth.persist().await {
             tracing::error!(
                 error = %error,
                 family_id = %family_id,
@@ -3271,8 +3268,7 @@ async fn refresh_access_token(
     current.used = true;
     let record = current.clone();
     drop(current);
-    let response = state
-        .oauth
+    let response = oauth
         .issue_tokens(
             client_id,
             record.issuer.as_str(),
@@ -3290,7 +3286,7 @@ async fn refresh_access_token(
                 "the authorization server could not issue an access token",
             )
         })?;
-    state.oauth.persist().await.map_err(|error| {
+    oauth.persist().await.map_err(|error| {
         tracing::error!(
             diagnostic = %error,
             "MCP OAuth rotated refresh token could not be persisted"
@@ -4205,5 +4201,196 @@ mod tests {
         assert_eq!(tools[1]["securitySchemes"][0]["type"], "noauth");
         // A tool missing from the catalog must never become anonymous.
         assert_eq!(tools[2]["securitySchemes"][0]["type"], "oauth2");
+    }
+
+    const TEST_CLIENT: &str = "test-client";
+    const TEST_REDIRECT: &str = "https://client.example.com/callback";
+    const TEST_RESOURCE: &str = "https://agena.example.com/mcp";
+    const TEST_ISSUER: &str = "https://agena.example.com";
+
+    fn test_oauth_state() -> OAuthState {
+        OAuthState::new(
+            OAuthSigningKey::generate().expect("test signing key"),
+            None,
+            None,
+        )
+    }
+
+    fn pkce_pair() -> (&'static str, String) {
+        const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(VERIFIER.as_bytes()));
+        (VERIFIER, challenge)
+    }
+
+    fn insert_authorization_code(oauth: &OAuthState, code: &str, challenge: &str) {
+        oauth.authorization_codes.insert(
+            code.to_owned(),
+            AuthorizationCodeRecord {
+                client_id: TEST_CLIENT.to_owned(),
+                redirect_uri: TEST_REDIRECT.to_owned(),
+                issuer: TEST_ISSUER.to_owned(),
+                resource: TEST_RESOURCE.to_owned(),
+                scope: DEFAULT_OAUTH_SCOPE.to_owned(),
+                code_challenge: challenge.to_owned(),
+                expires_at: Instant::now() + AUTHORIZATION_CODE_TTL,
+            },
+        );
+    }
+
+    fn code_request(code: &str, verifier: &str) -> TokenRequest {
+        TokenRequest {
+            grant_type: "authorization_code".to_owned(),
+            code: Some(code.to_owned()),
+            redirect_uri: Some(TEST_REDIRECT.to_owned()),
+            client_id: Some(TEST_CLIENT.to_owned()),
+            code_verifier: Some(verifier.to_owned()),
+            refresh_token: None,
+            resource: Some(TEST_RESOURCE.to_owned()),
+            scope: None,
+        }
+    }
+
+    fn refresh_request(refresh_token: &str) -> TokenRequest {
+        TokenRequest {
+            grant_type: "refresh_token".to_owned(),
+            code: None,
+            redirect_uri: None,
+            client_id: Some(TEST_CLIENT.to_owned()),
+            code_verifier: None,
+            refresh_token: Some(refresh_token.to_owned()),
+            resource: Some(TEST_RESOURCE.to_owned()),
+            scope: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn authorization_code_exchange_issues_a_usable_single_use_token() {
+        let oauth = test_oauth_state();
+        let (verifier, challenge) = pkce_pair();
+        insert_authorization_code(&oauth, "code-1", challenge.as_str());
+
+        let response =
+            exchange_authorization_code(&oauth, TEST_ISSUER, &code_request("code-1", verifier))
+                .await
+                .expect("token response");
+        assert_eq!(response.token_type, "Bearer");
+        assert_eq!(response.scope, DEFAULT_OAUTH_SCOPE);
+        assert!(oauth.validate_access_token(
+            response.access_token.as_str(),
+            TEST_ISSUER,
+            TEST_RESOURCE
+        ));
+        // The access token is bound to this resource only.
+        assert!(!oauth.validate_access_token(
+            response.access_token.as_str(),
+            TEST_ISSUER,
+            "https://other.example.com/mcp"
+        ));
+        // The authorization code cannot be replayed.
+        assert!(
+            exchange_authorization_code(&oauth, TEST_ISSUER, &code_request("code-1", verifier))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn authorization_code_exchange_rejects_a_wrong_verifier() {
+        let oauth = test_oauth_state();
+        let (_verifier, challenge) = pkce_pair();
+        insert_authorization_code(&oauth, "code-2", challenge.as_str());
+        assert!(
+            exchange_authorization_code(
+                &oauth,
+                TEST_ISSUER,
+                &code_request(
+                    "code-2",
+                    "not-the-verifier-not-the-verifier-not-the-verifier"
+                )
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rotation_detects_replay_and_revokes_the_family() {
+        let oauth = test_oauth_state();
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .expect("initial tokens");
+        let rotated = refresh_access_token(
+            &oauth,
+            TEST_ISSUER,
+            &refresh_request(issued.refresh_token.as_str()),
+        )
+        .await
+        .expect("rotated tokens");
+        assert_ne!(rotated.refresh_token, issued.refresh_token);
+
+        // Reusing the consumed refresh token is treated as replay and revokes
+        // the whole family, including the freshly rotated token.
+        assert!(
+            refresh_access_token(
+                &oauth,
+                TEST_ISSUER,
+                &refresh_request(issued.refresh_token.as_str())
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            refresh_access_token(
+                &oauth,
+                TEST_ISSUER,
+                &refresh_request(rotated.refresh_token.as_str())
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn revoked_access_token_stops_validating() {
+        let oauth = test_oauth_state();
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .expect("tokens");
+        assert!(oauth.validate_access_token(
+            issued.access_token.as_str(),
+            TEST_ISSUER,
+            TEST_RESOURCE
+        ));
+        let claims = oauth
+            .verified_access_token_claims(issued.access_token.as_str())
+            .expect("verified claims");
+        oauth.revoked_jti.insert(claims.jti, claims.exp);
+        assert!(!oauth.validate_access_token(
+            issued.access_token.as_str(),
+            TEST_ISSUER,
+            TEST_RESOURCE
+        ));
+    }
+
+    #[tokio::test]
+    async fn client_metadata_host_must_be_public() {
+        for host in ["127.0.0.1", "10.0.0.5", "169.254.169.254", "::1"] {
+            assert!(
+                ensure_public_metadata_host(host, 443).await.is_err(),
+                "{host} must not be fetchable"
+            );
+        }
     }
 }

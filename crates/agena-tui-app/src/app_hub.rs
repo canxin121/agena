@@ -1,12 +1,10 @@
-//! Session hub route: home screen listing favorites, sessions needing
-//! attention, running sessions, and recent sessions, with a create-new-session
-//! action.
+//! Session hub route: current project, project tree, or all sessions.
 //!
 //! The display projection and rendering live in `agena_tui_session::session_hub`;
 //! this module owns the overview request/response plumbing and the session-open
 //! / create / session-list effects that only the App can perform.
 
-use agena_tui_session::session_hub::{HubPageTarget, HubRow, SessionHubDirectory};
+use agena_tui_session::session_hub::{HubPageTarget, HubRow, HubView, SessionHubDirectory};
 
 use super::{App, AppMessage, HubState, KeyEvent, Route};
 use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionResource, ui_text};
@@ -51,6 +49,16 @@ impl App {
             }
         }));
         let mut state = HubState::new();
+        self.seed_hub_project(&mut state);
+        self.spawn_hub_overview_request(&mut state);
+        self.route_stack.clear();
+        self.current_route = Route::Hub(state);
+    }
+
+    fn seed_hub_project(&self, state: &mut HubState) {
+        if state.presentation.view() == HubView::AllSessions {
+            return;
+        }
         let workspace_id = self.application.workspace_id();
         let path = self.application.workspace_root().display().to_string();
         state
@@ -65,9 +73,21 @@ impl App {
                 visible_limit: 20,
             }]);
         state.presentation.select_new_session(workspace_id);
-        self.spawn_hub_overview_request(&mut state);
-        self.route_stack.clear();
-        self.current_route = Route::Hub(state);
+    }
+
+    fn switch_hub_view(&mut self, state: &mut HubState, view: HubView) {
+        if state.presentation.view() == view {
+            return;
+        }
+        // Clear the old scope immediately. The new request ID also rejects an
+        // already queued response from the previous view/search/page.
+        state.presentation = crate::SessionHubPresentation::empty();
+        state.presentation.set_view(view);
+        state.pages.clear();
+        state.pending_page = None;
+        self.seed_hub_project(state);
+        state.presentation.set_query(&state.query);
+        self.spawn_hub_overview_request(state);
     }
 
     pub(crate) fn spawn_hub_overview_request(&mut self, state: &mut HubState) {
@@ -90,6 +110,7 @@ impl App {
         let tx = self.tx.clone();
         let expanded = state.presentation.expanded_directories();
         let query = crate::app_backend::session_hub::HubCatalogQuery {
+            view: state.presentation.view(),
             pages: state.pages.clone(),
             expanded,
             search: state.query.clone(),
@@ -183,26 +204,21 @@ impl App {
                 return;
             }
         };
-        let mut sections = [
-            SessionHubSectionKind::Running,
-            SessionHubSectionKind::Attention,
-            SessionHubSectionKind::Recent,
-            SessionHubSectionKind::Search,
-        ]
-        .into_iter()
-        .filter_map(|kind| {
-            let ids = catalog.members.get(&HubPageTarget::Section(kind))?;
-            Some(SessionHubSection::new(
-                kind,
-                catalog
-                    .sessions
-                    .iter()
-                    .filter(|session| ids.contains(&session.id))
-                    .map(|session| self.hub_session_item(session))
-                    .collect(),
-            ))
-        })
-        .collect::<Vec<_>>();
+        let mut sections = [SessionHubSectionKind::All]
+            .into_iter()
+            .filter_map(|kind| {
+                let ids = catalog.members.get(&HubPageTarget::Section(kind))?;
+                Some(SessionHubSection::new(
+                    kind,
+                    catalog
+                        .sessions
+                        .iter()
+                        .filter(|session| ids.contains(&session.id))
+                        .map(|session| self.hub_session_item(session))
+                        .collect(),
+                ))
+            })
+            .collect::<Vec<_>>();
         let mut directories = catalog
             .workspaces
             .iter()
@@ -370,7 +386,20 @@ impl App {
         }
         match resolve_tui_key(KeyContext::Hub, key) {
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
-                let forward = action == KeyAction::MoveRight;
+                if state
+                    .presentation
+                    .move_selection_project(if action == KeyAction::MoveRight {
+                        1
+                    } else {
+                        -1
+                    })
+                    .is_some()
+                {
+                    self.spawn_hub_overview_request(state);
+                }
+            }
+            Some(action @ (KeyAction::HubPreviousPage | KeyAction::HubNextPage)) => {
+                let forward = action == KeyAction::HubNextPage;
                 if !state.loading
                     && let Some((target, page)) = state.presentation.page_request(forward)
                 {
@@ -412,10 +441,6 @@ impl App {
                 );
                 return true;
             }
-            Some(KeyAction::HubOpenSessionList) => {
-                self.open_resume_session_picker();
-                return true;
-            }
             Some(KeyAction::Refresh) => {
                 if !state.loading || state.refreshed_at.elapsed().as_secs() >= 30 {
                     self.spawn_hub_overview_request(state);
@@ -452,8 +477,10 @@ impl App {
                 .move_selection_page(1, state.presentation.viewport_page_size()),
             Some(KeyAction::Home) => state.presentation.move_selection_home(),
             Some(KeyAction::End) => state.presentation.move_selection_end(),
-            Some(KeyAction::NextTab) => state.presentation.move_selection_section(1),
-            Some(KeyAction::PreviousTab) => state.presentation.move_selection_section(-1),
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
+                let delta = if action == KeyAction::NextTab { 1 } else { -1 };
+                self.switch_hub_view(state, state.presentation.view().next(delta));
+            }
             Some(KeyAction::Open) => return self.activate_hub_row(state),
             // Search input belongs only to the explicitly opened search box.
             _ => {}
@@ -466,6 +493,19 @@ impl App {
         let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
             return;
         };
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && let Some(view) = agena_tui_session::session_hub::hub_view_hit_test(
+                self.layout.overlay_area,
+                state.error.is_some(),
+                mouse.column,
+                mouse.row,
+                &self.i18n,
+            )
+        {
+            self.switch_hub_view(&mut state, view);
+            self.current_route = Route::Hub(state);
+            return;
+        }
         let hit = agena_tui_session::session_hub::hub_hit_test(
             self.layout.overlay_area,
             &state.presentation,

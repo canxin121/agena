@@ -33,6 +33,7 @@ class DelayedProxy(http.server.ThreadingHTTPServer):
         self.write_count = 0
         self.fail_next = False
         self.lock = threading.Lock()
+        self.requests = []
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -42,6 +43,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def forward(self):
         proxy = self.server
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        with proxy.lock:
+            proxy.requests.append((self.command, self.path))
         is_write = self.command == "PUT" and re.fullmatch(r"/api/v1/sessions/\d+", self.path)
         fail = False
         if is_write:
@@ -131,7 +134,7 @@ def main() -> int:
         client = tui.Pty(binary, proxied_api, workspace, None, out / "tui", env)
         client.wait_text("rapid-mark-target", "opened")
         # New session -> neighbor in Pins -> neighbor in Favorites -> target in Recent.
-        client.send(b"\t\t\t", "select-target-in-project-recent")
+        client.send(b"\x1b[B\x1b[B\x1b[B", "select-target-in-project-recent")
 
         def selected_line():
             return next((line for line in client.text().splitlines()
@@ -214,10 +217,33 @@ def main() -> int:
         client.close()
         client = tui.Pty(binary, proxied_api, workspace, None, out / "reopened", env)
         client.wait_text("rapid-mark-target", "reopened")
-        client.send(b"\t", "select-persisted-target-in-pins")
+        client.send(b"\x1b[B", "select-persisted-target-in-pins")
         fixture.poll(lambda: settled(*current), 10, "reopening lost the committed markers")
         checkpoint("reopening-preserves-server-state")
-        client.send(b"l", "open-session-picker")
+        client.send(b"\t\t", "switch-to-flat-view-for-mark-races")
+        fixture.poll(lambda: "▾" not in client.text() and visible(*current), 10,
+                     "flat view did not select the persisted session")
+        for mode in ("keyboard", "mouse"):
+            proxy.writes.clear()
+            before = proxy.write_count
+            desired = tuple(not value for value in current)
+            packet = b"pf" if mode == "keyboard" else click("p") + click("f")
+            client.send(packet * 21, f"flat-{mode}-rapid-marks")
+            fixture.poll(lambda: proxy.write_count - before == 2, 5, "flat view did not submit both marks")
+            fixture.poll(lambda: visible(*desired), 5, "flat view did not show the latest intent")
+            # Cycle through both other scopes with replies still pending.
+            client.send(b"\t\t\t", f"flat-{mode}-switch-while-marks-pending")
+            time.sleep(0.3)
+            proxy.writes.set()
+            fixture.poll(lambda: settled(*desired), 10, "view switches lost pending marks")
+            fixture.require("▾" not in client.text(), "pending mark response restored the wrong view")
+            fixture.require(all(api.state(neighbor)["session"][key] for key in ("pinned", "favorite")),
+                            "view switching changed the neighboring session")
+            current = desired
+            checkpoint(f"flat-{mode}-marks-survive-view-switches")
+        client.send(b"\r", "open-selected-session")
+        time.sleep(0.5)
+        client.send_prompt("/sessions")
         client.wait_text("Resume Session", "picker-opened")
         fixture.poll(lambda: visible(*current), 10, "picker did not select the latest session")
         for mode in ("keyboard", "mouse"):

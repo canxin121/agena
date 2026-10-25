@@ -13,7 +13,6 @@ sessions-loading-more = 正在載入更多工作階段...
 sessions-more = 還有更多工作階段可載入
 hub-title = 工作階段中心
 hub-action-create = 新增工作階段
-hub-action-list = 工作階段清單
 hub-action-refresh = 重新整理
 hub-hint-move = 移動
 hub-hint-focus = 焦點
@@ -73,7 +72,6 @@ context-help-summary-plugin-drilldown = 瀏覽巢狀設定列，並啟用選取�
 context-help-summary-plugin-diff = 檢視待套用的設定變更，然後返回。
 context-help-summary-session-work = 查看此工作階段的檔案、背景工作與重試狀態。
 context-help-key-create-session = 建立新的工作階段。
-context-help-key-session-list = 開啟完整的工作階段清單。
 
 transcript-header-lines = 行 {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = 搜尋={$query} ({$current}/{$total})

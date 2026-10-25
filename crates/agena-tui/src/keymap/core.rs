@@ -167,20 +167,20 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::Hub => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Left if unmodified(key) => Some(A::MoveLeft),
-            K::Right if unmodified(key) => Some(A::MoveRight),
+            K::Left | K::Char('h') if unmodified(key) => Some(A::MoveLeft),
+            K::Right | K::Char('l') if unmodified(key) => Some(A::MoveRight),
             K::Up | K::Char('k') if unmodified(key) => Some(A::MoveUp),
             K::Down | K::Char('j') if unmodified(key) => Some(A::MoveDown),
             K::PageUp if unmodified(key) => Some(A::PageUp),
             K::PageDown if unmodified(key) => Some(A::PageDown),
             K::Home if unmodified(key) => Some(A::Home),
             K::End if unmodified(key) => Some(A::End),
-            K::Tab if unmodified(key) => Some(A::NextTab),
-            K::BackTab | K::Char('t') if unmodified_or_shift(key) => Some(A::PreviousTab),
+            K::Tab | K::BackTab => tab_navigation_action(key),
+            K::Char('[') if unmodified(key) => Some(A::HubPreviousPage),
+            K::Char(']') if unmodified(key) => Some(A::HubNextPage),
             K::Enter if unmodified(key) => Some(A::Open),
             K::Char('n') if only_ctrl(key) => Some(A::HubCreateSession),
             K::Char('c') if unmodified(key) => Some(A::HubCreateSession),
-            K::Char('l') if unmodified(key) => Some(A::HubOpenSessionList),
             K::Char('f') if only_ctrl(key) => Some(A::SearchForward),
             K::Char('f')
                 if unmodified(key) || key.modifiers == crossterm::event::KeyModifiers::ALT =>
@@ -279,5 +279,40 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers as M;
+
+    #[test]
+    fn hub_tabs_switch_views_and_horizontal_keys_switch_projects() {
+        for (code, modifiers, expected) in [
+            (K::Tab, M::NONE, A::NextTab),
+            (K::Tab, M::SHIFT, A::PreviousTab),
+            (K::BackTab, M::NONE, A::PreviousTab),
+            (K::BackTab, M::SHIFT, A::PreviousTab),
+            (K::Left, M::NONE, A::MoveLeft),
+            (K::Char('h'), M::NONE, A::MoveLeft),
+            (K::Right, M::NONE, A::MoveRight),
+            (K::Char('l'), M::NONE, A::MoveRight),
+            (K::Char('['), M::NONE, A::HubPreviousPage),
+            (K::Char(']'), M::NONE, A::HubNextPage),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::Hub, KeyEvent::new(code, modifiers)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            resolve(KeyContext::Hub, KeyEvent::new(K::Char('t'), M::NONE)),
+            None
+        );
+        assert_eq!(
+            resolve(KeyContext::Hub, KeyEvent::new(K::Tab, M::CONTROL)),
+            None
+        );
     }
 }

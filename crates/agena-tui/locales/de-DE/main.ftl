@@ -13,7 +13,6 @@ sessions-loading-more = Weitere Sitzungen werden geladen...
 sessions-more = Weitere Sitzungen verfuegbar
 hub-title = Sitzungs-Hub
 hub-action-create = neue Sitzung
-hub-action-list = Sitzungsliste
 hub-action-refresh = aktualisieren
 hub-hint-move = bewegen
 hub-hint-focus = Fokus
@@ -41,7 +40,6 @@ hub-empty = Noch keine Sitzungen. Erstellen Sie eine mit Ctrl+N.
 context-help-context-hub = Sitzungs-Hub
 context-help-summary-hub = Zeigt Sitzungen mit Aufmerksamkeitsbedarf, laufende und kürzliche Sitzungen, und erstellt neue Sitzungen.
 context-help-key-create-session = Eine neue Sitzung erstellen.
-context-help-key-session-list = Die vollständige Sitzungsliste öffnen.
 
 transcript-header-lines = Zeilen {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = suche={$query} ({$current}/{$total})

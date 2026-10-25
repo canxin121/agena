@@ -8,13 +8,16 @@ use agena_api::{
     queries::{ListSessionsParams, ListWorkspacesParams, Query, QueryResult, SessionListBucket},
     resource::{SessionResource, WorkspaceResource},
 };
-use agena_tui_session::session_hub::{HubPageTarget, HubPagination, SessionHubSectionKind};
+use agena_tui_session::session_hub::{
+    HubPageTarget, HubPagination, HubView, SessionHubSectionKind,
+};
 use anyhow::{Result, bail};
 
 pub(crate) const HUB_PAGE_SIZE: u64 = 20;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HubCatalogQuery {
+    pub view: HubView,
     pub pages: BTreeMap<HubPageTarget, usize>,
     pub expanded: BTreeSet<i64>,
     pub search: String,
@@ -32,54 +35,52 @@ impl TuiBackend {
     pub(crate) async fn session_hub_catalog(&self, query: HubCatalogQuery) -> Result<HubCatalog> {
         let workspace_page = *query.pages.get(&HubPageTarget::Workspaces).unwrap_or(&0);
         let search = (!query.search.trim().is_empty()).then(|| query.search.trim().to_owned());
-        let QueryResult::Workspaces(workspaces) = self
-            .client()
-            .query_revalidated(Query::ListWorkspaces(ListWorkspacesParams {
-                limit: Some(HUB_PAGE_SIZE),
-                offset: workspace_page as u64 * HUB_PAGE_SIZE,
-                include_session_count: true,
-                search: search.clone(),
-                ..Default::default()
-            }))
-            .await?
-        else {
-            bail!("expected a workspace page");
-        };
-        let mut catalog = HubCatalog {
-            workspaces: workspaces.items,
-            ..Default::default()
-        };
-        catalog.pages.insert(
-            HubPageTarget::Workspaces,
-            HubPagination {
-                page: workspace_page,
-                has_more: workspaces.page.has_more,
-                total: None,
-            },
-        );
-        // Keep the active workspace directly accessible on the first page.
-        if workspace_page == 0
-            && search.is_none()
-            && !catalog
-                .workspaces
-                .iter()
-                .any(|ws| ws.id == self.workspace_id())
-            && let QueryResult::Workspace(workspace) = self
-                .client()
-                .query(Query::GetWorkspace(
-                    agena_api::queries::GetWorkspaceParams {
-                        workspace_id: self.workspace_id(),
+        let mut catalog = HubCatalog::default();
+        match query.view {
+            HubView::CurrentProject => {
+                catalog
+                    .workspaces
+                    .push(self.hub_workspace(self.workspace_id()).await?);
+            }
+            HubView::Projects if search.is_none() => {
+                let QueryResult::Workspaces(workspaces) = self
+                    .client()
+                    .query_revalidated(Query::ListWorkspaces(ListWorkspacesParams {
+                        limit: Some(HUB_PAGE_SIZE),
+                        offset: workspace_page as u64 * HUB_PAGE_SIZE,
+                        include_session_count: true,
+                        ..Default::default()
+                    }))
+                    .await?
+                else {
+                    bail!("expected a workspace page");
+                };
+                catalog.workspaces = workspaces.items;
+                catalog.pages.insert(
+                    HubPageTarget::Workspaces,
+                    HubPagination {
+                        page: workspace_page,
+                        has_more: workspaces.page.has_more,
+                        total: None,
                     },
-                ))
-                .await?
-        {
-            catalog.workspaces.insert(0, workspace);
+                );
+                // Keep the launch project accessible on the first page.
+                if workspace_page == 0
+                    && !catalog
+                        .workspaces
+                        .iter()
+                        .any(|ws| ws.id == self.workspace_id())
+                {
+                    catalog
+                        .workspaces
+                        .insert(0, self.hub_workspace(self.workspace_id()).await?);
+                }
+            }
+            HubView::Projects | HubView::AllSessions => {}
         }
-        let mut requests = Vec::new();
         for workspace in &catalog.workspaces {
-            let target = HubPageTarget::Directory(workspace.id);
             catalog.pages.insert(
-                target,
+                HubPageTarget::Directory(workspace.id),
                 HubPagination {
                     total: workspace
                         .session_stats
@@ -88,60 +89,8 @@ impl TuiBackend {
                     ..Default::default()
                 },
             );
-            if query.expanded.contains(&workspace.id) || search.is_some() {
-                requests.push((
-                    target,
-                    ListSessionsParams {
-                        workspace_id: Some(workspace.id),
-                        ..Default::default()
-                    },
-                ));
-                if search.is_none() {
-                    for (kind, bucket) in [
-                        (SessionHubSectionKind::Pinned, SessionListBucket::Pinned),
-                        (
-                            SessionHubSectionKind::Favorites,
-                            SessionListBucket::Favorite,
-                        ),
-                    ] {
-                        requests.push((
-                            HubPageTarget::DirectorySection(workspace.id, kind),
-                            ListSessionsParams {
-                                workspace_id: Some(workspace.id),
-                                bucket: Some(bucket),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                }
-            }
         }
-        if search.is_some() {
-            requests.push((
-                HubPageTarget::Section(SessionHubSectionKind::Search),
-                ListSessionsParams {
-                    search,
-                    ..Default::default()
-                },
-            ));
-        } else {
-            for (kind, bucket) in [
-                (SessionHubSectionKind::Running, SessionListBucket::Running),
-                (
-                    SessionHubSectionKind::Attention,
-                    SessionListBucket::Attention,
-                ),
-                (SessionHubSectionKind::Recent, SessionListBucket::Recent),
-            ] {
-                requests.push((
-                    HubPageTarget::Section(kind),
-                    ListSessionsParams {
-                        bucket: Some(bucket),
-                        ..Default::default()
-                    },
-                ));
-            }
-        }
+        let requests = session_requests(&query, &catalog.workspaces, self.workspace_id());
         let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
         let mut tasks = tokio::task::JoinSet::new();
         for (target, mut params) in requests {
@@ -199,7 +148,53 @@ impl TuiBackend {
                 .cmp(&a.updated_at)
                 .then_with(|| b.id.cmp(&a.id))
         });
+        // Project search uses one global, bounded session page, then groups
+        // those results by project. It must find titles in projects outside the
+        // first workspace page without adding a second flat result list.
+        if query.view == HubView::Projects && search.is_some() {
+            let ids = catalog
+                .sessions
+                .iter()
+                .map(|session| session.workspace_id)
+                .collect::<BTreeSet<_>>();
+            let mut workspaces = tokio::task::JoinSet::new();
+            for id in ids {
+                let backend = self.clone();
+                let semaphore = semaphore.clone();
+                workspaces.spawn(async move {
+                    let _permit = semaphore.acquire_owned().await?;
+                    backend.hub_workspace(id).await
+                });
+            }
+            while let Some(result) = workspaces.join_next().await {
+                let workspace = result??;
+                catalog.members.insert(
+                    HubPageTarget::Directory(workspace.id),
+                    catalog
+                        .sessions
+                        .iter()
+                        .filter(|session| session.workspace_id == workspace.id)
+                        .map(|session| session.id)
+                        .collect(),
+                );
+                catalog.workspaces.push(workspace);
+            }
+            catalog.members.remove(&HubPageTarget::Workspaces);
+        }
         Ok(catalog)
+    }
+
+    async fn hub_workspace(&self, workspace_id: i64) -> Result<WorkspaceResource> {
+        let QueryResult::Workspace(workspace) = self
+            .client()
+            .query_revalidated(Query::GetWorkspace(
+                agena_api::queries::GetWorkspaceParams { workspace_id },
+            ))
+            .await?
+        else {
+            bail!("expected a workspace");
+        };
+        Ok(workspace)
     }
 
     pub(crate) async fn create_workspace_session(
@@ -219,5 +214,169 @@ impl TuiBackend {
         pinned: bool,
     ) -> Result<SessionResource> {
         Ok(self.client().set_session_pinned(session_id, pinned).await?)
+    }
+}
+
+/// Plan session reads from the selected scope, independently of rendering.
+fn session_requests(
+    query: &HubCatalogQuery,
+    workspaces: &[WorkspaceResource],
+    current: i64,
+) -> Vec<(HubPageTarget, ListSessionsParams)> {
+    let search = (!query.search.trim().is_empty()).then(|| query.search.trim().to_owned());
+    if query.view == HubView::AllSessions || (query.view == HubView::Projects && search.is_some()) {
+        return vec![(
+            if query.view == HubView::Projects {
+                HubPageTarget::Workspaces
+            } else {
+                HubPageTarget::Section(SessionHubSectionKind::All)
+            },
+            ListSessionsParams {
+                search,
+                ..Default::default()
+            },
+        )];
+    }
+    let mut requests = Vec::new();
+    for workspace in workspaces {
+        if query.view == HubView::CurrentProject && workspace.id != current {
+            continue;
+        }
+        if query.expanded.contains(&workspace.id) || search.is_some() {
+            requests.push((
+                HubPageTarget::Directory(workspace.id),
+                ListSessionsParams {
+                    workspace_id: Some(workspace.id),
+                    search: search.clone(),
+                    ..Default::default()
+                },
+            ));
+            if search.is_none() {
+                for (kind, bucket) in [
+                    (SessionHubSectionKind::Pinned, SessionListBucket::Pinned),
+                    (
+                        SessionHubSectionKind::Favorites,
+                        SessionListBucket::Favorite,
+                    ),
+                ] {
+                    requests.push((
+                        HubPageTarget::DirectorySection(workspace.id, kind),
+                        ListSessionsParams {
+                            workspace_id: Some(workspace.id),
+                            bucket: Some(bucket),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    requests
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspaces() -> Vec<WorkspaceResource> {
+        [1, 2, 3]
+            .into_iter()
+            .map(|id| WorkspaceResource {
+                id,
+                path: format!("/projects/{id}"),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                session_count: None,
+                session_stats: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn current_project_reads_never_escape_its_workspace() {
+        for search in ["", " session-title "] {
+            let query = HubCatalogQuery {
+                expanded: BTreeSet::from([1, 2, 3]),
+                search: search.to_owned(),
+                ..Default::default()
+            };
+            let requests = session_requests(&query, &workspaces(), 2);
+            assert!(!requests.is_empty());
+            assert!(
+                requests
+                    .iter()
+                    .all(|(_, params)| params.workspace_id == Some(2))
+            );
+            if !search.is_empty() {
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].1.search.as_deref(), Some("session-title"));
+            }
+        }
+    }
+
+    #[test]
+    fn project_tree_requests_only_expanded_project_buckets() {
+        let query = HubCatalogQuery {
+            view: HubView::Projects,
+            expanded: BTreeSet::from([2]),
+            ..Default::default()
+        };
+        let requests = session_requests(&query, &workspaces(), 1);
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests
+                .iter()
+                .all(|(_, params)| params.workspace_id == Some(2))
+        );
+        assert!(requests.iter().all(|(target, _)| matches!(
+            target,
+            HubPageTarget::Directory(_) | HubPageTarget::DirectorySection(_, _)
+        )));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, params)| params.bucket == Some(SessionListBucket::Pinned))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(_, params)| params.bucket == Some(SessionListBucket::Favorite))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn all_sessions_and_grouped_search_use_single_unbucketed_global_page() {
+        for (view, search, target) in [
+            (
+                HubView::AllSessions,
+                "",
+                HubPageTarget::Section(SessionHubSectionKind::All),
+            ),
+            (
+                HubView::AllSessions,
+                "needle",
+                HubPageTarget::Section(SessionHubSectionKind::All),
+            ),
+            (HubView::Projects, "needle", HubPageTarget::Workspaces),
+        ] {
+            let query = HubCatalogQuery {
+                view,
+                search: search.to_owned(),
+                ..Default::default()
+            };
+            let requests = session_requests(&query, &workspaces(), 1);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].0, target);
+            assert!(requests[0].1.workspace_id.is_none());
+            assert!(requests[0].1.bucket.is_none());
+            assert_eq!(
+                requests[0].1.search.as_deref(),
+                (!search.is_empty()).then_some(search)
+            );
+        }
     }
 }

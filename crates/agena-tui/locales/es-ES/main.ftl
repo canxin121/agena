@@ -13,7 +13,6 @@ sessions-loading-more = Cargando mas sesiones...
 sessions-more = Hay mas sesiones disponibles
 hub-title = Centro de sesiones
 hub-action-create = nueva sesión
-hub-action-list = lista de sesiones
 hub-action-refresh = actualizar
 hub-hint-move = mover
 hub-hint-focus = foco
@@ -41,7 +40,6 @@ hub-empty = Aún no hay sesiones. Cree una con Ctrl+N.
 context-help-context-hub = Centro de sesiones
 context-help-summary-hub = Consulte las sesiones que requieren atención, en ejecución y recientes, y cree una nueva sesión.
 context-help-key-create-session = Crear una nueva sesión.
-context-help-key-session-list = Abrir la lista completa de sesiones.
 
 transcript-header-lines = lineas {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = buscar={$query} ({$current}/{$total})

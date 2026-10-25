@@ -1029,7 +1029,7 @@ pub(super) struct HubState {
     /// narrows the hub to matching sessions (title / label / id).
     pub(super) query: String,
     /// Whether the user is composing a search. While active, printable keys
-    /// (including the single-letter hub bindings c/j/k/l/t) type into the
+    /// (including the single-letter hub bindings c/h/j/k/l) type into the
     /// query instead of triggering their hub action.
     pub(super) search_active: bool,
     pub(super) refreshed_at: Instant,

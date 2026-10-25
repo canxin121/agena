@@ -21,6 +21,32 @@ use ratatui::{
 mod columns;
 use columns::HubColumns;
 
+/// The three independent scopes of the Hub. Tab navigation wraps in this order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HubView {
+    #[default]
+    CurrentProject,
+    Projects,
+    AllSessions,
+}
+
+impl HubView {
+    pub const ALL: [Self; 3] = [Self::CurrentProject, Self::Projects, Self::AllSessions];
+
+    pub fn next(self, delta: isize) -> Self {
+        let index = Self::ALL.iter().position(|view| *view == self).unwrap_or(0);
+        Self::ALL[(index as isize + delta).rem_euclid(Self::ALL.len() as isize) as usize]
+    }
+
+    fn localization_key(self) -> &'static str {
+        match self {
+            Self::CurrentProject => "hub-view-current-project",
+            Self::Projects => "hub-view-projects",
+            Self::AllSessions => "hub-view-all-sessions",
+        }
+    }
+}
+
 /// A session entry shown in a hub section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHubItem {
@@ -54,6 +80,7 @@ pub enum SessionHubSectionKind {
     Running,
     Attention,
     Recent,
+    All,
 }
 
 impl SessionHubSectionKind {
@@ -67,6 +94,7 @@ impl SessionHubSectionKind {
             Self::Running => "hub-section-running",
             Self::Attention => "hub-section-attention",
             Self::Recent => "hub-section-recent",
+            Self::All => "hub-view-all-sessions",
         }
     }
 }
@@ -195,6 +223,7 @@ pub struct SessionHubDirectory {
 /// visible below long directory lists. Headers are not selectable.
 #[derive(Debug, Clone)]
 pub struct SessionHubPresentation {
+    view: HubView,
     /// Full section catalog from the last overview (unfiltered). Re-filtered
     /// on every query edit, so the server call itself stays un-filtered.
     sections: Vec<SessionHubSection>,
@@ -218,6 +247,7 @@ impl SessionHubPresentation {
     /// response lands, so it starts with no rows.
     pub fn empty() -> Self {
         Self {
+            view: HubView::default(),
             sections: Vec::new(),
             rows: Vec::new(),
             selection: 0,
@@ -229,6 +259,60 @@ impl SessionHubPresentation {
             directory_height: Cell::new(10),
             quick_height: Cell::new(10),
         }
+    }
+
+    pub fn view(&self) -> HubView {
+        self.view
+    }
+
+    pub fn set_view(&mut self, view: HubView) {
+        self.view = view;
+    }
+
+    /// Jump between projects, skipping their buckets and session rows. A
+    /// collapsed destination expands and focuses its own create action.
+    pub fn move_selection_project(&mut self, delta: isize) -> Option<i64> {
+        if self.view != HubView::Projects {
+            return None;
+        }
+        let projects = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                HubRow::Directory { workspace_id, .. } => Some(*workspace_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if projects.len() < 2 {
+            return None;
+        }
+        let current = self
+            .selected_workspace()
+            .and_then(|id| projects.iter().position(|project| *project == id))
+            .unwrap_or(0);
+        let next =
+            projects[(current as isize + delta).rem_euclid(projects.len() as isize) as usize];
+        let needs_load = !self.expanded_directories().contains(&next);
+        self.toggle_directory(next, Some(true));
+        if let Some(index) = self.rows.iter().position(
+            |row| matches!(row, HubRow::Directory { workspace_id, .. } if *workspace_id == next),
+        ) {
+            // Reveal the destination from its heading, leaving room below
+            // the selected create action for that project's sessions.
+            self.directory_offset.set(index);
+        }
+        if let Some(index) = self.rows.iter().position(|row| {
+            matches!(row,
+            HubRow::Item(item) if item.workspace_id == next)
+        }) {
+            self.selection = index;
+        } else if let Some(index) = self.rows.iter().position(|row| {
+            matches!(row,
+            HubRow::Directory { workspace_id, .. } if *workspace_id == next)
+        }) {
+            self.selection = index;
+        }
+        needs_load.then_some(next)
     }
 
     /// Replace the section catalog and re-derive the visible rows, preserving
@@ -962,7 +1046,17 @@ pub fn render_session_hub(
         .borders(Borders::ALL)
         .title(format!(" {} ", i18n.text("hub-title")));
     frame.render_widget(block, area);
-    let [actions, search, content, details, footer] = hub_layout(area, error.is_some());
+    let [views, actions, search, content, details, footer] = hub_layout(area, error.is_some());
+    for (view, rect, label) in hub_view_tabs(views, i18n) {
+        frame.render_widget(
+            Paragraph::new(label).style(if view == presentation.view() {
+                selection_style().add_modifier(Modifier::BOLD)
+            } else {
+                muted_style()
+            }),
+            rect,
+        );
+    }
     let selected = presentation
         .selected_item()
         .filter(|item| !item.is_new_session);
@@ -1046,10 +1140,16 @@ pub fn render_session_hub(
     crate::session_chrome::render_details(frame, details, &title, &detail);
     let mut hints = vec![
         ShortcutHint::new("↑↓", i18n.text("hub-hint-move")),
-        ShortcutHint::new("←→", i18n.text("session-action-page")),
+        ShortcutHint::new("Tab/⇧Tab", i18n.text("hub-hint-view")),
+        ShortcutHint::new("[ ]", i18n.text("session-action-page")),
         ShortcutHint::new("PgUp/Dn", i18n.text("session-action-scroll")),
-        ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
     ];
+    if presentation.view() == HubView::Projects {
+        hints.insert(
+            2,
+            ShortcutHint::new("h/l ←→", i18n.text("hub-hint-project")),
+        );
+    }
     if search_active || !query.is_empty() {
         hints.push(ShortcutHint::new(
             "Esc",
@@ -1059,10 +1159,11 @@ pub fn render_session_hub(
     frame.render_widget(Paragraph::new(build_shortcut_line(hints)), footer);
 }
 
-fn hub_layout(area: Rect, has_error: bool) -> [Rect; 5] {
+fn hub_layout(area: Rect, has_error: bool) -> [Rect; 6] {
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let details_height = if inner.height >= 12 { 2 } else { 0 };
     let rows = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(u16::from(inner.height >= 8)),
         Constraint::Length(u16::from(has_error)),
@@ -1071,7 +1172,35 @@ fn hub_layout(area: Rect, has_error: bool) -> [Rect; 5] {
         Constraint::Length(1),
     ])
     .split(inner);
-    [rows[0], rows[1], rows[3], rows[4], rows[5]]
+    [rows[0], rows[1], rows[2], rows[4], rows[5], rows[6]]
+}
+
+/// Use the same terminal-cell geometry for view labels and mouse targets.
+fn hub_view_tabs(area: Rect, i18n: &I18n) -> Vec<(HubView, Rect, String)> {
+    let mut x = area.x;
+    let mut tabs = Vec::new();
+    for view in HubView::ALL {
+        let label = format!(" {} ", i18n.text(view.localization_key()));
+        let width = u16::try_from(Line::from(label.as_str()).width()).unwrap_or(u16::MAX);
+        if x.saturating_add(width) > area.right() || area.height == 0 {
+            break;
+        }
+        tabs.push((view, Rect::new(x, area.y, width, 1), label));
+        x = x.saturating_add(width).saturating_add(1);
+    }
+    tabs
+}
+
+pub fn hub_view_hit_test(
+    area: Rect,
+    has_error: bool,
+    column: u16,
+    row: u16,
+    i18n: &I18n,
+) -> Option<HubView> {
+    hub_view_tabs(hub_layout(area, has_error)[0], i18n)
+        .into_iter()
+        .find_map(|(view, rect, _)| rect.contains((column, row).into()).then_some(view))
 }
 
 /// Geometry is shared by rendering and hit testing, including sticky column
@@ -1233,7 +1362,7 @@ pub fn hub_hit_test(
     row: u16,
     i18n: &I18n,
 ) -> Option<HubHit> {
-    let content = hub_layout(area, has_error)[2];
+    let content = hub_layout(area, has_error)[3];
     let regions = hub_row_regions(content, presentation);
     if let Some(divider) = regions.divider
         && divider.contains((column, row).into())

@@ -552,21 +552,21 @@ pub fn preset_specs(
                 (
                     navigation,
                     vec![
-                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-hub-view"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("Enter", "context-help-key-open"),
-                        ("Esc", "context-help-key-back"),
+                        ("Esc", "hub-action-clear-search"),
                     ],
                 ),
                 (
                     actions,
                     vec![
                         ("Ctrl+N / c", "context-help-key-create-session"),
-                        ("← / →", "session-action-page"),
+                        ("h / l / ← / →", "context-help-key-hub-project"),
+                        ("[ / ]", "session-action-page"),
                         ("PgUp / PgDn", "session-action-scroll"),
                         ("Enter", "session-directory-guide"),
                         ("p", "hub-action-pin"),
-                        ("l", "context-help-key-session-list"),
                         ("f", "context-help-key-toggle-favorite"),
                         ("Ctrl+R", "context-help-key-refresh"),
                     ],

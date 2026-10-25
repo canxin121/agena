@@ -72,6 +72,132 @@ fn select_item(hub: &mut SessionHubPresentation, target: HubPageTarget, id: i64)
 }
 
 #[test]
+fn three_views_cycle_in_both_directions() {
+    let mut view = HubView::default();
+    assert_eq!(view, HubView::CurrentProject);
+    for expected in [
+        HubView::Projects,
+        HubView::AllSessions,
+        HubView::CurrentProject,
+    ] {
+        view = view.next(1);
+        assert_eq!(view, expected);
+    }
+    for expected in [
+        HubView::AllSessions,
+        HubView::Projects,
+        HubView::CurrentProject,
+    ] {
+        view = view.next(-1);
+        assert_eq!(view, expected);
+    }
+}
+
+#[test]
+fn project_navigation_skips_buckets_expands_destinations_and_wraps() {
+    let mut hub = SessionHubPresentation::empty();
+    let mut second = marked_directory(2);
+    second.expanded = false;
+    hub.set_catalog(
+        vec![marked_directory(1), second, marked_directory(3)],
+        vec![],
+    );
+    hub.select_new_session(1);
+    assert_eq!(hub.move_selection_project(1), None);
+    assert_eq!(hub.selected_workspace(), Some(1));
+    hub.set_view(HubView::Projects);
+    assert_eq!(hub.move_selection_project(1), Some(2));
+    assert!(hub.selected_item().unwrap().is_new_session);
+    assert_eq!(hub.selected_workspace(), Some(2));
+    assert!(hub.expanded_directories().contains(&2));
+    assert!(matches!(
+        hub.rows[hub.directory_offset.get()],
+        HubRow::Directory {
+            workspace_id: 2,
+            ..
+        }
+    ));
+    assert_eq!(hub.move_selection_project(1), None);
+    assert_eq!(hub.selected_workspace(), Some(3));
+    hub.move_selection_project(1);
+    assert_eq!(hub.selected_workspace(), Some(1));
+    hub.move_selection_project(-1);
+    assert_eq!(hub.selected_workspace(), Some(3));
+    hub.set_query("session");
+    select_item(&mut hub, HubPageTarget::Directory(3), 300);
+    hub.move_selection_project(-1);
+    assert_eq!(hub.selected_item().unwrap().session_id, 201);
+}
+
+#[test]
+fn view_tabs_use_matching_mouse_cells_including_wide_translations() {
+    for locale in ["en-US", "zh-CN"] {
+        let i18n = I18n::resolve(Some(locale), None);
+        for width in [50, 80, 120, 220] {
+            let area = Rect::new(3, 2, width, 32);
+            for has_error in [false, true] {
+                let tabs = hub_view_tabs(hub_layout(area, has_error)[0], &i18n);
+                assert_eq!(tabs.len(), 3);
+                for (view, rect, _) in tabs {
+                    for column in rect.x..rect.right() {
+                        assert_eq!(
+                            hub_view_hit_test(area, has_error, column, rect.y, &i18n),
+                            Some(view)
+                        );
+                        assert_eq!(
+                            hub_hit_test(
+                                area,
+                                &SessionHubPresentation::empty(),
+                                has_error,
+                                column,
+                                rect.y,
+                                &i18n
+                            ),
+                            None
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn flat_sessions_use_all_available_space_without_project_rows() {
+    for width in [50, 80, 120, 220] {
+        let mut hub = SessionHubPresentation::empty();
+        hub.set_view(HubView::AllSessions);
+        hub.set_sections(vec![SessionHubSection::new(
+            SessionHubSectionKind::All,
+            (1..=30).map(|id| item(id % 2, id)).collect(),
+        )]);
+        let area = Rect::new(0, 0, width, 32);
+        let content = hub_layout(area, false)[3];
+        let regions = hub_row_regions(content, &hub);
+        assert!(regions.divider.is_none());
+        assert_eq!(regions.headers.len(), 1);
+        assert!(
+            regions
+                .rows
+                .iter()
+                .all(|(_, rect)| rect.width == content.width)
+        );
+        assert!(!hub.rows.iter().any(|row| matches!(
+            row,
+            HubRow::Directory { .. } | HubRow::DirectoryHeader { .. }
+        )));
+        hub.move_selection_end();
+        let regions = hub_row_regions(content, &hub);
+        assert!(
+            regions
+                .rows
+                .iter()
+                .any(|(index, _)| *index == hub.selection())
+        );
+    }
+}
+
+#[test]
 fn pending_mark_bursts_keep_rows_counts_and_selection_stable() {
     let mut hub = SessionHubPresentation::empty();
     let mut project = marked_directory(1);
@@ -412,7 +538,7 @@ fn project_headers_render_in_the_tree_and_mouse_matches_both_viewports() {
             terminal
                 .draw(|frame| render_session_hub(frame, area, &hub, false, None, false, "", &i18n))
                 .unwrap();
-            let regions = hub_row_regions(hub_layout(area, false)[2], &hub);
+            let regions = hub_row_regions(hub_layout(area, false)[3], &hub);
             assert!(regions.rows.iter().any(|(visible, _)| *visible == index));
             for (header, _) in &regions.headers {
                 assert_eq!(
@@ -462,7 +588,7 @@ fn normal_terminals_use_full_width_tables_with_sticky_column_headings() {
             )],
         );
         let area = Rect::new(0, 0, width, 32);
-        let content = hub_layout(area, false)[2];
+        let content = hub_layout(area, false)[3];
         let regions = hub_row_regions(content, &hub);
         assert_eq!(regions.headers.len(), 2);
         if width < 196 {

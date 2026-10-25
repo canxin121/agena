@@ -479,6 +479,7 @@ fn committed_unpin_keeps_the_session_selected_instead_of_a_bucket_neighbor() {
 #[test]
 fn opening_focuses_project_create_and_catalog_refresh_preserves_it() {
     let mut hub = SessionHubPresentation::empty();
+    hub.set_view(HubView::Projects);
     hub.set_directories(vec![directory(2)]);
     hub.select_new_session(2);
     assert!(
@@ -490,7 +491,8 @@ fn opening_focuses_project_create_and_catalog_refresh_preserves_it() {
         hub.selected_item()
             .is_some_and(|item| item.is_new_session && item.workspace_id == 2)
     );
-    assert!(matches!(hub.rows.first(), Some(HubRow::Directory { .. })));
+    assert_eq!(hub.rows.first(), Some(&HubRow::NewProject));
+    assert!(matches!(hub.rows.get(1), Some(HubRow::Directory { .. })));
     assert_eq!(
         hub.rows
             .iter()
@@ -511,6 +513,30 @@ fn opening_focuses_project_create_and_catalog_refresh_preserves_it() {
         hub.selected_page_target(),
         HubPageTarget::DirectorySection(2, SessionHubSectionKind::Favorites)
     );
+}
+
+#[test]
+fn new_project_action_is_first_selectable_and_survives_catalog_and_search_updates() {
+    let mut hub = SessionHubPresentation::empty();
+    hub.set_view(HubView::Projects);
+    assert_eq!(hub.rows(), &[HubRow::NewProject]);
+    hub.set_catalog(vec![directory(1), directory(2)], vec![]);
+    hub.select_new_session(1);
+    hub.move_selection(-2);
+    assert_eq!(hub.selected_row(), Some(&HubRow::NewProject));
+    assert_eq!(hub.selected_workspace(), None);
+    assert_eq!(hub.selected_page_position(), None);
+    assert_eq!(hub.selected_page_target(), HubPageTarget::Workspaces);
+    hub.set_catalog(vec![directory(2), directory(1)], vec![]);
+    assert_eq!(hub.selected_row(), Some(&HubRow::NewProject));
+    hub.set_query("no matching projects");
+    assert_eq!(hub.rows(), &[HubRow::NewProject]);
+    hub.set_query("");
+    assert_eq!(hub.selected_row(), Some(&HubRow::NewProject));
+    for view in [HubView::CurrentProject, HubView::AllSessions] {
+        hub.set_view(view);
+        assert!(!hub.rows().contains(&HubRow::NewProject));
+    }
 }
 
 #[test]

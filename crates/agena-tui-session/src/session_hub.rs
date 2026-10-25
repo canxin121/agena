@@ -147,10 +147,11 @@ impl SessionHubSection {
     }
 }
 
-/// A row of the flattened hub list: either a section header (not selectable)
-/// or a session row.
+/// A row of the flattened hub list: a header, session, project, or action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HubRow {
+    /// Global create action at the start of the Projects view.
+    NewProject,
     Page {
         target: HubPageTarget,
         page: usize,
@@ -180,6 +181,7 @@ pub enum HubRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HubRowIdentity {
+    NewProject,
     Item(i64, i64),
     Directory(i64),
     More(i64),
@@ -189,6 +191,7 @@ enum HubRowIdentity {
 impl HubRow {
     fn identity(&self) -> Option<HubRowIdentity> {
         match self {
+            Self::NewProject => Some(HubRowIdentity::NewProject),
             Self::Page {
                 target, forward, ..
             } => Some(HubRowIdentity::Page(*target, *forward)),
@@ -666,7 +669,8 @@ impl SessionHubPresentation {
     }
 
     /// Filter the sections to rows matching `query` (case-insensitive substring
-    /// over title/label/session id). Create actions are hidden while searching.
+    /// over title/label/session id). New-session actions hide while searching;
+    /// the global New project action stays reachable in Projects.
     /// Selection is preserved by identity when the selected row still matches,
     /// otherwise it lands on the first row.
     pub fn set_query(&mut self, query: &str) {
@@ -873,6 +877,9 @@ impl SessionHubPresentation {
             }
         }
         let mut directory_rows = Vec::new();
+        if self.view == HubView::Projects {
+            directory_rows.push(HubRow::NewProject);
+        }
         for directory in &self.directories {
             let path_matches = directory.path.to_lowercase().contains(&self.query);
             let matches =
@@ -1019,7 +1026,8 @@ impl SessionHubPresentation {
             .iter()
             .enumerate()
             .filter_map(|(index, row)| match row {
-                HubRow::Item(_)
+                HubRow::NewProject
+                | HubRow::Item(_)
                 | HubRow::Directory { .. }
                 | HubRow::More { .. }
                 | HubRow::Page { .. } => Some(index),
@@ -1040,12 +1048,13 @@ impl SessionHubPresentation {
                 HubRow::Directory { .. } => {
                     spans.push((SessionHubSectionKind::Directories, index, 1))
                 }
-                HubRow::Item(_) | HubRow::More { .. } | HubRow::Page { .. } => {
-                    match spans.last_mut() {
-                        Some(span) => span.2 += 1,
-                        None => spans.push((SessionHubSectionKind::New, index, 1)),
-                    }
-                }
+                HubRow::NewProject
+                | HubRow::Item(_)
+                | HubRow::More { .. }
+                | HubRow::Page { .. } => match spans.last_mut() {
+                    Some(span) => span.2 += 1,
+                    None => spans.push((SessionHubSectionKind::New, index, 1)),
+                },
             }
         }
         spans.retain(|(_, _, count)| *count > 0);
@@ -1165,6 +1174,10 @@ pub fn render_session_hub(
         render_rows(frame, content, presentation, i18n);
     }
     let (title, detail) = match presentation.selected_row() {
+        Some(HubRow::NewProject) => (
+            i18n.text("hub-item-new-project"),
+            i18n.text("hub-item-new-project-detail"),
+        ),
         Some(HubRow::Item(item)) => (item.label.clone(), item.detail.clone()),
         Some(HubRow::Directory { path, count, .. }) => (
             path.clone(),
@@ -1506,6 +1519,10 @@ fn render_rows(
         let row = &presentation.rows[index];
         let indented = !presentation.directories.is_empty() && presentation.same_region(index, 0);
         let item = match row {
+            HubRow::NewProject => ListItem::new(
+                HubColumns::new(area.width.saturating_sub(1))
+                    .action(&i18n.text("hub-item-new-project")),
+            ),
             HubRow::Header(kind) | HubRow::DirectoryHeader { kind, .. } => {
                 ListItem::new(Line::from(Span::styled(
                     {

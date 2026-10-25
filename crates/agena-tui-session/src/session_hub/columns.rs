@@ -75,6 +75,10 @@ impl HubColumns {
         self.line(name, &item.status, &item.updated)
     }
 
+    pub(super) fn action(&self, label: &str) -> Line<'static> {
+        self.line(vec![Span::raw(cell(label, self.name))], "", "")
+    }
+
     fn line(&self, mut name: Vec<Span<'static>>, status: &str, updated: &str) -> Line<'static> {
         if self.status > 0 {
             name.push(Span::styled(self.separator, theme::muted_style()));

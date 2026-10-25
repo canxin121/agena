@@ -407,6 +407,7 @@ impl App {
 
     fn activate_hub_row(&mut self, state: &mut HubState) -> bool {
         match state.presentation.selected_row().cloned() {
+            Some(HubRow::NewProject) => self.open_hub_project_dialog(),
             Some(HubRow::Directory { workspace_id, .. }) => {
                 state.presentation.toggle_directory(workspace_id, None);
                 if state

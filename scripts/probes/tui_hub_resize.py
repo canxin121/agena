@@ -90,28 +90,35 @@ def main() -> int:
             fixture.poll(lambda: labels() == expected, 10,
                          f"wrong rendered capacity for {rows} rows: {labels()}")
             fixture.require("Next page" in client.text(), "paging control did not fit the terminal")
+            lines = client.text().splitlines()
+            name_row = next(i for i, line in enumerate(lines) if "Name" in line and "Status" in line)
+            fixture.require(name_row == 2, "top action/help rows still occupy the Hub header")
+            footer = "\n".join(lines[-3:])
+            for hint in ("↑↓ move", "Enter open / expand", "Tab/⇧Tab view", "[ ] page", "PgUp/Dn scroll",
+                         "Ctrl+N new session", "/ search", "p pin", "f favorite", "Ctrl+R refresh"):
+                fixture.require(hint in footer, f"missing unified footer action: {hint}")
             checkpoint(f"height-{rows}-shows-{count}-sessions")
 
         client.wait_text("Page-item-119", "opened")
-        check_first_page(24, 10)
-        check_first_page(36, 22)
-        check_first_page(60, 46)
-        check_first_page(36, 22)
+        check_first_page(24, 11)
+        check_first_page(36, 23)
+        check_first_page(60, 47)
+        check_first_page(36, 23)
         # Select a non-first item on a later page: a resize must use its
         # absolute position, not just the page's old starting offset.
         client.send(b"\x1b[B", "select-first-session")
         fixture.poll(lambda: selected() == "Page-item-119", 10, "first session not selected")
         for page in (1, 2):
             client.send(b"]", "next-page")
-            loaded(22, page * 22, selection=f"Page-item-{119 - page * 22:03}")
+            loaded(23, page * 23, selection=f"Page-item-{119 - page * 23:03}")
         client.send(b"\x1b[B" * 7, "select-inside-later-page")
-        anchor = "Page-item-068"
+        anchor = "Page-item-066"
         fixture.poll(lambda: selected() == anchor, 10, "anchor not selected")
         client.resize(60)
-        loaded(46, 46, selection=anchor)
+        loaded(47, 47, selection=anchor)
         checkpoint("grow-later-page-keeps-selected-session")
         client.resize(24)
-        loaded(10, 50, selection=anchor)
+        loaded(11, 44, selection=anchor)
         checkpoint("shrink-later-page-keeps-selected-session")
 
         # All old size responses are held, then released together. The final
@@ -122,35 +129,47 @@ def main() -> int:
             after = len(proxy.requests)
         client.resize(48)
         fixture.require(proxy.captured_read.wait(5), "resize request was not held")
-        for rows, limit, offset in [(20, 6, 48), (60, 46, 46), (28, 14, 42)]:
+        for rows, limit, offset in [(20, 7, 49), (60, 47, 47), (28, 15, 45)]:
             client.resize(rows)
             fixture.poll(lambda: requested(limit, offset, after), 5, "resize query did not use anchor")
             fixture.require(selected() == anchor, "loading a resize cleared the selected session")
         proxy.reads.set()
-        loaded(14, 42, after, anchor)
+        loaded(15, 45, after, anchor)
         time.sleep(0.5)
         fixture.require(selected() == anchor and "page 4" in client.text(),
                         "late size response overwrote the final page")
         checkpoint("rapid-resizes-ignore-stale-catalogs")
 
-        # Searching hides the create action and returns that row to capacity.
+        # The search field replaces the create action without changing capacity.
         client.send(b"/Page-item", "search-with-adaptive-pages")
         loaded(15)
         fixture.require("+ New session" not in client.text(), "search retained create row")
-        checkpoint("search-reclaims-create-action-row")
+        checkpoint("search-keeps-footer-and-page-geometry-consistent")
         client.send(b"\x1b", "close-search")
+        loaded(15)
+        # A whitespace filter still has a visible input field after moving
+        # selection out of the editor. Its height must remain accounted for.
+        client.send(b"/   ", "search-whitespace")
         loaded(14)
+        client.send(b"\x1b[B", "leave-whitespace-search-editor")
+        time.sleep(0.4)
+        normal_reads = [params for params in reads() if not params.get("bucket")]
+        fixture.require(normal_reads[-1].get("limit") == ["14"] and "Filter:" in client.text(),
+                        "leaving a whitespace filter changed page geometry")
+        checkpoint("whitespace-search-keeps-visible-input-height")
+        client.send(b"\x1b", "clear-whitespace-search")
+        loaded(15)
         # Pinned/Favorites must also use the terminal-sized limit, not 20.
         for sid in ids[:30]:
             api.call("PUT", f"/api/v1/sessions/{sid}", {"pinned": True, "favorite": True})
         client.send(b"\x12", "refresh-marked-buckets")
         client.wait_text("Pinned  30", "pins-refreshed")
         fixture.poll(lambda: "Favorites  30" in client.text() or
-                     any(params.get("bucket") == ["favorite"] and params.get("limit") == ["14"]
+                     any(params.get("bucket") == ["favorite"] and params.get("limit") == ["15"]
                          for params in reads()), 10, "favorites did not use adaptive page size")
         bucket_reads = reads()
         for bucket in ("pinned", "favorite"):
-            fixture.require(any(params.get("bucket") == [bucket] and params.get("limit") == ["14"]
+            fixture.require(any(params.get("bucket") == [bucket] and params.get("limit") == ["15"]
                                 for params in bucket_reads), f"{bucket} still uses a fixed limit")
         checkpoint("project-mark-buckets-use-adaptive-pages")
         client.send(b"\t", "switch-to-project-tree")

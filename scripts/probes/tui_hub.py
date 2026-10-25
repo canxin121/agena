@@ -26,7 +26,7 @@ def main() -> int:
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--cols", type=int, default=120)
-    parser.add_argument("--rows", type=int, default=36)
+    parser.add_argument("--rows", type=int, default=35)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
@@ -305,8 +305,8 @@ def main() -> int:
         client = launch(alpha, "project-buckets")
         # This fixture has 24 pins; keep exercising its later page with the
         # terminal-sized current-project page rather than assuming 20 rows.
-        page_size = max(1, args.rows - 14)
-        fixture.require(page_size < 24, "use fewer than 38 rows for this navigation probe")
+        page_size = max(1, args.rows - 13)
+        fixture.require(page_size < 23, "use at most 35 rows for this navigation probe")
         pin_index = 23 - page_size
         paged_pin = f"A-pin-{pin_index:02}"
         client.wait_text("A-pin-23", "pins-loaded")

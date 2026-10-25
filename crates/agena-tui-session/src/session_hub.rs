@@ -19,6 +19,7 @@ use ratatui::{
 };
 
 mod columns;
+mod footer;
 use columns::HubColumns;
 
 /// The three independent scopes of the Hub. Tab navigation wraps in this order.
@@ -1099,14 +1100,27 @@ pub fn render_session_hub(
     query: &str,
     i18n: &I18n,
 ) {
-    use agena_tui_components::pointer::{self, PointerAction};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use agena_tui_components::pointer;
     pointer::begin_surface();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", i18n.text("hub-title")));
+    let title = if loading {
+        format!(
+            " {} · … {} ",
+            i18n.text("hub-title"),
+            i18n.text("overlay-picker-loading")
+        )
+    } else {
+        format!(" {} ", i18n.text("hub-title"))
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     frame.render_widget(block, area);
-    let [views, actions, search, content, details, footer] = hub_layout(area, error.is_some());
+    let search_visible = search_active || !query.is_empty();
+    let [views, search, content, details, footer] = hub_layout(
+        area,
+        error.is_some(),
+        presentation.view(),
+        search_visible,
+        i18n,
+    );
     for (view, rect, label) in hub_view_tabs(views, i18n) {
         frame.render_widget(
             Paragraph::new(label).style(if view == presentation.view() {
@@ -1120,55 +1134,16 @@ pub fn render_session_hub(
     let selected = presentation
         .selected_item()
         .filter(|item| !item.is_new_session);
-    let pin = format!(
-        "p {}",
-        i18n.text(if selected.is_some_and(|item| item.pinned) {
-            "session-action-unpin"
-        } else {
-            "session-action-pin"
-        })
-    );
-    let favorite = format!(
-        "f {}",
-        i18n.text(if selected.is_some_and(|item| item.favorite) {
-            "hub-action-unfavorite"
-        } else {
-            "hub-action-favorite"
-        })
-    );
-    let create = format!("^N {}", i18n.text("hub-action-create"));
-    let find = format!("/ {}", i18n.text("hub-action-search"));
-    let ctrl = |c| PointerAction::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
-    let alt = |c| PointerAction::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT));
-    pointer::render_buttons(
-        frame,
-        actions,
-        &[
-            (&create, ctrl('n')),
-            (&find, ctrl('f')),
-            (&pin, alt('p')),
-            (&favorite, alt('f')),
-        ],
-    );
-
-    let mut search_line = if !query.is_empty() || search_active {
-        Line::from(Span::styled(
-            i18n.text_args(
+    if search_visible {
+        frame.render_widget(
+            Paragraph::new(i18n.text_args(
                 "hub-search-active",
                 &agena_tui::fl_args!("query" => agena_tui::sanitize_picker_text(query)),
-            ),
-            accent_color(),
-        ))
-    } else {
-        Line::from(Span::styled(i18n.text("session-hub-guide"), muted_style()))
-    };
-    if loading {
-        search_line.spans.push(Span::styled(
-            format!("  … {}", i18n.text("overlay-picker-loading")),
-            muted_style(),
-        ));
+            ))
+            .style(Style::default().fg(accent_color())),
+            search,
+        );
     }
-    frame.render_widget(Paragraph::new(search_line), search);
     if let Some(error) = error {
         frame.render_widget(
             Paragraph::new(agena_tui::sanitize_picker_text(error))
@@ -1198,49 +1173,50 @@ pub fn render_session_hub(
         _ => (String::new(), String::new()),
     };
     crate::session_chrome::render_details(frame, details, &title, &detail);
-    let mut hints = vec![
-        ShortcutHint::new("↑↓", i18n.text("hub-hint-move")),
-        ShortcutHint::new("Tab/⇧Tab", i18n.text("hub-hint-view")),
-        ShortcutHint::new("[ ]", i18n.text("session-action-page")),
-        ShortcutHint::new("PgUp/Dn", i18n.text("session-action-scroll")),
-    ];
-    if presentation.view() == HubView::Projects {
-        hints.insert(
-            2,
-            ShortcutHint::new("h/l ←→", i18n.text("hub-hint-project")),
-        );
-    }
-    if search_active || !query.is_empty() {
-        hints.push(ShortcutHint::new(
-            "Esc",
-            i18n.text("hub-action-clear-search"),
-        ));
-    }
-    frame.render_widget(Paragraph::new(build_shortcut_line(hints)), footer);
+    footer::Footer::new(presentation.view(), selected, search_visible, i18n).render(frame, footer);
 }
 
-fn hub_layout(area: Rect, has_error: bool) -> [Rect; 6] {
+fn hub_layout(
+    area: Rect,
+    has_error: bool,
+    view: HubView,
+    search_visible: bool,
+    i18n: &I18n,
+) -> [Rect; 5] {
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let details_height = if inner.height >= 12 { 2 } else { 0 };
+    let footer_height = footer::Footer::new(view, None, search_visible, i18n)
+        .height(inner.width)
+        .min((inner.height / 2).max(1));
     let rows = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(u16::from(inner.height >= 8)),
+        Constraint::Length(u16::from(search_visible)),
         Constraint::Length(u16::from(has_error)),
         Constraint::Min(1),
         Constraint::Length(details_height),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .split(inner);
-    [rows[0], rows[1], rows[2], rows[4], rows[5], rows[6]]
+    [rows[0], rows[1], rows[3], rows[4], rows[5]]
 }
 
-/// Each independently paged project bucket can occupy the available table.
-/// Reserve the project, create and bucket headings plus both paging controls;
-/// a first/last page may leave one spare row. Error banners are transient and
-/// must not change offsets or start a resize/retry feedback loop.
-pub fn current_project_page_size(area: Rect, searching: bool) -> usize {
-    let content = hub_layout(area, false)[3];
+/// Size independently paged project buckets from the actual list rectangle,
+/// including the wrapped footer and optional search field. Both paging
+/// controls get space; a first/last page may leave one spare row. Transient
+/// errors must not change offsets or start a resize/retry feedback loop.
+pub fn current_project_page_size(
+    area: Rect,
+    searching: bool,
+    search_active: bool,
+    i18n: &I18n,
+) -> usize {
+    let content = hub_layout(
+        area,
+        false,
+        HubView::CurrentProject,
+        search_active || searching,
+        i18n,
+    )[2];
     let table_heading = u16::from(content.height >= 3);
     usize::from(content.height.saturating_sub(table_heading))
         .saturating_sub(5 - usize::from(searching))
@@ -1270,9 +1246,12 @@ pub fn hub_view_hit_test(
     row: u16,
     i18n: &I18n,
 ) -> Option<HubView> {
-    hub_view_tabs(hub_layout(area, has_error)[0], i18n)
-        .into_iter()
-        .find_map(|(view, rect, _)| rect.contains((column, row).into()).then_some(view))
+    hub_view_tabs(
+        hub_layout(area, has_error, HubView::CurrentProject, false, i18n)[0],
+        i18n,
+    )
+    .into_iter()
+    .find_map(|(view, rect, _)| rect.contains((column, row).into()).then_some(view))
 }
 
 /// Geometry is shared by rendering and hit testing, including sticky column
@@ -1430,11 +1409,12 @@ pub fn hub_hit_test(
     area: Rect,
     presentation: &SessionHubPresentation,
     has_error: bool,
+    search_visible: bool,
     column: u16,
     row: u16,
     i18n: &I18n,
 ) -> Option<HubHit> {
-    let content = hub_layout(area, has_error)[3];
+    let content = hub_layout(area, has_error, presentation.view(), search_visible, i18n)[2];
     let regions = hub_row_regions(content, presentation);
     if let Some(divider) = regions.divider
         && divider.contains((column, row).into())

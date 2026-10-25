@@ -73,20 +73,29 @@ fn select_item(hub: &mut SessionHubPresentation, target: HubPageTarget, id: i64)
 
 #[test]
 fn current_project_capacity_uses_the_rendered_table_height() {
-    for (height, expected) in [(24, 10), (36, 22), (60, 46)] {
+    for (height, expected) in [(24, 11), (36, 23), (60, 47)] {
         let area = Rect::new(0, 0, 100, height);
-        assert_eq!(current_project_page_size(area, false), expected);
-        assert_eq!(current_project_page_size(area, true), expected + 1);
+        assert_eq!(
+            current_project_page_size(area, false, false, &I18n::english()),
+            expected
+        );
+        assert_eq!(
+            current_project_page_size(area, true, true, &I18n::english()),
+            expected
+        );
     }
     for height in 0..=16 {
-        assert!(current_project_page_size(Rect::new(0, 0, 80, height), false) >= 1);
+        assert!(
+            current_project_page_size(Rect::new(0, 0, 80, height), false, false, &I18n::english())
+                >= 1
+        );
     }
 }
 
 #[test]
 fn terminal_sized_server_page_is_not_truncated_by_the_old_local_limit() {
     let area = Rect::new(0, 0, 100, 60);
-    let capacity = current_project_page_size(area, false);
+    let capacity = current_project_page_size(area, false, false, &I18n::english());
     let mut project = directory(1);
     project.items = (1..=capacity as i64).map(|id| item(1, id)).collect();
     let mut hub = SessionHubPresentation::empty();
@@ -101,7 +110,10 @@ fn terminal_sized_server_page_is_not_truncated_by_the_old_local_limit() {
         },
     )]));
     hub.select_new_session(1);
-    let regions = hub_row_regions(hub_layout(area, false)[3], &hub);
+    let regions = hub_row_regions(
+        hub_layout(area, false, hub.view(), false, &I18n::english())[2],
+        &hub,
+    );
     let displayed = regions
         .rows
         .iter()
@@ -186,7 +198,10 @@ fn view_tabs_use_matching_mouse_cells_including_wide_translations() {
         for width in [50, 80, 120, 220] {
             let area = Rect::new(3, 2, width, 32);
             for has_error in [false, true] {
-                let tabs = hub_view_tabs(hub_layout(area, has_error)[0], &i18n);
+                let tabs = hub_view_tabs(
+                    hub_layout(area, has_error, HubView::CurrentProject, false, &i18n)[0],
+                    &i18n,
+                );
                 assert_eq!(tabs.len(), 3);
                 for (view, rect, _) in tabs {
                     for column in rect.x..rect.right() {
@@ -199,6 +214,7 @@ fn view_tabs_use_matching_mouse_cells_including_wide_translations() {
                                 area,
                                 &SessionHubPresentation::empty(),
                                 has_error,
+                                false,
                                 column,
                                 rect.y,
                                 &i18n
@@ -222,7 +238,7 @@ fn flat_sessions_use_all_available_space_without_project_rows() {
             (1..=30).map(|id| item(id % 2, id)).collect(),
         )]);
         let area = Rect::new(0, 0, width, 32);
-        let content = hub_layout(area, false)[3];
+        let content = hub_layout(area, false, hub.view(), false, &I18n::english())[2];
         let regions = hub_row_regions(content, &hub);
         assert!(regions.divider.is_none());
         assert_eq!(regions.headers.len(), 1);
@@ -725,16 +741,19 @@ fn project_headers_render_in_the_tree_and_mouse_matches_both_viewports() {
             terminal
                 .draw(|frame| render_session_hub(frame, area, &hub, false, None, false, "", &i18n))
                 .unwrap();
-            let regions = hub_row_regions(hub_layout(area, false)[3], &hub);
+            let regions = hub_row_regions(
+                hub_layout(area, false, hub.view(), false, &I18n::english())[2],
+                &hub,
+            );
             assert!(regions.rows.iter().any(|(visible, _)| *visible == index));
             for (header, _) in &regions.headers {
                 assert_eq!(
-                    hub_hit_test(area, &hub, false, header.x, header.y, &i18n),
+                    hub_hit_test(area, &hub, false, false, header.x, header.y, &i18n),
                     None
                 );
             }
             for (visible, rect) in regions.rows {
-                let hit = hub_hit_test(area, &hub, false, rect.x, rect.y, &i18n);
+                let hit = hub_hit_test(area, &hub, false, false, rect.x, rect.y, &i18n);
                 if hub.rows[visible].identity().is_some() {
                     assert_eq!(
                         hit,
@@ -775,7 +794,7 @@ fn normal_terminals_use_full_width_tables_with_sticky_column_headings() {
             )],
         );
         let area = Rect::new(0, 0, width, 32);
-        let content = hub_layout(area, false)[3];
+        let content = hub_layout(area, false, hub.view(), false, &I18n::english())[2];
         let regions = hub_row_regions(content, &hub);
         assert_eq!(regions.headers.len(), 2);
         if width < 196 {

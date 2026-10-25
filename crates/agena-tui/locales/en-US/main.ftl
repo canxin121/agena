@@ -54,6 +54,7 @@ hub-hint-move = move
 hub-hint-focus = focus
 hub-hint-section = section
 hub-hint-open = open
+hub-hint-open-expand = open / expand
 hub-hint-back = back
 hub-section-attention = Needs attention
 hub-section-running = Running

@@ -54,6 +54,7 @@ hub-hint-move = 移动
 hub-hint-focus = 焦点
 hub-hint-section = 分组
 hub-hint-open = 打开
+hub-hint-open-expand = 打开／展开
 hub-hint-back = 返回
 hub-section-attention = 需要关注
 hub-section-running = 运行中

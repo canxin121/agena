@@ -141,6 +141,8 @@ impl App {
         let size = agena_tui_session::session_hub::current_project_page_size(
             area,
             !state.query.trim().is_empty(),
+            state.search_active || !state.query.is_empty(),
+            &self.i18n,
         );
         if !state.resize_page_size(size) {
             return;
@@ -580,6 +582,7 @@ impl App {
             self.layout.overlay_area,
             &state.presentation,
             state.error.is_some(),
+            state.search_active || !state.query.is_empty(),
             mouse.column,
             mouse.row,
             &self.i18n,

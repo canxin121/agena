@@ -8,13 +8,9 @@ import SettingsCard from './SettingsCard.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
-import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 import { confirmAction } from '@/lib/appConfirm'
 import { settingsText as st } from '@/i18n/settingsText'
-
-type McpAuthMode = 'none' | 'oauth' | 'mixed'
-type McpAnonymousAccess = 'none' | 'read_only'
 
 type McpOAuthStatus = {
   configured: boolean
@@ -38,14 +34,13 @@ type McpOAuthStatus = {
 
 type McpServerControl = {
   enabled: boolean
-  authMode: McpAuthMode
-  anonymousAccess: McpAnonymousAccess
   publicUrl: string | null
   oauthIssuerUrl: string | null
   resourceUrl: string
   ready: boolean
   warnings: string[]
-  oauth?: McpOAuthStatus
+  generatedOauthPassword?: string | null
+  oauth: McpOAuthStatus
 }
 
 const loading = ref(false)
@@ -55,8 +50,6 @@ const control = ref<McpServerControl | null>(null)
 const enabled = ref(false)
 const publicUrl = ref('')
 const oauthIssuerUrl = ref('')
-const authMode = ref<McpAuthMode>('none')
-const anonymousAccess = ref<McpAnonymousAccess>('none')
 const oauthPassword = ref('')
 const copiedEndpoint = ref('')
 
@@ -67,9 +60,7 @@ const controlDirty = computed(() => {
   return (
     enabled.value !== value.enabled ||
     publicUrl.value.trim() !== String(value.publicUrl || '') ||
-    oauthIssuerUrl.value.trim() !== String(value.oauthIssuerUrl || '') ||
-    authMode.value !== value.authMode ||
-    anonymousAccess.value !== value.anonymousAccess
+    oauthIssuerUrl.value.trim() !== String(value.oauthIssuerUrl || '')
   )
 })
 const mcpSurfaceSummary = computed(() => {
@@ -78,50 +69,10 @@ const mcpSurfaceSummary = computed(() => {
   if (!value.enabled) {
     return st('The /mcp endpoint is disabled. The management API remains available so it can be enabled again.')
   }
-  if (value.authMode === 'oauth') {
-    return st('The /mcp endpoint is available. Full OAuth protects the complete MCP transport.')
-  }
-  if (value.authMode === 'mixed' && value.anonymousAccess === 'read_only') {
-    return st('The /mcp endpoint is available. Mixed auth keeps discovery and opted-in read-only tools public.')
-  }
-  if (value.authMode === 'mixed') {
-    return st('The /mcp endpoint is available. Mixed auth keeps discovery public and protects every tool call.')
-  }
-  return st('The /mcp endpoint is available. MCP calls are anonymous.')
+  return st(
+    'The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.',
+  )
 })
-const authModeOptions = computed(() => [
-  {
-    value: 'none',
-    label: st('No authentication'),
-    description: st('Anonymous MCP. OAuth discovery endpoints are hidden and every exposed tool declares noauth.'),
-  },
-  {
-    value: 'oauth',
-    label: st('Full OAuth'),
-    description: st('Require a valid OAuth bearer token for initialize, discovery, tool listing, and every tool call.'),
-  },
-  {
-    value: 'mixed',
-    label: st('Mixed auth (recommended for ChatGPT)'),
-    description: st(
-      'Keep initialize and tool discovery public; tool calls remain OAuth-protected unless explicitly opted into anonymous access.',
-    ),
-  },
-])
-const anonymousAccessOptions = computed(() => [
-  {
-    value: 'none',
-    label: st('No anonymous tool calls (recommended)'),
-    description: st('ChatGPT can initialize and discover tools before signing in, but every tool call requires OAuth.'),
-  },
-  {
-    value: 'read_only',
-    label: st('Anonymous read-only tools'),
-    description: st(
-      'High risk: permission-contract read-only tools can run without OAuth and may expose private workspace, filesystem, configuration, or diagnostic data.',
-    ),
-  },
-])
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
@@ -134,8 +85,6 @@ function applyControl(value: McpServerControl, preserveDraft = false) {
   enabled.value = value.enabled
   publicUrl.value = value.publicUrl || ''
   oauthIssuerUrl.value = value.oauthIssuerUrl || ''
-  authMode.value = value.authMode
-  anonymousAccess.value = value.anonymousAccess || 'none'
 }
 
 async function copyEndpoint(label: string, value: string | undefined) {
@@ -166,8 +115,6 @@ async function refresh() {
 
 async function updateControl(body: {
   enabled?: boolean
-  authMode?: McpAuthMode
-  anonymousAccess?: McpAnonymousAccess
   publicUrl?: string | null
   oauthIssuerUrl?: string | null
 }) {
@@ -180,8 +127,6 @@ async function updateControl(body: {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         enabled: body.enabled ?? control.value.enabled,
-        authMode: body.authMode ?? control.value.authMode,
-        anonymousAccess: body.anonymousAccess ?? control.value.anonymousAccess,
         ...(Object.prototype.hasOwnProperty.call(body, 'publicUrl') ? { publicUrl: body.publicUrl } : {}),
         ...(Object.prototype.hasOwnProperty.call(body, 'oauthIssuerUrl')
           ? { oauthIssuerUrl: body.oauthIssuerUrl }
@@ -201,12 +146,8 @@ function toggleEnabled() {
 }
 
 async function saveControlDraft() {
-  const highRisk = enabled.value && (authMode.value === 'none' || anonymousAccess.value === 'read_only')
-  if (highRisk && !(await confirmAction(st('Apply this high-risk MCP configuration?')))) return
   await updateControl({
     enabled: enabled.value,
-    authMode: authMode.value,
-    anonymousAccess: anonymousAccess.value,
     publicUrl: publicUrl.value.trim() || null,
     oauthIssuerUrl: oauthIssuerUrl.value.trim() || null,
   })
@@ -394,67 +335,7 @@ onMounted(() => {
           </div>
         </div>
       </SettingsCard>
-      <SettingsCard :title="$st('MCP authentication mode')">
-        <div class="space-y-3">
-          <div>
-            <OptionPicker
-              v-model="authMode"
-              class="min-w-0 flex-1"
-              :options="authModeOptions"
-              :include-empty="false"
-              :title="$st('MCP authentication mode')"
-              :disabled="saving"
-            />
-          </div>
-          <div
-            v-if="authMode === 'none'"
-            class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-          >
-            {{
-              $st(
-                'High-risk mode: every exposed tool is anonymous. Anyone who can reach the public MCP URL can invoke the exposed catalog without an Agena login.',
-              )
-            }}
-          </div>
-          <div v-else-if="authMode === 'mixed'" class="text-xs leading-relaxed text-muted-foreground">
-            {{
-              $st(
-                'ChatGPT can initialize and discover tools without signing in. Tool calls remain OAuth-protected unless the anonymous-access policy below explicitly opts in a class of tools.',
-              )
-            }}
-          </div>
-        </div>
-
-        <div v-if="authMode === 'mixed'" class="mt-4 grid gap-2 border-t border-border/50 pt-4">
-          <div class="text-sm font-medium">{{ $st('Anonymous tool access in mixed mode') }}</div>
-          <div>
-            <OptionPicker
-              v-model="anonymousAccess"
-              class="min-w-0 flex-1"
-              :options="anonymousAccessOptions"
-              :include-empty="false"
-              :title="$st('Mixed-auth anonymous tool access')"
-              :disabled="saving"
-            />
-          </div>
-          <div
-            v-if="anonymousAccess === 'read_only'"
-            class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-          >
-            {{
-              $st(
-                'High-risk opt-in: read-only does not mean public. Anonymous tools can still reveal private workspace files, configuration, diagnostics, or other sensitive data. Keep this set to “none” for ordinary Agena workspaces.',
-              )
-            }}
-          </div>
-          <div v-else class="text-xs leading-relaxed text-muted-foreground">
-            {{ $st('Safe default: initialize and tool discovery are public, but every tool call requires OAuth.') }}
-          </div>
-        </div>
-      </SettingsCard>
-
       <SettingsCard
-        v-if="authMode !== 'none'"
         :title="$st('OAuth authorization')"
         :description="
           $st(
@@ -462,6 +343,17 @@ onMounted(() => {
           )
         "
       >
+        <div
+          v-if="control?.generatedOauthPassword"
+          class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+        >
+          {{
+            $st(
+              'Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.',
+            )
+          }}
+          <code class="mt-1 block select-all break-all">{{ control.generatedOauthPassword }}</code>
+        </div>
         <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <div class="rounded-md border border-border/60 p-3 text-xs">
             <div class="text-muted-foreground">{{ $st('Password status') }}</div>
@@ -523,7 +415,7 @@ onMounted(() => {
         </div>
       </SettingsCard>
 
-      <details v-if="authMode !== 'none' && oauth" class="min-w-0 rounded-xl border border-border/60 bg-card/30 p-4">
+      <details v-if="oauth" class="min-w-0 rounded-xl border border-border/60 bg-card/30 p-4">
         <summary class="cursor-pointer text-sm font-medium">{{ $st('OAuth discovery endpoints') }}</summary>
         <dl class="mt-3 grid gap-2 text-xs">
           <div

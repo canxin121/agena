@@ -204,15 +204,6 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--mcp-oauth-issuer-url".into());
         arguments.push(mcp_oauth_issuer_url.into());
     }
-    if let Some(mode) = args.mcp_auth_mode {
-        arguments.push("--mcp-auth-mode".into());
-        arguments.push(mode.as_str().into());
-    }
-    if let Some(access) = args.mcp_anonymous_access {
-        arguments.push("--mcp-anonymous-access".into());
-        arguments.push(access.as_str().into());
-    }
-
     let workspace = args
         .workspace_root
         .clone()

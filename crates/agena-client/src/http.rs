@@ -1003,32 +1003,6 @@ impl AgenaClient {
             .await
     }
 
-    /// Select no-auth, full OAuth, or ChatGPT mixed-auth mode.
-    pub async fn set_mcp_server_auth_mode(
-        &self,
-        auth_mode: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.put_json(
-            "/api/v1/server/mcp",
-            serde_json::json!({"authMode": auth_mode}),
-        )
-        .await
-    }
-
-    /// Configure anonymous tool execution in mixed-auth mode. `none` is the
-    /// safe default; `read_only` explicitly permits permission-contract-proven
-    /// read-only tools without OAuth and can expose private workspace data.
-    pub async fn set_mcp_server_anonymous_access(
-        &self,
-        anonymous_access: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.put_json(
-            "/api/v1/server/mcp",
-            serde_json::json!({"anonymousAccess": anonymous_access}),
-        )
-        .await
-    }
-
     /// Configure the stable OAuth authorization-server issuer. `None` clears
     /// the explicit issuer so the server derives it from the configured public
     /// MCP resource, never from request Host/forwarded headers.

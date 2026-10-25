@@ -42,7 +42,9 @@ use rmcp::service::{RequestContext, RoleServer};
 
 mod stateless_tool_policy;
 
-pub use stateless_tool_policy::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
+pub use stateless_tool_policy::{
+    McpToolAccess, StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed, mcp_tool_access,
+};
 
 const LIST_CACHE_TTL_MS: u64 = 30_000;
 static PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);

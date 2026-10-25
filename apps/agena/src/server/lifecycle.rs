@@ -58,8 +58,6 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.mcp_enabled.is_some()
             || args.mcp_public_url.is_some()
             || args.mcp_oauth_issuer_url.is_some()
-            || args.mcp_auth_mode.is_some()
-            || args.mcp_anonymous_access.is_some()
             || args.ui_dir.is_some()
         {
             bail!(
@@ -175,12 +173,6 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         command
             .arg("--mcp-oauth-issuer-url")
             .arg(mcp_oauth_issuer_url);
-    }
-    if let Some(mode) = args.mcp_auth_mode {
-        command.arg("--mcp-auth-mode").arg(mode.as_str());
-    }
-    if let Some(access) = args.mcp_anonymous_access {
-        command.arg("--mcp-anonymous-access").arg(access.as_str());
     }
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);

@@ -14,8 +14,8 @@ use std::{
 
 use agena_application::{Application, dto::OperatorToolResource};
 use agena_mcp_server::{
-    CallToolParams, CallToolResult, McpServerBackend, McpServerError, StatelessMcpToolMetadata,
-    ToolDescriptor, is_stateless_mcp_tool_exposed,
+    CallToolParams, CallToolResult, McpServerBackend, McpServerError, McpToolAccess,
+    StatelessMcpToolMetadata, ToolDescriptor, is_stateless_mcp_tool_exposed, mcp_tool_access,
 };
 use async_trait::async_trait;
 use axum::{
@@ -58,7 +58,6 @@ struct McpRequestMetadata {
     has_id: bool,
     tools_list: bool,
     is_batch: bool,
-    root_tool_call_id: Option<serde_json::Value>,
     tool_calls: Vec<(String, Option<serde_json::Value>)>,
 }
 
@@ -72,10 +71,6 @@ impl McpRequestMetadata {
             has_id: jsonrpc_request_id(&value).is_some(),
             tools_list: contains_tools_list(&value),
             is_batch: value.is_array(),
-            root_tool_call_id: (value.get("method").and_then(serde_json::Value::as_str)
-                == Some("tools/call"))
-            .then(|| value.get("id").cloned().filter(|id| !id.is_null()))
-            .flatten(),
             tool_calls: Vec::new(),
         };
         let mut capture = |request: &serde_json::Value| {
@@ -160,13 +155,17 @@ pub(crate) struct McpServerState {
     fallback_resource: String,
 }
 
-fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
-    is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
+fn mcp_tool_metadata(tool: &OperatorToolResource) -> StatelessMcpToolMetadata<'_> {
+    StatelessMcpToolMetadata {
         name: tool.name.as_str(),
         plugin_id: tool.plugin_id.as_str(),
         interactive: tool.interactive,
         agent: tool.agent,
-    })
+    }
+}
+
+fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
+    is_stateless_mcp_tool_exposed(mcp_tool_metadata(tool))
 }
 
 fn refresh_token_fingerprint(token: &str) -> String {
@@ -240,65 +239,39 @@ async fn validate_mcp_host_origin(
     next.run(request).await
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+/// Authentication selector written by releases that let operators choose an MCP
+/// authentication mode.
+///
+/// Agena no longer offers selectable authentication modes. The MCP surface
+/// always serves the OAuth discovery/authorization surface, always keeps
+/// protocol discovery anonymous, and decides per tool whether a call needs a
+/// bearer token. This type exists only so control records written by older
+/// releases still deserialize; its value is reported once and ignored.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum McpAuthMode {
-    /// No OAuth discovery or bearer enforcement. Every exposed tool declares
-    /// the Apps SDK `noauth` security scheme.
-    #[default]
+enum LegacyMcpAuthMode {
     None,
-    /// Protect the complete MCP transport, including initialize and tools/list.
     Oauth,
-    /// Keep initialize and tool discovery anonymous while applying OAuth per
-    /// tool. Tool calls remain protected by default; operators can explicitly
-    /// opt read-only tools into anonymous access.
     Mixed,
 }
 
-impl McpAuthMode {
-    const fn is_enabled(self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-impl From<agena_cli::McpAuthModeArg> for McpAuthMode {
-    fn from(value: agena_cli::McpAuthModeArg) -> Self {
-        match value {
-            agena_cli::McpAuthModeArg::None => Self::None,
-            agena_cli::McpAuthModeArg::Oauth => Self::Oauth,
-            agena_cli::McpAuthModeArg::Mixed => Self::Mixed,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+/// Legacy companion selector of [`LegacyMcpAuthMode::Mixed`].
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum McpAnonymousAccess {
-    /// No tool call is anonymous. In mixed mode only initialize and discovery
-    /// remain public, which is the safe default for private workspace data.
-    #[default]
+enum LegacyMcpAnonymousAccess {
     None,
-    /// Allow tools whose declared behavior marks them read-only to execute
-    /// anonymously. This is an explicit opt-in because read-only does not mean
-    /// non-sensitive: filesystem and workspace reads can still expose data.
     ReadOnly,
-}
-
-impl From<agena_cli::McpAnonymousAccessArg> for McpAnonymousAccess {
-    fn from(value: agena_cli::McpAnonymousAccessArg) -> Self {
-        match value {
-            agena_cli::McpAnonymousAccessArg::None => Self::None,
-            agena_cli::McpAnonymousAccessArg::ReadOnly => Self::ReadOnly,
-        }
-    }
 }
 
 struct McpControlState {
     enabled: std::sync::atomic::AtomicBool,
-    auth_mode: RwLock<McpAuthMode>,
-    anonymous_access: RwLock<McpAnonymousAccess>,
     configured_resource: RwLock<Option<String>>,
     configured_issuer: RwLock<Option<String>>,
     oauth_password: RwLock<Option<McpOAuthPassword>>,
+    /// Plaintext of a password Agena generated itself because the deployment
+    /// configured none. It is surfaced once through the control plane and then
+    /// dropped from memory.
+    generated_password: RwLock<Option<String>>,
     database: Option<Arc<ServerStateDb>>,
     update_lock: tokio::sync::Mutex<()>,
 }
@@ -319,8 +292,12 @@ struct McpReadiness {
 struct PersistedMcpServerControl {
     enabled: bool,
     public_url: Option<String>,
-    auth_mode: McpAuthMode,
-    anonymous_access: McpAnonymousAccess,
+    /// Removed selector. Parsed for backward compatibility and never written.
+    #[serde(default, skip_serializing)]
+    auth_mode: Option<LegacyMcpAuthMode>,
+    /// Removed selector. Parsed for backward compatibility and never written.
+    #[serde(default, skip_serializing)]
+    anonymous_access: Option<LegacyMcpAnonymousAccess>,
     oauth_password_phc: Option<String>,
     oauth_issuer_url: Option<String>,
 }
@@ -420,8 +397,6 @@ pub(crate) struct McpServerStartupConfig<'a> {
     pub(crate) enabled: Option<bool>,
     pub(crate) public_url: Option<&'a str>,
     pub(crate) oauth_issuer_url: Option<&'a str>,
-    pub(crate) auth_mode: Option<McpAuthMode>,
-    pub(crate) anonymous_access: Option<McpAnonymousAccess>,
     pub(crate) fallback_public_url: &'a str,
 }
 
@@ -448,8 +423,6 @@ impl McpServerState {
             None,
             fallback_resource,
             true,
-            McpAuthMode::None,
-            McpAnonymousAccess::None,
             None,
             None,
         ))
@@ -468,11 +441,10 @@ impl McpServerState {
         let had_persisted_control = persisted.is_some();
         let (
             mut enabled,
-            mut auth_mode,
-            mut anonymous_access,
             configured_public_url,
             configured_issuer_url,
             oauth_password,
+            legacy_selectors,
         ) = match persisted.as_ref() {
             Some(persisted) => {
                 let oauth_password = persisted
@@ -485,21 +457,13 @@ impl McpServerState {
                     .transpose()?;
                 (
                     persisted.enabled,
-                    persisted.auth_mode,
-                    persisted.anonymous_access,
                     persisted.public_url.clone(),
                     persisted.oauth_issuer_url.clone(),
                     oauth_password,
+                    Some((persisted.auth_mode, persisted.anonymous_access)),
                 )
             }
-            None => (
-                true,
-                McpAuthMode::None,
-                McpAnonymousAccess::None,
-                None,
-                None,
-                None,
-            ),
+            None => (true, None, None, None, None),
         };
         let mut configured_resource = configured_public_url
             .map(|value| normalize_public_mcp_url(value.as_str()))
@@ -509,8 +473,6 @@ impl McpServerState {
             .transpose()?;
         let persisted_effective = (
             enabled,
-            auth_mode,
-            anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
         );
@@ -534,29 +496,18 @@ impl McpServerState {
         if let Some(oauth_issuer_url) = startup.oauth_issuer_url {
             configured_issuer = Some(normalize_oauth_issuer_url(oauth_issuer_url)?);
         }
-        if let Some(value) = startup.auth_mode {
-            auth_mode = value;
-        }
-        if let Some(value) = startup.anonymous_access {
-            anonymous_access = value;
-        }
-        if enabled && auth_mode.is_enabled() && matches!(&ui_auth, UiAuth::Disabled) {
-            return Err(
-                "public MCP OAuth requires AGENA_SERVER_UI_PASSWORD (or --ui-password) so the Agena management API and authorization page are not exposed without an operator credential"
-                    .to_owned(),
-            );
-        }
-
+        // A deployment without any operator credential is no longer a startup
+        // error: the unified policy always serves the OAuth surface, so Agena
+        // generates a dedicated authorization password below instead of
+        // refusing to start or leaving the authorization page unusable.
         let effective_control = (
             enabled,
-            auth_mode,
-            anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
         );
         let control_changed = !had_persisted_control || persisted_effective != effective_control;
         let fallback_resource = normalize_public_mcp_url(startup.fallback_public_url)?;
-        if enabled && auth_mode.is_enabled() {
+        if enabled {
             let effective_resource = configured_resource
                 .as_deref()
                 .unwrap_or(fallback_resource.as_str());
@@ -588,8 +539,6 @@ impl McpServerState {
             configured_issuer.clone(),
             fallback_resource,
             enabled,
-            auth_mode,
-            anonymous_access,
             oauth_password,
             Some(Arc::clone(&database)),
         );
@@ -607,15 +556,18 @@ impl McpServerState {
         // a new identity accidentally retaining prior token state.
         if control_changed {
             state
-                .persist_control(
-                    enabled,
-                    auth_mode,
-                    anonymous_access,
-                    configured_resource,
-                    configured_issuer,
-                )
+                .persist_control(enabled, configured_resource, configured_issuer)
                 .await?;
         }
+        if let Some((auth_mode, anonymous_access)) = legacy_selectors {
+            tracing::warn!(
+                target: "agena::server::mcp",
+                auth_mode = ?auth_mode,
+                anonymous_access = ?anonymous_access,
+                "ignoring removed MCP authentication selectors; the unified policy applies"
+            );
+        }
+        state.ensure_oauth_password().await?;
         Ok(state)
     }
 
@@ -630,8 +582,6 @@ impl McpServerState {
         configured_issuer: Option<String>,
         fallback_resource: String,
         enabled: bool,
-        auth_mode: McpAuthMode,
-        anonymous_access: McpAnonymousAccess,
         oauth_password: Option<McpOAuthPassword>,
         database: Option<Arc<ServerStateDb>>,
     ) -> Self {
@@ -643,11 +593,10 @@ impl McpServerState {
             oauth,
             control: Arc::new(McpControlState {
                 enabled: std::sync::atomic::AtomicBool::new(enabled),
-                auth_mode: RwLock::new(auth_mode),
-                anonymous_access: RwLock::new(anonymous_access),
                 configured_resource: RwLock::new(configured_resource),
                 configured_issuer: RwLock::new(configured_issuer),
                 oauth_password: RwLock::new(oauth_password),
+                generated_password: RwLock::new(None),
                 database,
                 update_lock: tokio::sync::Mutex::new(()),
             }),
@@ -657,26 +606,6 @@ impl McpServerState {
 
     fn is_enabled(&self) -> bool {
         self.control.enabled.load(Ordering::Acquire)
-    }
-
-    fn auth_mode(&self) -> McpAuthMode {
-        *self
-            .control
-            .auth_mode
-            .read()
-            .expect("MCP auth mode lock poisoned")
-    }
-
-    fn auth_enabled(&self) -> bool {
-        self.auth_mode().is_enabled()
-    }
-
-    fn anonymous_access(&self) -> McpAnonymousAccess {
-        *self
-            .control
-            .anonymous_access
-            .read()
-            .expect("MCP anonymous access lock poisoned")
     }
 
     fn configured_public_url(&self) -> Option<String> {
@@ -699,15 +628,13 @@ impl McpServerState {
         mcp_tool_is_exposed(tool)
     }
 
+    /// Whether one exposed tool requires an OAuth access token.
+    ///
+    /// The decision belongs to the tool catalog, not to a deployment-wide
+    /// switch: the shared stateless MCP policy marks a tool as anonymously
+    /// callable only when it is explicitly listed as safe for that transport.
     fn tool_requires_auth(&self, tool: &OperatorToolResource) -> bool {
-        match self.auth_mode() {
-            McpAuthMode::None => false,
-            McpAuthMode::Oauth => true,
-            McpAuthMode::Mixed => match self.anonymous_access() {
-                McpAnonymousAccess::None => true,
-                McpAnonymousAccess::ReadOnly => !tool.read_only,
-            },
-        }
+        mcp_tool_access(mcp_tool_metadata(tool)) == McpToolAccess::OAuth
     }
 
     async fn exposed_tool_auth_requirements(&self) -> HashMap<String, bool> {
@@ -815,27 +742,23 @@ impl McpServerState {
         if !self.is_enabled() {
             warnings.push("MCP server is disabled.".to_owned());
         }
-        if !is_https_resource(resource.as_str()) {
+        if !is_https_resource(resource.as_str()) && !is_loopback_resource(resource.as_str()) {
             warnings.push(
                 "ChatGPT requires a canonical remote HTTPS MCP resource URL. Configure a public HTTPS endpoint or Secure MCP Tunnel before connecting it.".to_owned(),
             );
         }
-        // Any advertised OAuth mode must be operational before the control
-        // plane calls the connector ChatGPT-ready. Mixed mode still publishes
-        // discovery metadata and may expose privileged tools after a policy
-        // change without changing the public connector identity.
-        if self.auth_enabled() {
-            if !self.has_custom_oauth_password() && !matches!(self.ui_auth, UiAuth::Enabled(_)) {
-                warnings.push(
-                    "OAuth authorization password is not configured; set an MCP OAuth password in Web/TUI or start the server with a UI password.".to_owned(),
-                );
-            }
-            if let Err(error) = validate_managed_oauth_identity(
-                resource.as_str(),
-                self.configured_oauth_issuer_url().as_deref(),
-            ) {
-                warnings.push(error);
-            }
+        // The OAuth surface is always advertised, so it must always be
+        // operational before the control plane calls the connector ready.
+        if !self.has_custom_oauth_password() && !matches!(self.ui_auth, UiAuth::Enabled(_)) {
+            warnings.push(
+                "OAuth authorization password is not configured; set an MCP OAuth password in Web/TUI or start the server with a UI password.".to_owned(),
+            );
+        }
+        if let Err(error) = validate_managed_oauth_identity(
+            resource.as_str(),
+            self.configured_oauth_issuer_url().as_deref(),
+        ) {
+            warnings.push(error);
         }
 
         McpReadiness {
@@ -852,8 +775,6 @@ impl McpServerState {
         tracing::info!(
             target: "agena::server::mcp",
             enabled = self.is_enabled(),
-            auth_mode = ?self.auth_mode(),
-            anonymous_access = ?self.anonymous_access(),
             resource = %resource,
             issuer = %issuer,
             ready = readiness.ready,
@@ -903,19 +824,16 @@ impl McpServerState {
     fn control_status(&self, headers: &HeaderMap) -> McpServerControlResponse {
         let resource_url = self.public_resource(headers);
         let issuer = self.issuer_for_headers(headers);
-        let auth_mode = self.auth_mode();
-        let auth_enabled = auth_mode.is_enabled();
         let readiness = self.readiness(headers);
         McpServerControlResponse {
             enabled: self.is_enabled(),
-            auth_mode,
-            anonymous_access: self.anonymous_access(),
             public_url: self.configured_public_url(),
+            generated_oauth_password: self.take_generated_password(),
             oauth_issuer_url: self.configured_oauth_issuer_url(),
             resource_url: resource_url.clone(),
             ready: readiness.ready,
             warnings: readiness.warnings.clone(),
-            oauth: auth_enabled.then(|| McpOAuthControlStatus {
+            oauth: McpOAuthControlStatus {
                 configured: self.has_custom_oauth_password()
                     || matches!(self.ui_auth, UiAuth::Enabled(_)),
                 password_configured: self.has_custom_oauth_password(),
@@ -941,15 +859,13 @@ impl McpServerState {
                 protected_resource_metadata: protected_resource_metadata_url(&resource_url),
                 authorization_server_metadata: authorization_server_metadata_url(&issuer),
                 jwks_uri: append_public_endpoint(&issuer, "/oauth/jwks.json"),
-            }),
+            },
         }
     }
 
     async fn persist_control(
         &self,
         enabled: bool,
-        auth_mode: McpAuthMode,
-        anonymous_access: McpAnonymousAccess,
         public_url: Option<String>,
         oauth_issuer_url: Option<String>,
     ) -> Result<(), String> {
@@ -963,8 +879,8 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 PersistedMcpServerControl {
                     enabled,
-                    auth_mode,
-                    anonymous_access,
+                    auth_mode: None,
+                    anonymous_access: None,
                     public_url,
                     oauth_issuer_url,
                     oauth_password_phc: self.oauth_password_phc(),
@@ -976,20 +892,14 @@ impl McpServerState {
     async fn update_control(
         &self,
         enabled: bool,
-        auth_mode: McpAuthMode,
-        anonymous_access: McpAnonymousAccess,
         configured_resource: Option<String>,
         configured_issuer: Option<String>,
     ) -> Result<(), String> {
         let _guard = self.control.update_lock.lock().await;
         let previous_enabled = self.is_enabled();
-        let previous_auth_mode = self.auth_mode();
-        let previous_anonymous_access = self.anonymous_access();
         let previous_resource = self.configured_public_url();
         let previous_issuer = self.configured_oauth_issuer_url();
         let control_changed = previous_enabled != enabled
-            || previous_auth_mode != auth_mode
-            || previous_anonymous_access != anonymous_access
             || previous_resource != configured_resource
             || previous_issuer != configured_issuer;
         if control_changed {
@@ -1000,23 +910,11 @@ impl McpServerState {
         }
         self.persist_control(
             enabled,
-            auth_mode,
-            anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
         )
         .await?;
         self.control.enabled.store(enabled, Ordering::Release);
-        *self
-            .control
-            .auth_mode
-            .write()
-            .expect("MCP auth mode lock poisoned") = auth_mode;
-        *self
-            .control
-            .anonymous_access
-            .write()
-            .expect("MCP anonymous access lock poisoned") = anonymous_access;
         *self
             .control
             .configured_resource
@@ -1046,8 +944,6 @@ impl McpServerState {
         let enabled = self.is_enabled();
         let public_url = self.configured_public_url();
         let oauth_issuer_url = self.configured_oauth_issuer_url();
-        let auth_mode = self.auth_mode();
-        let anonymous_access = self.anonymous_access();
         let database = self
             .control
             .database
@@ -1059,8 +955,8 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 PersistedMcpServerControl {
                     enabled,
-                    auth_mode,
-                    anonymous_access,
+                    auth_mode: None,
+                    anonymous_access: None,
                     public_url,
                     oauth_issuer_url,
                     oauth_password_phc: Some(phc.clone()),
@@ -1080,8 +976,6 @@ impl McpServerState {
         let enabled = self.is_enabled();
         let public_url = self.configured_public_url();
         let oauth_issuer_url = self.configured_oauth_issuer_url();
-        let auth_mode = self.auth_mode();
-        let anonymous_access = self.anonymous_access();
         let database = self
             .control
             .database
@@ -1096,8 +990,8 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 PersistedMcpServerControl {
                     enabled,
-                    auth_mode,
-                    anonymous_access,
+                    auth_mode: None,
+                    anonymous_access: None,
                     public_url,
                     oauth_issuer_url,
                     oauth_password_phc: None,
@@ -1111,21 +1005,60 @@ impl McpServerState {
             .expect("MCP OAuth password lock poisoned") = None;
         Ok(())
     }
+
+    /// Guarantee that the authorization page has an operator credential.
+    ///
+    /// The unified policy always serves the OAuth surface, so a deployment that
+    /// configured no password would otherwise advertise an authorization server
+    /// nobody can complete. Generate a dedicated MCP OAuth password, store it
+    /// through the same Argon2 path as an operator-supplied one, and surface it
+    /// once (startup log + control plane) so the operator can copy it.
+    async fn ensure_oauth_password(&self) -> Result<(), String> {
+        if !self.is_enabled()
+            || self.has_custom_oauth_password()
+            || matches!(&self.ui_auth, UiAuth::Enabled(_))
+        {
+            return Ok(());
+        }
+        let password = crate::server::issue_token();
+        self.set_oauth_password(password.as_str()).await?;
+        tracing::warn!(
+            target: "agena::server::mcp",
+            password = %password,
+            "generated an MCP OAuth password because no operator password is configured; set one in Web/TUI to replace it"
+        );
+        *self
+            .control
+            .generated_password
+            .write()
+            .expect("MCP generated password lock poisoned") = Some(password);
+        Ok(())
+    }
+
+    /// Consume the generated password so the control plane reports it once.
+    fn take_generated_password(&self) -> Option<String> {
+        self.control
+            .generated_password
+            .write()
+            .expect("MCP generated password lock poisoned")
+            .take()
+    }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct McpServerControlResponse {
     enabled: bool,
-    auth_mode: McpAuthMode,
-    anonymous_access: McpAnonymousAccess,
     public_url: Option<String>,
     oauth_issuer_url: Option<String>,
     resource_url: String,
     ready: bool,
     warnings: Vec<String>,
+    /// Plaintext of a password Agena generated itself. Reported exactly once and
+    /// omitted afterwards.
     #[serde(skip_serializing_if = "Option::is_none")]
-    oauth: Option<McpOAuthControlStatus>,
+    generated_oauth_password: Option<String>,
+    oauth: McpOAuthControlStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -1160,10 +1093,13 @@ pub(crate) struct UpdateMcpServerControlRequest {
     /// configured public URL and returns to the listener-local fallback.
     #[serde(default)]
     public_url: Option<Option<String>>,
+    /// Removed selector. Accepted so clients built against an older control API
+    /// keep working; the value is ignored.
     #[serde(default)]
-    auth_mode: Option<McpAuthMode>,
+    auth_mode: Option<serde_json::Value>,
+    /// Removed selector. Accepted for backward compatibility and ignored.
     #[serde(default)]
-    anonymous_access: Option<McpAnonymousAccess>,
+    anonymous_access: Option<serde_json::Value>,
     /// `None` means "leave unchanged"; `Some(None)` clears the configured
     /// issuer and returns to the resource-derived issuer.
     #[serde(default)]
@@ -1190,12 +1126,12 @@ pub(crate) async fn update_mcp_server_control(
     let enabled = request
         .enabled
         .unwrap_or_else(|| state.mcp_server.is_enabled());
-    let auth_mode = request
-        .auth_mode
-        .unwrap_or_else(|| state.mcp_server.auth_mode());
-    let anonymous_access = request
-        .anonymous_access
-        .unwrap_or_else(|| state.mcp_server.anonymous_access());
+    if request.auth_mode.is_some() || request.anonymous_access.is_some() {
+        tracing::debug!(
+            target: "agena::server::mcp",
+            "ignoring removed MCP authentication selectors from the control request"
+        );
+    }
     let configured_resource = match request.public_url {
         None => state.mcp_server.configured_public_url(),
         Some(None) => None,
@@ -1212,13 +1148,7 @@ pub(crate) async fn update_mcp_server_control(
             Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
         },
     };
-    if auth_mode.is_enabled() && enabled {
-        if matches!(&state.mcp_server.ui_auth, UiAuth::Disabled) {
-            return control_error(
-                StatusCode::BAD_REQUEST,
-                "Public MCP OAuth requires AGENA_SERVER_UI_PASSWORD (or --ui-password). This credential protects the Agena management API and is also the default OAuth authorization password.".to_owned(),
-            );
-        }
+    if enabled {
         let effective_resource = state
             .mcp_server
             .public_resource_with_configured(&headers, configured_resource.as_deref());
@@ -1231,13 +1161,7 @@ pub(crate) async fn update_mcp_server_control(
     }
     if let Err(error) = state
         .mcp_server
-        .update_control(
-            enabled,
-            auth_mode,
-            anonymous_access,
-            configured_resource,
-            configured_issuer,
-        )
+        .update_control(enabled, configured_resource, configured_issuer)
         .await
     {
         return control_error(StatusCode::INTERNAL_SERVER_ERROR, error);
@@ -1293,12 +1217,14 @@ fn mcp_auth_disabled() -> Response {
     response
 }
 
-/// Build the MCP Streamable HTTP route and the optional OAuth surface.
+/// Build the MCP Streamable HTTP route and its OAuth surface.
 ///
-/// The route table is fixed so the running server can switch modes without a
-/// restart. OAuth handlers and middleware return/bypass at runtime according
-/// to `auth_enabled`; in anonymous mode the OAuth URLs behave as not found and
-/// `/mcp` accepts requests without a bearer token.
+/// The route table is fixed and always serves the same protocol surface: OAuth
+/// discovery, the built-in authorization server, and `/mcp`. There is no
+/// authentication mode to switch at runtime; whether a given tool call needs a
+/// bearer token is decided per tool (see `mcp_tool_access`). The only remaining
+/// runtime switch is the MCP kill switch, which removes the whole surface when
+/// the server is disabled.
 pub(crate) fn router(state: Arc<McpServerState>) -> Router {
     // ChatGPT and Secure MCP Tunnel may probe the endpoint before they have a
     // session ID (for example with server/discover or an early tools/list).
@@ -1344,11 +1270,6 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         ))
         .with_state(Arc::clone(&state));
 
-    // Keep the OAuth surface truly disabled when Auth is off. The individual
-    // handlers also check this flag, but an extractor (Json/Form/Query) runs
-    // before a handler body. Without this route-level guard, malformed OAuth
-    // requests could turn anonymous mode back into an HTTP 422 instead of the
-    // promised empty 404.
     let oauth_routes = Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
@@ -1374,10 +1295,6 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         )
         .route("/oauth/token", axum::routing::post(token))
         .route("/oauth/revoke", axum::routing::post(revoke))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            require_mcp_auth_enabled,
-        ))
         .with_state(Arc::clone(&state));
 
     Router::new()
@@ -1599,18 +1516,16 @@ fn operator_tool_descriptor(tool: OperatorToolResource) -> ToolDescriptor {
 /// MCP surface, where no HTTP OAuth resource server exists.
 fn add_tool_security_schemes(
     mut payload: serde_json::Value,
-    auth_mode: McpAuthMode,
     auth_requirements: &HashMap<String, bool>,
 ) -> Option<serde_json::Value> {
     fn rewrite_message(
         payload: &mut serde_json::Value,
-        auth_mode: McpAuthMode,
         auth_requirements: &HashMap<String, bool>,
     ) -> bool {
         if let Some(messages) = payload.as_array_mut() {
             let mut changed = false;
             for message in messages {
-                changed |= rewrite_message(message, auth_mode, auth_requirements);
+                changed |= rewrite_message(message, auth_requirements);
             }
             return changed;
         }
@@ -1631,14 +1546,9 @@ fn add_tool_security_schemes(
                 .get("name")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            let requires_auth = match auth_mode {
-                McpAuthMode::None => false,
-                McpAuthMode::Oauth => true,
-                // Missing names default closed. A serialized descriptor that
-                // does not match the authoritative catalog must never become
-                // anonymous.
-                McpAuthMode::Mixed => auth_requirements.get(name).copied().unwrap_or(true),
-            };
+            // Missing names default closed: a serialized descriptor that does
+            // not match the authoritative catalog must never become anonymous.
+            let requires_auth = auth_requirements.get(name).copied().unwrap_or(true);
             let security_schemes = if requires_auth {
                 serde_json::json!([{
                     "type": "oauth2",
@@ -1652,7 +1562,7 @@ fn add_tool_security_schemes(
         true
     }
 
-    rewrite_message(&mut payload, auth_mode, auth_requirements).then_some(payload)
+    rewrite_message(&mut payload, auth_requirements).then_some(payload)
 }
 
 fn contains_tools_list(value: &serde_json::Value) -> bool {
@@ -1685,7 +1595,6 @@ fn jsonrpc_request_id(value: &serde_json::Value) -> Option<&serde_json::Value> {
 
 fn rewrite_tool_list_json(
     body: &[u8],
-    auth_mode: McpAuthMode,
     auth_requirements: &HashMap<String, bool>,
 ) -> Option<Vec<u8>> {
     let payload = match serde_json::from_slice::<serde_json::Value>(body) {
@@ -1702,7 +1611,7 @@ fn rewrite_tool_list_json(
             return None;
         }
     };
-    let payload = add_tool_security_schemes(payload, auth_mode, auth_requirements)?;
+    let payload = add_tool_security_schemes(payload, auth_requirements)?;
     match serde_json::to_vec(&payload) {
         Ok(payload) => Some(payload),
         Err(error) => {
@@ -1721,7 +1630,6 @@ fn rewrite_tool_list_json(
 
 fn rewrite_tool_list_sse(
     body: &[u8],
-    auth_mode: McpAuthMode,
     auth_requirements: &HashMap<String, bool>,
 ) -> Option<Vec<u8>> {
     let text = match std::str::from_utf8(body) {
@@ -1749,9 +1657,7 @@ fn rewrite_tool_list_sse(
         if let Some(data) = line_without_newline.strip_prefix("data:") {
             match serde_json::from_str::<serde_json::Value>(data.trim_start()) {
                 Ok(payload) => {
-                    if let Some(payload) =
-                        add_tool_security_schemes(payload, auth_mode, auth_requirements)
-                    {
+                    if let Some(payload) = add_tool_security_schemes(payload, auth_requirements) {
                         let payload = match serde_json::to_string(&payload) {
                             Ok(payload) => payload,
                             Err(error) => {
@@ -1813,7 +1719,6 @@ async fn rewrite_tool_security_schemes(
         Err(error) => return mcp_worker_unavailable(error),
     };
     let should_rewrite = metadata.tools_list;
-    let auth_mode = state.auth_mode();
     let auth_requirements = if should_rewrite {
         state.exposed_tool_auth_requirements().await
     } else {
@@ -1822,7 +1727,7 @@ async fn rewrite_tool_security_schemes(
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     let response = next.run(request).await;
     if should_rewrite {
-        rewrite_tool_list_response(response, auth_mode, auth_requirements).await
+        rewrite_tool_list_response(response, auth_requirements).await
     } else {
         response
     }
@@ -1830,7 +1735,6 @@ async fn rewrite_tool_security_schemes(
 
 async fn rewrite_tool_list_response(
     response: Response,
-    auth_mode: McpAuthMode,
     auth_requirements: HashMap<String, bool>,
 ) -> Response {
     let content_type = response
@@ -1853,9 +1757,9 @@ async fn rewrite_tool_list_response(
     let (body, rewritten) = match MCP_REWRITES
         .run(move || {
             let rewritten = if is_json {
-                rewrite_tool_list_json(&body, auth_mode, &auth_requirements)
+                rewrite_tool_list_json(&body, &auth_requirements)
             } else {
-                rewrite_tool_list_sse(&body, auth_mode, &auth_requirements)
+                rewrite_tool_list_sse(&body, &auth_requirements)
             };
             (body, rewritten)
         })
@@ -1908,9 +1812,6 @@ async fn protected_resource_metadata(
     State(state): State<Arc<McpServerState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     let resource = state.public_resource(&headers);
     let issuer = state.issuer_for_headers(&headers);
     json_no_store(
@@ -1928,9 +1829,6 @@ async fn authorization_server_metadata(
     State(state): State<Arc<McpServerState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     let issuer = state.issuer_for_headers(&headers);
     json_no_store(
         StatusCode::OK,
@@ -1959,9 +1857,6 @@ async fn authorization_server_metadata(
 }
 
 async fn jwks(State(state): State<Arc<McpServerState>>, _headers: HeaderMap) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     json_no_store(StatusCode::OK, state.oauth.signing_key.jwks())
 }
 
@@ -2402,9 +2297,6 @@ async fn authorize_get(
     headers: HeaderMap,
     Query(request): Query<AuthorizeRequest>,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     match validate_authorization_request(&state, &headers, &request).await {
         Ok(request) => authorization_html(
             StatusCode::OK,
@@ -2420,9 +2312,6 @@ async fn authorize_post(
     headers: HeaderMap,
     request: Result<Form<AuthorizeRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -2900,9 +2789,6 @@ async fn token(
     headers: HeaderMap,
     request: Result<Form<TokenRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -3177,9 +3063,6 @@ async fn revoke(
     State(state): State<Arc<McpServerState>>,
     request: Result<Form<RevokeRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
-    if !state.auth_enabled() {
-        return mcp_auth_disabled();
-    }
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -3264,17 +3147,7 @@ async fn require_mcp_enabled(
     mcp_auth_disabled()
 }
 
-async fn require_mcp_auth_enabled(
-    State(state): State<Arc<McpServerState>>,
-    request: axum::http::Request<Body>,
-    next: middleware::Next,
-) -> Response {
-    if state.auth_enabled() {
-        return next.run(request).await;
-    }
-    mcp_auth_disabled()
-}
-
+/// Authorization requirement of one `/mcp` request that carried no valid token.
 #[derive(Debug, Clone)]
 enum McpAuthRequirement {
     NotRequired,
@@ -3282,7 +3155,15 @@ enum McpAuthRequirement {
     Transport,
 }
 
-async fn mixed_auth_requirement(
+/// Decide whether one unauthenticated `/mcp` request may proceed.
+///
+/// Protocol discovery (initialize, ping, list operations, notifications) always
+/// proceeds: an MCP client has to discover tools before it can obtain a token.
+/// Tool invocations are checked one by one against the tool catalog, so a batch
+/// cannot smuggle a protected call past an anonymous one, and a single protected
+/// call is answered with an in-band authentication challenge so the client can
+/// start the OAuth flow without losing the JSON-RPC exchange.
+async fn tool_call_auth_requirement(
     state: &McpServerState,
     metadata: Arc<McpRequestMetadata>,
 ) -> Result<McpAuthRequirement, String> {
@@ -3313,10 +3194,6 @@ async fn require_mcp_bearer(
     request: axum::http::Request<Body>,
     next: middleware::Next,
 ) -> Response {
-    let auth_mode = state.auth_mode();
-    if auth_mode == McpAuthMode::None {
-        return next.run(request).await;
-    }
     let resource = state.public_resource(&headers);
     let issuer = state.issuer_for_headers(&headers);
     let authorized = bearer_token(&headers).is_some_and(|token| {
@@ -3329,11 +3206,7 @@ async fn require_mcp_bearer(
     }
 
     if request.method() != axum::http::Method::POST {
-        return if auth_mode == McpAuthMode::Mixed {
-            next.run(request).await
-        } else {
-            mcp_unauthorized(&issuer, &resource)
-        };
+        return mcp_unauthorized(&issuer, &resource);
     }
 
     let (mut parts, body) = request.into_parts();
@@ -3345,29 +3218,9 @@ async fn require_mcp_bearer(
         Ok(metadata) => metadata,
         Err(error) => return mcp_worker_unavailable(error),
     };
-    let requirement = match auth_mode {
-        McpAuthMode::None => McpAuthRequirement::NotRequired,
-        McpAuthMode::Oauth => match MCP_METADATA
-            .run(move || {
-                metadata
-                    .root_tool_call_id
-                    .clone()
-                    .map(McpAuthRequirement::ToolCall)
-                    .unwrap_or(McpAuthRequirement::Transport)
-            })
-            .await
-        {
-            Ok(requirement) => requirement,
-            Err(error) => {
-                return mcp_worker_unavailable(format!(
-                    "MCP authentication worker failed: {error}"
-                ));
-            }
-        },
-        McpAuthMode::Mixed => match mixed_auth_requirement(&state, metadata).await {
-            Ok(requirement) => requirement,
-            Err(error) => return mcp_worker_unavailable(error),
-        },
+    let requirement = match tool_call_auth_requirement(&state, metadata).await {
+        Ok(requirement) => requirement,
+        Err(error) => return mcp_worker_unavailable(error),
     };
     match requirement {
         McpAuthRequirement::NotRequired => {
@@ -3777,13 +3630,28 @@ fn is_https_resource(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a URL is a plain-HTTP URL on a loopback host.
+///
+/// A local `agena server` cannot serve HTTPS, so its own listener-local identity
+/// is allowed to stay on loopback HTTP. Everything reachable from another host
+/// must still be HTTPS, which is what `is_acceptable_oauth_origin` enforces.
+fn is_loopback_resource(value: &str) -> bool {
+    Url::parse(value)
+        .map(|url| url.scheme().eq_ignore_ascii_case("http") && is_loopback_host(&url))
+        .unwrap_or(false)
+}
+
+fn is_acceptable_oauth_origin(value: &str) -> bool {
+    is_https_resource(value) || is_loopback_resource(value)
+}
+
 fn validate_managed_oauth_identity(
     resource: &str,
     configured_issuer: Option<&str>,
 ) -> Result<String, String> {
-    if !is_https_resource(resource) {
+    if !is_acceptable_oauth_origin(resource) {
         return Err(
-            "MCP OAuth requires a canonical remote HTTPS resource URL (for example https://agena.example.com/mcp)"
+            "MCP OAuth requires a canonical remote HTTPS resource URL (for example https://agena.example.com/mcp); only loopback HTTP is accepted without TLS"
                 .to_owned(),
         );
     }
@@ -3796,9 +3664,9 @@ fn validate_managed_oauth_identity(
     let issuer = configured_issuer
         .map(str::to_owned)
         .unwrap_or_else(|| issuer_for_resource(resource));
-    if !is_https_resource(issuer.as_str()) {
+    if !is_acceptable_oauth_origin(issuer.as_str()) {
         return Err(
-            "MCP OAuth requires a canonical HTTPS issuer origin (for example https://agena.example.com)"
+            "MCP OAuth requires a canonical HTTPS issuer origin (for example https://agena.example.com); only loopback HTTP is accepted without TLS"
                 .to_owned(),
         );
     }

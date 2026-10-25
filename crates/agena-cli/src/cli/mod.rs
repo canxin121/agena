@@ -876,54 +876,12 @@ pub struct ServerArgs {
     /// same domain; Agena then derives the issuer from the MCP public URL.
     #[arg(long, env = "AGENA_MCP_OAUTH_ISSUER_URL", value_name = "URL")]
     pub mcp_oauth_issuer_url: Option<String>,
-    /// MCP authentication mode. An explicit CLI/environment value overrides a
-    /// persisted Web/TUI selection on every process start.
-    #[arg(long, env = "AGENA_MCP_AUTH_MODE", value_enum)]
-    pub mcp_auth_mode: Option<McpAuthModeArg>,
-    /// Mixed-auth anonymous tool policy. The default is `none`; opting into
-    /// `read-only` can expose private workspace data even without writes.
-    #[arg(long, env = "AGENA_MCP_ANONYMOUS_ACCESS", value_enum)]
-    pub mcp_anonymous_access: Option<McpAnonymousAccessArg>,
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace_root: Option<PathBuf>,
     /// Directory containing the built Web frontend. When omitted, repository
     /// and packaged `web-dist` layouts are auto-detected.
     #[arg(long = "ui-dir", env = "AGENA_SERVER_UI_DIR", value_name = "PATH")]
     pub ui_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-pub enum McpAuthModeArg {
-    None,
-    Oauth,
-    Mixed,
-}
-
-impl McpAuthModeArg {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Oauth => "oauth",
-            Self::Mixed => "mixed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-pub enum McpAnonymousAccessArg {
-    None,
-    ReadOnly,
-}
-
-impl McpAnonymousAccessArg {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::ReadOnly => "read-only",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

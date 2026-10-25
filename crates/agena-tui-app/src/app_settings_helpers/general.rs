@@ -36,24 +36,6 @@ pub(crate) fn settings_studio_mcp_items(
         .as_ref()
         .and_then(|value| value.get("enabled"))
         .and_then(serde_json::Value::as_bool);
-    let auth_mode = control
-        .as_ref()
-        .and_then(|value| value.get("authMode"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            control
-                .as_ref()
-                .and_then(|value| value.get("authEnabled"))
-                .and_then(serde_json::Value::as_bool)
-                .map(|enabled| if enabled { "oauth" } else { "none" })
-        })
-        .unwrap_or("none");
-    let auth_enabled = auth_mode != "none";
-    let anonymous_access = control
-        .as_ref()
-        .and_then(|value| value.get("anonymousAccess"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("none");
     let ready = control
         .as_ref()
         .and_then(|value| value.get("ready"))
@@ -145,61 +127,32 @@ pub(crate) fn settings_studio_mcp_items(
         ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-mcp-auth-label"),
-            match auth_mode {
-                "oauth" => ui_text::t(i18n, "settings-mcp-auth-oauth"),
-                "mixed" => ui_text::t(i18n, "settings-mcp-auth-mixed"),
-                _ => ui_text::t(i18n, "settings-mcp-auth-none"),
-            },
-            if auth_enabled {
+            ui_text::t(i18n, "settings-mcp-auth-oauth"),
+            {
                 let oauth = control.as_ref().and_then(|value| value.get("oauth"));
-                let registrations = oauth
-                    .and_then(|value| value.get("registrationMethods"))
-                    .and_then(serde_json::Value::as_array)
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    })
-                    .unwrap_or_else(|| "—".to_owned());
-                let pkce = oauth
-                    .and_then(|value| value.get("pkceMethods"))
-                    .and_then(serde_json::Value::as_array)
-                    .map(|values| {
-                        values
-                            .iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    })
-                    .unwrap_or_else(|| "—".to_owned());
+                let list = |key: &str| {
+                    oauth
+                        .and_then(|value| value.get(key))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" / ")
+                        })
+                        .unwrap_or_else(|| "—".to_owned())
+                };
                 format!(
-                    "{} {}: {registrations}; {}: {pkce}",
+                    "{} {}: {}; {}: {}",
                     ui_text::t(i18n, "settings-mcp-auth-detail"),
                     ui_text::t(i18n, "settings-mcp-registration-label"),
+                    list("registrationMethods"),
                     ui_text::t(i18n, "settings-mcp-pkce-label"),
+                    list("pkceMethods"),
                 )
-            } else {
-                ui_text::t(i18n, "settings-mcp-auth-detail")
             },
-            SettingsPickerAction::ToggleMcpAuth,
-        ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-mcp-anonymous-access-label"),
-            if anonymous_access == "read_only" {
-                ui_text::t(i18n, "settings-mcp-anonymous-access-read-only")
-            } else {
-                ui_text::t(i18n, "settings-mcp-anonymous-access-none")
-            },
-            if auth_mode != "mixed" {
-                ui_text::t(i18n, "settings-mcp-anonymous-access-inactive-detail")
-            } else if anonymous_access == "read_only" {
-                ui_text::t(i18n, "settings-mcp-anonymous-access-read-only-detail")
-            } else {
-                ui_text::t(i18n, "settings-mcp-anonymous-access-none-detail")
-            },
-            SettingsPickerAction::ToggleMcpAnonymousAccess,
+            SettingsPickerAction::EditMcpOAuthPassword,
         ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-mcp-public-url-label"),
@@ -225,22 +178,20 @@ pub(crate) fn settings_studio_mcp_items(
             SettingsPickerAction::EditMcpOAuthIssuerUrl,
         ),
     ];
-    if auth_enabled {
-        items.extend([
-            SettingsStudioItem::new(
-                ui_text::t(i18n, "settings-mcp-oauth-password-label"),
-                password_status,
-                ui_text::t(i18n, "settings-mcp-oauth-password-detail"),
-                SettingsPickerAction::EditMcpOAuthPassword,
-            ),
-            SettingsStudioItem::new(
-                ui_text::t(i18n, "settings-mcp-oauth-password-clear-label"),
-                ui_text::t(i18n, "value-clear"),
-                ui_text::t(i18n, "settings-mcp-oauth-password-clear-detail"),
-                SettingsPickerAction::ClearMcpOAuthPassword,
-            ),
-        ]);
-    }
+    items.extend([
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-oauth-password-label"),
+            password_status,
+            ui_text::t(i18n, "settings-mcp-oauth-password-detail"),
+            SettingsPickerAction::EditMcpOAuthPassword,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-oauth-password-clear-label"),
+            ui_text::t(i18n, "value-clear"),
+            ui_text::t(i18n, "settings-mcp-oauth-password-clear-detail"),
+            SettingsPickerAction::ClearMcpOAuthPassword,
+        ),
+    ]);
     items
 }
 

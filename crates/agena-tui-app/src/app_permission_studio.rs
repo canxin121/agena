@@ -414,46 +414,6 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::ToggleMcpAuth => {
-                self.dispatch_backend_operation(
-                    |application| async move { application.cycle_mcp_auth_mode().await },
-                    |app, result| match result {
-                        Ok(value) => {
-                            let mode = value
-                                .get("authMode")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("none");
-                            app.flash_success(app.i18n.text_args(
-                                "settings-mcp-auth-mode-updated",
-                                &agena_tui::fl_args!("mode" => mode.to_owned()),
-                            ));
-                            app.refresh_current_route_after_local_edit();
-                        }
-                        Err(error) => app.flash_error(error),
-                    },
-                );
-                false
-            }
-            SettingsPickerAction::ToggleMcpAnonymousAccess => {
-                self.dispatch_backend_operation(
-                    |application| async move { application.toggle_mcp_anonymous_access().await },
-                    |app, result| match result {
-                        Ok(value) => {
-                            let policy = value
-                                .get("anonymousAccess")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("none");
-                            app.flash_success(app.i18n.text_args(
-                                "settings-mcp-anonymous-access-updated",
-                                &agena_tui::fl_args!("policy" => policy.to_owned()),
-                            ));
-                            app.refresh_current_route_after_local_edit();
-                        }
-                        Err(error) => app.flash_error(error),
-                    },
-                );
-                false
-            }
             SettingsPickerAction::EditMcpPublicUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {

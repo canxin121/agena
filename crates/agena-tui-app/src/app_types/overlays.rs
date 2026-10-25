@@ -202,8 +202,6 @@ pub(crate) enum SettingsFieldKind {
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     ToggleMcpServer,
-    ToggleMcpAuth,
-    ToggleMcpAnonymousAccess,
     EditMcpPublicUrl,
     EditMcpOAuthIssuerUrl,
     EditMcpOAuthPassword,

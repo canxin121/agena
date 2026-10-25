@@ -67,6 +67,36 @@ pub fn is_stateless_mcp_tool_exposed(tool: StatelessMcpToolMetadata<'_>) -> bool
         && !tool_has_known_interactive_name(tool.name)
 }
 
+/// Authorization requirement of one exposed MCP tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpToolAccess {
+    /// Anonymous clients may invoke the tool without an access token.
+    Anonymous,
+    /// A valid OAuth access token is required.
+    OAuth,
+}
+
+/// Tools that are explicitly safe to invoke anonymously.
+///
+/// Deliberately empty: on the stateless surface "read-only" is not the same as
+/// "non-sensitive" (workspace reads expose private data), so anonymity is a
+/// property each tool owner has to claim for its own tool. Every transport that
+/// serves this policy therefore protects the whole exposed catalog by default
+/// while still supporting anonymous tools as a first-class capability.
+const ANONYMOUS_MCP_TOOL_ALLOWLIST: &[&str] = &[];
+
+/// Return the authorization requirement of one exposed MCP tool.
+///
+/// This is the single place where "does this call need a token" is answered;
+/// no transport offers a deployment-wide authentication mode any more.
+pub fn mcp_tool_access(tool: StatelessMcpToolMetadata<'_>) -> McpToolAccess {
+    if ANONYMOUS_MCP_TOOL_ALLOWLIST.contains(&tool.name) {
+        McpToolAccess::Anonymous
+    } else {
+        McpToolAccess::OAuth
+    }
+}
+
 fn plugin_id_is_hidden(plugin_id: &str) -> bool {
     HIDDEN_STATELESS_MCP_PLUGIN_IDS.contains(&plugin_id)
 }

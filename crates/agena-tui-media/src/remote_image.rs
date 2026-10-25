@@ -143,6 +143,14 @@ struct RemoteImageLoadGuard {
 
 impl RemoteImageLoadGuard {
     fn complete(mut self, result: Result<Vec<u8>, String>) {
+        if let Err(error) = &result {
+            let source = Url::parse(&self.key).ok();
+            tracing::warn!(
+                remote_host = source.as_ref().and_then(Url::host_str).unwrap_or_default(),
+                diagnostic = error.as_str(),
+                "remote Markdown image download failed"
+            );
+        }
         REMOTE_IMAGES
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -271,7 +279,7 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
             .map_err(|error| {
                 agena_failure::diagnostic::format_error_chain_with_context(
                     "remote image request failed",
-                    &error,
+                    &error.without_url(),
                 )
             })?;
 
@@ -320,7 +328,7 @@ async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
         while let Some(chunk) = response.chunk().await.map_err(|error| {
             agena_failure::diagnostic::format_error_chain_with_context(
                 "cannot read remote image",
-                &error,
+                &error.without_url(),
             )
         })? {
             if bytes.len().saturating_add(chunk.len()) > MAX_MARKDOWN_IMAGE_BYTES {
@@ -403,19 +411,31 @@ async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
             )
         }
     };
+    permitted_remote_targets(addresses, domain_routed)
+}
+
+fn permitted_remote_targets(
+    addresses: Vec<SocketAddr>,
+    domain_routed: bool,
+) -> Result<Vec<SocketAddr>, String> {
     if addresses.is_empty() {
         return Err("remote image DNS lookup returned no addresses".to_string());
     }
-    if let Some(address) = addresses
+    // The client is pinned to this list. An unusable IPv6 answer must not
+    // suppress a valid IPv4 route (including the existing TUN Fake-IP route),
+    // but it must never reach the connector or trigger a fresh DNS lookup.
+    let permitted = addresses
         .iter()
-        .map(SocketAddr::ip)
-        .find(|address| !is_permitted_remote_address(*address, domain_routed))
-    {
+        .copied()
+        .filter(|address| is_permitted_remote_address(address.ip(), domain_routed))
+        .collect::<Vec<_>>();
+    if permitted.is_empty() {
         return Err(format!(
-            "remote image host resolves to a non-public address ({address})"
+            "remote image host resolves to a non-public address ({})",
+            addresses[0].ip()
         ));
     }
-    Ok(addresses)
+    Ok(permitted)
 }
 
 fn is_permitted_remote_address(address: IpAddr, domain_routed: bool) -> bool {
@@ -473,4 +493,43 @@ fn is_public_ipv6(address: Ipv6Addr) -> bool {
         && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
         && !(segments[0] == 0x2001 && segments[1] == 0x0002)
         && (segments[0] & 0xe000) == 0x2000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addresses(values: &[&str]) -> Vec<SocketAddr> {
+        values.iter().map(|value| value.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn dual_stack_fake_ip_dns_keeps_the_permitted_pinned_route() {
+        let v4 = addresses(&["198.18.7.28:443"]);
+        let dual = addresses(&["198.18.7.28:443", "[fdfe:dcba:9876::92]:443"]);
+        assert_eq!(permitted_remote_targets(dual, true).unwrap(), v4);
+        assert!(permitted_remote_targets(v4, false).is_err());
+    }
+
+    #[test]
+    fn private_answers_are_never_forwarded_to_the_connector() {
+        let mixed = addresses(&[
+            "127.0.0.1:443",
+            "10.0.0.1:443",
+            "169.254.169.254:443",
+            "[::1]:443",
+            "[fd00::1]:443",
+            "[::ffff:192.168.1.1]:443",
+            "1.1.1.1:443",
+            "[2606:4700:4700::1111]:443",
+        ]);
+        assert_eq!(
+            permitted_remote_targets(mixed, true).unwrap(),
+            addresses(&["1.1.1.1:443", "[2606:4700:4700::1111]:443"])
+        );
+        assert!(permitted_remote_targets(Vec::new(), true).is_err());
+        for address in ["127.0.0.1:443", "[fdfe:dcba:9876::92]:443"] {
+            assert!(permitted_remote_targets(addresses(&[address]), true).is_err());
+        }
+    }
 }

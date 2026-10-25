@@ -715,6 +715,10 @@ fn reload_after_uninstall() -> Result<()> {
     run_systemctl(["daemon-reload"])?;
     let _ = Command::new("systemctl")
         .args(["--user", "reset-failed", systemd_unit_name().as_str()])
+        // daemon-reload may already have unloaded this removed unit. Clearing
+        // its optional failure state must not print a spurious uninstall error.
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
     Ok(())
 }

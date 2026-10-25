@@ -23,6 +23,7 @@ WORKSPACE="${AGENA_WORKSPACE_ROOT:-$HOME}"
 UI_PASSWORD="${AGENA_SERVER_UI_PASSWORD:-}"
 SERVICE_MODE="${AGENA_INSTALL_SERVICE_MODE:-auto}"
 UPDATE_PATH=1
+NO_PATH_UPDATE_SET=0
 PURGE_DATA=0
 REPO_SET=0
 VERSION_SET=0
@@ -116,7 +117,7 @@ while [[ $# -gt 0 ]]; do
     --workspace) WORKSPACE="${2:-}"; WORKSPACE_SET=1; shift 2 ;;
     --ui-password) UI_PASSWORD="${2:-}"; UI_PASSWORD_SET=1; shift 2 ;;
     --service-mode) SERVICE_MODE="${2:-}"; SERVICE_MODE_SET=1; shift 2 ;;
-    --no-path-update) UPDATE_PATH=0; shift ;;
+    --no-path-update) UPDATE_PATH=0; NO_PATH_UPDATE_SET=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -289,6 +290,9 @@ load_state() {
   unset INSTALL_STATE_SCHEMA DATA_DIR RELEASE_VERSION
   # shellcheck disable=SC1090
   source "$STATE_FILE"
+  if (( NO_PATH_UPDATE_SET )); then
+    UPDATE_PATH=0
+  fi
   if [[ "${INSTALL_STATE_SCHEMA:-}" != "2" || -z "${DATA_DIR:-}" ]]; then
     echo "ERROR: installer state is incompatible; reinstall with an explicit --data-dir" >&2
     exit 1
@@ -636,8 +640,18 @@ agena_lifecycle() {
 server_is_running_at() {
   [[ -x "$AGENA_BIN" ]] || return 1
   local output
-  output="$(agena_lifecycle_at "$1" server status 2>&1 || true)"
-  [[ "$output" == *" is running at "* ]]
+  # This is a local lifecycle probe, including when the installed executable
+  # predates the client's loopback proxy bypass. Do not pass this override to
+  # server start: its child still needs the user's normal internet routing.
+  if ! output="$(NO_PROXY='*' no_proxy='*' agena_lifecycle_at "$1" server status 2>&1)"; then
+    printf 'ERROR: failed to determine the installed Agena running state:\n%s\n' "$output" >&2
+    return 2
+  fi
+  case "$output" in
+    *" is running at "*) return 0 ;;
+    *"Agena server is not running"*|*"Agena server user service is installed but not running"*) return 1 ;;
+    *) printf 'ERROR: unrecognized Agena server status:\n%s\n' "$output" >&2; return 2 ;;
+  esac
 }
 
 server_is_running() {
@@ -652,8 +666,13 @@ stop_installation() {
   [[ -x "$AGENA_BIN" ]] || return 0
   if [[ "$service_mode" == "native" ]]; then
     agena_lifecycle_at "$data_dir" server uninstall >/dev/null
-  elif server_is_running_at "$data_dir"; then
-    agena_lifecycle_at "$data_dir" server stop >/dev/null
+  else
+    if server_is_running_at "$data_dir"; then
+      agena_lifecycle_at "$data_dir" server stop >/dev/null
+    else
+      local status=$?
+      (( status == 1 )) || return "$status"
+    fi
   fi
 }
 
@@ -727,7 +746,12 @@ resolve_replacement() {
       load_state
       OLD_DATA_DIR="$DATA_DIR"
       OLD_SERVICE_MODE="$SERVICE_MODE"
-      server_is_running_at "$OLD_DATA_DIR" && OLD_WAS_RUNNING=1 || true
+      if server_is_running_at "$OLD_DATA_DIR"; then
+        OLD_WAS_RUNNING=1
+      else
+        local status=$?
+        (( status == 1 )) || return "$status"
+      fi
       (( REPO_SET )) && REPO="$requested_repo"
       # An upgrade selects a new release; a reinstall repeats the recorded
       # release unless another source or version was requested explicitly.
@@ -979,8 +1003,13 @@ do_uninstall() {
   if [[ -x "$AGENA_BIN" ]]; then
     if [[ "$SERVICE_MODE" == "native" ]]; then
       agena_lifecycle server uninstall >/dev/null
-    elif server_is_running; then
-      agena_lifecycle server stop >/dev/null
+    else
+      if server_is_running; then
+        agena_lifecycle server stop >/dev/null
+      else
+        local status=$?
+        (( status == 1 )) || return "$status"
+      fi
     fi
   fi
   remove_shell_path

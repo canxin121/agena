@@ -31,6 +31,9 @@ action="${2:-}"
 printf '%s\t%s\t%s\n' "$data_root" "$action" "$*" >> "$TEST_CALLS_PATH"
 case "$action" in
   start|install)
+    if [[ -n "${TEST_ROUTING_PATH:-}" ]]; then
+      printf '%s\t%s\t%s\n' "${NO_PROXY:-}" "${no_proxy:-}" "${http_proxy:-}" >> "$TEST_ROUTING_PATH"
+    fi
     mkdir -p "$data_root/run"
     printf 'fixture database\n' > "$data_root/agena.db"
     : > "$data_root/run/stub-running"
@@ -39,6 +42,18 @@ case "$action" in
     rm -f "$data_root/run/stub-running"
     echo 'Stopped stub Agena server.' ;;
   status)
+    if [[ "${TEST_STATUS_FAILURE:-}" == 1 ]]; then
+      echo 'Error: server readiness handshake failed'
+      exit 42
+    fi
+    if [[ "${TEST_STATUS_UNEXPECTED:-}" == 1 ]]; then
+      echo 'Unrecognized status fixture'
+      exit 0
+    fi
+    if [[ "${TEST_REQUIRE_DIRECT_STATUS:-}" == 1 && ( "${NO_PROXY:-}" != '*' || "${no_proxy:-}" != '*' ) ]]; then
+      echo 'Error: proxy returned an empty response'
+      exit 43
+    fi
     if [[ -f "$data_root/run/stub-running" ]]; then
       echo 'Agena server is running at http://127.0.0.1:3210'
     else
@@ -384,6 +399,52 @@ class InstallerStorageTests(unittest.TestCase):
         self.invoke("reinstall", "--archive", self.archive)
         self.assertFalse((self.data_dir / "run/stub-running").exists())
         self.assert_only_selected_root_was_called()
+
+    def test_reinstall_probes_legacy_client_directly_without_changing_server_proxy(self):
+        self.install()
+        routing = self.root / "server routing.tsv"
+        environment = {
+            "http_proxy": "http://127.0.0.1:9",
+            "https_proxy": "http://127.0.0.1:9",
+            "NO_PROXY": "keep-upper.example",
+            "no_proxy": "keep-lower.example",
+            "TEST_REQUIRE_DIRECT_STATUS": "1",
+            "TEST_ROUTING_PATH": str(routing),
+        }
+        self.invoke("reinstall", "--archive", self.archive, environment=environment)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+        self.assertEqual(routing.read_text().strip(),
+                         "keep-upper.example\tkeep-lower.example\thttp://127.0.0.1:9")
+
+    def test_reinstall_no_path_update_overrides_the_saved_setting(self):
+        self.invoke("install", "--archive", self.archive, "--data-dir", self.data_dir,
+                    "--workspace", self.workspace, "--service-mode", "detached",
+                    environment={"SHELL": "/bin/zsh"}, update_path=True)
+        profiles = [self.home / ".zshenv", self.home / ".zshrc"]
+        original = [path.read_bytes() for path in profiles]
+        self.assertEqual(self.state_value("UPDATE_PATH"), "1")
+        result = self.invoke("reinstall", "--archive", self.archive,
+                             environment={"SHELL": "/bin/zsh"})
+        self.assertNotIn("Added Agena PATH", result.stdout)
+        self.assertEqual([path.read_bytes() for path in profiles], original)
+        self.assertEqual(self.state_value("UPDATE_PATH"), "0")
+
+    def test_reinstall_does_not_treat_a_failed_or_unknown_probe_as_stopped(self):
+        self.install()
+        original = (self.install_dir / "bin/agena").read_bytes()
+        state = (self.install_dir / "install-state.env").read_bytes()
+        for flag in ["TEST_STATUS_FAILURE", "TEST_STATUS_UNEXPECTED"]:
+            with self.subTest(flag=flag):
+                before = self.calls_path.read_text().splitlines()
+                result = self.invoke("reinstall", "--archive", self.archive,
+                                     environment={flag: "1"}, success=False)
+                self.assertIn("server", result.stdout)
+                self.assertTrue((self.data_dir / "run/stub-running").exists())
+                self.assertEqual((self.install_dir / "bin/agena").read_bytes(), original)
+                self.assertEqual((self.install_dir / "install-state.env").read_bytes(), state)
+                extra_calls = self.calls_path.read_text().splitlines()[len(before):]
+                self.assertTrue(extra_calls)
+                self.assertTrue(all("\tstatus\t" in line for line in extra_calls), extra_calls)
 
     def test_reinstall_keeps_saved_settings_and_applies_explicit_overrides(self):
         self.install()

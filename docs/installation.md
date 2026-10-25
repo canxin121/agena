@@ -91,6 +91,13 @@ working per-user systemd session is available. Otherwise it uses Agena's
 detached server lifecycle. On Windows, `auto` always resolves to the native
 Task Scheduler logon task.
 
+Reinstall and upgrade preserve whether the existing instance was running.
+On Unix, the installer probes the local server directly, including with older
+installed clients, so shell proxy settings cannot make a running service look
+stopped. A failed or unrecognized status check stops the replacement before
+program files or services are changed; inspect `agena server status` and
+start or stop the service explicitly before retrying.
+
 The installation root contains program files. The data root contains the
 instance's database, configuration, secrets, workspace data, logs, and client
 state. They must be different directories, and neither may contain the other.

@@ -150,6 +150,11 @@ server URL in this order:
 2. The live endpoint in `<data-dir>/run/server.json`.
 3. `http://127.0.0.1:3210`.
 
+Connections to loopback IP addresses and `localhost` (including `.localhost`
+names) bypass environment and system HTTP proxies. Remote Agena endpoints
+continue to honor normal proxy settings. This applies to health checks,
+password authentication, API requests, and live HTTP streams.
+
 Most one-shot commands, including `agena exec`, `agena sessions`, and
 `agena config resolve`, are thin clients of the long-lived server. Start the
 server first. `agena inspect` prints the compiled capability manifest and does

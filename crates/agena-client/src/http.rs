@@ -44,12 +44,47 @@ use crate::ws::SubscriptionEvent;
 
 mod archive;
 mod content;
+#[cfg(test)]
+mod tests;
 pub use content::ContentSubscription;
 
 const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_BINARY_RESPONSE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
+
+fn is_local_server(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.to_ipv4_mapped().is_some_and(|ip| ip.is_loopback())
+        }
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.');
+            host == "localhost" || host.ends_with(".localhost")
+        }
+        None => false,
+    }
+}
+
+fn response_json(
+    bytes: &[u8],
+    status: reqwest::StatusCode,
+    context: &str,
+) -> Result<serde_json::Value, ClientError> {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Err(ClientError::Protocol(format!(
+            "{context} returned an empty response (HTTP {status}); expected JSON; check the server URL and proxy settings"
+        )));
+    }
+    serde_json::from_slice(bytes).map_err(|error| {
+        ClientError::Protocol(format!(
+            "{context} returned invalid JSON (HTTP {status}): {error}"
+        ))
+    })
+}
 
 #[derive(Default)]
 struct ClientAuthentication {
@@ -382,11 +417,16 @@ impl AgenaClient {
     pub fn new(base_url: impl AsRef<str>) -> Result<Self, ClientError> {
         let base_url = url::Url::parse(base_url.as_ref())
             .map_err(|e| ClientError::Transport(format!("invalid base url: {e}")))?;
+        let mut http = reqwest::Client::builder().connect_timeout(Duration::from_secs(10));
+        // Local control-plane traffic must reach this machine even when a
+        // shell has HTTP(S)/ALL_PROXY set without NO_PROXY. Keep the normal
+        // proxy behavior for explicitly configured remote Agena servers.
+        if is_local_server(&base_url) {
+            http = http.no_proxy();
+        }
         Ok(Self {
             base_url,
-            http: reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()?,
+            http: http.build()?,
             authentication: Arc::new(ClientAuthentication::anonymous()),
             reads: Arc::new(tokio::sync::Mutex::new(ResourceReads::default())),
             revision_check: Arc::new(tokio::sync::Mutex::new(())),
@@ -451,7 +491,7 @@ impl AgenaClient {
             "server authentication response",
         )
         .await?;
-        let value: serde_json::Value = serde_json::from_str(body.as_str())?;
+        let value = response_json(body.as_bytes(), status, "server authentication")?;
         if !status.is_success() {
             if let Ok(api) = serde_json::from_value::<agena_api::error::ApiError>(value.clone()) {
                 return Err(ClientError::Api(api));
@@ -622,7 +662,7 @@ impl AgenaClient {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let value = response_json(&bytes, status, "server API")?;
         if !status.is_success() {
             if let Ok(api) = serde_json::from_value::<agena_api::error::ApiError>(value.clone()) {
                 return Err(ClientError::Api(api));

@@ -68,6 +68,8 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 32;
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) default_selection: agena_domain::ExecutionSelection,
+    pub(crate) auxiliary_selection: agena_domain::ExecutionSelection,
+    pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) max_concurrent_tools: usize,
@@ -85,6 +87,26 @@ pub(crate) fn session_build_config_from_resolved(
 ) -> RuntimeSessionBuildConfig {
     RuntimeSessionBuildConfig {
         default_selection: config.default_selection.clone(),
+        auxiliary_selection: config
+            .runtime
+            .auxiliary_model
+            .as_ref()
+            .map(|model| {
+                let mut selection = agena_domain::ExecutionSelection {
+                    provider: model.provider.clone(),
+                    adapter: model.adapter.clone(),
+                    model: model.model.clone(),
+                    thinking_mode: model.thinking_mode.clone(),
+                    speed_mode: model.speed_mode.clone(),
+                    verbosity: model.verbosity.clone(),
+                    parallel_tool_calls: model.parallel_tool_calls,
+                    ..Default::default()
+                };
+                selection.normalize();
+                selection
+            })
+            .unwrap_or_default(),
+        auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
         auto_compaction: agena_domain::SessionAutoCompactionConfig {
             enabled: config.session.compaction.auto,

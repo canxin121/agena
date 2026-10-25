@@ -1280,10 +1280,23 @@ impl AgenaClient {
         title: impl Into<String>,
         parent_id: Option<i64>,
     ) -> Result<SessionResource, ClientError> {
+        self.create_session_with_auto_title(workspace_id, title, parent_id, false)
+            .await
+    }
+
+    /// Create a session whose placeholder may be replaced by the title worker.
+    pub async fn create_session_with_auto_title(
+        &self,
+        workspace_id: i64,
+        title: impl Into<String>,
+        parent_id: Option<i64>,
+        auto_title: bool,
+    ) -> Result<SessionResource, ClientError> {
         let body = serde_json::json!({
             "workspace_id": workspace_id,
             "title": title.into(),
             "parent_id": parent_id,
+            "auto_title": auto_title,
         });
         self.post_json("/api/v1/sessions", body).await
     }
@@ -2651,9 +2664,11 @@ impl AgenaClient {
             Command::CreateSession(CreateSessionParams {
                 workspace_id,
                 title,
+                auto_title,
                 parent_id,
             }) => Ok(CommandResult::Session(
-                self.create_session(workspace_id, title, parent_id).await?,
+                self.create_session_with_auto_title(workspace_id, title, parent_id, auto_title)
+                    .await?,
             )),
             Command::UpdateSession(UpdateSessionParams {
                 session_id, title, ..

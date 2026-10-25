@@ -56,6 +56,8 @@ pub enum SessionModelChooserPurpose {
     RuntimeOverride,
     GlobalDefault,
     WorkspaceDefault,
+    Auxiliary,
+    WorkspaceAuxiliary,
     PermissionApproval,
     WorkspacePermissionApproval,
 }

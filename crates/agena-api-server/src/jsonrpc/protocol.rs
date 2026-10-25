@@ -95,6 +95,9 @@ pub mod method {
 pub struct CreateSessionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Defaults to automatic naming when no explicit title was supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_title: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
 }

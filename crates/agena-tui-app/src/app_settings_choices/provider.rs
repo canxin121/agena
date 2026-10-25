@@ -1,4 +1,17 @@
 impl App {
+    pub(crate) fn current_auxiliary_model_ref(&self, workspace: bool) -> Option<ModelRef> {
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
+        let source = if workspace {
+            &sources.project_file
+        } else {
+            &sources.file
+        };
+        let selection: agena_domain::ExecutionSelection =
+            serde_json::from_value(get_json_path(source, Some("runtime.auxiliary_model")).ok()?)
+                .ok()?;
+        selection.model_ref().ok().flatten()
+    }
+
     pub(crate) fn current_global_default_model_ref(&self) -> Option<ModelRef> {
         if let Some(selection) = self
             .application
@@ -45,6 +58,28 @@ impl App {
             verbosity.clone(),
         );
         match purpose {
+            agena_tui::model_chooser::SessionModelChooserPurpose::Auxiliary
+            | agena_tui::model_chooser::SessionModelChooserPurpose::WorkspaceAuxiliary => {
+                let workspace = purpose
+                    == agena_tui::model_chooser::SessionModelChooserPurpose::WorkspaceAuxiliary;
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        if workspace {
+                            application
+                                .set_workspace_config_setting("runtime.auxiliary_model", selection)
+                                .await
+                        } else {
+                            application
+                                .set_config_setting("runtime.auxiliary_model", selection)
+                                .await
+                        }
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
+            }
             agena_tui::model_chooser::SessionModelChooserPurpose::GlobalDefault => {
                 self.dispatch_backend_operation(
                     move |application| async move {
@@ -156,6 +191,10 @@ impl App {
             Ok(()) => {
                 self.flash_success(self.i18n.text_args(
                     match purpose {
+                        agena_tui::model_chooser::SessionModelChooserPurpose::Auxiliary
+                        | agena_tui::model_chooser::SessionModelChooserPurpose::WorkspaceAuxiliary => {
+                            "flash-auxiliary-model-updated"
+                        }
                         agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
                             "flash-permission-approval-model-updated"
                         }

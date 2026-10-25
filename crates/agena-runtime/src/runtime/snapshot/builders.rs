@@ -56,6 +56,8 @@ pub(super) fn build_or_prepare_session_manager(
     let processor = SessionProcessor::new(Arc::clone(&plugins));
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
+        auxiliary_selection: build_config.auxiliary_selection.clone(),
+        auto_title: build_config.auto_title.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,
         max_concurrent_tools: build_config.max_concurrent_tools,

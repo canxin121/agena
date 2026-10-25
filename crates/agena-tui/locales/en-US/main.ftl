@@ -2700,3 +2700,15 @@ activity-summary-completed = Completed
 hub-column-name = Name
 hub-column-status = Status
 hub-column-updated = Updated
+
+# Automatic session naming and shared auxiliary tasks
+settings-auxiliary-model-label = Global auxiliary model
+settings-workspace-auxiliary-model-label = Workspace auxiliary model
+settings-auxiliary-model-description = Used for short background tasks such as session naming. When unset, the session model is used.
+flash-auxiliary-model-updated = Auxiliary model updated: {$provider}/{$model}
+settings-auto-title-enabled-label = Automatically name sessions
+settings-auto-title-enabled-description = Name new sessions in the background and update misleading titles. Manually assigned names are preserved.
+settings-auto-title-interval-label = User messages between title checks
+settings-auto-title-interval-description = After initial naming and third-message calibration, wait this many new user messages before another check.
+settings-auto-title-cooldown-label = Title check cooldown (seconds)
+settings-auto-title-cooldown-description = Minimum time between later title checks. Set to 0 to use only the message interval.

@@ -111,6 +111,7 @@ impl SessionManager {
             run.settled
                 .store(true, std::sync::atomic::Ordering::Release);
             run.done.notify_waiters();
+            manager.schedule_title(run.session);
         });
         result
     }
@@ -158,6 +159,7 @@ impl SessionManager {
                 .map_err(kernel_error)?;
                 let result = execution_outcome(&receipt.value);
                 manager.supervise(receipt.value, options, false, permit);
+                manager.schedule_title(session);
                 Ok(result)
             }
             .await;
@@ -1059,7 +1061,7 @@ pub(super) fn execution_outcome(
         reply,
     )
 }
-fn completion_request(
+pub(super) fn completion_request(
     options: &SessionRunOptions,
     system: Option<String>,
     turns: Vec<agena_provider::CompletionInputRun>,
@@ -1127,7 +1129,7 @@ impl SessionManager {
         let execution = self.state.load_full();
         self.apply_model_modes_with_state(options, &execution)
     }
-    fn apply_model_modes_with_state(
+    pub(super) fn apply_model_modes_with_state(
         &self,
         options: &mut SessionRunOptions,
         execution: &ExecutionState,

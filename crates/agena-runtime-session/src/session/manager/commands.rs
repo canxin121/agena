@@ -27,6 +27,11 @@ impl SessionManager {
         let state = self.state.load_full();
         let parent = request.parent_session_id.map(session_id).transpose()?;
         let mut configuration = SessionConfiguration {
+            title_state: if request.auto_title {
+                SessionTitleState::automatic()
+            } else {
+                Default::default()
+            },
             parent_session_id: parent,
             relation_kind: if parent.is_some() {
                 agena_domain::SessionRelationKind::Child

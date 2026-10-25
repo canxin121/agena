@@ -369,6 +369,56 @@ pub(crate) fn settings_studio_provider_items(
     let mut items = vec![settings_studio_provider_workbench_item(i18n, providers)];
     items.push(settings_studio_global_default_model_item(i18n, sources));
     items.push(settings_studio_workspace_default_model_item(i18n, sources));
+    for workspace in [false, true] {
+        let path = "runtime.auxiliary_model";
+        let source = if workspace {
+            &sources.project_file
+        } else {
+            &sources.file
+        };
+        let value = get_json_path(source, Some(path)).unwrap_or(JsonValue::Null);
+        let effective = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
+        let current = if value.is_null() {
+            ui_text::t(i18n, "settings-source-unset")
+        } else {
+            global_default_selection_summary(i18n, &value)
+        };
+        let summary = global_default_selection_summary(i18n, &effective);
+        let rows = if workspace {
+            settings_source_rows_for_workspace_config_path(
+                i18n,
+                sources,
+                path,
+                current.clone(),
+                summary.clone(),
+            )
+        } else {
+            settings_source_rows_for_config_path(
+                i18n,
+                sources,
+                path,
+                current.clone(),
+                summary.clone(),
+            )
+        };
+        items.push(SettingsStudioItem::from_parts(
+            ui_text::t(
+                i18n,
+                if workspace {
+                    "settings-workspace-auxiliary-model-label"
+                } else {
+                    "settings-auxiliary-model-label"
+                },
+            ),
+            summary.clone(),
+            ui_text::t(i18n, "settings-auxiliary-model-description"),
+            Some(path.into()),
+            Some(current),
+            Some(summary),
+            rows,
+            SettingsPickerAction::OpenAuxiliaryModelChooser { workspace },
+        ));
+    }
     items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()

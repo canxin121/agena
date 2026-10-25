@@ -270,6 +270,7 @@ impl RawConfig {
             providers: Some(RawRuntimeProvidersConfig {
                 client_versions: Some(client_versions),
             }),
+            ..Default::default()
         });
 
         let compaction_auto = env
@@ -293,6 +294,7 @@ impl RawConfig {
                 reserved_tokens: compaction_reserved_tokens,
             }),
             max_turns: session_max_turns,
+            ..Default::default()
         });
 
         Ok(Self {
@@ -333,6 +335,11 @@ impl RawConfig {
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let session = SessionConfig::from_raw(self.session.unwrap_or_default());
+        if session.auto_title.message_interval == 0 {
+            return Err(ConfigError::Validation(
+                "session.auto_title.message_interval must be greater than zero".into(),
+            ));
+        }
         let mut permission = agena_domain::PermissionConfig::global_default();
         if let Some(overlay) = self.permission {
             permission.merge_from(overlay);
@@ -347,8 +354,16 @@ impl RawConfig {
             .into_iter()
             .map(|(provider_id, raw)| raw.resolve(provider_id))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let default_selection =
-            resolve_default_selection(explicit_default_selection.as_ref(), &providers)?;
+        let default_selection = resolve_model_selection(
+            "providers.default_selection",
+            explicit_default_selection.as_ref(),
+            &providers,
+        )?;
+        resolve_model_selection(
+            "runtime.auxiliary_model",
+            runtime.auxiliary_model.as_ref(),
+            &providers,
+        )?;
         validate_permission_config("permission", &permission)?;
 
         Ok(ResolvedConfig {
@@ -364,7 +379,8 @@ impl RawConfig {
     }
 }
 
-fn resolve_default_selection(
+fn resolve_model_selection(
+    path: &str,
     explicit_selection: Option<&agena_domain::ModelSelectionConfig>,
     providers: &BTreeMap<String, ResolvedProviderConfig>,
 ) -> Result<agena_domain::ExecutionSelection, ConfigError> {
@@ -382,18 +398,16 @@ fn resolve_default_selection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            ConfigError::Validation(
-                "`providers.default_selection` must specify a provider and model".to_owned(),
-            )
+            ConfigError::Validation(format!("`{path}` must specify a provider and model"))
         })?;
     let provider = providers.get(provider_id).ok_or_else(|| {
         ConfigError::Validation(format!(
-            "providers.default_selection `{provider_id}` references unknown provider"
+            "{path} `{provider_id}` references unknown provider"
         ))
     })?;
     if !provider.enabled {
         return Err(ConfigError::Validation(format!(
-            "providers.default_selection `{provider_id}` references disabled provider"
+            "{path} `{provider_id}` references disabled provider"
         )));
     }
 
@@ -405,12 +419,12 @@ fn resolve_default_selection(
     {
         let adapter = provider.adapters.get(adapter_id).ok_or_else(|| {
             ConfigError::Validation(format!(
-                "providers.default_selection adapter `{adapter_id}` references unknown adapter for provider `{provider_id}`"
+                "{path} adapter `{adapter_id}` references unknown adapter for provider `{provider_id}`"
             ))
         })?;
         if !adapter.enabled {
             return Err(ConfigError::Validation(format!(
-                "providers.default_selection adapter `{adapter_id}` references disabled adapter for provider `{provider_id}`"
+                "{path} adapter `{adapter_id}` references disabled adapter for provider `{provider_id}`"
             )));
         }
     }
@@ -421,9 +435,7 @@ fn resolve_default_selection(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            ConfigError::Validation(
-                "`providers.default_selection` must specify a provider and model".to_owned(),
-            )
+            ConfigError::Validation(format!("`{path}` must specify a provider and model"))
         })?;
 
     Ok(agena_domain::ExecutionSelection {
@@ -589,6 +601,8 @@ fn preference_map_merge(
 pub struct RawRuntimeConfig {
     #[merge(strategy = option_struct_merge)]
     pub providers: Option<RawRuntimeProvidersConfig>,
+    #[merge(strategy = option_override)]
+    pub auxiliary_model: Option<agena_domain::ModelSelectionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -622,6 +636,9 @@ impl RuntimeConfig {
             .unwrap_or_default();
         let defaults = crate::ProviderClientVersionSettings::default();
         Ok(Self {
+            auxiliary_model: raw
+                .auxiliary_model
+                .filter(|selection| !selection.is_empty()),
             providers: RuntimeProvidersConfig {
                 client_versions: crate::ProviderClientVersionSettings {
                     codex: normalize_provider_client_version(
@@ -674,10 +691,23 @@ fn normalize_provider_client_version(
 pub struct RawSessionConfig {
     #[merge(strategy = option_struct_merge)]
     pub compaction: Option<RawSessionCompactionConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub auto_title: Option<RawSessionAutoTitleConfig>,
     /// Cap on model turns within one stable run. `0` means unlimited;
     /// `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500).
     #[merge(strategy = option_override)]
     pub max_turns: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub struct RawSessionAutoTitleConfig {
+    #[merge(strategy = option_override)]
+    pub enabled: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub message_interval: Option<u64>,
+    #[merge(strategy = option_override)]
+    pub cooldown_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -693,7 +723,14 @@ pub struct RawSessionCompactionConfig {
 impl SessionConfig {
     pub fn from_raw(raw: RawSessionConfig) -> Self {
         let compaction = raw.compaction.unwrap_or_default();
+        let title = raw.auto_title.unwrap_or_default();
+        let defaults = crate::SessionAutoTitleConfig::default();
         Self {
+            auto_title: crate::SessionAutoTitleConfig {
+                enabled: title.enabled.unwrap_or(defaults.enabled),
+                message_interval: title.message_interval.unwrap_or(defaults.message_interval),
+                cooldown_seconds: title.cooldown_seconds.unwrap_or(defaults.cooldown_seconds),
+            },
             compaction: SessionCompactionConfig {
                 auto: compaction.auto.unwrap_or(true),
                 reserved_tokens: compaction.reserved_tokens,
@@ -780,6 +817,7 @@ impl_local_merge_via_crate!(
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,
     RawSessionConfig,
+    RawSessionAutoTitleConfig,
     RawSessionCompactionConfig,
     ProviderNativeToolRoutesOverlay,
     ProviderNativeToolUserLocationOverlay,

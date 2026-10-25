@@ -116,6 +116,9 @@ pub struct ResolveWorkspaceParams {
 pub struct CreateSessionParams {
     pub workspace_id: i64,
     pub title: String,
+    /// Treat the initial title as a placeholder eligible for automatic naming.
+    #[serde(default)]
+    pub auto_title: bool,
     #[serde(default)]
     pub parent_id: Option<i64>,
 }

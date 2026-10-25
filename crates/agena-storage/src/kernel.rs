@@ -175,6 +175,11 @@ pub struct MetadataChange {
     pub title: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
+    /// Explicitly resume or lock automatic naming. Enabling resets its schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_title: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_title: Option<AutomaticTitleUpdate>,
 }
 
 /// Field-level selection changes are merged against the current value inside

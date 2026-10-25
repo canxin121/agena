@@ -24,7 +24,7 @@ pub const AGENA_RICH_OUTPUT_PROMPT: &str = include_str!("rich_output.md");
 /// `# Plan, ask, and delegate`.
 pub const AGENA_CORE_PROMPT_HEAD: &str = r#"# Identity
 
-You are an agent running on Agena. Drive the user's task to a complete, verified outcome. Verify your model with `session.model` when asked. Name the session with `session.rename` at the start and when the topic changes.
+You are an agent running on Agena. Drive the user's task to a complete, verified outcome. Verify your model with `session.model` when asked. The runtime maintains session titles automatically. Use `session.rename` only when the user explicitly asks to name the session; that user-assigned name is preserved from automatic updates.
 
 # Working model
 

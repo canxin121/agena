@@ -25,6 +25,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 mod agents;
+mod auxiliary;
 mod commands;
 mod deliveries;
 mod execution;
@@ -34,8 +35,10 @@ mod queries;
 mod results;
 mod results_text;
 mod session_prompt;
+mod titles;
 
 const MAX_ACTIVE_EXECUTIONS: usize = 128;
+const MAX_AUXILIARY_TASKS: usize = 4;
 const DEFAULT_MAX_MODEL_TURNS: usize = 500;
 
 #[derive(Clone)]
@@ -80,6 +83,7 @@ struct SessionDispatch {
     submission: tokio::sync::Mutex<()>,
     execution: tokio::sync::Mutex<()>,
     tail: StdMutex<std::sync::Weak<RunControl>>,
+    title: StdMutex<titles::TitleWork>,
 }
 impl RunControl {
     fn phase(&self, phase: agena_domain::ExecutionPhase) {
@@ -104,6 +108,7 @@ pub struct SessionManager {
     active: Arc<StdMutex<HashMap<ExecutionId, Arc<RunControl>>>>,
     admission: Arc<Semaphore>,
     agent_settlements: Arc<Semaphore>,
+    auxiliary_tasks: Arc<Semaphore>,
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
@@ -138,6 +143,7 @@ impl SessionManager {
             active: Default::default(),
             admission: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             agent_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
+            auxiliary_tasks: Arc::new(Semaphore::new(MAX_AUXILIARY_TASKS)),
             sessions: Default::default(),
             tools: Default::default(),
             host_sequences: Default::default(),
@@ -310,6 +316,12 @@ impl SessionManager {
                 .agent_settlements
                 .clone()
                 .acquire_many_owned(MAX_ACTIVE_EXECUTIONS as u32)
+                .await
+                .map_err(|_| AppError::Cancelled)?;
+            let _auxiliary = self
+                .auxiliary_tasks
+                .clone()
+                .acquire_many_owned(MAX_AUXILIARY_TASKS as u32)
                 .await
                 .map_err(|_| AppError::Cancelled)?;
             Ok::<(), AppError>(())

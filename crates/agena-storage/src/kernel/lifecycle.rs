@@ -11,6 +11,8 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionConfiguration {
+    /// Missing on older sessions means manual: existing names are preserved.
+    pub title_state: SessionTitleState,
     /// A user stop fences queued claims until an explicit resume, including
     /// after reconnecting or reopening the database.
     pub message_queue_paused: bool,
@@ -22,6 +24,45 @@ pub struct SessionConfiguration {
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
     pub agent: Option<SessionAgentConfiguration>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTitleSource {
+    Default,
+    Automatic,
+    #[default]
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct SessionTitleState {
+    pub source: SessionTitleSource,
+    pub checked_user_messages: u64,
+    pub checked_at_ms: i64,
+    pub calibrated: bool,
+}
+
+impl SessionTitleState {
+    pub fn automatic() -> Self {
+        Self {
+            source: SessionTitleSource::Default,
+            ..Self::default()
+        }
+    }
+}
+
+/// Compare-and-set guard for a background title result. Checked with the
+/// title write in the kernel transaction, including results that keep the name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomaticTitleUpdate {
+    pub expected_metadata_version: MetadataVersion,
+    pub expected_membership_generation: MembershipGeneration,
+    pub user_message_count: u64,
+    pub last_user_message: EntryId,
+    pub last_user_revision: EntryRevision,
+    pub title: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionAgentConfiguration {
@@ -42,6 +83,7 @@ pub struct AgentExecutionLimits {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionConfigurationChange {
+    pub title_state: Option<SessionTitleState>,
     pub message_queue_paused: Option<bool>,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: Option<SessionRelationKind>,

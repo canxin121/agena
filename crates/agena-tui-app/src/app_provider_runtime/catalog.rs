@@ -73,6 +73,14 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::WorkspaceDefault);
     }
 
+    pub(crate) fn open_auxiliary_model_chooser(&mut self, workspace: bool) {
+        self.open_model_chooser(if workspace {
+            SessionModelChooserPurpose::WorkspaceAuxiliary
+        } else {
+            SessionModelChooserPurpose::Auxiliary
+        });
+    }
+
     pub(crate) fn open_permission_approval_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::PermissionApproval);
     }
@@ -105,6 +113,12 @@ impl App {
                     }
                     SessionModelChooserPurpose::WorkspaceDefault => {
                         self.current_workspace_default_model_ref()
+                    }
+                    SessionModelChooserPurpose::Auxiliary => {
+                        self.current_auxiliary_model_ref(false)
+                    }
+                    SessionModelChooserPurpose::WorkspaceAuxiliary => {
+                        self.current_auxiliary_model_ref(true)
                     }
                     SessionModelChooserPurpose::PermissionApproval => {
                         self.current_permission_approval_model_ref()

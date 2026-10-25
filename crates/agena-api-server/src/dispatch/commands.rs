@@ -51,13 +51,18 @@ pub async fn dispatch_command(
         Command::CreateSession(CreateSessionParams {
             workspace_id,
             title,
+            auto_title,
             parent_id,
         }) => {
             let session = state
                 .service()
                 .create_session(SessionCreateRequest {
                     workspace_id,
-                    session: SessionHierarchyRequest { title, parent_id },
+                    session: SessionHierarchyRequest {
+                        title,
+                        parent_id,
+                        auto_title,
+                    },
                 })
                 .await?;
             Ok(CommandResult::Session(session))
@@ -167,6 +172,7 @@ pub async fn dispatch_command(
                         title: Some(title),
                         favorite: None,
                         pinned: None,
+                        auto_title: None,
                     },
                 )
                 .await?;

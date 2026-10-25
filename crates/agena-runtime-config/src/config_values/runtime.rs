@@ -15,6 +15,10 @@ pub struct UiConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct RuntimeConfig {
     pub providers: RuntimeProvidersConfig,
+    /// Shared model for short, tool-free background tasks. Unset uses the
+    /// current session's model without changing its selection or transcript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auxiliary_model: Option<agena_domain::ModelSelectionConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
@@ -52,10 +56,30 @@ impl Default for ProviderClientVersionSettings {
 /// Resolved session configuration.
 pub struct SessionConfig {
     pub compaction: SessionCompactionConfig,
+    pub auto_title: SessionAutoTitleConfig,
     /// Cap on model turns within one stable run. `0` means unlimited;
     /// `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
+}
+
+/// Automatic title scheduling, counted in user messages rather than model turns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SessionAutoTitleConfig {
+    pub enabled: bool,
+    pub message_interval: u64,
+    pub cooldown_seconds: u64,
+}
+
+impl Default for SessionAutoTitleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            message_interval: 5,
+            cooldown_seconds: 300,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

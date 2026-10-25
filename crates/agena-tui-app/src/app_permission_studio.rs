@@ -507,6 +507,11 @@ impl App {
                 self.open_workspace_default_model_chooser();
                 false
             }
+            SettingsPickerAction::OpenAuxiliaryModelChooser { workspace } => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_auxiliary_model_chooser(workspace);
+                false
+            }
             SettingsPickerAction::OpenPermissionApprovalModelChooser => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_permission_approval_model_chooser();

@@ -20,6 +20,7 @@ Engineering guides:
 
 - [Development validation](docs/development.md)
 - [Git workflow and file recovery](docs/git-workflow.md)
+- [Automatic session titles and auxiliary models](docs/session-titles.md)
 
 ## Install
 

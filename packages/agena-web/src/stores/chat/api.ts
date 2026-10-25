@@ -750,6 +750,7 @@ export async function listSessions(opts?: {
 export type CreateSessionInput = {
   workspaceId: number
   title: string
+  autoTitle?: boolean
   parentId?: number
 }
 
@@ -760,7 +761,7 @@ export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject
     throw new Error(i18n.global.t('chat.errors.workspaceIdRequired'))
   if (!title) throw new Error(i18n.global.t('chat.errors.sessionTitleRequired'))
 
-  const payload: JsonObject = { workspace_id: workspaceId, title }
+  const payload: JsonObject = { workspace_id: workspaceId, title, auto_title: input.autoTitle === true }
   if (typeof input.parentId === 'number' && Number.isSafeInteger(input.parentId) && input.parentId > 0) {
     payload.parent_id = input.parentId
   }

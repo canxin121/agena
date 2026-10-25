@@ -56,11 +56,70 @@ pub(super) async fn apply(
         Command::Metadata { session, change } => {
             let mut metadata = reads::metadata(connection, *session).await?;
             let original = metadata.clone();
+            let mut config = lifecycle::configuration(connection, *session).await?;
+            let original_state = config.title_state.clone();
+            if let Some(update) = &change.automatic_title {
+                if change.title.is_some()
+                    || change.favorite.is_some()
+                    || change.pinned.is_some()
+                    || change.auto_title.is_some()
+                {
+                    return Err(invalid(
+                        "automatic title cannot be combined with manual metadata",
+                    ));
+                }
+                if metadata.metadata_version != update.expected_metadata_version
+                    || metadata.membership_generation != update.expected_membership_generation
+                    || config.title_state.source == SessionTitleSource::Manual
+                    || config.relation_kind.is_subagent()
+                {
+                    return Err(KernelError::Conflict(
+                        "background title was superseded".into(),
+                    ));
+                }
+                let messages: i64 = sqlx::query_scalar(
+                    "SELECT user_message_count FROM agena_session_statistics WHERE session_id=?",
+                )
+                .bind(session.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+                if u64::try_from(messages).ok() != Some(update.user_message_count)
+                    || update.user_message_count == 0
+                {
+                    return Err(KernelError::Conflict("title context has changed".into()));
+                }
+                let last = sqlx::query("SELECT e.id,e.revision FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1")
+                    .bind(session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?;
+                if last.as_ref().is_none_or(|row| {
+                    row.try_get::<i64, _>("id").ok() != Some(update.last_user_message.get())
+                        || row.try_get::<i64, _>("revision").ok()
+                            != Some(update.last_user_revision.get())
+                }) {
+                    return Err(KernelError::Conflict("title input was edited".into()));
+                }
+                if let Some(title) = &update.title {
+                    if title.trim().is_empty()
+                        || title.len() > 4096
+                        || title.chars().any(char::is_control)
+                    {
+                        return Err(invalid("invalid automatic title"));
+                    }
+                    metadata.title.clone_from(title);
+                    config.title_state.source = SessionTitleSource::Automatic;
+                }
+                config.title_state.checked_user_messages = update.user_message_count;
+                config.title_state.checked_at_ms = now;
+                config.title_state.calibrated |= update.user_message_count >= 3;
+            }
             if let Some(title) = &change.title {
                 if title.len() > 4096 {
                     return Err(invalid("title exceeds 4096 bytes"));
                 }
                 metadata.title.clone_from(title);
+                // Even assigning the same name is an explicit user decision
+                // and must fence a generation already in flight.
+                config.title_state.source = SessionTitleSource::Manual;
             }
             if let Some(value) = change.favorite {
                 metadata.favorite = value;
@@ -68,10 +127,21 @@ pub(super) async fn apply(
             if let Some(value) = change.pinned {
                 metadata.pinned = value;
             }
-            if metadata != original {
+            if let Some(enabled) = change.auto_title {
+                config.title_state = if enabled {
+                    SessionTitleState::automatic()
+                } else {
+                    SessionTitleState::default()
+                };
+            }
+            if metadata != original || config.title_state != original_state {
+                let configuration = encode(&config)?;
+                if configuration.len() > 65536 {
+                    return Err(invalid("session configuration exceeds 64 KiB"));
+                }
                 metadata.metadata_version = metadata.metadata_version.next().map_err(storage)?;
-                sqlx::query("UPDATE agena_sessions SET title=?,favorite=?,pinned=?,metadata_version=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
-                    .bind(&metadata.title).bind(metadata.favorite).bind(metadata.pinned).bind(metadata.metadata_version.get()).bind(now).bind(session.get())
+                sqlx::query("UPDATE agena_sessions SET title=?,favorite=?,pinned=?,configuration_json=?,metadata_version=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
+                    .bind(&metadata.title).bind(metadata.favorite).bind(metadata.pinned).bind(configuration).bind(metadata.metadata_version.get()).bind(now).bind(session.get())
                     .execute(&mut *connection).await.map_err(sql_error)?;
             }
             Ok(Mutation::Session(Box::new(metadata)))

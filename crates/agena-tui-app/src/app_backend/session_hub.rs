@@ -245,7 +245,7 @@ impl TuiBackend {
     ) -> Result<SessionResource> {
         Ok(self
             .client()
-            .create_session(workspace_id, title, None)
+            .create_session_with_auto_title(workspace_id, title, None, true)
             .await?)
     }
 

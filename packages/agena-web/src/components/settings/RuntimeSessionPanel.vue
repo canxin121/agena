@@ -18,6 +18,34 @@ const versionFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const autoUpdateField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const autoCompactionField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
+const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
+const titleOptions = computed(() => [
+  {
+    path: 'session.auto_title.enabled',
+    label: st('Automatically name sessions'),
+    description: st(
+      'Name new sessions in the background and update misleading titles. Manually assigned names are preserved.',
+    ),
+    kind: 'boolean' as const,
+    defaultValue: true,
+  },
+  {
+    path: 'session.auto_title.message_interval',
+    label: st('User messages between title checks'),
+    description: st(
+      'After initial naming and third-message calibration, wait this many new user messages before another check.',
+    ),
+    kind: 'number' as const,
+    defaultValue: 5,
+  },
+  {
+    path: 'session.auto_title.cooldown_seconds',
+    label: st('Title check cooldown (seconds)'),
+    description: st('Minimum time between later title checks. Set to 0 to use only the message interval.'),
+    kind: 'number' as const,
+    defaultValue: 300,
+  },
+])
 const versionOptions = computed(() => [
   {
     path: 'runtime.providers.client_versions.codex',
@@ -37,9 +65,13 @@ const versionOptions = computed(() => [
 ])
 async function refresh() {
   await Promise.all(
-    [...versionFields.value, autoUpdateField.value, autoCompactionField.value, tokensField.value].map((field) =>
-      field?.refresh(),
-    ),
+    [
+      ...versionFields.value,
+      ...titleFields.value,
+      autoUpdateField.value,
+      autoCompactionField.value,
+      tokensField.value,
+    ].map((field) => field?.refresh()),
   )
 }
 defineExpose({ refresh })
@@ -111,30 +143,35 @@ defineProps<{ activePage: string }>()
         />
       </SettingsCard>
     </div>
-    <SettingsCard v-else :title="$st('Context management')" :icon="RiStackLine">
-      <ServerSettingField
-        ref="autoCompactionField"
-        path="session.compaction.auto"
-        :label="t('settings.tui.fields.autoCompaction')"
-        :description="t('settings.tui.fields.autoCompactionDescription')"
-        kind="boolean"
-        :default-value="true"
-        compact
-      />
-      <ServerSettingField
-        ref="tokensField"
-        path="session.compaction.reserved_tokens"
-        :label="t('settings.tui.fields.reservedTokens')"
-        :description="
-          st(
-            'Leave empty to derive headroom from the model’s usable input budget. A value of 0 uses the entire input budget before compaction.',
-          )
-        "
-        kind="number"
-        include-empty
-        :placeholder="st('Automatic')"
-        compact
-      />
-    </SettingsCard>
+    <div v-else class="space-y-4">
+      <SettingsCard :title="$st('Automatic session titles')" :icon="RiCpuLine">
+        <ServerSettingField v-for="field in titleOptions" :key="field.path" ref="titleFields" v-bind="field" compact />
+      </SettingsCard>
+      <SettingsCard :title="$st('Context management')" :icon="RiStackLine">
+        <ServerSettingField
+          ref="autoCompactionField"
+          path="session.compaction.auto"
+          :label="t('settings.tui.fields.autoCompaction')"
+          :description="t('settings.tui.fields.autoCompactionDescription')"
+          kind="boolean"
+          :default-value="true"
+          compact
+        />
+        <ServerSettingField
+          ref="tokensField"
+          path="session.compaction.reserved_tokens"
+          :label="t('settings.tui.fields.reservedTokens')"
+          :description="
+            st(
+              'Leave empty to derive headroom from the model’s usable input budget. A value of 0 uses the entire input budget before compaction.',
+            )
+          "
+          kind="number"
+          include-empty
+          :placeholder="st('Automatic')"
+          compact
+        />
+      </SettingsCard>
+    </div>
   </SettingsSectionWorkbench>
 </template>

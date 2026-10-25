@@ -37,6 +37,8 @@ pub struct SessionListQuery {
 pub struct SessionHierarchyRequest {
     pub title: String,
     #[serde(default)]
+    pub auto_title: bool,
+    #[serde(default)]
     pub parent_id: Option<i64>,
 }
 
@@ -50,6 +52,10 @@ pub struct SessionUpdateRequest {
     pub favorite: Option<bool>,
     #[serde(default)]
     pub pinned: Option<bool>,
+    /// Resume automatic naming, or lock the current title. Takes effect on the
+    /// next user turn; assigning a title alone always locks it.
+    #[serde(default)]
+    pub auto_title: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

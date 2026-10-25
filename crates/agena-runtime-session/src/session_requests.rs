@@ -12,6 +12,7 @@ pub struct SessionQueuedMessageEditRequest {
 /// Request to create a session.
 pub struct SessionCreateRequest {
     pub title: String,
+    pub auto_title: bool,
     pub parent_session_id: Option<i64>,
 }
 

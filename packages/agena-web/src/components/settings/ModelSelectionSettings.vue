@@ -27,11 +27,20 @@ import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-const props = defineProps<{ scope: string; purpose: 'default' | 'approval' }>()
+const props = defineProps<{ scope: string; purpose: 'default' | 'approval' | 'auxiliary' }>()
 const scope = computed(() => (props.scope === 'global' || props.scope === 'workspace' ? props.scope : 'effective'))
 const approval = computed(() => props.purpose === 'approval')
-const path = computed(() => (approval.value ? 'permission.approval_model' : 'providers.default_selection'))
-const title = computed(() => (approval.value ? st('Automatic approval model') : st('Default model')))
+const auxiliary = computed(() => props.purpose === 'auxiliary')
+const path = computed(() =>
+  auxiliary.value
+    ? 'runtime.auxiliary_model'
+    : approval.value
+      ? 'permission.approval_model'
+      : 'providers.default_selection',
+)
+const title = computed(() =>
+  auxiliary.value ? st('Auxiliary model') : approval.value ? st('Automatic approval model') : st('Default model'),
+)
 const editable = computed(() => scope.value !== 'effective')
 const catalog = useModelSelectionCatalog()
 const toasts = useToastsStore()
@@ -199,9 +208,11 @@ defineExpose({ refresh, dirty, saving, discard: syncEditor })
     :title="title"
     :icon="approval ? RiShieldCheckLine : RiCpuLine"
     :description="
-      approval
-        ? $st('Used to review permission requests in Auto mode. When unset, the session model reviews them.')
-        : $st('Choose the model used for new runs when no model is explicitly selected.')
+      auxiliary
+        ? $st('Used for short background tasks such as session naming. When unset, the session model is used.')
+        : approval
+          ? $st('Used to review permission requests in Auto mode. When unset, the session model reviews them.')
+          : $st('Choose the model used for new runs when no model is explicitly selected.')
     "
     :data-model-selection="purpose"
     :aria-busy="loading || saving"

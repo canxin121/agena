@@ -5,6 +5,8 @@ use agena_domain::{ExecutionSelection, PermissionConfig, SessionAutoCompactionCo
 /// Configuration of the runtime session manager.
 pub struct RuntimeSessionManagerConfig {
     pub default_selection: ExecutionSelection,
+    pub auxiliary_selection: ExecutionSelection,
+    pub auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub permission: PermissionConfig,
     pub auto_compaction: SessionAutoCompactionConfig,
     pub max_concurrent_tools: usize,
@@ -17,6 +19,8 @@ impl Default for RuntimeSessionManagerConfig {
     fn default() -> Self {
         Self {
             default_selection: Default::default(),
+            auxiliary_selection: Default::default(),
+            auto_title: Default::default(),
             permission: Default::default(),
             auto_compaction: Default::default(),
             max_concurrent_tools: 32,

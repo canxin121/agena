@@ -56,13 +56,14 @@ bun --version
 # 1.3.14
 ```
 
-There are currently no Rust tests in the first-party workspace crates and no
-automated frontend tests. The quality gate compiles all targets, runs lint and
+Focused Rust tests cover automatic session naming, title persistence, and
+auxiliary-model configuration (see [session titles](session-titles.md#verification)).
+There are no automated frontend tests. The quality gate compiles all targets, runs lint and
 contract checks, and builds the frontend. The Python refactor tooling and
 installer contracts still have their own tests. Vendored packages under
 `third_party/` retain upstream tests, but those tests are not part of this
-repository's quality gate. Plan new first-party tests explicitly instead of
-assuming a test command exists.
+repository's quality gate. Run focused first-party tests for the behavior you
+change in addition to the compilation and contract checks below.
 
 ## Build and run
 

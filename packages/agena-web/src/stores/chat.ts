@@ -1655,6 +1655,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         const created = await chatApi.createSession({
           workspaceId,
           title: title || 'New session',
+          autoTitle: !String(opts?.title || '').trim(),
           ...(typeof opts?.parentId === 'number' ? { parentId: opts.parentId } : {}),
         })
         upsertSessionCache(created)

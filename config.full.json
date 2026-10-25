@@ -32,14 +32,20 @@
         "gemini": "0.50.0",
         "auto_update": true
       }
-    }
+    },
+    "auxiliary_model": null
   },
   "session": {
     "compaction": {
       "auto": true,
       "reserved_tokens": 12000
     },
-    "max_turns": 500
+    "max_turns": 500,
+    "auto_title": {
+      "enabled": true,
+      "message_interval": 5,
+      "cooldown_seconds": 300
+    }
   },
   "permission": {
     "path": {

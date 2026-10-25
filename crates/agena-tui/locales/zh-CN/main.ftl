@@ -2700,3 +2700,15 @@ activity-summary-completed = 已完成
 hub-column-name = 名称
 hub-column-status = 状态
 hub-column-updated = 时间
+
+# Automatic session naming and shared auxiliary tasks
+settings-auxiliary-model-label = 全局辅助任务模型
+settings-workspace-auxiliary-model-label = 工作区辅助任务模型
+settings-auxiliary-model-description = 用于会话命名等简短的后台任务。未设置时使用当前会话模型。
+flash-auxiliary-model-updated = 已更新辅助任务模型：{$provider}/{$model}
+settings-auto-title-enabled-label = 自动命名会话
+settings-auto-title-enabled-description = 在后台为新会话命名，并更新不再准确的标题。手动指定的名称会被保留。
+settings-auto-title-interval-label = 标题检查的用户消息间隔
+settings-auto-title-interval-description = 首次命名和第三轮校准后，每新增这些用户消息才再次检查。
+settings-auto-title-cooldown-label = 标题检查冷却时间（秒）
+settings-auto-title-cooldown-description = 后续标题检查之间的最短时间。设为 0 时仅按消息间隔检查。

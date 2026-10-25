@@ -1717,7 +1717,7 @@ impl AgenaCli {
             .await?;
         let session = server
             .client
-            .create_session(server.workspace_id, title, None)
+            .create_session_with_auto_title(server.workspace_id, title, None, true)
             .await
             .map_err(|error| client_error("failed to create session through server", error))?;
         let mut execution = server

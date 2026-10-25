@@ -683,7 +683,11 @@ impl Application {
         self.service()
             .create_session(SessionCreateRequest {
                 workspace_id: workspace.id,
-                session: SessionHierarchyRequest { title, parent_id },
+                session: SessionHierarchyRequest {
+                    title,
+                    parent_id,
+                    auto_title: false,
+                },
             })
             .await
             .map_err(|error| {
@@ -722,6 +726,7 @@ impl Application {
                     title: Some(title),
                     favorite: None,
                     pinned: None,
+                    auto_title: None,
                 },
             )
             .await

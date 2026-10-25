@@ -28,6 +28,9 @@ async fn configure(
 ) -> Result<Mutation> {
     let original = configuration(connection, session).await?;
     let mut next = original.clone();
+    if let Some(title_state) = &change.title_state {
+        next.title_state = title_state.clone();
+    }
     if let Some(paused) = change.message_queue_paused {
         next.message_queue_paused = paused;
     }
@@ -240,6 +243,11 @@ async fn fork(
         SessionRelationKind::Fork
     };
     config.agent = None;
+    // A branch starts a new topic-check schedule. User-assigned names remain
+    // locked; automatically named branches may acquire their own names.
+    if config.title_state.source != SessionTitleSource::Manual {
+        config.title_state = SessionTitleState::automatic();
+    }
     config.conversation = conversation_mode.map(|mode| agena_domain::SessionConversation {
         mode,
         parent_session_id: session.get(),
@@ -567,6 +575,7 @@ pub(super) async fn apply(
                 connection,
                 metadata.id,
                 &SessionConfigurationChange {
+                    title_state: Some(config.title_state.clone()),
                     message_queue_paused: Some(config.message_queue_paused),
                     parent_session_id: config.parent_session_id,
                     relation_kind: Some(config.relation_kind),

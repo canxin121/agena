@@ -16,11 +16,12 @@ type ModelEditor = {
 
 const defaultEditor = ref<ModelEditor | null>(null)
 const approvalEditor = ref<ModelEditor | null>(null)
-const editors = computed(() => [defaultEditor.value, approvalEditor.value])
+const auxiliaryEditor = ref<ModelEditor | null>(null)
+const editors = computed(() => [defaultEditor.value, approvalEditor.value, auxiliaryEditor.value])
 const dirty = computed(() => editors.value.some((editor) => editor?.dirty))
 const saving = computed(() => editors.value.some((editor) => editor?.saving))
 
-// One navigation decision covers both drafts. A cancelled navigation must not
+// One navigation decision covers all drafts. A cancelled navigation must not
 // discard one card before the other card has been checked.
 async function canLeave() {
   if (saving.value) return false
@@ -59,5 +60,6 @@ defineExpose({
   <div class="grid min-w-0 gap-5" data-model-settings>
     <ModelSelectionSettings ref="defaultEditor" purpose="default" :scope="scope" />
     <ModelSelectionSettings ref="approvalEditor" purpose="approval" :scope="scope" />
+    <ModelSelectionSettings ref="auxiliaryEditor" purpose="auxiliary" :scope="scope" />
   </div>
 </template>

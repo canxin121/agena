@@ -210,6 +210,7 @@ pub(crate) enum SettingsPickerAction {
     ClearMcpOAuthPassword,
     OpenGlobalDefaultModelChooser,
     OpenWorkspaceDefaultModelChooser,
+    OpenAuxiliaryModelChooser { workspace: bool },
     OpenPermissionApprovalModelChooser,
     OpenWorkspacePermissionApprovalModelChooser,
     OpenProviderList,

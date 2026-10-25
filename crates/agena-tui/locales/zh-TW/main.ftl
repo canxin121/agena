@@ -3088,3 +3088,7 @@ insert-content-skill-detail = 附加 Skill 引用，需要時再讀取其中的�
 flash-skill-attached = 已附加 Skill：{$name}
 
 flash-skill-count-limit = 一則訊息最多可引用 {$count} 個 Skill。
+
+hub-column-name = 名稱
+hub-column-status = 狀態
+hub-column-updated = 時間

@@ -1,7 +1,7 @@
 use super::*;
 use ratatui::{Terminal, backend::TestBackend};
 
-fn item(workspace_id: i64, session_id: i64) -> SessionHubItem {
+pub(super) fn item(workspace_id: i64, session_id: i64) -> SessionHubItem {
     SessionHubItem {
         session_id,
         workspace_id,
@@ -9,7 +9,8 @@ fn item(workspace_id: i64, session_id: i64) -> SessionHubItem {
         favorite: false,
         title: format!("session-{session_id}"),
         label: format!("session-{session_id}"),
-        summary: String::new(),
+        status: "Ready".to_owned(),
+        updated: "10-25 17:00".to_owned(),
         detail: String::new(),
         is_new_session: false,
     }
@@ -317,7 +318,7 @@ fn search_finds_project_bucket_items_and_hides_create_actions() {
 
 #[test]
 fn project_headers_render_in_the_tree_and_mouse_matches_both_viewports() {
-    for (width, height) in [(80, 32), (140, 32), (50, 12)] {
+    for (width, height) in [(80, 32), (140, 32), (220, 32), (50, 12)] {
         let mut hub = SessionHubPresentation::empty();
         hub.set_catalog(
             vec![marked_directory(1), marked_directory(2)],
@@ -335,9 +336,15 @@ fn project_headers_render_in_the_tree_and_mouse_matches_both_viewports() {
             terminal
                 .draw(|frame| render_session_hub(frame, area, &hub, false, None, false, "", &i18n))
                 .unwrap();
-            let (regions, _) = hub_row_regions(hub_layout(area, false)[2], &hub);
-            assert!(regions.iter().any(|(visible, _)| *visible == index));
-            for (visible, rect) in regions {
+            let regions = hub_row_regions(hub_layout(area, false)[2], &hub);
+            assert!(regions.rows.iter().any(|(visible, _)| *visible == index));
+            for (header, _) in &regions.headers {
+                assert_eq!(
+                    hub_hit_test(area, &hub, false, header.x, header.y, &i18n),
+                    None
+                );
+            }
+            for (visible, rect) in regions.rows {
                 let hit = hub_hit_test(area, &hub, false, rect.x, rect.y, &i18n);
                 if hub.rows[visible].identity().is_some() {
                     assert_eq!(
@@ -364,5 +371,59 @@ fn project_headers_render_in_the_tree_and_mouse_matches_both_viewports() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn normal_terminals_use_full_width_tables_with_sticky_column_headings() {
+    for width in [50, 80, 120, 160, 220] {
+        let mut hub = SessionHubPresentation::empty();
+        hub.set_catalog(
+            vec![marked_directory(1)],
+            vec![SessionHubSection::new(
+                SessionHubSectionKind::Recent,
+                vec![item(2, 299)],
+            )],
+        );
+        let area = Rect::new(0, 0, width, 32);
+        let content = hub_layout(area, false)[2];
+        let regions = hub_row_regions(content, &hub);
+        assert_eq!(regions.headers.len(), 2);
+        if width < 196 {
+            assert!(
+                regions
+                    .rows
+                    .iter()
+                    .all(|(_, rect)| rect.width == content.width)
+            );
+            assert!(regions.headers.iter().all(|(rect, _)| rect.x == content.x));
+        } else {
+            assert!(regions.rows.iter().all(|(_, rect)| rect.width >= 96));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(width, 32)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_session_hub(frame, area, &hub, false, None, false, "", &I18n::english())
+            })
+            .unwrap();
+        for (rect, _) in regions.headers {
+            let text = (rect.x..rect.right())
+                .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
+                .collect::<String>();
+            assert!(
+                text.contains("Name") && text.contains("Status") && text.contains("Updated"),
+                "{text}"
+            );
+        }
+        // Item contents and metadata render together, even on a 50-cell terminal.
+        let regions = hub_row_regions(content, &hub);
+        let (_, rect) = regions.rows.iter().find(|(index, _)| matches!(&hub.rows[*index], HubRow::Item(item) if item.session_id == 101)).unwrap();
+        let text = (rect.x..rect.right())
+            .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
+            .collect::<String>();
+        assert!(
+            text.contains("session-101") && text.contains("Ready") && text.contains("10-25 17:00"),
+            "{text}"
+        );
     }
 }

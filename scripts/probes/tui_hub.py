@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import socket
 import subprocess
 import time
@@ -21,16 +22,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--cols", type=int, default=120)
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     trace = fixture.JsonLines(out / "http.jsonl")
     log = (out / "server.log").open("wb")
-    result = {"status": "failed", "binary_sha256": fixture.file_digest(binary), "cases": []}
+    result = {"status": "failed", "binary_sha256": fixture.file_digest(binary), "cols": args.cols, "cases": []}
     process = None
     clients = []
     tui.fixture = fixture
+    tui.COLS = args.cols
     try:
         alpha = fixture.prepare_configuration(out, "http://127.0.0.1:1/v1")
         beta = out / "project-beta"
@@ -75,12 +78,17 @@ def main() -> int:
         def selected(client: tui.Pty, label: str) -> bool:
             # Inspect only the project viewport; global quick access has its own selection.
             return any(
-                line.lstrip("│ ").startswith("> ") and label in line[:tui.COLS // 2]
-                for line in client.text().splitlines()
+                line.lstrip("│ ").startswith("›") and label in line
+                for line in project_text(client).splitlines()
             )
 
         def project_text(client: tui.Pty) -> str:
-            return "\n".join(line[:tui.COLS // 2] for line in client.text().splitlines())
+            lines = client.text().splitlines()
+            if tui.COLS - 2 >= 196:
+                return "\n".join(line[:1 + (tui.COLS - 2) // 2] for line in lines)
+            divider = next((index for index, line in enumerate(lines)
+                            if "Running " in line and "Recent " in line), len(lines))
+            return "\n".join(lines[:divider])
 
         def wait_selected(client: tui.Pty, label: str) -> None:
             fixture.poll(lambda: selected(client, label), 30, f"selection did not reach {label}: {client.text()}")
@@ -92,7 +100,7 @@ def main() -> int:
         client = launch(alpha, "alpha-create")
         wait_selected(client, "+ New session")
         client.wait_text("A-pin-23", "old-pin-visible")
-        left = [line[:tui.COLS // 2] for line in client.text().splitlines()]
+        left = project_text(client).splitlines()
         fixture.require(next(i for i, line in enumerate(left) if "workspace" in line)
                         < next(i for i, line in enumerate(left) if "+ New session" in line),
                         "create action appears outside the project")
@@ -112,6 +120,16 @@ def main() -> int:
         client.send(b"\x1b[C", "next-project-pin-page")
         wait_selected(client, "A-pin-03")
         checkpoint(client, "old-pins-second-page")
+        project = project_text(client)
+        fixture.require("Name" in project and "Status" in project and "Updated" in project,
+                        "Hub has no explicit name/status/time headings")
+        selected_line = next(line for line in project.splitlines() if "›" in line and "A-pin-03" in line)
+        fixture.require("Ready" in selected_line and selected_line.count("│") >= 3
+                        and re.search(r"\d{2}-\d{2} \d{2}:\d{2}", selected_line),
+                        "session metadata is missing or not in separate columns")
+        fixture.require(selected_line.index("A-pin-03") - selected_line.index("›") == 2,
+                        "session name still has excessive leading padding")
+        checkpoint(client, "explicit-name-status-time-columns")
         # A server-side metadata change causes a real catalog refresh.
         # Rename another pin: this reorders the page while the selected pin
         # survives, so preserving a raw row index would focus the wrong session.

@@ -2676,3 +2676,7 @@ activity-summary-user-declined = 用户已拒绝
 activity-summary-unavailable = 不可用
 activity-summary-reasoning-private = 提供方未返回可见思考内容
 activity-summary-completed = 已完成
+
+hub-column-name = 名称
+hub-column-status = 状态
+hub-column-updated = 时间

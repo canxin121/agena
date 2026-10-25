@@ -3037,3 +3037,7 @@ insert-content-skill-detail = スキル参照を追加します。指示は必�
 flash-skill-attached = スキルを追加しました: {$name}
 
 flash-skill-count-limit = 1 件のメッセージには最大 {$count} 個のスキルを追加できます。
+
+hub-column-name = 名前
+hub-column-status = 状態
+hub-column-updated = 更新日時

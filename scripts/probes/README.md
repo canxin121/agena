@@ -214,12 +214,15 @@ the actual run result from the final binary, including any failed run.
 
 ```sh
 python3 scripts/probes/tui_hub.py --binary target/release/agena --output target/hub-validation/run-1
+# Optional: exercise another terminal width (default: 120 cells).
+python3 scripts/probes/tui_hub.py --binary target/release/agena --cols 220 --output target/hub-validation/wide-1
 ```
 
 This probe starts an isolated instance and drives real PTY keyboard input. It
 creates two projects, 24 older pinned sessions and 22 newer unmarked sessions.
 It checks the initial project-local New Session selection, Enter creating in
 the launch or selected project, independent project buckets, pin pagination,
-selection after a live refresh, and independent pin/favorite mutations. All
+selection after a live refresh, independent pin/favorite mutations, and compact
+rows with explicit name/status/time columns. All
 fixture data, HTTP traces and terminal captures stay in the new output directory;
 the installed instance and user conversations are untouched.

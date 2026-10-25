@@ -18,6 +18,9 @@ use ratatui::{
     widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph},
 };
 
+mod columns;
+use columns::HubColumns;
+
 /// A session entry shown in a hub section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHubItem {
@@ -31,8 +34,9 @@ pub struct SessionHubItem {
     /// First line of the row; the renderer never invents text, so the App
     /// pre-localizes it.
     pub label: String,
-    /// Compact status and recency shown beside the title.
-    pub summary: String,
+    /// Separate, pre-localized values for the fixed status and time columns.
+    pub status: String,
+    pub updated: String,
     /// Full metadata of the selected session.
     pub detail: String,
     /// True for the synthetic "new session" action inside its project.
@@ -1021,31 +1025,41 @@ fn hub_layout(area: Rect, has_error: bool) -> [Rect; 5] {
     [rows[0], rows[1], rows[3], rows[4], rows[5]]
 }
 
-/// Shared geometry for rendering and hit testing. Each area retains its own
-/// scroll offset, so paging a directory never pushes quick access off screen.
-fn hub_row_regions(
-    area: Rect,
-    presentation: &SessionHubPresentation,
-) -> (Vec<(usize, Rect)>, Option<Rect>) {
+/// Geometry is shared by rendering and hit testing, including sticky column
+/// headers. The panes retain independent scrolling without cutting normal
+/// terminal widths into two cramped tables.
+struct HubRegions {
+    rows: Vec<(usize, Rect)>,
+    divider: Option<Rect>,
+    headers: Vec<(Rect, bool)>,
+}
+
+fn hub_row_regions(area: Rect, presentation: &SessionHubPresentation) -> HubRegions {
     let split = presentation
         .rows
         .iter()
         .position(|row| matches!(row, HubRow::Header(_)))
         .unwrap_or(presentation.rows.len());
-    let mut regions = Vec::new();
-    if area.height < 8 || split == 0 || split == presentation.rows.len() {
-        presentation.directory_height.set(usize::from(area.height));
-        presentation.quick_height.set(usize::from(area.height));
-        visible_region(
+    let mut regions = HubRegions {
+        rows: Vec::new(),
+        divider: None,
+        headers: Vec::new(),
+    };
+    if area.height < 10 || split == 0 || split == presentation.rows.len() {
+        let height = table_region(
             area,
             presentation,
             0..presentation.rows.len(),
             &presentation.directory_offset,
+            split > 0,
             &mut regions,
         );
-        return (regions, None);
+        presentation.directory_height.set(height);
+        presentation.quick_height.set(height);
+        return regions;
     }
-    let (directories, divider, quick) = if area.width >= 108 {
+    let (directories, divider, quick) = if area.width >= 196 {
+        // Both tables need room for useful names plus status and time.
         let left_width = area.width / 2;
         let right_x = area.x + left_width + 1;
         let right_width = area.width.saturating_sub(left_width + 1);
@@ -1060,16 +1074,17 @@ fn hub_row_regions(
             ),
         )
     } else {
-        // Give unused rows back to the other region; a collapsed directory
-        // should not leave two thirds of a small terminal empty.
-        let available = area.height.saturating_sub(1);
-        let quick_rows = presentation.rows.len().saturating_sub(split) as u16;
+        // Reserve one heading per table plus the activity divider. Favor the
+        // project tree while giving unused rows back to either region.
+        let available = area.height.saturating_sub(3);
+        let quick_rows =
+            u16::try_from(presentation.rows.len().saturating_sub(split)).unwrap_or(u16::MAX);
         let directory_rows = u16::try_from(split).unwrap_or(u16::MAX);
         let quick_height = quick_rows
-            .min((available / 2).max(3))
+            .min((available / 3).max(3))
             .max(available.saturating_sub(directory_rows))
             .min(available.saturating_sub(2));
-        let directory_height = available.saturating_sub(quick_height);
+        let directory_height = available.saturating_sub(quick_height) + 1;
         (
             Rect::new(area.x, area.y, area.width, directory_height),
             Rect::new(area.x, area.y + directory_height, area.width, 1),
@@ -1077,29 +1092,48 @@ fn hub_row_regions(
                 area.x,
                 area.y + directory_height + 1,
                 area.width,
-                quick_height,
+                quick_height + 1,
             ),
         )
     };
-    presentation
-        .directory_height
-        .set(usize::from(directories.height));
-    presentation.quick_height.set(usize::from(quick.height));
-    visible_region(
+    presentation.directory_height.set(table_region(
         directories,
         presentation,
         0..split,
         &presentation.directory_offset,
+        true,
         &mut regions,
-    );
-    visible_region(
+    ));
+    presentation.quick_height.set(table_region(
         quick,
         presentation,
         split..presentation.rows.len(),
         &presentation.quick_offset,
+        false,
         &mut regions,
-    );
-    (regions, Some(divider))
+    ));
+    regions.divider = Some(divider);
+    regions
+}
+
+fn table_region(
+    area: Rect,
+    presentation: &SessionHubPresentation,
+    range: std::ops::Range<usize>,
+    offset: &Cell<usize>,
+    indented: bool,
+    regions: &mut HubRegions,
+) -> usize {
+    let data = if area.height >= 3 {
+        regions
+            .headers
+            .push((Rect::new(area.x, area.y, area.width, 1), indented));
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+    } else {
+        area
+    };
+    visible_region(data, presentation, range, offset, &mut regions.rows);
+    usize::from(data.height)
 }
 
 fn visible_region(
@@ -1151,8 +1185,8 @@ pub fn hub_hit_test(
     i18n: &I18n,
 ) -> Option<HubHit> {
     let content = hub_layout(area, has_error)[2];
-    let (regions, divider) = hub_row_regions(content, presentation);
-    if let Some(divider) = divider
+    let regions = hub_row_regions(content, presentation);
+    if let Some(divider) = regions.divider
         && divider.contains((column, row).into())
     {
         let mut x = usize::from(divider.x);
@@ -1180,7 +1214,7 @@ pub fn hub_hit_test(
             x += width + 3;
         }
     }
-    regions.into_iter().find_map(|(index, rect)| {
+    regions.rows.into_iter().find_map(|(index, rect)| {
         (rect.contains((column, row).into()) && presentation.rows[index].identity().is_some())
             .then_some(HubHit {
                 row: index,
@@ -1203,8 +1237,17 @@ fn render_rows(
     presentation: &SessionHubPresentation,
     i18n: &I18n,
 ) {
-    let (regions, divider) = hub_row_regions(area, presentation);
-    if let Some(divider) = divider {
+    let regions = hub_row_regions(area, presentation);
+    for (header, indented) in &regions.headers {
+        let columns = HubColumns::new(header.width.saturating_sub(1));
+        let mut line = columns.header(i18n, *indented);
+        line.spans.insert(0, Span::raw(" "));
+        frame.render_widget(
+            Paragraph::new(line).style(muted_style().add_modifier(Modifier::BOLD)),
+            *header,
+        );
+    }
+    if let Some(divider) = regions.divider {
         if divider.x > area.x {
             for y in area.y..area.bottom() {
                 frame.render_widget(
@@ -1229,17 +1272,9 @@ fn render_rows(
             divider,
         );
     }
-    for (index, area) in regions {
+    for (index, area) in regions.rows {
         let row = &presentation.rows[index];
-        let indent = if !presentation.directories.is_empty()
-            && index > 0
-            && presentation.same_region(index, 0)
-            && matches!(row, HubRow::Item(_))
-        {
-            "  "
-        } else {
-            ""
-        };
+        let indented = !presentation.directories.is_empty() && presentation.same_region(index, 0);
         let item = match row {
             HubRow::Header(kind) | HubRow::DirectoryHeader { kind, .. } => {
                 ListItem::new(Line::from(Span::styled(
@@ -1295,9 +1330,9 @@ fn render_rows(
                         format!(
                             "{}{}  {}{}",
                             if matches!(row, HubRow::DirectoryHeader { .. }) {
-                                "  "
-                            } else {
                                 " "
+                            } else {
+                                ""
                             },
                             i18n.text(kind.localization_key()),
                             count,
@@ -1309,14 +1344,9 @@ fn render_rows(
                         .add_modifier(Modifier::BOLD),
                 )))
             }
-            HubRow::Item(item) => ListItem::new(crate::session_chrome::session_line(
-                area.width.saturating_sub(2),
-                &item.label,
-                &item.summary,
-                item.pinned,
-                item.favorite,
-                !indent.is_empty(),
-            )),
+            HubRow::Item(item) => {
+                ListItem::new(HubColumns::new(area.width.saturating_sub(1)).item(item, indented))
+            }
             HubRow::Directory {
                 path,
                 expanded,
@@ -1358,7 +1388,7 @@ fn render_rows(
         let list = List::new([item])
             .highlight_style(selection_style())
             .highlight_spacing(HighlightSpacing::Always)
-            .highlight_symbol("> ");
+            .highlight_symbol("›");
         let mut state = ListState::default();
         if index == presentation.selection {
             state.select(Some(0));

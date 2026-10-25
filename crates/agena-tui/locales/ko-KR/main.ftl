@@ -3033,3 +3033,7 @@ insert-content-skill-detail = 스킬 참조를 추가합니다. 지침은 필요
 flash-skill-attached = 스킬을 추가했습니다: {$name}
 
 flash-skill-count-limit = 메시지 하나에 최대 {$count}개의 스킬을 참조할 수 있습니다.
+
+hub-column-name = 이름
+hub-column-status = 상태
+hub-column-updated = 갱신 시각

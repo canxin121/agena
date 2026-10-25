@@ -3036,3 +3036,7 @@ insert-content-skill-detail = Joindre une référence de skill. Ses instructions
 flash-skill-attached = Skill joint : {$name}
 
 flash-skill-count-limit = Un message peut inclure au maximum {$count} références de skill.
+
+hub-column-name = Nom
+hub-column-status = État
+hub-column-updated = Mise à jour

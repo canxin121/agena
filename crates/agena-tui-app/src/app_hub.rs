@@ -544,11 +544,18 @@ impl App {
             title: session.title.clone(),
             favorite: session.favorite,
             label: session.title.clone(),
-            summary: format!(
-                "{} · {}",
-                ui_text::session_state_label(&self.i18n, &session.state),
-                chrono::DateTime::<chrono::Local>::from(session.updated_at).format("%m-%d %H:%M")
-            ),
+            status: match session.state {
+                agena_api::resource::SessionState::Ready { .. } => {
+                    self.i18n.text("session-work-ready")
+                }
+                agena_api::resource::SessionState::AwaitingInteraction { .. } => {
+                    self.i18n.text("session-work-status-waiting")
+                }
+                _ => ui_text::session_state_label(&self.i18n, &session.state),
+            },
+            updated: chrono::DateTime::<chrono::Local>::from(session.updated_at)
+                .format("%m-%d %H:%M")
+                .to_string(),
             detail: detail_parts.join(" | "),
             is_new_session: false,
         }
@@ -563,7 +570,8 @@ impl App {
             title: String::new(),
             favorite: false,
             label: self.i18n.text("hub-item-new"),
-            summary: String::new(),
+            status: String::new(),
+            updated: String::new(),
             detail: format!("{} | {}", path, self.i18n.text("hub-item-new-detail")),
             is_new_session: true,
         }

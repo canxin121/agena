@@ -2676,3 +2676,7 @@ activity-summary-user-declined = Declined by user
 activity-summary-unavailable = Unavailable
 activity-summary-reasoning-private = No visible reasoning provided
 activity-summary-completed = Completed
+
+hub-column-name = Name
+hub-column-status = Status
+hub-column-updated = Updated

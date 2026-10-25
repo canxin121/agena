@@ -3039,3 +3039,7 @@ insert-content-skill-detail = Adjunta una referencia de skill. Sus instrucciones
 flash-skill-attached = Skill adjunto: {$name}
 
 flash-skill-count-limit = Un mensaje puede incluir como máximo {$count} referencias de skill.
+
+hub-column-name = Nombre
+hub-column-status = Estado
+hub-column-updated = Actualizado

@@ -1,8 +1,8 @@
-//! Structured search transports. The caller authorizes and resolves the endpoint;
-//! connections use those addresses, disable proxies and never follow redirects.
+//! Structured search transports. The caller authorizes the endpoint and route;
+//! connections use the authorized direct/proxy route and never follow redirects.
 //! Credentials are request headers, excluded from Debug, URLs and error bodies.
 
-use std::{collections::BTreeSet, net::SocketAddr, time::Duration};
+use std::{collections::BTreeSet, time::Duration};
 
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderValue};
 use serde::Serialize;
@@ -55,7 +55,7 @@ impl SearchApiProvider {
 pub struct SearchApiOptions<'a> {
     pub provider: SearchApiProvider,
     pub endpoint: &'a Url,
-    pub resolved_addrs: &'a [SocketAddr],
+    pub route: &'a crate::WebHttpRoute,
     pub api_key: Option<&'a str>,
     pub limit: usize,
     pub timeout: Duration,
@@ -118,18 +118,11 @@ pub async fn search_api(
             "search needs a 1–8192 byte query and a positive limit".into(),
         ));
     }
-    let host = options
-        .endpoint
-        .host_str()
-        .ok_or_else(|| CrawlError::InvalidInput("search endpoint has no host".into()))?;
-    let mut builder = reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .timeout(options.timeout)
         .user_agent(options.user_agent)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy();
-    if !options.resolved_addrs.is_empty() {
-        builder = builder.resolve_to_addrs(host, options.resolved_addrs);
-    }
+        .redirect(reqwest::redirect::Policy::none());
+    let builder = options.route.apply(builder, options.endpoint);
     let client = builder.build()?;
     // Brave and Tavily support at most 20. Use a predictable common cap.
     let limit = options.limit.min(20);

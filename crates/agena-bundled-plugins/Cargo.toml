@@ -32,6 +32,7 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
 ignore = { workspace = true }
+ipnet = { workspace = true }
 jsonschema = { workspace = true }
 notify = { workspace = true }
 regex = { workspace = true }

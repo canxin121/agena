@@ -65,3 +65,5 @@ pub use spider::{
     BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,
 };
 pub use store::{CrawlStore, CrawlStorePruneReport, CrawlStoreRetention};
+mod http_route;
+pub use http_route::WebHttpRoute;

@@ -21,7 +21,7 @@
 | `agena.settings` | 读取全局/工作区配置、合并验证、修改文件及请求重载 | 文件读取检查对应路径；合并验证检查两层 Read；实际编辑检查选中层 Write。dry_run 不申请不发生的写入。读取已加载的 effective 配置属于宿主配置能力。 |
 | `agena.commands` | 发现技能/命令、读取资源、安装和移除工作区技能 | 请求时扫描授权现有配置根；资源单独授权具体路径。批准后使用同一个解析出的包，避免再次解析换成别的文件。移除先将别名解析成真实包名，再批准真实目标。安装/移除在创建目录前批准。热重载时获取当前代次的 host。请求按当前调用的工作区扫描；遍历的目录和实际读取的命令文档逐项授权，不使用初始化数据目录替代请求工作区。 |
 | `agena.memory` | 工作区记忆文件与内部检索索引 | 显式读写按目录/记录路径申请权限；写入/删除同时授权实际连带修改的 MEMORY.md。目录检索在读每条记录前检查子路径，授权和实际访问均绑定当前调用的工作区。自动召回只查询已有权限，需要审批时跳过，避免后台 hook 发起交互。默认 `<state>` 规则允许当前实例的工作区记忆；用户限制该路径时仍生效。索引由宿主私有存储能力维护。 |
-| `agena.web` | 搜索、HTTP 抓取、重定向、robots、缓存读取、浏览器操作、截图与下载 | 所有网络 require 接入统一审批；每个 HTTP 重定向和浏览器 HTTP 请求重新授权。交互浏览器补齐子资源拦截并绕过 service worker/缓存。截图指定用户路径时要求 Write。下载保留调用上下文。拒绝不再被聚合成空搜索或“0 个可读页面”。浏览器旧调用的延迟拒绝不影响新调用。公共地址限制返回明确的策略拒绝，网络批准不会越过这个独立限制。 |
+| `agena.web` | 搜索、HTTP 抓取、重定向、robots、缓存读取、浏览器操作、截图与下载 | 所有网络 require 接入统一审批；每个 HTTP 重定向和浏览器 HTTP 请求重新授权。交互浏览器补齐子资源拦截并绕过 service worker/缓存。截图指定用户路径时要求 Write。下载保留调用上下文。拒绝不再被聚合成空搜索或“0 个可读页面”。浏览器旧调用的延迟拒绝不影响新调用。公共地址限制返回明确的策略拒绝，网络批准不会越过这个独立限制。服务端可显式声明本机可信 TUN 代理的 Fake-IP 网段，见下文。 |
 | `agena.chatgpt` | OpenAI 请求、图片输入、云端媒体及远程文件 | 请求发送前检查实际 provider endpoint；本地图片与媒体先 Read。禁止自动重定向。审批目标移除 query/fragment，避免暴露签名或 API key。 |
 | `agena.claude` | Anthropic 请求、云端媒体与文件管理 | 复用相同 endpoint 和本地输入授权；远程文件句柄继续绑定工作区、会话和 provider 连接。 |
 | `agena.gemini` | Gemini 请求、图片/媒体、可恢复上传及文件管理 | 相同网络和文件检查；上传初始化、服务端给出的上传地址、查询/删除文件均检查实际请求地址。保留上传地址同源验证。 |
@@ -47,6 +47,67 @@ stdio 和 HTTP 使用独立的 `host/permission.require_path`、`host/permission
 
 会话错误边界保留策略拒绝、用户拒绝及执行器已验证的插件 Failure 分类。策略拒绝不会被标成可重试的内部故障；用户明确拒绝也不会变成一条自动重试指令。爬取和浏览器适配器保留拒绝类型与原始 Failure 标识。
 
+## HTTP / SOCKS 代理
+
+网页搜索、普通 HTTP 抓取、robots、重定向预检和搜索 API 默认读取
+`HTTP_PROXY`/`http_proxy`、`HTTPS_PROXY`/`https_proxy`、`ALL_PROXY`/`all_proxy`、
+`NO_PROXY`/`no_proxy` 及支持平台的系统代理。服务进程未继承 shell 环境变量时，
+也可在 `agena.web` 的 `settings.network.proxy` 中持久配置代理 URL，例如
+`http://127.0.0.1:7890` 或 `socks5h://127.0.0.1:7890`；空字符串显式选择直连。
+显式配置同样遵守 `NO_PROXY`。支持 HTTP/HTTPS 代理、CONNECT、代理认证及
+SOCKS4/4a/5/5h，不会在代理失败后悄悄尝试直连。
+
+授权和连接使用同一份路由快照。HTTP(S)、SOCKS4a、SOCKS5h 由用户配置的可信代理
+解析目标域名，本机 DNS 无需成功，也不因本机的 Fake-IP 回答而拒绝请求。
+SOCKS4/5 使用本机 DNS；它们和直连一样校验解析结果并绑定连接地址。
+`NO_PROXY` 命中的请求走直连校验，不能借代理例外访问真实内网。
+每次目标请求和重定向仍执行会话网络权限，代理模式下的私有 IP 字面量和局域网域名仍被拒绝。
+远端解析的实际地址由可信代理控制，代理运营者负责其目的地址限制；不能把本机 DNS 检查
+当作远端代理的地址保证。代理 URL 和认证信息不会出现在路由 Debug 或连接池标识中。
+
+Chromium 仍使用其自身的系统网络配置与本机 TUN；上述 HTTP 客户端的显式代理不自动配置浏览器。
+
+## TUN 代理的 Fake-IP DNS
+
+Mihomo/Clash 的 Fake-IP 模式可能把 `html.duckduckgo.com` 等公网域名解析为
+`198.18.*` 或 IPv6 ULA 地址。这些地址是本机 TUN 代理使用的域名映射标记。
+默认的公共地址校验会拒绝它们；网络审批通过也不会解除这个限制。
+
+使用这种网络环境时，由服务端管理员核对本机代理的 `fake-ip-range` 和
+`fake-ip-range6`，在 Agena 配置中声明对应的规范 CIDR。以下示例对应
+Mihomo 的 `198.18.0.1/16` 与 `fdfe:dcba:9876::1/64`：
+
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.web": {
+        "package": { "kind": "static" },
+        "settings": {
+          "network": {
+            "fake_ip_ranges": ["198.18.0.0/16", "fdfe:dcba:9876::/64"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+保留已有的其他配置。安装支持该设置的版本并重新加载运行时后生效。
+这个设置默认为空，不会自动信任机器上发现的私有 DNS 回答；工具调用参数也不能设置它。
+最多声明 16 个网段，只允许 `198.18.0.0/15` 的子网及 `/64` 或更窄的 IPv6 ULA 子网，
+禁止把整个内网或默认路由加入例外。代理必须实际接管这些网段，并由它的运营者负责将映射转发到原域名。
+
+例外仅适用于公网域名的 DNS 回答，覆盖 HTML/API 搜索、HTTP 抓取、robots、重定向和浏览器请求。
+直接填写 Fake-IP 地址、localhost、局域网域名、映射为 IPv4 的 IPv6 私有地址，以及其他未声明的
+非公网回答仍会被拒绝。每一个 DNS 回答都必须通过检查，不能用一个合法地址掩盖另一个私有地址。
+会话的网络 Deny、Ask、Auto 和用户拒绝继续先于连接执行。
+
+直连的普通 HTTP、API 和 HTML 搜索连接绑定到已校验的地址，由本机 TUN 路由负责转发；
+HTML 搜索保留同源重定向限制。仅配置显式代理时通常无需声明 Fake-IP 网段，
+远端 DNS 请求直接使用代理路由。Chromium 请求仍由浏览器解析和连接，其限制见下方权限边界。
+
 ## 验证方式
 
 单元测试覆盖 SDK stdio/HTTP 的真实回调序列化、代理转发、只读查询、类型保留、临时权限凭证、文件副作用、AST 预览/应用、笔记本、记忆、provider 目标脱敏、搜索部分成功、浏览器跨调用错误隔离和审批耗时。
@@ -62,12 +123,31 @@ python3 scripts/probes/plugin_permissions.py \
 
 证据目录必须是新目录；保存每个用例的会话状态、Parts、HTTP 轨迹、服务日志、二进制哈希和汇总结果。
 
+Fake-IP 实机验证使用隔离服务和本地 mock 模型，搜索和抓取实际访问公网。需要本机已经运行
+TUN 代理，并明确提供它的合成网段；脚本不修改用户会话、系统 DNS 或代理配置：
+
+```sh
+python3 scripts/probes/web_fake_ip.py \
+  --binary target/release/agena \
+  --fake-ip-range 198.18.0.0/16 \
+  --fake-ip-range fdfe:dcba:9876::/64 \
+  --output target/web-validation/fake-ip-new-run
+```
+
+验证默认拒绝、配置后的多引擎真实结果与网页抓取、Internet Deny，以及 IP 字面量和回环地址
+在网络审批允许时仍被公共地址策略拒绝。单个搜索引擎的验证码、限流或网络失败可以保留为部分结果诊断。
+机器已安装 Chrome/Chromium 时，可追加 `--browser` 验证真实浏览器渲染路径。
+追加 `--proxy http://127.0.0.1:7890` 会在不声明任何 Fake-IP 网段的额外阶段验证真实代理搜索、抓取和拒绝行为。
+
 ## 本次验证记录（2026-10-25）
 
 - 27 项权限相关单元测试通过（agena-async、plugin-sdk、plugin-host、runtime-session、runtime-tools、bundled-plugins）。
 - 42 项 TUI 单元和集成回归通过。
 - 完整 CLI 构建、Rust 格式检查和 git diff --check 通过。
 - 隔离服务的 21 个用例全部通过，证据位于 `target/permission-validation/final/`。批量抓取用本地地址验证两次独立审批后仍受公共地址策略约束；不会为了测试开放内网抓取。
+- 代理兼容修复的 12 项相关单元测试、严格 Clippy、格式检查和 release 构建通过。
+- 同一最终二进制的 25 项权限回归通过，证据位于 `target/permission-validation/proxy-delivery-20261025/`。包含经真实 HTTP 代理访问 `.invalid` 目标的 Ask、AllowOnce、Deny、Auto 拒绝检查；未经批准不会向代理发出请求。
+- 同一二进制的 14 项 TUN/显式代理实机用例通过，证据位于 `target/web-validation/proxy-delivery-20261025/`。原始英雄联盟查询在两条路径均返回 15 条结果；普通抓取及 Chrome 渲染返回 HTTP 200；默认拒绝、Internet Deny、Fake-IP 字面量和回环地址拒绝均保持有效。
 
 ## 权限边界
 

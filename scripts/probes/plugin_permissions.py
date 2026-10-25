@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import traceback
+from urllib.parse import urlsplit
 from typing import Any
 
 import http_experience as fixture
@@ -26,6 +27,7 @@ class LocalServices:
         self.calls: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
         self.search_requests = 0
         self.page_requests = 0
+        self.proxy_requests = 0
         self.reviews = 0
         self.allow_auto = True
         owner = self
@@ -37,7 +39,11 @@ class LocalServices:
                 pass
 
             def do_GET(self) -> None:
-                if self.path.startswith('/page/'):
+                path = self.path
+                if path.startswith('http://'):
+                    owner.proxy_requests += 1
+                    path = urlsplit(path).path
+                if path.startswith('/page/'):
                     owner.page_requests += 1
                     raw = b'<html><title>Permission fixture</title><main><h1>Authorized local page</h1><p>This page is a controlled regression fixture with enough readable evidence for extraction.</p></main></html>'
                     self.send_response(200)
@@ -46,7 +52,7 @@ class LocalServices:
                     self.end_headers()
                     self.wfile.write(raw)
                     return
-                if self.path.startswith('/search'):
+                if path.startswith('/search'):
                     owner.search_requests += 1
                     body = {"results": [{"url": "https://example.org/permission-test", "title": "Authorized fixture", "content": "controlled result"}]}
                 else:
@@ -265,6 +271,35 @@ def main() -> None:
         fixture.require(not fixture.pending_permissions(api.state(sid)), 'Cancelled interaction remains pending')
         result['cases'].append({'name': 'search_cancelled', 'session_id': sid, 'passed': True})
         fixture.require(services.reviews >= 2, 'Auto approval model was not called')
+
+        # A trusted HTTP proxy resolves this intentionally nonexistent public
+        # hostname. Authorization must still run against the original URL,
+        # before the proxy sees a single request.
+        proxy_settings = {'search': {'provider': 'searxng',
+                                    'endpoint': 'http://proxy-search.fixture.invalid/search'},
+                          'network': {'proxy': services.url}, 'browser': {'enabled': False}}
+        config['plugins']['list']['agena.web']['settings'] = proxy_settings
+        fixture.write_json(config_path, config)
+        generation = api.get('/api/v1/health')['generation']
+        api.call('POST', '/api/v1/runtime/reload', {})
+        fixture.poll(lambda: api.get('/api/v1/health')['generation'] > generation,
+                     api.timeout, 'proxy settings did not reload')
+        effective = api.get('/api/v1/plugins/agena.web/settings')['effective']
+        fixture.require(effective['search']['endpoint'] == proxy_settings['search']['endpoint'],
+                        'workspace search settings did not reload')
+        for mode, decision in [('ask', 'allow_once'), ('ask', 'deny_once'), ('deny', None), ('auto', None)]:
+            name = f'proxy_search_{mode}_{decision or "policy"}'
+            before = services.proxy_requests
+            services.allow_auto = False
+            sid = session(name, {'network': {'internet': mode}}, 'web.search', {'query': name})
+            if decision:
+                fixture.permission_wait(api, sid)
+                time.sleep(0.15)
+                fixture.require(services.proxy_requests == before, f'{name}: contacted proxy before approval')
+                reply(sid, decision)
+            complete(sid, name, None if decision == 'allow_once' else 'declined' if decision == 'deny_once' else 'denied')
+            fixture.require(services.proxy_requests - before == int(decision == 'allow_once'),
+                            f'{name}: wrong proxy effect')
         result.update(status='passed', search_requests=services.search_requests, automatic_reviews=services.reviews)
     except BaseException:
         result['error'] = traceback.format_exc()

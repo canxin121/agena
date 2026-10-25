@@ -1,7 +1,6 @@
 //! Bounded ordinary HTTP retrieval. Every redirect and robots request is
-//! authorized before connecting, using the exact DNS addresses just checked.
+//! authorized before connecting, using the selected proxy or checked DNS addresses.
 use super::*;
-use std::net::SocketAddr;
 
 const ROBOTS_BYTES: usize = 512 * 1024;
 const REDIRECTS: usize = 10;
@@ -25,7 +24,7 @@ async fn send<F, Fut>(
 ) -> SdkResult<reqwest::Response>
 where
     F: Fn(url::Url) -> Fut,
-    Fut: Future<Output = SdkResult<Vec<SocketAddr>>>,
+    Fut: Future<Output = SdkResult<agena_web::WebHttpRoute>>,
 {
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -35,21 +34,15 @@ where
             "fetch URLs must use HTTP(S), without URL credentials",
         ));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| PluginError::invalid_params("fetch URL has no host"))?;
-    let addresses = resolve(url.clone()).await?;
-    if addresses.is_empty() {
-        return Err(PluginError::internal(
-            "authorized fetch DNS resolution returned no addresses",
-        ));
-    }
-    let client = reqwest::Client::builder()
-        .user_agent(&options.user_agent)
-        .timeout(options.timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .resolve_to_addrs(host, &addresses)
+    let route = resolve(url.clone()).await?;
+    let client = route
+        .apply(
+            reqwest::Client::builder()
+                .user_agent(&options.user_agent)
+                .timeout(options.timeout)
+                .redirect(reqwest::redirect::Policy::none()),
+            url,
+        )
         .build()
         .map_err(|error| PluginError::internal_error(&error))?;
     client
@@ -106,7 +99,7 @@ pub(super) async fn robots<F, Fut>(
 ) -> SdkResult<Option<String>>
 where
     F: Fn(url::Url) -> Fut,
-    Fut: Future<Output = SdkResult<Vec<SocketAddr>>>,
+    Fut: Future<Output = SdkResult<agena_web::WebHttpRoute>>,
 {
     let mut url = target
         .join("/robots.txt")
@@ -157,7 +150,7 @@ pub(super) async fn fetch<F, Fut>(
 ) -> SdkResult<Source>
 where
     F: Fn(url::Url) -> Fut,
-    Fut: Future<Output = SdkResult<Vec<SocketAddr>>>,
+    Fut: Future<Output = SdkResult<agena_web::WebHttpRoute>>,
 {
     let operation = async {
         let mut url = initial.clone();

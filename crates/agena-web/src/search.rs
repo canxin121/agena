@@ -113,6 +113,9 @@ impl FromStr for WebSearchEngine {
 /// Options of a web search.
 pub struct WebSearchOptions {
     pub engine: WebSearchEngine,
+    /// Caller-authorized route: pinned addresses for local DNS, or the user's
+    /// selected proxy for remote DNS. Reauthorize before every call/cache hit.
+    pub route: Option<crate::WebHttpRoute>,
     /// Maximum distinct candidates from this engine, before caller filtering (1–50).
     pub limit: usize,
     /// Maximum result pages to fetch, including the first page (1–5).
@@ -126,6 +129,7 @@ impl Default for WebSearchOptions {
     fn default() -> Self {
         Self {
             engine: WebSearchEngine::default(),
+            route: None,
             limit: 10,
             max_pages: 1,
             timeout: DEFAULT_SEARCH_TIMEOUT,

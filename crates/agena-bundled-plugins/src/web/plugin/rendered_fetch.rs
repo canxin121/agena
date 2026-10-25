@@ -64,17 +64,19 @@ async fn fetch_source(
         plugin.validate_network_target(url).await?;
         let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         let host = plugin.state()?.host.clone();
+        let network = plugin.config()?.network.clone();
         let pacing = plugin.state()?.fetch_coordinator.clone();
         let config = options.clone();
         let robots = Arc::new(Mutex::new(BTreeMap::<String, Option<String>>::new()));
         let policy: BrowserRequestPolicy = Arc::new(move |raw, document| {
             let host = host.clone();
+            let network = network.clone();
             let pacing = pacing.clone();
             let options = config.clone();
             let robots = robots.clone();
             let search_origin = search_origin.clone();
             Box::pin(async move {
-                let checked = async {
+                async {
                     if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
                         return Err(PluginError::internal(
                             "rendered network authorization requires an active tool call",
@@ -91,7 +93,7 @@ async fn fetch_source(
                         ));
                     }
                     host.require_network_permission(target.to_string()).await?;
-                    validate_public_network_target(&target).await?;
+                    validate_public_network_target(&target, &network).await?;
                     if document && options.respect_robots_txt {
                         let origin = target.origin().ascii_serialization();
                         let mut policies = robots.lock().await;
@@ -99,10 +101,11 @@ async fn fetch_source(
                             let rules = fetch_transport::robots(&target, &options, &|target| {
                                 let host = host.clone();
                                 let pacing = pacing.clone();
+                                let network = network.clone();
                                 async move {
                                     host.require_network_permission(target.to_string()).await?;
                                     pacing.wait_for_url_host(&target).await;
-                                    resolve_public_network_target(&target).await
+                                    resolve_public_http_route(&target, &network).await
                                 }
                             })
                             .await?;
@@ -123,8 +126,7 @@ async fn fetch_source(
                     pacing.wait_for_url_host(&target).await;
                     Ok::<(), PluginError>(())
                 }
-                .await;
-                checked
+                .await
             })
         });
         let endpoint = plugin.browser_endpoint().await?;

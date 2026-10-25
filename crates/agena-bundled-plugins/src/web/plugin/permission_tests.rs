@@ -3,7 +3,9 @@ use super::*;
 #[tokio::test]
 async fn non_public_fetch_targets_keep_their_policy_denial_classification() {
     let url = url::Url::parse("http://127.0.0.1:9/private").unwrap();
-    let error = resolve_public_network_target(&url).await.unwrap_err();
+    let error = resolve_public_network_target(&url, &network_policy::WebNetworkConfig::default())
+        .await
+        .unwrap_err();
     assert_eq!(
         error.kind,
         agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
@@ -62,7 +64,7 @@ async fn denied_search_sources_keep_typed_denial_and_partial_sources_stay_visibl
 #[test]
 fn crawl_adapters_preserve_access_rejection_identity() {
     let error = PluginError::from_kind(PluginErrorKind::PolicyDenied, "fixture policy");
-    let failure_id = error.failure.id.clone();
+    let failure_id = error.failure.id;
     let error = crawl_error_to_plugin(plugin_error_to_crawl(error));
     assert_eq!(error.kind, PluginErrorKind::PolicyDenied);
     assert_eq!(error.failure.id, failure_id);

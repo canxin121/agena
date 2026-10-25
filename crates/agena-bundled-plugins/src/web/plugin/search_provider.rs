@@ -156,37 +156,45 @@ pub(super) fn validate_input(input: &CrawlWebSearchInput) -> SdkResult<()> {
 
 async fn resolve_endpoint(
     config: &WebSearchConfig,
+    network: &network_policy::WebNetworkConfig,
     url: &url::Url,
     timeout: Duration,
-) -> SdkResult<Vec<std::net::SocketAddr>> {
+) -> SdkResult<agena_web::WebHttpRoute> {
+    let route = agena_web::WebHttpRoute::for_url(url, network.proxy.as_deref())
+        .map_err(crawl_error_to_plugin)?;
+    let allow_private =
+        config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint;
+    if route.remote_dns() {
+        if !allow_private {
+            network_policy::validate_proxy_target(url)?;
+        }
+        return Ok(route);
+    }
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("search endpoint has no host"))?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| PluginError::invalid_params("search endpoint has no port"))?;
-    let addresses = tokio::time::timeout(timeout, tokio::net::lookup_host((host, port)))
-        .await
-        .map_err(|_| PluginError::internal("search endpoint DNS lookup timed out"))?
-        .map_err(|error| plugin_internal_error_with_context("resolve search endpoint", &error))?
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let addresses = tokio::time::timeout(
+        timeout,
+        tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
+    )
+    .await
+    .map_err(|_| PluginError::internal("search endpoint DNS lookup timed out"))?
+    .map_err(|error| plugin_internal_error_with_context("resolve search endpoint", &error))?
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect::<Vec<_>>();
     if addresses.is_empty() {
         return Err(PluginError::internal(
             "search endpoint DNS lookup returned no addresses",
         ));
     }
-    if !(config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint)
-        && addresses
-            .iter()
-            .any(|address| !is_public_address(address.ip()))
-    {
-        return Err(PluginError::invalid_params(
-            "search endpoint resolves to a non-public address; private SearXNG requires search.allow_private_endpoint",
-        ));
+    if !(config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint) {
+        network_policy::validate_addresses(url, addresses.iter().copied(), network)?;
     }
-    Ok(addresses)
+    Ok(route.with_addresses(addresses))
 }
 
 impl WebPlugin {
@@ -228,13 +236,13 @@ impl WebPlugin {
             })
             .transpose()?;
         state.fetch_coordinator.wait_for_url_host(&url).await;
-        let addresses = resolve_endpoint(&config.search, &url, timeout).await?;
+        let route = resolve_endpoint(&config.search, &config.network, &url, timeout).await?;
         let result = search_api(
             &input.query,
             &SearchApiOptions {
                 provider,
                 endpoint: &url,
-                resolved_addrs: &addresses,
+                route: &route,
                 api_key: key.as_deref(),
                 limit,
                 timeout,

@@ -1,6 +1,7 @@
 mod content;
 mod downloads;
 mod fetch_transport;
+mod network_policy;
 mod playwright;
 mod rendered_fetch;
 use playwright::BrowserInteractionBackend;
@@ -77,6 +78,7 @@ fn log_secondary_plugin_failure(operation: &str, error: &PluginError) {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WebConfig {
+    pub network: network_policy::WebNetworkConfig,
     pub fetch: WebFetchConfig,
     pub crawl: WebCrawlConfig,
     pub search: WebSearchConfig,
@@ -357,6 +359,21 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "Controls direct page fetch operations, request throttling, and fetch cache behavior.",
         ),
         (
+            "/network",
+            "Network",
+            "HTTP/SOCKS proxy selection, public-address validation and trusted local Fake-IP DNS routing.",
+        ),
+        (
+            "/network/proxy",
+            "HTTP / SOCKS Proxy",
+            "Optional proxy URL for HTTP(S) requests. Omit to use HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and OS settings; NO_PROXY remains effective. An empty string forces direct access. Supports HTTP(S), SOCKS4/4a/5/5h.",
+        ),
+        (
+            "/network/fake_ip_ranges",
+            "Trusted Fake-IP Ranges",
+            "Exact synthetic CIDRs routed by your local TUN proxy. Empty by default. Only subnets of 198.18.0.0/15 and IPv6 ULA /64 or narrower are accepted. Applies to DNS answers for public hostnames, never IP literals or local names.",
+        ),
+        (
             "/fetch/extractor",
             "HTML Extractor",
             "Readability (local Rust default) or optional local Trafilatura via AGENA_EXTRACT_PYTHON. No remote extraction or automatic dependency installation.",
@@ -606,6 +623,7 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
 
 fn default_web_config() -> WebConfig {
     WebConfig {
+        network: network_policy::WebNetworkConfig::default(),
         fetch: WebFetchConfig::default(),
         crawl: WebCrawlConfig::default(),
         search: WebSearchConfig::default(),
@@ -1522,7 +1540,7 @@ impl WebPlugin {
             .host
             .require_network_permission(url.to_string())
             .await?;
-        validate_public_network_target(url).await
+        validate_public_network_target(url, &self.config()?.network).await
     }
 
     /// Resolve ordinary HTTP redirect hops before a managed browser target is
@@ -1543,12 +1561,14 @@ impl WebPlugin {
             let mut checked = Vec::new();
             for _ in 0..=MAX_REDIRECTS {
                 self.validate_network_target(&current).await?;
-                let addresses = resolve_public_network_target(&current).await?;
-                let client = reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .timeout(timeout)
-                    .no_proxy()
-                    .resolve_to_addrs(current.host_str().expect("validated host"), &addresses)
+                let route = resolve_public_http_route(&current, &self.config()?.network).await?;
+                let client = route
+                    .apply(
+                        reqwest::Client::builder()
+                            .redirect(reqwest::redirect::Policy::none())
+                            .timeout(timeout),
+                        &current,
+                    )
                     .build()
                     .map_err(|error| PluginError::internal_error(&error))?;
                 checked.push(current.to_string());
@@ -1799,8 +1819,10 @@ impl WebPlugin {
 
         let endpoint = self.browser_endpoint().await?;
         let host = self.state()?.host.clone();
+        let network = self.config()?.network.clone();
         let policy: BrowserRequestPolicy = Arc::new(move |url, _| {
             let host = host.clone();
+            let network = network.clone();
             Box::pin(async move {
                 if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
                     return Err(PluginError::internal(
@@ -1808,7 +1830,8 @@ impl WebPlugin {
                     ));
                 }
                 host.require_network_permission(url.clone()).await?;
-                authorize_browser_document_request(&url).await
+                let url = prepare_fetch_url(&url).map_err(crawl_error_to_plugin)?;
+                validate_public_network_target(&url, &network).await
             })
         });
         let client =
@@ -2073,7 +2096,7 @@ impl WebPlugin {
                             .require_network_permission(target.to_string())
                             .await?;
                         state.fetch_coordinator.wait_for_url_host(&target).await;
-                        resolve_public_network_target(&target).await
+                        resolve_public_http_route(&target, &state.config.network).await
                     })
                     .await?;
                     fetch_transport::extract(source, url.clone(), extractor).await
@@ -2200,8 +2223,8 @@ impl WebPlugin {
             }
         }).await;
         let mut results = results;
-        if results.iter().all(|entry| entry.3.is_some()) {
-            if let Some(error) = results.iter_mut().find_map(|entry| {
+        if results.iter().all(|entry| entry.3.is_some())
+            && let Some(error) = results.iter_mut().find_map(|entry| {
                 entry.3.as_ref().filter(|error| {
                     matches!(
                         error.kind,
@@ -2210,9 +2233,9 @@ impl WebPlugin {
                     )
                 })?;
                 entry.3.take()
-            }) {
-                return Err(error);
-            }
+            })
+        {
+            return Err(error);
         }
         let usable = results.iter().filter(|entry| entry.2).count();
         let text = results
@@ -3743,7 +3766,7 @@ impl WebPlugin {
             .host
             .require_network_permission(engine_url.to_string())
             .await?;
-        self.validate_network_target(&engine_url).await?;
+        let route = resolve_public_http_route(&engine_url, &state.config.network).await?;
         // Reserve a small completion margin inside the aggregate deadline so
         // a timed-out later page can return its already collected results.
         let deadline = tokio::time::Instant::now()
@@ -3752,6 +3775,7 @@ impl WebPlugin {
         let config = &state.config;
         let options = WebSearchOptions {
             engine,
+            route: Some(route),
             limit,
             max_pages,
             timeout: deadline.saturating_duration_since(tokio::time::Instant::now()),
@@ -3775,11 +3799,34 @@ impl WebPlugin {
     }
 }
 
-async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
-    resolve_public_network_target(url).await.map(|_| ())
+async fn resolve_public_http_route(
+    url: &url::Url,
+    network: &network_policy::WebNetworkConfig,
+) -> SdkResult<agena_web::WebHttpRoute> {
+    let route = agena_web::WebHttpRoute::for_url(url, network.proxy.as_deref())
+        .map_err(crawl_error_to_plugin)?;
+    if route.remote_dns() {
+        network_policy::validate_proxy_target(url)?;
+        Ok(route)
+    } else {
+        let addresses = resolve_public_network_target(url, network).await?;
+        Ok(route.with_addresses(addresses))
+    }
 }
 
-async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
+async fn validate_public_network_target(
+    url: &url::Url,
+    network: &network_policy::WebNetworkConfig,
+) -> SdkResult<()> {
+    resolve_public_network_target(url, network)
+        .await
+        .map(|_| ())
+}
+
+async fn resolve_public_network_target(
+    url: &url::Url,
+    network: &network_policy::WebNetworkConfig,
+) -> SdkResult<Vec<std::net::SocketAddr>> {
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
@@ -3814,14 +3861,7 @@ async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net
             "DNS resolution returned no addresses for {host}"
         )));
     }
-    for address in &addresses {
-        if !is_public_address(address.ip()) {
-            return Err(PluginError::from_kind(
-                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-                format!("web URL host `{host}` resolves to non-public address `{address}`"),
-            ));
-        }
-    }
+    network_policy::validate_addresses(url, addresses.iter().copied(), network)?;
     Ok(addresses.into_iter().collect())
 }
 
@@ -4471,7 +4511,7 @@ async fn authorize_browser_document_request(raw_url: &str) -> SdkResult<()> {
             url.scheme()
         )));
     }
-    validate_public_network_target(&url).await
+    validate_public_network_target(&url, &network_policy::WebNetworkConfig::default()).await
 }
 
 async fn send_cdp_request(
@@ -4840,11 +4880,16 @@ fn format_browser_snapshot(snapshot: &serde_json::Value) -> String {
 fn is_public_address(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
+            let [first, second, third, _] = address.octets();
             !address.is_private()
                 && !address.is_loopback()
                 && !address.is_link_local()
-                && address.octets()[0] != 0
-                && address.octets()[0] < 224
+                && !address.is_documentation()
+                && first != 0
+                && !(first == 100 && (64..=127).contains(&second))
+                && !(first == 192 && second == 0 && third == 0)
+                && !(first == 198 && matches!(second, 18 | 19))
+                && first < 224
         }
         IpAddr::V6(address) => {
             if let Some(mapped) = address.to_ipv4_mapped() {
@@ -4855,6 +4900,8 @@ fn is_public_address(address: IpAddr) -> bool {
                 && !address.is_unicast_link_local()
                 && !address.is_unspecified()
                 && !address.is_multicast()
+                && address.segments()[..2] != [0x2001, 0x0db8]
+                && address.segments()[..2] != [0x2001, 0x0002]
         }
     }
 }
@@ -4972,6 +5019,7 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
 }
 
 fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
+    network_policy::validate_config(&web.network)?;
     if web.fetch.request.max_body_bytes > 32 * 1024 * 1024 || web.fetch.request.timeout_secs > 120 {
         return Err(PluginError::invalid_params(
             "fetch.request allows at most 32 MiB and 120 seconds",

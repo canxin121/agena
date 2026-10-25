@@ -189,14 +189,20 @@ impl WebSearchCoordinator {
             }
             session.cooldown = None;
         }
+        // Preserve cookies when the authorized route is unchanged. New DNS
+        // addresses or proxy settings replace the client and its pooled connections.
+        let client_key = serde_json::to_string(&(
+            &options.user_agent,
+            options.route.as_ref().map(crate::WebHttpRoute::cache_key),
+        ))?;
         if session
             .client
             .as_ref()
-            .is_none_or(|(agent, _)| agent != &options.user_agent)
+            .is_none_or(|(key, _)| key != &client_key)
         {
             session.client = Some((
-                options.user_agent.clone(),
-                transport::client(engine, &options.user_agent)?,
+                client_key,
+                transport::client(engine, &options.user_agent, options.route.as_ref())?,
             ));
         }
         let client = session.client.as_ref().unwrap().1.clone();

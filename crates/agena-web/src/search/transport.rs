@@ -76,9 +76,11 @@ pub(super) fn duckduckgo_next(page: &WebSearchPage) -> Option<SearchRequest> {
 pub(super) fn client(
     engine: WebSearchEngine,
     user_agent: &str,
+    route: Option<&crate::WebHttpRoute>,
 ) -> Result<reqwest::Client, CrawlError> {
-    let origin = url::Url::parse(engine.permission_url())?.origin();
-    Ok(reqwest::Client::builder()
+    let url = url::Url::parse(engine.permission_url())?;
+    let origin = url.origin();
+    let mut builder = reqwest::Client::builder()
         .user_agent(user_agent)
         .cookie_store(true)
         .connect_timeout(Duration::from_secs(10))
@@ -96,8 +98,13 @@ pub(super) fn client(
                 // without connecting to an unauthorized different origin.
                 attempt.stop()
             }
-        }))
-        .build()?)
+        }));
+    if let Some(route) = route {
+        builder = route.apply(builder, &url);
+    } else {
+        builder = crate::WebHttpRoute::for_url(&url, None)?.apply(builder, &url);
+    }
+    Ok(builder.build()?)
 }
 
 pub(super) async fn fetch(
@@ -196,4 +203,45 @@ fn retry_after(value: &str) -> Option<u64> {
     }
     let when = chrono::DateTime::parse_from_rfc2822(value).ok()?;
     Some((when.timestamp() - chrono::Utc::now().timestamp()).clamp(0, 86_400) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn authorized_search_addresses_are_used_without_another_dns_lookup() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let route = crate::WebHttpRoute::default().with_addresses(vec![address]);
+        let client = client(WebSearchEngine::Bing, "fixture", Some(&route)).unwrap();
+        let server = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let length = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains(&format!("host: www.bing.com:{}", address.port()))
+            );
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        };
+        let request = async {
+            let response = client
+                .get(format!("http://www.bing.com:{}/search", address.port()))
+                .send()
+                .await
+                .unwrap();
+            // The attempted cross-origin redirect is returned, never followed.
+            assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+            assert_eq!(response.remote_addr(), Some(address));
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(server, request);
+        })
+        .await
+        .unwrap();
+    }
 }

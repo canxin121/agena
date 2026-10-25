@@ -175,8 +175,20 @@ def main() -> int:
         client.send(b"f", "favorite-old-pin")
         fixture.poll(lambda: api.state(pins[3])["session"]["favorite"], 30, "TUI favorite toggle failed")
         client.wait_text("Favorites  2", "favorite-bucket-updated")
-        client.send(b"\t", "select-project-favorites")
-        wait_selected(client, "A-pin-03")
+        # Updating metadata can move this session out of page 2 of Pins.
+        # Selection follows its identity into Recent, so navigate to Favorites
+        # explicitly instead of assuming the old bucket is still selected.
+        client.send(b"\x1b[H\t\t", "select-project-favorites")
+        def favorite_selected() -> bool:
+            lines = project_text(client).splitlines()
+            index = next((i for i, line in enumerate(lines)
+                          if "›" in line and "A-pin-03" in line), None)
+            if index is None:
+                return False
+            header = next((line for line in reversed(lines[:index])
+                           if any(label in line for label in ("Pinned  ", "Favorites  ", "Recent  "))), "")
+            return "Favorites  " in header
+        fixture.poll(favorite_selected, 30, "target was not selected in Favorites")
         client.send(b"p", "unpin-while-keeping-favorite")
         fixture.poll(lambda: not api.state(pins[3])["session"]["pinned"], 30, "TUI unpin failed")
         fixture.require(api.state(pins[3])["session"]["favorite"], "unpin cleared favorite")

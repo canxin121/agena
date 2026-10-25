@@ -159,7 +159,7 @@ impl App {
 
     fn apply_transcript_execution_with(
         &mut self,
-        execution: SessionExecutionResource,
+        mut execution: SessionExecutionResource,
         transcript: ExecutionTranscript,
     ) -> bool {
         if self.transcript.session_id != Some(execution.session.id) {
@@ -190,6 +190,7 @@ impl App {
             .is_some_and(|current| current.session.state.active_execution().is_some());
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
+        self.session_mark_writes.project(&mut execution.session);
         match transcript {
             ExecutionTranscript::Window => self.transcript.apply_execution(execution),
             ExecutionTranscript::Shell => self.transcript.apply_execution_shell(execution),

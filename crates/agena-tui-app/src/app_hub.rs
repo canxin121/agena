@@ -71,6 +71,10 @@ impl App {
     }
 
     pub(crate) fn spawn_hub_overview_request(&mut self, state: &mut HubState) {
+        if !self.session_mark_writes.is_idle() {
+            self.defer_hub_catalog_for_marks(state);
+            return;
+        }
         if let Some(task) = state.request_task.take() {
             task.abort();
         }
@@ -106,6 +110,9 @@ impl App {
     }
 
     pub(crate) fn refresh_hub_if_due(&mut self) {
+        if !self.session_mark_writes.is_idle() {
+            return;
+        }
         let due = matches!(&self.current_route, Route::Hub(state)
             if state.search_changed_at.is_some_and(|at| at.elapsed().as_millis() >= 250)
                 || (!state.loading && state.dirty && state.refreshed_at.elapsed().as_millis() >= 500)
@@ -121,18 +128,25 @@ impl App {
     }
 
     pub(crate) fn refresh_hub_after_mutation(&mut self) {
-        if let Route::Hub(state) = &mut self.current_route {
-            state.dirty = true;
-        }
-        if !matches!(&self.current_route, Route::Hub(state) if state.loading) {
+        if !self.session_mark_writes.is_idle() || !matches!(&self.current_route, Route::Hub(_)) {
             return;
         }
-        // Reject an overview requested before the mutation was committed.
         let Route::Hub(mut state) = std::mem::replace(&mut self.current_route, Route::Main) else {
             return;
         };
         self.spawn_hub_overview_request(&mut state);
         self.current_route = Route::Hub(state);
+    }
+
+    fn defer_hub_catalog_for_marks(&mut self, state: &mut HubState) {
+        if let Some(task) = state.request_task.take() {
+            task.abort();
+        }
+        // Invalidate even a completed request whose response is still queued.
+        self.next_hub_request_id = self.next_hub_request_id.saturating_add(1);
+        state.request_id = self.next_hub_request_id;
+        state.loading = false;
+        state.dirty = true;
     }
 
     fn schedule_hub_search(&mut self, state: &mut HubState) {
@@ -153,6 +167,9 @@ impl App {
         result: super::UiResult<crate::app_backend::session_hub::HubCatalog>,
     ) {
         if !matches!(&self.current_route, Route::Hub(state) if state.request_id == request_id) {
+            return;
+        }
+        if !self.session_mark_writes.is_idle() {
             return;
         }
         let catalog = match result {
@@ -285,20 +302,6 @@ impl App {
         });
     }
 
-    pub(crate) fn request_session_pin(&mut self, session_id: i64, pinned: bool) {
-        let application = self.application.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = application
-                .set_session_pinned(session_id, pinned)
-                .await
-                .map_err(crate::UiFailure::from_backend);
-            let _ = tx
-                .send(AppMessage::SessionPinnedUpdated { session_id, result })
-                .await;
-        });
-    }
-
     fn activate_hub_row(&mut self, state: &mut HubState) -> bool {
         match state.presentation.selected_row().cloned() {
             Some(HubRow::Directory { workspace_id, .. }) => {
@@ -382,7 +385,12 @@ impl App {
                     .selected_item()
                     .filter(|item| !item.is_new_session)
                 {
-                    self.request_session_pin(item.session_id, !item.pinned);
+                    let session_id = item.session_id;
+                    let pinned = self.toggle_session_pin(session_id, item.pinned);
+                    state
+                        .presentation
+                        .set_pending_marks(session_id, Some(pinned), None);
+                    self.defer_hub_catalog_for_marks(state);
                 }
             }
             Some(KeyAction::Close) => {
@@ -419,7 +427,12 @@ impl App {
                     .selected_item()
                     .filter(|item| !item.is_new_session)
                 {
-                    self.request_session_favorite(item.session_id, !item.favorite);
+                    let session_id = item.session_id;
+                    let favorite = self.toggle_session_favorite(session_id, item.favorite);
+                    state
+                        .presentation
+                        .set_pending_marks(session_id, None, Some(favorite));
+                    self.defer_hub_catalog_for_marks(state);
                 }
             }
             Some(KeyAction::SearchForward) => state.search_active = true,

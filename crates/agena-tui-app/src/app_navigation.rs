@@ -96,7 +96,8 @@ impl App {
         )
     }
 
-    pub(crate) fn session_search_item(&self, session: SessionResource) -> SessionSearchItem {
+    pub(crate) fn session_search_item(&self, mut session: SessionResource) -> SessionSearchItem {
+        self.session_mark_writes.project(&mut session);
         let mut detail_parts = vec![
             ui_text::session_state_label(&self.i18n, &session.state),
             ui_text::session_meta(

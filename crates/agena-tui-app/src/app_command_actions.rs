@@ -413,7 +413,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.request_session_favorite(session_id, !favorite);
+        self.toggle_session_favorite(session_id, favorite);
     }
 }
 

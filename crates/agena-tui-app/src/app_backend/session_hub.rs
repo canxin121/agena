@@ -34,7 +34,7 @@ impl TuiBackend {
         let search = (!query.search.trim().is_empty()).then(|| query.search.trim().to_owned());
         let QueryResult::Workspaces(workspaces) = self
             .client()
-            .query(Query::ListWorkspaces(ListWorkspacesParams {
+            .query_revalidated(Query::ListWorkspaces(ListWorkspacesParams {
                 limit: Some(HUB_PAGE_SIZE),
                 offset: workspace_page as u64 * HUB_PAGE_SIZE,
                 include_session_count: true,
@@ -183,7 +183,14 @@ impl TuiBackend {
                 page.items.iter().map(|session| session.id).collect(),
             );
             for session in page.items {
-                sessions.insert(session.id, session);
+                // Independently fetched buckets can finish out of order.
+                // Never replace a newer resource with an older duplicate.
+                let existing: Option<&SessionResource> = sessions.get(&session.id);
+                if existing.is_none_or(|old| {
+                    (session.version, session.updated_at) >= (old.version, old.updated_at)
+                }) {
+                    sessions.insert(session.id, session);
+                }
             }
         }
         catalog.sessions = sessions.into_values().collect();

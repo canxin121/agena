@@ -1,15 +1,58 @@
 //! Pointer dispatch follows the same topmost surface and reducers as keyboard input.
 use crate::*;
+use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::pointer::PointerAction;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 impl App {
+    /// Marker toggles change neither route nor row geometry until the next
+    /// frame. Keep the hit map for the still-visible toolbar so a second
+    /// click in the same input batch is not silently discarded.
+    pub(crate) fn is_session_mark_key(&self, key: KeyEvent) -> bool {
+        if self.context_help.is_some() {
+            return false;
+        }
+        let search = match &self.overlay {
+            Some(Overlay::SessionSearch(dialog)) => Some(dialog),
+            Some(_) => return false,
+            None => match &self.current_route {
+                Route::SessionSearch(dialog) => Some(dialog),
+                _ => None,
+            },
+        };
+        let context = match search {
+            Some(dialog)
+                if dialog.focus == agena_tui_components::SearchPickerFocus::Results
+                    || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                KeyContext::SessionSearch
+            }
+            Some(_) => return false,
+            None => match &self.current_route {
+                Route::Hub(state)
+                    if !state.search_active || key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    KeyContext::Hub
+                }
+                _ => return false,
+            },
+        };
+        matches!(
+            resolve_tui_key(context, key),
+            Some(KeyAction::HubTogglePinned | KeyAction::ToggleFavorite)
+        )
+    }
+
     pub(crate) fn handle_surface_pointer(&mut self, mouse: MouseEvent) -> bool {
         if let Some(action) = self.pointer_targets.action(mouse) {
+            let keep_targets =
+                matches!(&action, PointerAction::Key(key) if self.is_session_mark_key(*key));
             self.cancel_active_pointer_gesture();
             self.cancel_surface_selection();
             self.apply_pointer_action(action, true);
-            self.pointer_targets = Default::default();
+            if !keep_targets {
+                self.pointer_targets = Default::default();
+            }
             return true;
         }
         let modal = self.overlay.is_some()

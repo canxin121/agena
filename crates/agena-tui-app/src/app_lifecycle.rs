@@ -142,6 +142,7 @@ impl App {
             fork_pending: false,
             next_usage_request_id: 0,
             next_hub_request_id: 0,
+            session_mark_writes: Default::default(),
             active_subscription: None,
             subscription_generation: 0,
             status_line,

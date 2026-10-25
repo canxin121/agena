@@ -72,6 +72,82 @@ fn select_item(hub: &mut SessionHubPresentation, target: HubPageTarget, id: i64)
 }
 
 #[test]
+fn pending_mark_bursts_keep_rows_counts_and_selection_stable() {
+    let mut hub = SessionHubPresentation::empty();
+    let mut project = marked_directory(1);
+    project.items.push(project.sections[0].items[0].clone());
+    hub.set_catalog(
+        vec![project, marked_directory(2)],
+        vec![SessionHubSection::new(
+            SessionHubSectionKind::Recent,
+            vec![item(1, 101)],
+        )],
+    );
+    let target = HubPageTarget::DirectorySection(1, SessionHubSectionKind::Pinned);
+    hub.set_pagination(BTreeMap::from([(
+        target,
+        HubPagination {
+            total: Some(1),
+            ..Default::default()
+        },
+    )]));
+    select_item(&mut hub, target, 101);
+    let identities = hub.rows.iter().map(HubRow::identity).collect::<Vec<_>>();
+    let selection = hub.selection;
+    hub.directory_offset.set(2);
+    for index in 0..50 {
+        hub.set_pending_marks(101, Some(index % 2 == 1), Some(index % 3 == 1));
+        assert_eq!(
+            hub.rows.iter().map(HubRow::identity).collect::<Vec<_>>(),
+            identities
+        );
+        assert_eq!(hub.selection, selection);
+        assert_eq!(hub.directory_offset.get(), 2);
+        assert_eq!(hub.pagination[&target].total, Some(1));
+        for row in hub.rows() {
+            if let HubRow::Item(item) = row
+                && item.session_id == 101
+            {
+                assert_eq!(item.pinned, index % 2 == 1);
+                assert_eq!(item.favorite, index % 3 == 1);
+            }
+        }
+    }
+    // Rebuilding for navigation/filtering must retain the same pending marks.
+    hub.set_query("session-101");
+    assert!(hub.selected_item().unwrap().pinned);
+    assert!(hub.selected_item().unwrap().favorite);
+}
+
+#[test]
+fn committed_unpin_keeps_the_session_selected_instead_of_a_bucket_neighbor() {
+    let mut hub = SessionHubPresentation::empty();
+    let mut project = marked_directory(1);
+    project.items.push(project.sections[0].items[0].clone());
+    let mut neighbor = item(1, 103);
+    neighbor.pinned = true;
+    project.sections[0].items.push(neighbor);
+    hub.set_catalog(vec![project.clone()], vec![]);
+    select_item(
+        &mut hub,
+        HubPageTarget::DirectorySection(1, SessionHubSectionKind::Pinned),
+        101,
+    );
+    hub.set_pending_marks(101, Some(false), None);
+    project.sections[0].items.remove(0);
+    project
+        .items
+        .iter_mut()
+        .find(|item| item.session_id == 101)
+        .unwrap()
+        .pinned = false;
+    hub.set_catalog(vec![project], vec![]);
+    assert_eq!(hub.selected_item().unwrap().session_id, 101);
+    assert_eq!(hub.selected_page_target(), HubPageTarget::Directory(1));
+    assert!(!hub.selected_item().unwrap().pinned);
+}
+
+#[test]
 fn opening_focuses_project_create_and_catalog_refresh_preserves_it() {
     let mut hub = SessionHubPresentation::empty();
     hub.set_directories(vec![directory(2)]);

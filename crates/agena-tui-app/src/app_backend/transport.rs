@@ -2749,7 +2749,10 @@ impl TuiBackend {
         &self,
         params: ListSessionsParams,
     ) -> Result<PaginatedResponse<SessionResource>> {
-        let result = self.client().query(Query::ListSessions(params)).await?;
+        let result = self
+            .client()
+            .query_revalidated(Query::ListSessions(params))
+            .await?;
         let QueryResult::Sessions(page) = result else {
             bail!("server returned the wrong session-list result");
         };

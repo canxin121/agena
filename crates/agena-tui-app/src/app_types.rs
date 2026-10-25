@@ -518,6 +518,7 @@ pub struct App {
     /// Monotonic id for session-hub overview loads. Kept on the app so a late
     /// response from an older hub cannot overwrite a freshly refreshed one.
     pub(super) next_hub_request_id: u64,
+    pub(super) session_mark_writes: crate::app_session_marks::SessionMarkWrites,
     /// Forwarder task that pumps `app_backend::live_events::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
@@ -688,12 +689,8 @@ pub(super) enum AppMessage {
         session_id: i64,
         result: UiResult<SessionResource>,
     },
-    SessionFavoriteUpdated {
-        session_id: i64,
-        result: UiResult<SessionResource>,
-    },
-    SessionPinnedUpdated {
-        session_id: i64,
+    SessionMarkUpdated {
+        write: crate::app_session_marks::MarkWrite,
         result: UiResult<SessionResource>,
     },
     PermissionReplied {

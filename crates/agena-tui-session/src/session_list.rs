@@ -159,6 +159,14 @@ impl SessionListPresentation {
         }
     }
 
+    pub fn set_item_favorite(&mut self, session_id: i64, favorite: bool) {
+        for item in self.source_items.iter_mut().chain(&mut self.list.items) {
+            if item.session_id == session_id {
+                item.favorite = favorite;
+            }
+        }
+    }
+
     /// Updates display-only state and returns the resulting application intent.
     pub fn update(&mut self, action: SessionListAction) -> SessionListEffect {
         match action {

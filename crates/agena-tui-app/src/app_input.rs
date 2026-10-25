@@ -4,7 +4,9 @@ impl App {
             return;
         }
 
-        self.pointer_targets = Default::default();
+        if !self.is_session_mark_key(key) {
+            self.pointer_targets = Default::default();
+        }
         self.refresh_input_derived_state();
 
         if self.focus != Focus::Transcript

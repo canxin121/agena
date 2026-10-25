@@ -417,6 +417,44 @@ impl SessionHubPresentation {
         self.set_item_mark(session_id, SessionHubSectionKind::Pinned, pinned);
     }
 
+    /// Update markers immediately without moving rows under repeated clicks.
+    /// Bucket membership/counts are replaced together by the catalog fetched
+    /// after all pending writes settle, rather than piecemeal per HTTP reply.
+    pub fn set_pending_marks(
+        &mut self,
+        session_id: i64,
+        pinned: Option<bool>,
+        favorite: Option<bool>,
+    ) {
+        for item in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.items)
+            .chain(self.directories.iter_mut().flat_map(|directory| {
+                directory.items.iter_mut().chain(
+                    directory
+                        .sections
+                        .iter_mut()
+                        .flat_map(|section| &mut section.items),
+                )
+            }))
+            .chain(self.rows.iter_mut().filter_map(|row| match row {
+                HubRow::Item(item) => Some(item),
+                _ => None,
+            }))
+        {
+            if item.session_id != session_id || item.is_new_session {
+                continue;
+            }
+            if let Some(pinned) = pinned {
+                item.pinned = pinned;
+            }
+            if let Some(favorite) = favorite {
+                item.favorite = favorite;
+            }
+        }
+    }
+
     /// Update every duplicate, then adjust only the owning project's bucket.
     /// Pinning and favoriting are independent and have independent pages.
     fn set_item_mark(&mut self, session_id: i64, kind: SessionHubSectionKind, enabled: bool) {
@@ -805,20 +843,26 @@ impl SessionHubPresentation {
                     })
             })
             .or_else(|| {
-                self.item_indices()
-                    .into_iter()
-                    .filter(|&index| self.row_page_target(index) == previous_target)
-                    .min_by_key(|&index| index.abs_diff(previous_selection))
-            })
-            .or_else(|| {
-                // Removing the last pin/favorite can remove its bucket. Keep
-                // focus on the same session in the project's ordinary list.
+                // A mark change may move this session out of its bucket.
+                // Keep its identity before considering a neighboring row.
                 let previous = previous?;
                 self.rows.iter().enumerate().find_map(|(index, row)| {
                     (row.identity() == Some(previous)
                         && matches!(self.row_page_target(index), HubPageTarget::Directory(_)))
                     .then_some(index)
                 })
+            })
+            .or_else(|| {
+                let previous = previous?;
+                self.rows
+                    .iter()
+                    .position(|row| row.identity() == Some(previous))
+            })
+            .or_else(|| {
+                self.item_indices()
+                    .into_iter()
+                    .filter(|&index| self.row_page_target(index) == previous_target)
+                    .min_by_key(|&index| index.abs_diff(previous_selection))
             })
             .unwrap_or(0);
         self.clamp_selection();

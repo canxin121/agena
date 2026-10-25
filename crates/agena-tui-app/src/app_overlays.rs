@@ -46,9 +46,16 @@ impl App {
             {
                 if ready && let Some(session) = dialog.selected_item() {
                     if action == Some(KeyAction::HubTogglePinned) {
-                        self.request_session_pin(session.session_id, !session.pinned);
+                        let session_id = session.session_id;
+                        let pinned = self.toggle_session_pin(session_id, session.pinned);
+                        dialog.meta.remember_marks(session_id, Some(pinned), None);
                     } else {
-                        self.request_session_favorite(session.session_id, !session.favorite);
+                        let session_id = session.session_id;
+                        let favorite = self.toggle_session_favorite(session_id, session.favorite);
+                        dialog.meta.remember_marks(session_id, None, Some(favorite));
+                    }
+                    for item in &mut dialog.items {
+                        dialog.meta.apply_marks(item);
                     }
                 }
             }

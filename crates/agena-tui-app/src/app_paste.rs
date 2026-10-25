@@ -11,6 +11,9 @@ impl App {
             return true;
         }
         if let Some(overlay) = &self.overlay {
+            if let Overlay::SessionSearch(dialog) = overlay {
+                return dialog.focus == agena_tui_components::SearchPickerFocus::Input;
+            }
             return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
         }
         match &self.current_route {
@@ -25,8 +28,12 @@ impl App {
             | Route::Hub(_) => false,
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
-            Route::SessionSearch(_)
-            | Route::CommandPalette(_)
+            // Results own command keys such as p/f. Treating them as text
+            // coalesces fast key presses into a paste and edits the query.
+            Route::SessionSearch(dialog) => {
+                dialog.focus == agena_tui_components::SearchPickerFocus::Input
+            }
+            Route::CommandPalette(_)
             | Route::SessionNavigation(_)
             | Route::SelectionPicker(_)
             | Route::SessionModelChooser(_)

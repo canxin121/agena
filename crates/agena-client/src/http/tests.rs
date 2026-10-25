@@ -192,6 +192,57 @@ async fn empty_and_invalid_health_responses_include_server_context() {
 }
 
 #[tokio::test]
+async fn explicit_list_refresh_revalidates_even_with_a_live_revision_lease() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "unused",
+        Some(r#"{"items":[],"page":{"returned":0,"has_more":true,"next_cursor":"next"}}"#),
+    )
+    .await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let resource = "workspace:1:sessions";
+    let url = format!("{}/api/v1/sessions?workspace_id=1", server.url);
+    {
+        let mut reads = client.reads.lock().await;
+        reads.global_live_users.store(1, Ordering::Release);
+        reads.checked_at = Some(Instant::now());
+        reads.versions.insert(resource.to_owned(), "old".to_owned());
+        reads.remember(
+            format!("{resource}\n{url}"),
+            CachedRead {
+                resource: resource.to_owned(),
+                token: "old".to_owned(),
+                etag: "\"old\"".to_owned(),
+                value: serde_json::json!({"items":[],"page":{"returned":0,"has_more":false}}),
+                bytes: 64,
+                used: 0,
+                generation: 0,
+            },
+        );
+    }
+    let query = Query::ListSessions(ListSessionsParams {
+        workspace_id: Some(1),
+        ..Default::default()
+    });
+    let QueryResult::Sessions(cached) = client.query(query.clone()).await.unwrap() else {
+        panic!("wrong query result")
+    };
+    assert!(!cached.page.has_more);
+    assert!(server.requests.lock().unwrap().is_empty());
+    let QueryResult::Sessions(fresh) = client.query_revalidated(query).await.unwrap() else {
+        panic!("wrong query result")
+    };
+    assert!(fresh.page.has_more);
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("if-none-match: \"old\"")
+    );
+}
+
+#[tokio::test]
 #[ignore = "invoked by proxy tests in a process with isolated environment"]
 async fn proxy_environment_child() {
     let mode = std::env::var("AGENA_CLIENT_TEST_MODE").unwrap();

@@ -219,8 +219,15 @@ impl App {
                     .items
                     .into_iter()
                     .map(|session| {
-                        let mut item = self.session_search_item(session);
-                        dialog.meta.apply_marks(&mut item);
+                        let item = self.session_search_item(session);
+                        // The App projects pending writes and rejects snapshots
+                        // older than a commit. A newer server value must also
+                        // replace the picker's prior local override.
+                        dialog.meta.remember_marks(
+                            item.session_id,
+                            Some(item.pinned),
+                            Some(item.favorite),
+                        );
                         item
                     })
                     .collect::<Vec<_>>();
@@ -294,8 +301,12 @@ impl App {
                 dialog.meta.all_items = sessions
                     .into_iter()
                     .map(|session| {
-                        let mut item = self.session_search_item(session);
-                        dialog.meta.apply_marks(&mut item);
+                        let item = self.session_search_item(session);
+                        dialog.meta.remember_marks(
+                            item.session_id,
+                            Some(item.pinned),
+                            Some(item.favorite),
+                        );
                         item
                     })
                     .collect();

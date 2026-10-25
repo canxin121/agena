@@ -132,6 +132,7 @@ mod app_queue_editor;
 mod app_session_events;
 mod app_session_helpers;
 mod app_session_interactive;
+mod app_session_marks;
 mod app_session_work;
 mod app_settings;
 mod app_settings_choices;

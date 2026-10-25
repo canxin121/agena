@@ -2913,6 +2913,22 @@ impl AgenaClient {
 
     /// Generic query escape hatch over the existing REST surface.
     pub async fn query(&self, q: Query) -> Result<QueryResult, ClientError> {
+        self.query_with_validation(q, false).await
+    }
+
+    /// Revalidate cached list queries even while a global live stream exists.
+    /// Explicit refreshes and reads after mutations cannot assume that every
+    /// revision notification has already reached the client. ETag validation
+    /// and coalescing of concurrent requests still apply.
+    pub async fn query_revalidated(&self, q: Query) -> Result<QueryResult, ClientError> {
+        self.query_with_validation(q, true).await
+    }
+
+    async fn query_with_validation(
+        &self,
+        q: Query,
+        force: bool,
+    ) -> Result<QueryResult, ClientError> {
         match q {
             Query::ReadContentText(params) => Ok(QueryResult::ContentText(
                 self.read_content_text(params).await?,
@@ -3073,7 +3089,7 @@ impl AgenaClient {
                     }
                 }
                 Ok(QueryResult::Workspaces(
-                    self.conditional_json("workspaces", url, false).await?,
+                    self.conditional_json("workspaces", url, force).await?,
                 ))
             }
             Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
@@ -3133,7 +3149,7 @@ impl AgenaClient {
                     .map(|id| format!("workspace:{id}:sessions"))
                     .unwrap_or_else(|| "sessions".to_owned());
                 Ok(QueryResult::Sessions(
-                    self.conditional_json(&resource, url, false).await?,
+                    self.conditional_json(&resource, url, force).await?,
                 ))
             }
             Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
@@ -3193,7 +3209,7 @@ impl AgenaClient {
                     }
                 }
                 Ok(QueryResult::Activities(
-                    self.conditional_json("activities", url, false).await?,
+                    self.conditional_json("activities", url, force).await?,
                 ))
             }
             Query::GetActivity(GetActivityParams { activity_id }) => Ok(QueryResult::Activity(

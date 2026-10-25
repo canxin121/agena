@@ -21,7 +21,7 @@ enum Backend {
 #[input(non_empty_if_present("pattern"))]
 pub(super) struct DocumentInput {
     #[arg(trim, non_empty)]
-    path: String,
+    pub(super) path: String,
     #[serde(default)]
     backend: Backend,
     #[serde(default, skip_serializing_if = "Option::is_none")]

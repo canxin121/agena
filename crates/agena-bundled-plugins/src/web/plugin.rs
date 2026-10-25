@@ -1585,7 +1585,7 @@ impl WebPlugin {
                 "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
             )))
         };
-        tokio::time::timeout(timeout, preflight)
+        agena_plugin_host::sdk::permission_wait::timeout(timeout, preflight)
             .await
             .map_err(|_| PluginError::internal("browser redirect preflight deadline exceeded"))?
     }
@@ -1803,11 +1803,11 @@ impl WebPlugin {
             let host = host.clone();
             Box::pin(async move {
                 if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
-                    return Err("browser network authorization requires an active tool call".into());
+                    return Err(PluginError::internal(
+                        "browser network authorization requires an active tool call",
+                    ));
                 }
-                host.require_network_permission(url.clone())
-                    .await
-                    .map_err(|error| error.diagnostic_message().to_owned())?;
+                host.require_network_permission(url.clone()).await?;
                 authorize_browser_document_request(&url).await
             })
         });
@@ -2191,14 +2191,29 @@ impl WebPlugin {
                 sink.text(format!("[{position}/{total}] {state} {raw}\n")).await;
             }
             match result {
-                Ok((output, usable)) => (serde_json::json!({"url":raw,"ok":true,"usable":usable,"page":output.payload}), output.output_text, usable),
+                Ok((output, usable)) => (serde_json::json!({"url":raw,"ok":true,"usable":usable,"page":output.payload}), output.output_text, usable, None),
                 Err(error) => {
                     tracing::warn!(url = %raw, diagnostic = %error.diagnostic_message(), "batch page failed");
                     let message = &error.failure.user.fallback;
-                    (serde_json::json!({"url":raw,"ok":false,"usable":false,"error_kind":error.kind,"error":message,"failure_id":error.failure.id}), format!("URL: {raw}\n{message}"), false)
+                    (serde_json::json!({"url":raw,"ok":false,"usable":false,"error_kind":error.kind,"error":message,"failure_id":error.failure.id}), format!("URL: {raw}\n{message}"), false, Some(error))
                 }
             }
         }).await;
+        let mut results = results;
+        if results.iter().all(|entry| entry.3.is_some()) {
+            if let Some(error) = results.iter_mut().find_map(|entry| {
+                entry.3.as_ref().filter(|error| {
+                    matches!(
+                        error.kind,
+                        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
+                            | agena_plugin_host::sdk::PluginErrorKind::UserDeclined
+                    )
+                })?;
+                entry.3.take()
+            }) {
+                return Err(error);
+            }
+        }
         let usable = results.iter().filter(|entry| entry.2).count();
         let text = results
             .iter()
@@ -3199,7 +3214,7 @@ impl WebPlugin {
                 .await?
             } else {
                 let client = self.browser_client(Some(input.session_id.as_str())).await?;
-                tokio::time::timeout(
+                agena_plugin_host::sdk::permission_wait::timeout(
                     Duration::from_millis(input.timeout_ms),
                     client.evaluate(expression.as_str()),
                 )
@@ -3303,7 +3318,7 @@ impl WebPlugin {
                 .await?
             } else {
                 let client = self.browser_client(Some(input.session_id.as_str())).await?;
-                tokio::time::timeout(
+                agena_plugin_host::sdk::permission_wait::timeout(
                     Duration::from_millis(input.timeout_ms),
                     client.evaluate(expression.as_str()),
                 )
@@ -3489,6 +3504,16 @@ impl WebPlugin {
                 .join("browser")
                 .join(format!("{}.png", uuid::Uuid::new_v4())),
         };
+        if input.path.is_some() {
+            self.state()?
+                .host
+                .require_path_permission(
+                    agena_plugin_host::sdk::host_api::PathPermissionQuery::write(
+                        path.to_string_lossy(),
+                    ),
+                )
+                .await?;
+        }
         let size_bytes = bytes.len() as u64;
         crate::artifact_file::persist_replace_or_create(path.clone(), bytes, "browser screenshot")
             .await?;
@@ -3604,6 +3629,8 @@ impl WebPlugin {
             .await
             .get(&input.session_id)
             .and_then(|meta| meta.browser_context_id.clone());
+        let page = self.browser_client(Some(&input.session_id)).await?;
+        page.refresh_callback_context()?;
         let result = downloads::transfer(
             endpoint,
             browser_context_id,
@@ -3659,7 +3686,9 @@ impl WebPlugin {
         text: Option<&str>,
         timeout_ms: u64,
     ) -> SdkResult<()> {
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let deadline = agena_plugin_host::sdk::permission_wait::Deadline::new(
+            Duration::from_millis(timeout_ms),
+        );
         let selector = selector
             .map(serde_json::to_string)
             .transpose()
@@ -3681,7 +3710,7 @@ impl WebPlugin {
                 let client = self.browser_client(Some(target_id)).await?;
                 client.evaluate(expression.as_str()).await
             };
-            match tokio::time::timeout_at(deadline, probe).await {
+            match deadline.run(probe).await {
                 Ok(Ok(value)) if value.as_bool() == Some(true) => return Ok(()),
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => return Err(error),
@@ -3691,7 +3720,7 @@ impl WebPlugin {
                     )));
                 }
             }
-            if tokio::time::Instant::now() >= deadline {
+            if deadline.remaining().is_zero() {
                 return Err(PluginError::internal(format!(
                     "browser wait timed out after {timeout_ms} ms"
                 )));
@@ -3710,16 +3739,16 @@ impl WebPlugin {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
-        // Reserve a small completion margin inside the aggregate deadline so
-        // a timed-out later page can return its already collected results.
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(state.config.fetch.request.timeout_secs)
-                .saturating_sub(Duration::from_millis(50));
         state
             .host
             .require_network_permission(engine_url.to_string())
             .await?;
         self.validate_network_target(&engine_url).await?;
+        // Reserve a small completion margin inside the aggregate deadline so
+        // a timed-out later page can return its already collected results.
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(state.config.fetch.request.timeout_secs)
+                .saturating_sub(Duration::from_millis(50));
         let config = &state.config;
         let options = WebSearchOptions {
             engine,
@@ -3738,11 +3767,7 @@ impl WebPlugin {
                     rendered_fetch::search_source(self, &url, remaining)
                         .await
                         .map(Some)
-                        .map_err(|error| {
-                            agena_web::CrawlError::InvalidInput(
-                                error.diagnostic_message().to_owned(),
-                            )
-                        })
+                        .map_err(plugin_error_to_crawl)
                 },
             )
             .await
@@ -3791,9 +3816,10 @@ async fn resolve_public_network_target(url: &url::Url) -> SdkResult<Vec<std::net
     }
     for address in &addresses {
         if !is_public_address(address.ip()) {
-            return Err(PluginError::invalid_params(format!(
-                "web URL host `{host}` resolves to non-public address `{address}`"
-            )));
+            return Err(PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                format!("web URL host `{host}` resolves to non-public address `{address}`"),
+            ));
         }
     }
     Ok(addresses.into_iter().collect())
@@ -3822,15 +3848,20 @@ enum PendingCdpCommand {
 struct NavigationDecision {
     request_id: String,
     url: String,
-    result: Result<(), String>,
+    call: Option<(i64, i64)>,
+    result: SdkResult<()>,
+}
+
+struct NavigationFailure {
+    call: Option<(i64, i64)>,
+    error: PluginError,
 }
 
 const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
-type BrowserRequestPolicy = Arc<
-    dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
->;
+type BrowserRequestPolicy =
+    Arc<dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = SdkResult<()>> + Send>> + Send + Sync>;
 
 type BrowserCallbackContext =
     Arc<std::sync::Mutex<Option<agena_plugin_host::sdk::host_api::HostCallbackContext>>>;
@@ -3843,7 +3874,7 @@ struct CdpAuthorization {
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
     navigation_interception_enabled: Arc<OnceLock<()>>,
-    navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+    navigation_errors: Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
     callback_context: BrowserCallbackContext,
 }
 
@@ -3880,7 +3911,7 @@ impl CdpClient {
         events: Option<mpsc::Sender<CdpEvent>>,
         policy: BrowserRequestPolicy,
     ) -> SdkResult<Self> {
-        let (mut socket, _) = tokio::time::timeout(
+        let (mut socket, _) = agena_plugin_host::sdk::permission_wait::timeout(
             CDP_CONNECT_TIMEOUT,
             tokio_tungstenite::connect_async(endpoint),
         )
@@ -3893,7 +3924,7 @@ impl CdpClient {
         })?;
 
         let (session_id, next_id) = if let Some(target_id) = target_id {
-            let result = tokio::time::timeout(
+            let result = agena_plugin_host::sdk::permission_wait::timeout(
                 CDP_CONNECT_TIMEOUT,
                 cdp_attach_target(&mut socket, target_id),
             )
@@ -3945,13 +3976,19 @@ impl CdpClient {
             return Ok(());
         }
         self.command(
+            "Network.setBypassServiceWorker",
+            serde_json::json!({"bypass":true}),
+        )
+        .await?;
+        self.command(
+            "Network.setCacheDisabled",
+            serde_json::json!({"cacheDisabled":true}),
+        )
+        .await?;
+        self.command(
             "Fetch.enable",
             serde_json::json!({
-                "patterns": [{
-                    "urlPattern": "*",
-                    "resourceType": "Document",
-                    "requestStage": "Request",
-                }],
+                "patterns": [{ "urlPattern": "*", "requestStage": "Request" }],
             }),
         )
         .await?;
@@ -3986,11 +4023,11 @@ impl CdpClient {
         // host rejects an expired authority; no background workspace fallback.
         self.refresh_callback_context()?;
         if let Some(error) = self.take_navigation_error() {
-            return Err(PluginError::internal(error));
+            return Err(error);
         }
 
         let (response, receiver) = oneshot::channel();
-        let result = tokio::time::timeout(command_timeout, async {
+        let result = agena_plugin_host::sdk::permission_wait::timeout(command_timeout, async {
             self.commands
                 .send(CdpCommandRequest {
                     method: method.to_string(),
@@ -4023,7 +4060,7 @@ impl CdpClient {
         })??;
 
         if let Some(error) = self.take_navigation_error() {
-            return Err(PluginError::internal(error));
+            return Err(error);
         }
         result.map_err(PluginError::internal)
     }
@@ -4050,16 +4087,22 @@ impl CdpClient {
             .unwrap_or(serde_json::Value::Null))
     }
 
-    fn take_navigation_error(&self) -> Option<String> {
-        match self.navigation_errors.lock() {
-            Ok(mut errors) => errors.pop_front(),
-            Err(poisoned) => {
-                tracing::error!(
-                    "browser navigation error queue lock was poisoned; recovering queued safety diagnostics"
-                );
-                poisoned.into_inner().pop_front()
+    fn take_navigation_error(&self) -> Option<PluginError> {
+        let current = agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.session_id.zip(context.call_id));
+        let mut errors = self
+            .navigation_errors
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Deferred requests from a completed tool retain its old authority.
+        // Their rejection must not fail the next, independently authorized call.
+        while let Some(failure) = errors.pop_front() {
+            if failure.call.is_none() || failure.call == current {
+                return Some(failure.error);
             }
+            tracing::debug!(call = ?failure.call, "discarded browser rejection from an earlier call");
         }
+        None
     }
 
     fn is_closed(&self) -> bool {
@@ -4144,7 +4187,7 @@ async fn run_cdp_connection(
     session_id: Option<String>,
     mut next_id: u64,
     mut commands: mpsc::Receiver<CdpCommandRequest>,
-    navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+    navigation_errors: Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
     events: Option<mpsc::Sender<CdpEvent>>,
     authorization: CdpAuthorization,
 ) {
@@ -4220,13 +4263,7 @@ async fn run_cdp_connection(
                         serde_json::json!({ "requestId": decision.request_id }),
                     ),
                     Err(error) => {
-                        push_navigation_error(
-                            &navigation_errors,
-                            format!(
-                                "browser document request to '{}' was blocked before dispatch: {error}",
-                                decision.url
-                            ),
-                        );
+                        push_navigation_failure(&navigation_errors, decision.call, error);
                         (
                             "Fetch.failRequest",
                             serde_json::json!({
@@ -4393,23 +4430,21 @@ async fn run_cdp_connection(
                 let policy = authorization.policy.clone();
                 let context = match authorization.context.lock() {
                     Ok(context) => context.clone(),
-                    Err(_) => { push_navigation_error(&navigation_errors, "browser callback context lock poisoned".into()); break; }
+                    Err(_) => { push_navigation_error(&navigation_errors, "browser callback context lock poisoned".to_owned()); break; }
                 };
+                let call = context.as_ref().and_then(|context| context.session_id.zip(context.call_id));
                 checks.spawn(async move {
                     let _authorization_slot = authorization_slot;
-                    let authorized = async {
-                        let operation = policy(url.clone(), is_document);
-                        match context {
-                            Some(context) => agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(context, operation).await,
-                            None => operation.await,
-                        }
-                    };
-                    let result = tokio::time::timeout(CDP_COMMAND_TIMEOUT, authorized).await
-                        .unwrap_or_else(|_| Err("browser request authorization timed out".into()));
+                    let authorized = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+                        context.unwrap_or_default(),
+                        agena_plugin_host::sdk::permission_wait::timeout(CDP_COMMAND_TIMEOUT, async { policy(url.clone(), is_document).await }),
+                    );
+                    let result = authorized.await.unwrap_or_else(|_| Err(PluginError::from_kind(agena_plugin_host::sdk::PluginErrorKind::Timeout, "browser request authorization timed out")));
                     if let Err(error) = decisions
                         .send(NavigationDecision {
                             request_id,
                             url,
+                            call,
                             result,
                         })
                         .await
@@ -4427,17 +4462,16 @@ async fn run_cdp_connection(
     }
 }
 
-async fn authorize_browser_document_request(raw_url: &str) -> Result<(), String> {
-    let url = url::Url::parse(raw_url).map_err(|error| format!("invalid document URL: {error}"))?;
+async fn authorize_browser_document_request(raw_url: &str) -> SdkResult<()> {
+    let url = url::Url::parse(raw_url)
+        .map_err(|error| PluginError::invalid_params(format!("invalid document URL: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!(
+        return Err(PluginError::invalid_params(format!(
             "unsupported document URL scheme '{}'; only HTTP(S) navigation is allowed",
             url.scheme()
-        ));
+        )));
     }
-    validate_public_network_target(&url)
-        .await
-        .map_err(|error| error.diagnostic_message().to_owned())
+    validate_public_network_target(&url).await
 }
 
 async fn send_cdp_request(
@@ -4466,7 +4500,7 @@ fn complete_cdp_command(
     id: u64,
     response: serde_json::Value,
     pending: &mut BTreeMap<u64, PendingCdpCommand>,
-    navigation_errors: &Arc<std::sync::Mutex<VecDeque<String>>>,
+    navigation_errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
 ) {
     let Some(command) = pending.remove(&id) else {
         return;
@@ -4516,22 +4550,44 @@ fn fail_pending_commands(pending: &mut BTreeMap<u64, PendingCdpCommand>, error: 
     }
 }
 
-fn push_navigation_error(errors: &Arc<std::sync::Mutex<VecDeque<String>>>, error: String) {
-    let mut errors = match errors.lock() {
-        Ok(errors) => errors,
-        Err(poisoned) => {
-            tracing::error!(
-                operation = "record browser navigation error",
-                error = %poisoned,
-                "recovering poisoned browser navigation-error queue"
-            );
-            poisoned.into_inner()
-        }
+enum NavigationError {
+    Typed(PluginError),
+    Text(String),
+}
+impl From<PluginError> for NavigationError {
+    fn from(error: PluginError) -> Self {
+        Self::Typed(error)
+    }
+}
+impl From<String> for NavigationError {
+    fn from(error: String) -> Self {
+        Self::Text(error)
+    }
+}
+
+fn push_navigation_error(
+    errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
+    error: impl Into<NavigationError>,
+) {
+    let error = match error.into() {
+        NavigationError::Typed(error) => error,
+        NavigationError::Text(error) => PluginError::internal(error),
     };
+    push_navigation_failure(errors, None, error);
+}
+
+fn push_navigation_failure(
+    errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
+    call: Option<(i64, i64)>,
+    error: PluginError,
+) {
+    let mut errors = errors
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if errors.len() >= 32 {
         errors.pop_front();
     }
-    errors.push_back(error);
+    errors.push_back(NavigationFailure { call, error });
 }
 
 fn ensure_browser_action(result: &serde_json::Value) -> SdkResult<()> {
@@ -4815,11 +4871,32 @@ fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::U
     }
 }
 
+fn plugin_error_to_crawl(error: PluginError) -> agena_web::CrawlError {
+    if matches!(
+        error.kind,
+        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
+            | agena_plugin_host::sdk::PluginErrorKind::UserDeclined
+    ) {
+        agena_web::CrawlError::AccessRejected(Box::new(error))
+    } else {
+        agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
+    }
+}
+
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
+    if let agena_web::CrawlError::AccessRejected(source) = err {
+        return match source.downcast::<PluginError>() {
+            Ok(error) => *error,
+            Err(error) => PluginError::internal(error.to_string()),
+        };
+    }
     PluginError::internal_error(&err)
 }
 
 fn search_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
+    if matches!(err, agena_web::CrawlError::AccessRejected(_)) {
+        return crawl_error_to_plugin(err);
+    }
     let mut error = PluginError::internal_error(&err);
     if let agena_web::CrawlError::SearchUnavailable { issue, .. } = &err {
         error.diagnostic.data = Some(serde_json::json!({"search_issue": issue}));
@@ -4841,9 +4918,7 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
         document: &'a agena_web::StoredDocument,
     ) -> Pin<Box<dyn Future<Output = Result<(), agena_web::CrawlError>> + Send + 'a>> {
         Box::pin(async move {
-            let state = self.plugin.state().map_err(|error| {
-                agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
-            })?;
+            let state = self.plugin.state().map_err(plugin_error_to_crawl)?;
             // Legacy documents have no final URL; do not infer it from an HTML
             // canonical hint, which need not be the transport destination.
             if document.final_url.is_empty() {
@@ -4857,9 +4932,7 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
                     .host
                     .require_network_permission(url.to_owned())
                     .await
-                    .map_err(|error| {
-                        agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
-                    })?;
+                    .map_err(plugin_error_to_crawl)?;
             }
             Ok(())
         })
@@ -4875,9 +4948,7 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
             self.plugin
                 .fetch_selected(url, use_cache, self.render_js, None)
                 .await
-                .map_err(|error| {
-                    agena_web::CrawlError::InvalidInput(error.diagnostic_message().to_owned())
-                })
+                .map_err(plugin_error_to_crawl)
         })
     }
 }
@@ -5188,3 +5259,6 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
 fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
     agena_web::search_domain_allowed(url, allow, block)
 }
+
+#[cfg(test)]
+mod permission_tests;

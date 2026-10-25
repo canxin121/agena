@@ -356,6 +356,13 @@ impl Service<'_> {
             ));
         }
         let key = official_service::env_secret(self.key_env, self.provider)?;
+        let local_path = self.root.join(&input.path);
+        crate::permissions::require_path(
+            self.host.as_ref(),
+            agena_domain::PathKind::Read,
+            &local_path.to_string_lossy(),
+        )
+        .await?;
         let root = self.root.to_owned();
         let path = input.path.clone();
         let expected = input.expected_sha256.clone();
@@ -482,6 +489,7 @@ impl Service<'_> {
         let original = start.path().trim_end_matches('/');
         let (prefix, version) = original.rsplit_once('/').unwrap_or(("", "v1beta"));
         start.set_path(&format!("{prefix}/upload/{version}/files"));
+        official_service::validate_provider_endpoint(self.host, start.as_str()).await?;
         let begin = self
             .authenticated(
                 crate::PROVIDER_HTTP_CLIENT
@@ -545,6 +553,7 @@ impl Service<'_> {
             return record.output(None);
         }
         let url = self.remote_endpoint(&record.remote_id)?;
+        official_service::validate_provider_endpoint(self.host, &url).await?;
         let request = if delete {
             crate::PROVIDER_HTTP_CLIENT.delete(url)
         } else {

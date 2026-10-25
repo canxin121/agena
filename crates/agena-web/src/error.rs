@@ -3,6 +3,10 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 /// Error from the web crawl subsystem.
 pub enum CrawlError {
+    /// An embedding host rejected access. Preserve the source for its caller;
+    /// never turn this into an empty result, engine cooldown or page warning.
+    #[error("{0}")]
+    AccessRejected(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("{provider} search failed: {issue}")]
     SearchUnavailable {
         provider: &'static str,

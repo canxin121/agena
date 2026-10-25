@@ -218,7 +218,7 @@ where
             "fetch redirect loop or ten-redirect budget exceeded",
         ))
     };
-    tokio::time::timeout(options.timeout, operation)
+    agena_plugin_host::sdk::permission_wait::timeout(options.timeout, operation)
         .await
         .map_err(|_| {
             PluginError::internal(

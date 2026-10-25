@@ -393,6 +393,31 @@ impl SettingsPlugin {
         })
     }
 
+    async fn require_file(
+        &self,
+        path: &std::path::Path,
+        kind: agena_domain::PathKind,
+    ) -> SdkResult<()> {
+        crate::permissions::require_path(self.host()?.as_ref(), kind, &path.to_string_lossy()).await
+    }
+
+    async fn require_layers(
+        &self,
+        meta: &SettingsConfigMeta,
+        write: Option<SettingsLayer>,
+    ) -> SdkResult<()> {
+        // Validation merges both layers, even when only one is edited.
+        for layer in [SettingsLayer::Global, SettingsLayer::Workspace] {
+            self.require_file(meta.file(layer).0, agena_domain::PathKind::Read)
+                .await?;
+        }
+        if let Some(layer) = write {
+            self.require_file(meta.file(layer).0, agena_domain::PathKind::Write)
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn config_meta(&self) -> SdkResult<SettingsConfigMeta> {
         let host = self.host()?;
         let meta = host.read_config(Some("meta".to_string())).await?;
@@ -480,6 +505,8 @@ impl SettingsPlugin {
                     ));
                 }
                 let (config_path, _) = meta.file(layer);
+                self.require_file(config_path, agena_domain::PathKind::Read)
+                    .await?;
                 read_file_setting(
                     config_path.clone(),
                     ConfigSettingsGetInput {
@@ -554,6 +581,8 @@ impl SettingsPlugin {
                     ));
                 }
                 let (config_path, _) = meta.file(layer);
+                self.require_file(config_path, agena_domain::PathKind::Read)
+                    .await?;
                 list_file_settings(
                     config_path.clone(),
                     ConfigSettingsListInput {
@@ -662,6 +691,7 @@ impl SettingsPlugin {
     )]
     async fn inspect(&self, input: SettingsInspectToolInput) -> SdkResult<ToolInvokeOutput> {
         let meta = self.config_meta().await?;
+        self.require_layers(&meta, None).await?;
         let global = inspect_file_value(&meta, SettingsLayer::Global, input.path.clone())?;
         let workspace = inspect_file_value(&meta, SettingsLayer::Workspace, input.path.clone())?;
         let effective_path =
@@ -750,6 +780,8 @@ impl SettingsPlugin {
         let meta = self.config_meta().await?;
         let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
         options.expected_revision = input.expected_revision.clone();
+        self.require_layers(&meta, (!options.dry_run).then_some(layer))
+            .await?;
         let reload = options.reload;
         let response = set_layered_file_setting(
             meta.global_path.clone(),
@@ -839,6 +871,8 @@ impl SettingsPlugin {
         let meta = self.config_meta().await?;
         let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
         options.expected_revision = input.expected_revision.clone();
+        self.require_layers(&meta, (!options.dry_run).then_some(layer))
+            .await?;
         let reload = options.reload;
         let response = delete_layered_file_setting(
             meta.global_path.clone(),
@@ -927,6 +961,8 @@ impl SettingsPlugin {
         let meta = self.config_meta().await?;
         let mut options = self.edit_options(input.dry_run, input.validate, input.reload)?;
         options.expected_revision = input.expected_revision.clone();
+        self.require_layers(&meta, (!options.dry_run).then_some(layer))
+            .await?;
         let reload = options.reload;
         let response = patch_layered_file_settings(
             meta.global_path.clone(),
@@ -973,6 +1009,7 @@ impl SettingsPlugin {
     async fn validate(&self, input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
         let layer = self.read_layer(input.layer)?;
         let meta = self.config_meta().await?;
+        self.require_layers(&meta, None).await?;
         let response: ConfigSettingsValidateResponse = validate_layered_file_settings(
             meta.global_path.clone(),
             meta.workspace_path.clone(),

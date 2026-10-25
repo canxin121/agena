@@ -28,6 +28,7 @@ use base64::Engine as _;
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
+    host: std::sync::OnceLock<Arc<dyn agena_plugin_host::sdk::HostClient>>,
 }
 
 fn mcp_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
@@ -140,15 +141,32 @@ fn default_mcp_config() -> McpConfig {
 )]
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            host: Default::default(),
+        }
+    }
+
+    async fn authorize_server(&self, server: &str) -> SdkResult<()> {
+        if let Some(target) = self.manager.server_network_targets().await.get(server) {
+            let host = self
+                .host
+                .get()
+                .ok_or_else(|| PluginError::internal("MCP plugin invoked before initialization"))?;
+            host.require_network_permission(target.clone()).await?;
+        }
+        Ok(())
     }
 
     #[hook(init)]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,
-        _host: Arc<dyn agena_plugin_host::sdk::HostClient>,
+        host: Arc<dyn agena_plugin_host::sdk::HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::internal("MCP permission host already initialized"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -175,6 +193,7 @@ impl McpPlugin {
         )
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .list_resources(&input.server, input.cursor.clone())
@@ -218,6 +237,7 @@ impl McpPlugin {
         &self,
         input: &McpServerInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .list_resource_templates(&input.server, input.cursor.clone())
@@ -252,6 +272,7 @@ impl McpPlugin {
         &self,
         input: &ReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .read_resource(&input.server, input.uri.as_str())
@@ -292,6 +313,7 @@ impl McpPlugin {
         )
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .list_prompts(&input.server, input.cursor.clone())
@@ -320,6 +342,7 @@ impl McpPlugin {
         )
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .get_prompt(&input.server, input.name.as_str(), input.arguments.clone())
@@ -351,6 +374,7 @@ impl McpPlugin {
         )
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         let result = self
             .manager
             .call_tool(
@@ -652,6 +676,7 @@ impl McpPlugin {
         &self,
         input: &McpServerNameInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.authorize_server(&input.server).await?;
         self.manager
             .reconnect(input.server.as_str())
             .await

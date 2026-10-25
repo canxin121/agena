@@ -95,12 +95,12 @@ where
     let engines = selection.engines();
     // Fixed fanout (at most eight). These futures run in the caller's task,
     // preserving host callback authority and cancellation without detached work.
-    // Time out each complete source, including permission, pacing, DNS and all
+    // Time out each complete source, excluding approval waits, with pacing, DNS and all
     // pages. A slow source cannot discard another source's completed results.
     let outcomes = join_all(engines.iter().copied().map(|engine| {
         let search_engine = &search_engine;
         async move {
-            tokio::time::timeout(
+            agena_plugin_host::sdk::permission_wait::timeout(
                 timeout,
                 search_engine(
                     engine,
@@ -116,7 +116,7 @@ where
                         issue: agena_web::SearchIssue {
                             kind: agena_web::SearchIssueKind::Timeout,
                             message: format!(
-                                "search timed out after {} ms, including permission, DNS and queueing",
+                                "search timed out after {} ms, of active time, including DNS and queueing",
                                 timeout.as_millis()
                             ),
                             http_status: None,
@@ -135,6 +135,7 @@ where
     let mut successful_engines = Vec::new();
     let mut engine_errors = Vec::new();
     let mut engine_reports = Vec::new();
+    let mut permission_error = None;
     for (engine, outcome) in engines.iter().copied().zip(outcomes) {
         match outcome {
             Ok(batch) => {
@@ -180,8 +181,20 @@ where
                         .and_then(|value| serde_json::from_value(value.clone()).ok()),
                 });
                 engine_errors.push(format!("{engine}: {}", error.diagnostic_message()));
+                if matches!(
+                    error.kind,
+                    agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
+                        | agena_plugin_host::sdk::PluginErrorKind::UserDeclined
+                ) {
+                    permission_error.get_or_insert(error);
+                }
             }
         }
+    }
+    if successful_engines.is_empty()
+        && let Some(error) = permission_error
+    {
+        return Err(error);
     }
     super::ensure_search_available(successful_engines.len(), &engine_errors).map_err(
         |mut error| {

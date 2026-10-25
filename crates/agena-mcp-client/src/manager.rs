@@ -1577,6 +1577,7 @@ async fn connect_http(
             )));
         }
         let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| McpError::http_error(&error))?;
         manager
@@ -1592,7 +1593,11 @@ async fn connect_http(
         Some(token) => config.auth_header(token),
         None => config,
     };
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let http_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| McpError::http_error(&error))?;
+    let transport = StreamableHttpClientTransport::with_client(http_client, config);
     Ok(client_handler.serve(transport).await?)
 }
 

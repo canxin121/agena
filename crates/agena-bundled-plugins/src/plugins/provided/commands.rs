@@ -63,7 +63,7 @@ use agena_plugin_host::sdk::{
 
 use discovery::{
     DiscoveredCommand, DiscoveryDiagnostic, MAX_COMMAND_DOCUMENT_BYTES, default_command_roots,
-    default_roots, scan_commands_with_diagnostics, scan_packages_with_diagnostics,
+    default_roots,
 };
 
 pub(crate) const COMMANDS_PLUGIN_ID: &str = "agena.commands";
@@ -1128,7 +1128,10 @@ impl CommandsPlugin {
         T: Send + 'static,
         F: FnOnce(Self) -> SdkResult<T> + Send + 'static,
     {
-        let plugin = self.clone();
+        let mut plugin = self.clone();
+        // Builtin transports are process scoped and can be initialized against
+        // the state root. Bind the blocking request to its actual workspace.
+        plugin.workspace_root = Arc::new(OnceLock::from(self.request_workspace_root()?));
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
@@ -1388,10 +1391,18 @@ impl CommandsPlugin {
         workspace_root: &Path,
         config: &CommandsPluginConfig,
     ) -> PackageCatalog {
+        Self::discovered_catalog_filtered(workspace_root, config, None)
+    }
+
+    fn discovered_catalog_filtered(
+        workspace_root: &Path,
+        config: &CommandsPluginConfig,
+        access: Option<agena_tool::path_filter::PathPredicate>,
+    ) -> PackageCatalog {
         let (roots, command_roots) = Self::filesystem_roots(workspace_root, config);
 
-        let package_report = scan_packages_with_diagnostics(&roots);
-        let command_report = scan_commands_with_diagnostics(&command_roots);
+        let package_report = discovery::scan_packages_filtered(&roots, access.clone());
+        let command_report = discovery::scan_commands_filtered(&command_roots, access);
 
         let mut packages: BTreeMap<String, PackageEntry> = bundled_command_definitions()
             .into_iter()
@@ -2246,9 +2257,75 @@ impl Plugin for CommandsPlugin {
 }
 
 impl CommandsPlugin {
+    fn permission_host(&self) -> SdkResult<Arc<dyn HostClient>> {
+        let host = agena_runtime_plugins::plugin_slot::current_plugin_host().ok_or_else(|| {
+            PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
+                "commands permission host is unavailable",
+            )
+        })?;
+        let loaded = host
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.key().to_string() == COMMANDS_PLUGIN_ID)
+            .ok_or_else(|| PluginError::internal("commands plugin is not active"))?;
+        Ok(host
+            .host_handle()
+            .scoped_host_client_for_scope(COMMANDS_PLUGIN_ID.to_owned(), loaded.effect_scope()))
+    }
+
+    async fn require_path(&self, path: &Path, kind: agena_domain::PathKind) -> SdkResult<()> {
+        crate::permissions::require_path(
+            self.permission_host()?.as_ref(),
+            kind,
+            &path.to_string_lossy(),
+        )
+        .await
+    }
+
+    fn request_workspace_root(&self) -> SdkResult<PathBuf> {
+        Ok(
+            agena_plugin_host::sdk::host_api::current_host_callback_context()
+                .and_then(|context| context.workspace_root)
+                .filter(|root| !root.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or(self.workspace_root()?.to_owned()),
+        )
+    }
+
+    async fn authorize_discovery(&self) -> SdkResult<()> {
+        let (roots, command_roots) =
+            Self::filesystem_roots(&self.request_workspace_root()?, &self.config());
+        for root in roots.into_iter().chain(command_roots) {
+            // Existence is metadata only. Do not request approvals for the many
+            // optional ecosystem directories that have never been installed.
+            if root.exists() {
+                self.require_path(&root, agena_domain::PathKind::Read)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn request_catalog(&self) -> SdkResult<PackageCatalog> {
+        self.authorize_discovery().await?;
+        let access = crate::permissions::read_filter(self.permission_host()?, true)?;
+        let predicate = access.predicate();
+        let result = self
+            .run_blocking(move |plugin| {
+                Ok(Self::discovered_catalog_filtered(
+                    plugin.workspace_root()?,
+                    &plugin.config(),
+                    Some(predicate),
+                ))
+            })
+            .await;
+        access.finish(result)
+    }
+
     async fn invoke_list(&self, input: CommandsListInput) -> SdkResult<ToolInvokeOutput> {
-        let catalog = self.definition_catalog_async().await?;
-        let workspace_root = self.workspace_root()?.to_path_buf();
+        let catalog = self.request_catalog().await?;
+        let workspace_root = self.request_workspace_root()?;
         let entries = catalog.packages.into_iter().collect::<Vec<_>>();
         let (entries, total, offset) = Self::paginate(entries, input.offset, input.limit);
         let mut lines = vec![format!(
@@ -2314,9 +2391,9 @@ impl CommandsPlugin {
     }
 
     async fn invoke_get(&self, input: CommandsGetInput) -> SdkResult<ToolInvokeOutput> {
+        let catalog = self.request_catalog().await?;
         let requested_name = input.name;
         self.run_blocking(move |plugin| {
-            let catalog = plugin.discovered_catalog()?;
             let workspace_root = plugin.workspace_root()?;
             let (name, entry) = Self::resolve_package(&catalog.packages, requested_name.as_str())?;
             let summary = Self::package_description(entry);
@@ -2355,6 +2432,17 @@ impl CommandsPlugin {
     }
 
     async fn invoke_install(&self, input: CommandsInstallInput) -> SdkResult<ToolInvokeOutput> {
+        let path = {
+            let package = parse_managed_package_document(&input.document)?;
+            self.request_workspace_root()?
+                .join(".agena/skills")
+                .join(&package.frontmatter.name)
+                .join("SKILL.md")
+        };
+        self.require_path(&path, agena_domain::PathKind::Read)
+            .await?;
+        self.require_path(&path, agena_domain::PathKind::Write)
+            .await?;
         let document = input.document;
         self.run_blocking(move |plugin| {
             let result = plugin.install_managed_package(document.as_str())?;
@@ -2364,7 +2452,19 @@ impl CommandsPlugin {
     }
 
     async fn invoke_remove(&self, input: CommandsRemoveInput) -> SdkResult<ToolInvokeOutput> {
-        let name = input.name;
+        let catalog = self.request_catalog().await?;
+        let (canonical_name, _) = Self::resolve_package(&catalog.packages, &input.name)?;
+        validate_managed_package_name(canonical_name)?;
+        let name = canonical_name.to_owned();
+        let path = self
+            .request_workspace_root()?
+            .join(".agena/skills")
+            .join(&name)
+            .join("SKILL.md");
+        self.require_path(&path, agena_domain::PathKind::Read)
+            .await?;
+        self.require_path(&path, agena_domain::PathKind::Write)
+            .await?;
         self.run_blocking(move |plugin| {
             let result = plugin.remove_managed_package(name.as_str())?;
             Ok(plugin.complete_package_write(result))
@@ -2376,12 +2476,21 @@ impl CommandsPlugin {
         &self,
         input: CommandsReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let requested_name = input.name;
+        let catalog = self.request_catalog().await?;
+        let (_, entry) = Self::resolve_package(&catalog.packages, &input.name)?;
+        if let Some(source) = entry.command.source_path.as_ref() {
+            let parent = source
+                .parent()
+                .ok_or_else(|| PluginError::invalid_params("package has no resource directory"))?;
+            self.require_path(&parent.join(&input.path), agena_domain::PathKind::Read)
+                .await?;
+        }
+        let (name, entry) = Self::resolve_package(&catalog.packages, &input.name)?;
+        let name = name.to_owned();
+        let entry = entry.clone();
         let resource_path = input.path;
         let max_bytes = input.max_bytes;
-        self.run_blocking(move |plugin| {
-            let catalog = plugin.discovered_catalog()?;
-            let (name, entry) = Self::resolve_package(&catalog.packages, requested_name.as_str())?;
+        self.run_blocking(move |_plugin| {
             if !entry.origin.supports_resources() {
                 return Err(PluginError::invalid_params(format!(
                     "{} '{}' does not expose filesystem-backed resources",
@@ -2418,6 +2527,7 @@ impl CommandsPlugin {
     }
 
     async fn invoke_refresh(&self, input: CommandsRefreshInput) -> SdkResult<ToolInvokeOutput> {
+        self.request_catalog().await?;
         let (refresh, watcher_status) = self
             .run_blocking(|plugin| {
                 let refresh = plugin.refresh_catalog()?;

@@ -387,11 +387,15 @@ fn agena_home_dir() -> Option<PathBuf> {
 }
 
 /// Scan skill packages: every `SKILL.md` under the given roots.
-pub(crate) fn scan_packages_with_diagnostics(roots: &[PathBuf]) -> DiscoveryReport {
+pub(crate) fn scan_packages_filtered(
+    roots: &[PathBuf],
+    access: Option<agena_tool::path_filter::PathPredicate>,
+) -> DiscoveryReport {
     scan_matching(
         roots,
         |path| path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md"),
         |path| DiscoveredCommand::from_package_path(path),
+        access,
     )
 }
 
@@ -401,7 +405,10 @@ pub(crate) fn scan_packages_with_diagnostics(roots: &[PathBuf]) -> DiscoveryRepo
 /// The two scans are separate because a package keeps resources beside its
 /// document and a bare command file does not, so a root that is listed for both
 /// (or nested inside the other) must not report the same document twice.
-pub(crate) fn scan_commands_with_diagnostics(roots: &[PathBuf]) -> DiscoveryReport {
+pub(crate) fn scan_commands_filtered(
+    roots: &[PathBuf],
+    access: Option<agena_tool::path_filter::PathPredicate>,
+) -> DiscoveryReport {
     scan_matching(
         roots,
         |path| {
@@ -412,6 +419,7 @@ pub(crate) fn scan_commands_with_diagnostics(roots: &[PathBuf]) -> DiscoveryRepo
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
         },
         |path| DiscoveredCommand::from_command_path(path),
+        access,
     )
 }
 
@@ -419,6 +427,7 @@ fn scan_matching(
     roots: &[PathBuf],
     matches_file: impl Fn(&Path) -> bool,
     load: impl Fn(&Path) -> DiscoveryResult<DiscoveredCommand>,
+    access: Option<agena_tool::path_filter::PathPredicate>,
 ) -> DiscoveryReport {
     let mut commands = Vec::new();
     let mut diagnostics = Vec::new();
@@ -437,6 +446,11 @@ fn scan_matching(
             .git_exclude(false)
             .parents(false)
             .threads(1);
+        if let Some(access) = access.clone() {
+            builder.filter_entry(move |entry| {
+                !entry.file_type().is_some_and(|kind| kind.is_dir()) || access.allows(entry.path())
+            });
+        }
         for (entry_index, entry) in builder.build().enumerate() {
             if entry_index >= MAX_DISCOVERY_ENTRIES_PER_ROOT {
                 diagnostics.push(discovery_diagnostic(
@@ -456,6 +470,9 @@ fn scan_matching(
             };
             let path = entry.path();
             if !entry.file_type().is_some_and(|kind| kind.is_file()) || !matches_file(path) {
+                continue;
+            }
+            if access.as_ref().is_some_and(|access| !access.allows(path)) {
                 continue;
             }
             match load(path) {

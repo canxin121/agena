@@ -9,6 +9,9 @@ mod artifact_file;
 pub mod capability_manifest;
 pub mod docs_reference;
 pub mod memory;
+#[cfg(test)]
+mod permission_tests;
+mod permissions;
 mod plugin_settings_docs;
 mod plugin_tool_docs;
 pub mod plugins;

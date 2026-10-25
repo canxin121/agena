@@ -31,98 +31,105 @@ pub(super) async fn transfer(
     action_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> SdkResult<DownloadResult> {
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
-    let worker = tokio::spawn(async move {
-        let _action_guard = action_guard;
-        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        let permit = tokio::select! {biased; _=&mut cancel_rx=>return Err(PluginError::internal("download cancelled before admission")), result=tokio::time::timeout(timeout,gate.lock_owned())=>result.map_err(|_|PluginError::internal("download timed out waiting for admission"))?};
-        let _permit = permit;
-        let mut state = State {
-            root: None,
-            page: None,
-            guid: None,
-            changed_behavior: false,
-            dir,
-            browser_context_id,
-        };
-        let operation = receive(&endpoint, &target, &url, &mut state, max_bytes);
-        let result = tokio::select! {biased; _=&mut cancel_rx=>Err(PluginError::internal("download cancelled; cleanup requested")), result=tokio::time::timeout(timeout,operation)=>result.unwrap_or_else(|_|Err(PluginError::internal("download deadline exceeded")))};
-        let mut warnings = Vec::new();
-        if result.is_err()
-            && let Some(page) = state.page.as_ref()
-            && let Err(error) = page
-                .command_with_timeout(
-                    "Page.stopLoading",
-                    serde_json::json!({}),
-                    Duration::from_secs(2),
-                )
-                .await
-        {
-            warnings.push(format!(
-                "download navigation stop failed: {}",
-                error.failure.user.fallback
-            ));
-        }
-        if let Some(root) = state.root.as_ref() {
-            if result.is_err()
-                && let Some(guid) = state.guid.as_deref()
-                && let Err(error) = root
-                    .command_with_timeout(
-                        "Browser.cancelDownload",
-                        with_context(
-                            serde_json::json!({"guid":guid}),
-                            state.browser_context_id.as_deref(),
-                        ),
-                        Duration::from_secs(2),
-                    )
-                    .await
-            {
-                warnings.push(format!(
-                    "download cancellation failed: {}",
-                    error.failure.user.fallback
-                ));
-            }
-            if state.changed_behavior
-                && let Err(error) = root
-                    .command_with_timeout(
-                        "Browser.setDownloadBehavior",
-                        with_context(
-                            serde_json::json!({"behavior":"default"}),
-                            state.browser_context_id.as_deref(),
-                        ),
-                        Duration::from_secs(2),
-                    )
-                    .await
-            {
-                warnings.push(format!(
-                    "download behavior reset failed: {}",
-                    error.failure.user.fallback
-                ));
-            }
-        }
-        if result.is_err() {
-            if warnings.is_empty()
-                && let Err(error) = tokio::fs::remove_dir_all(&state.dir).await
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                warnings.push(format!("partial download cleanup failed: {error}"));
-            }
-            if !warnings.is_empty() {
-                tracing::error!(?warnings, directory=%state.dir.display(),"download cleanup needs attention");
-            }
-        }
-        match result {
-            Ok(mut result) => {
-                result.warnings = warnings;
-                Ok(result)
-            }
-            Err(error) if warnings.is_empty() => Err(error),
-            Err(error) => Err(PluginError::internal(format!(
-                "{}; cleanup warnings: {}",
-                error.failure.user.fallback,
-                warnings.join("; ")
-            ))),
-        }
-    });
+    let callback =
+        agena_plugin_host::sdk::host_api::current_host_callback_context().unwrap_or_default();
+    let worker = tokio::spawn(
+        agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            callback,
+            async move {
+                let _action_guard = action_guard;
+                let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
+                let permit = tokio::select! {biased; _=&mut cancel_rx=>return Err(PluginError::internal("download cancelled before admission")), result=tokio::time::timeout(timeout,gate.lock_owned())=>result.map_err(|_|PluginError::internal("download timed out waiting for admission"))?};
+                let _permit = permit;
+                let mut state = State {
+                    root: None,
+                    page: None,
+                    guid: None,
+                    changed_behavior: false,
+                    dir,
+                    browser_context_id,
+                };
+                let operation = receive(&endpoint, &target, &url, &mut state, max_bytes);
+                let result = tokio::select! {biased; _=&mut cancel_rx=>Err(PluginError::internal("download cancelled; cleanup requested")), result=agena_plugin_host::sdk::permission_wait::timeout(timeout,operation)=>result.unwrap_or_else(|_|Err(PluginError::internal("download deadline exceeded")))};
+                let mut warnings = Vec::new();
+                if result.is_err()
+                    && let Some(page) = state.page.as_ref()
+                    && let Err(error) = page
+                        .command_with_timeout(
+                            "Page.stopLoading",
+                            serde_json::json!({}),
+                            Duration::from_secs(2),
+                        )
+                        .await
+                {
+                    warnings.push(format!(
+                        "download navigation stop failed: {}",
+                        error.failure.user.fallback
+                    ));
+                }
+                if let Some(root) = state.root.as_ref() {
+                    if result.is_err()
+                        && let Some(guid) = state.guid.as_deref()
+                        && let Err(error) = root
+                            .command_with_timeout(
+                                "Browser.cancelDownload",
+                                with_context(
+                                    serde_json::json!({"guid":guid}),
+                                    state.browser_context_id.as_deref(),
+                                ),
+                                Duration::from_secs(2),
+                            )
+                            .await
+                    {
+                        warnings.push(format!(
+                            "download cancellation failed: {}",
+                            error.failure.user.fallback
+                        ));
+                    }
+                    if state.changed_behavior
+                        && let Err(error) = root
+                            .command_with_timeout(
+                                "Browser.setDownloadBehavior",
+                                with_context(
+                                    serde_json::json!({"behavior":"default"}),
+                                    state.browser_context_id.as_deref(),
+                                ),
+                                Duration::from_secs(2),
+                            )
+                            .await
+                    {
+                        warnings.push(format!(
+                            "download behavior reset failed: {}",
+                            error.failure.user.fallback
+                        ));
+                    }
+                }
+                if result.is_err() {
+                    if warnings.is_empty()
+                        && let Err(error) = tokio::fs::remove_dir_all(&state.dir).await
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        warnings.push(format!("partial download cleanup failed: {error}"));
+                    }
+                    if !warnings.is_empty() {
+                        tracing::error!(?warnings, directory=%state.dir.display(),"download cleanup needs attention");
+                    }
+                }
+                match result {
+                    Ok(mut result) => {
+                        result.warnings = warnings;
+                        Ok(result)
+                    }
+                    Err(error) if warnings.is_empty() => Err(error),
+                    Err(error) => Err(PluginError::internal(format!(
+                        "{}; cleanup warnings: {}",
+                        error.failure.user.fallback,
+                        warnings.join("; ")
+                    ))),
+                }
+            },
+        ),
+    );
     let result = worker
         .await
         .map_err(|error| PluginError::internal(format!("download worker failed: {error}")))?;

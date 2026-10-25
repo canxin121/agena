@@ -990,7 +990,9 @@ impl ChatGptToolsPlugin {
         let mut image_input_bytes = 0_u64;
         for source in input.images {
             let path = resolve_local_path(self.workspace_root()?, source.as_str())?;
-            let bytes = read_image_input_bounded(&path, &mut image_input_bytes, "OpenAI").await?;
+            let bytes =
+                read_image_input_bounded(self.host()?, &path, &mut image_input_bytes, "OpenAI")
+                    .await?;
             let filename = path
                 .file_name()
                 .and_then(|value| value.to_str())

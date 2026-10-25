@@ -322,6 +322,7 @@ pub async fn crawl_site(
                     documents.push(document.summary());
                 }
                 Ok(Retrieved::Cached(_)) => unreachable!("cache handled above"),
+                Err((_, err @ CrawlError::AccessRejected(_))) => return Err(err),
                 Err((reason, err)) => {
                     page_errors.push(CrawlPageError {
                         url: url.to_string(),

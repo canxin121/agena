@@ -6,7 +6,7 @@ use std::path::Path;
 use agena_macros::ToolInput;
 use agena_tool::code_search::{
     CodeLanguage, CodeSearchError, StructuralSearchRequest, SyntaxTreeRequest,
-    format_search_output, search_ast, syntax_tree,
+    format_search_output, syntax_tree,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,9 @@ use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeO
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
 
-pub(crate) struct CodePlugin;
+pub(crate) struct CodePlugin {
+    permissions: crate::permissions::PluginPermissions,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +71,18 @@ struct CodeSyntaxTreeInput {
     ),
 )]
 impl CodePlugin {
+    #[hook(init)]
+    async fn init(
+        &self,
+        _ctx: agena_plugin_host::sdk::InitContext,
+        host: std::sync::Arc<dyn agena_plugin_host::sdk::host_api::HostClient>,
+    ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
+        self.permissions.initialize(host)?;
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(
+            agena_plugin_host::sdk::Plugin::manifest(self),
+        ))
+    }
+
     #[tool(
         tags(query, filesystem, discovery, read_only),
         summary = "Search code structurally with ast-grep.",
@@ -131,8 +145,17 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
         let workspace_root = context.workspace_root.to_owned();
-        run_code_blocking(move || Self::invoke_search_ast(&workspace_root, input)).await
+        let access = self.permissions.read_filter(true)?;
+        let predicate = access.predicate();
+        let result = run_code_blocking(move || {
+            Self::invoke_search_ast_filtered(&workspace_root, input, Some(predicate))
+        })
+        .await;
+        access.finish(result)
     }
 
     #[tool(
@@ -197,6 +220,9 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
         let workspace_root = context.workspace_root.to_owned();
         run_code_blocking(move || Self::invoke_syntax_tree(&workspace_root, input)).await
     }
@@ -263,16 +289,25 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeRewriteInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
+        if input.apply {
+            self.permissions
+                .path(agena_domain::PathKind::Write, &input.path)
+                .await?;
+        }
         let workspace = context.workspace_root.to_owned();
         run_code_blocking(move || invoke_rewrite(Path::new(&workspace), input)).await
     }
 
-    fn invoke_search_ast(
+    fn invoke_search_ast_filtered(
         workspace_root: &str,
         input: CodeSearchAstInput,
+        access: Option<agena_tool::path_filter::PathPredicate>,
     ) -> SdkResult<ToolInvokeOutput> {
         let title = format!("Search AST · {}", input.path);
-        let result = search_ast(
+        let result = agena_tool::code_search::search_ast_with_filter(
             Path::new(workspace_root),
             StructuralSearchRequest {
                 path: input.path.into(),
@@ -281,6 +316,7 @@ impl CodePlugin {
                 language: input.language,
                 limit: input.limit,
             },
+            access,
         )
         .map_err(code_search_error_to_plugin)?;
         let output = format_search_output(&result);
@@ -341,7 +377,9 @@ impl CodePlugin {
 }
 
 pub(crate) fn new_plugin() -> CodePlugin {
-    CodePlugin
+    CodePlugin {
+        permissions: Default::default(),
+    }
 }
 
 async fn run_code_blocking<T, F>(work: F) -> SdkResult<T>

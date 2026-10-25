@@ -3,8 +3,9 @@
 use std::collections::VecDeque;
 use std::sync::LazyLock;
 
+use agena_async::permission_wait::Deadline;
 use tokio::sync::Mutex;
-use tokio::time::{Instant, timeout_at};
+use tokio::time::Instant;
 
 use super::*;
 
@@ -146,7 +147,7 @@ impl WebSearchCoordinator {
             ));
         }
         let engine = options.engine;
-        let deadline = Instant::now() + options.timeout;
+        let deadline = Deadline::new(options.timeout);
         let timeout = || {
             SearchIssue::new(
                 SearchIssueKind::Timeout,
@@ -157,7 +158,8 @@ impl WebSearchCoordinator {
             .iter()
             .position(|candidate| *candidate == engine)
             .unwrap();
-        let mut session = timeout_at(deadline, self.engines[index].lock())
+        let mut session = deadline
+            .run(self.engines[index].lock())
             .await
             .map_err(|_| timeout().error(engine))?;
         let limit = options.limit.clamp(1, MAX_SEARCH_RESULTS);
@@ -221,12 +223,7 @@ impl WebSearchCoordinator {
                         tokio::time::sleep_until(next).await;
                     }
                     session.next_request = Some(Instant::now() + self.page_delay);
-                    if let Some(rendered) = render(
-                        page.final_url,
-                        deadline.saturating_duration_since(Instant::now()),
-                    )
-                    .await?
-                    {
+                    if let Some(rendered) = render(page.final_url, deadline.remaining()).await? {
                         response.rendered = true;
                         if rendered.html.len() > MAX_SEARCH_RESPONSE_BYTES {
                             return Err(CrawlError::ResponseTooLarge {
@@ -238,11 +235,13 @@ impl WebSearchCoordinator {
                 }
                 parsed
             };
-            let outcome = timeout_at(deadline, operation)
+            let outcome = deadline
+                .run(operation)
                 .await
                 .unwrap_or_else(|_| Err(timeout().error(engine)));
             let rows = match outcome {
                 Ok(rows) => rows,
+                Err(error @ CrawlError::AccessRejected(_)) => return Err(error),
                 Err(error) => {
                     let mut issue = SearchIssue::from_error(error);
                     let delay = issue.cooldown();

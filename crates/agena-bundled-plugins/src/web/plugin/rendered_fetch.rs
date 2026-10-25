@@ -10,7 +10,7 @@ pub(super) async fn fetch(
     url: &url::Url,
     options: &SpiderFetchOptions,
 ) -> SdkResult<FetchedPage> {
-    tokio::time::timeout(options.timeout, async {
+    agena_plugin_host::sdk::permission_wait::timeout(options.timeout, async {
         let source = fetch_source(plugin, url, options, None).await?;
         let mut page = fetch_transport::extract(source, url.clone(), options.extractor).await?;
         page.rendered = true;
@@ -124,13 +124,13 @@ async fn fetch_source(
                     Ok::<(), PluginError>(())
                 }
                 .await;
-                checked.map_err(|error| error.diagnostic_message().to_owned())
+                checked
             })
         });
         let endpoint = plugin.browser_endpoint().await?;
         render(&endpoint, url, options, policy).await
     };
-    tokio::time::timeout(options.timeout, operation)
+    agena_plugin_host::sdk::permission_wait::timeout(options.timeout, operation)
         .await
         .map_err(|_| {
             PluginError::internal(
@@ -228,7 +228,7 @@ async fn render(
             }
             Ok::<(), PluginError>(())
         };
-        tokio::time::timeout(options.browser.wait_timeout, readiness).await
+        agena_plugin_host::sdk::permission_wait::timeout(options.browser.wait_timeout, readiness).await
             .map_err(|_| PluginError::internal("rendered page readiness timed out"))??;
         if let Some(delay) = options.browser.delay { tokio::time::sleep(delay).await; }
         let limit = options.max_body_bytes;

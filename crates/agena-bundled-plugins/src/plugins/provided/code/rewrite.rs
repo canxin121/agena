@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 )]
 pub(super) struct CodeRewriteInput {
     #[arg(trim, non_empty)]
-    path: String,
+    pub(super) path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 16384)]
     pattern: Option<String>,
@@ -24,7 +24,7 @@ pub(super) struct CodeRewriteInput {
     replacement: String,
     /// False previews; true publishes after checking expected_sha256.
     #[serde(default)]
-    apply: bool,
+    pub(super) apply: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim)]
     expected_sha256: Option<String>,

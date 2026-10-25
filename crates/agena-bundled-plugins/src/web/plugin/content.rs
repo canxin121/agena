@@ -11,13 +11,14 @@ where
     F: Fn(bool) -> Fut,
     Fut: Future<Output = SdkResult<FetchedPage>>,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut page = tokio::time::timeout_at(deadline, fetch(render_js == Some(true)))
+    let deadline = agena_plugin_host::sdk::permission_wait::Deadline::new(timeout);
+    let mut page = deadline
+        .run(fetch(render_js == Some(true)))
         .await
         .map_err(|_| {
             PluginError::timeout_with_public_detail(
-                "web page overall deadline elapsed",
-                "Page fetch exceeded its overall time budget, including admission and rendering.",
+                "web page overall active deadline elapsed",
+                "Page fetch exceeded its time budget, including admission and rendering.",
             )
         })??;
     if render_js.is_none()
@@ -26,11 +27,14 @@ where
         && (200..300).contains(&page.status)
         && page.content_status == agena_web::PageContentStatus::RequiresJavascript
     {
-        match tokio::time::timeout_at(deadline, fetch(true)).await {
+        match deadline.run(fetch(true)).await {
             Ok(Ok(mut rendered)) => {
                 rendered.warnings.push("HTTP returned a JavaScript shell; retried once in an isolated browser context.".into());
                 return Ok(rendered);
             }
+            Ok(Err(error)) if matches!(error.kind,
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
+                    | agena_plugin_host::sdk::PluginErrorKind::UserDeclined) => return Err(error),
             Ok(Err(error)) => {
                 tracing::warn!(diagnostic = %error.diagnostic_message(), "automatic rendered read failed");
                 page.warnings.push("Automatic browser retry failed; the returned content is the original HTTP shell.".into());

@@ -250,6 +250,13 @@ impl SessionPlugin {
         )
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
+        self.host
+            .get()
+            .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
+            .require_path_permission(agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
+                context.workspace_root,
+            ))
+            .await?;
         let workspace_root = context.workspace_root.to_string();
         let mut lines = vec![format!("Working directory: {workspace_root}")];
         let mut git_branch = None::<String>;
@@ -461,6 +468,20 @@ impl SessionPlugin {
             }
         });
         if input.probe_versions {
+            let host = self
+                .host
+                .get()
+                .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?;
+            for tool in &inventory.tools {
+                if let Some(path) = &tool.executable {
+                    host.require_path_permission(
+                        agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
+                            path.to_string_lossy(),
+                        ),
+                    )
+                    .await?;
+                }
+            }
             futures_util::future::join_all(inventory.tools.iter_mut().map(|tool| {
                 agena_runtime_tools::cli_tools::probe_version(
                     tool,

@@ -134,7 +134,11 @@ impl Service<'_> {
         request: reqwest::RequestBuilder,
         operation: &str,
     ) -> SdkResult<ProviderHttpResponse> {
-        let response=request.send().await.map_err(|error|PluginError::internal(format!("cloud {operation} transport failed; remote acceptance is unknown, do not automatically repeat: {}",error.without_url())))?;
+        let request = request
+            .build()
+            .map_err(|error| PluginError::internal_error(&error))?;
+        official_service::validate_provider_endpoint(self.host, request.url().as_str()).await?;
+        let response=crate::PROVIDER_HTTP_CLIENT.execute(request).await.map_err(|error|PluginError::internal(format!("cloud {operation} transport failed; remote acceptance is unknown, do not automatically repeat: {}",error.without_url())))?;
         let (status, request_id, value) =
             official_service::read_json_response_bounded(response, self.provider, operation)
                 .await?;
@@ -189,6 +193,13 @@ impl Service<'_> {
                     path,
                     expected_sha256,
                 } => {
+                    let local_path = self.root.join(path);
+                    crate::permissions::require_path(
+                        self.host.as_ref(),
+                        agena_domain::PathKind::Read,
+                        &local_path.to_string_lossy(),
+                    )
+                    .await?;
                     let root = self.root.to_owned();
                     let path = path.clone();
                     let expected = expected_sha256.clone();

@@ -16,7 +16,9 @@ mod validation;
 pub(crate) const NOTEBOOK_PLUGIN_ID: &str = "agena.notebook";
 const MAX_NOTEBOOK_BYTES: u64 = 32 * 1024 * 1024;
 
-pub(crate) struct NotebookPlugin;
+pub(crate) struct NotebookPlugin {
+    permissions: crate::permissions::PluginPermissions,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -85,8 +87,22 @@ struct NotebookEditInput {
     ),
 )]
 impl NotebookPlugin {
+    #[hook(init)]
+    async fn init(
+        &self,
+        _ctx: agena_plugin_host::sdk::InitContext,
+        host: std::sync::Arc<dyn agena_plugin_host::sdk::host_api::HostClient>,
+    ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
+        self.permissions.initialize(host)?;
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(
+            agena_plugin_host::sdk::Plugin::manifest(self),
+        ))
+    }
+
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            permissions: Default::default(),
+        }
     }
 
     #[tool(
@@ -141,6 +157,12 @@ impl NotebookPlugin {
         context: &ToolInvokeContext<'_>,
         input: &NotebookEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
+        self.permissions
+            .path(agena_domain::PathKind::Write, &input.path)
+            .await?;
         if input.source.len() > 16 * 1024 * 1024 {
             return Err(PluginError::invalid_params(
                 "notebook source exceeds the 16 MiB byte limit",

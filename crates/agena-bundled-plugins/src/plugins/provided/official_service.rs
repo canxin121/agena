@@ -114,17 +114,24 @@ pub(crate) fn endpoint(base_url: &str, path: &str) -> SdkResult<String> {
 }
 
 pub(crate) async fn validate_provider_endpoint(
-    _host: &Arc<dyn HostClient>,
+    host: &Arc<dyn HostClient>,
     url: &str,
 ) -> SdkResult<()> {
-    let parsed = url::Url::parse(url)
+    let mut parsed = url::Url::parse(url)
         .map_err(|error| PluginError::invalid_params(format!("invalid provider URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(PluginError::invalid_params(
             "provider URL must use HTTP or HTTPS",
         ));
     }
-    Ok(())
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(PluginError::invalid_params(
+            "provider URL must not contain credentials",
+        ));
+    }
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    host.require_network_permission(parsed.to_string()).await
 }
 
 /// Read one provider image without allowing a request containing several
@@ -132,10 +139,17 @@ pub(crate) async fn validate_provider_endpoint(
 /// a fast rejection; the `take` boundary also closes the race where a file
 /// grows after it was statted.
 pub(crate) async fn read_image_input_bounded(
+    host: &Arc<dyn HostClient>,
     path: &Path,
     total_bytes: &mut u64,
     provider: &str,
 ) -> SdkResult<Vec<u8>> {
+    crate::permissions::require_path(
+        host.as_ref(),
+        agena_domain::PathKind::Read,
+        &path.to_string_lossy(),
+    )
+    .await?;
     let metadata = tokio::fs::metadata(path).await.map_err(|error| {
         PluginError::internal(format!(
             "cannot stat {provider} image '{}': {error}",

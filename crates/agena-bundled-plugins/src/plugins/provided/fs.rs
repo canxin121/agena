@@ -23,7 +23,9 @@ pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 const MAX_MUTATING_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_STAT_HASH_BYTES: u64 = 64 * 1024 * 1024;
 
-pub(crate) struct FsPlugin;
+pub(crate) struct FsPlugin {
+    permissions: crate::permissions::PluginPermissions,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
@@ -105,7 +107,9 @@ const fn default_true() -> bool {
 }
 
 pub(crate) fn new_plugin() -> FsPlugin {
-    FsPlugin
+    FsPlugin {
+        permissions: Default::default(),
+    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -127,6 +131,18 @@ pub(crate) fn new_plugin() -> FsPlugin {
     ),
 )]
 impl FsPlugin {
+    #[hook(init)]
+    async fn init(
+        &self,
+        _ctx: agena_plugin_host::sdk::InitContext,
+        host: std::sync::Arc<dyn agena_plugin_host::sdk::host_api::HostClient>,
+    ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
+        self.permissions.initialize(host)?;
+        Ok(agena_plugin_host::sdk::InitOutcome::ack(
+            agena_plugin_host::sdk::Plugin::manifest(self),
+        ))
+    }
+
     #[tool(
         stream = invoke_document_stream,
         tags(query, filesystem, read_only),
@@ -150,6 +166,9 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
         document::invoke(Path::new(context.workspace_root), input).await
     }
 
@@ -161,6 +180,9 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
         sink.text("Extracting document text…\n").await;
         document::invoke(Path::new(context.workspace_root), input).await
     }
@@ -424,6 +446,12 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &WriteFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
+        self.permissions
+            .path(agena_domain::PathKind::Write, &input.path)
+            .await?;
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         run_fs_blocking(move || {
@@ -617,6 +645,12 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReplaceFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
+        self.permissions
+            .path(agena_domain::PathKind::Write, &input.path)
+            .await?;
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         run_fs_blocking(move || {
@@ -755,6 +789,11 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReadManyInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        for path in &input.paths {
+            self.permissions
+                .path(agena_domain::PathKind::Read, path)
+                .await?;
+        }
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         run_fs_blocking(move || {
@@ -870,6 +909,9 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &StatInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.permissions
+            .path(agena_domain::PathKind::Read, &input.path)
+            .await?;
         let workspace_root = context.workspace_root.to_string();
         let input = input.clone();
         run_fs_blocking(move || {

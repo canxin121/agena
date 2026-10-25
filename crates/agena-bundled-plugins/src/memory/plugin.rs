@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use agena_storage::MemoryType;
@@ -83,6 +83,8 @@ fn default_memory_config() -> MemoryConfig {
 
 /// The bundled memory plugin.
 pub struct MemoryPlugin {
+    permissions: crate::permissions::PluginPermissions,
+    host: OnceLock<Arc<dyn agena_plugin_host::sdk::HostClient>>,
     config: OnceLock<MemoryConfig>,
     workspace_root: OnceLock<PathBuf>,
     sync_lock: Arc<Mutex<()>>,
@@ -190,6 +192,8 @@ struct MemoryRecordOutput {
 impl MemoryPlugin {
     pub fn new() -> Self {
         Self {
+            permissions: Default::default(),
+            host: Default::default(),
             config: OnceLock::new(),
             workspace_root: OnceLock::new(),
             sync_lock: Arc::new(Mutex::new(())),
@@ -200,8 +204,12 @@ impl MemoryPlugin {
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
-        _host: std::sync::Arc<dyn agena_plugin_host::sdk::HostClient>,
+        host: std::sync::Arc<dyn agena_plugin_host::sdk::HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
+        self.permissions.initialize(host.clone())?;
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::internal("memory permission host already initialized"))?;
         self.config
             .set(parse_memory_config(ctx.settings)?)
             .map_err(|_| PluginError::internal("memory plugin initialized more than once"))?;
@@ -219,18 +227,55 @@ impl MemoryPlugin {
             .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
     }
 
-    fn workspace_root(&self) -> SdkResult<&Path> {
+    fn workspace_root(&self) -> SdkResult<PathBuf> {
+        if let Some(root) = agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.workspace_root)
+            .filter(|root| !root.is_empty())
+        {
+            return Ok(PathBuf::from(root));
+        }
         self.workspace_root
             .get()
-            .map(PathBuf::as_path)
+            .cloned()
             .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
+    }
+
+    fn memory_path(&self, name: Option<&str>) -> SdkResult<PathBuf> {
+        let store = MemoryStore::for_workspace(&self.workspace_root()?);
+        Ok(match name {
+            Some(name) => store
+                .dir()
+                .join(format!("{}.md", name.trim().trim_end_matches(".md"))),
+            None => store.dir().to_owned(),
+        })
+    }
+
+    async fn require_memory(
+        &self,
+        name: Option<&str>,
+        kind: agena_domain::PathKind,
+    ) -> SdkResult<()> {
+        self.permissions
+            .path(kind, &self.memory_path(name)?.to_string_lossy())
+            .await
+    }
+
+    async fn require_memory_index_edit(&self) -> SdkResult<()> {
+        let path = self.memory_path(None)?.join("MEMORY.md");
+        for kind in [agena_domain::PathKind::Read, agena_domain::PathKind::Write] {
+            self.permissions.path(kind, &path.to_string_lossy()).await?;
+        }
+        Ok(())
     }
 
     async fn sync_and_search_documents(
         &self,
         query: &str,
         limit: usize,
+        interactive: bool,
     ) -> SdkResult<Vec<MemorySearchDocument>> {
+        let access = self.permissions.read_filter(interactive)?;
+        let predicate = access.predicate();
         let workspace_root = self.workspace_root()?.to_path_buf();
         let query = query.to_string();
         let guard = Arc::clone(&self.sync_lock).lock_owned().await;
@@ -247,9 +292,12 @@ impl MemoryPlugin {
             let _worker_permit = worker_permit;
             let _guard = guard;
             let store = MemoryStore::for_workspace(&workspace_root);
-            let documents = store
-                .list()
-                .map_err(memory_error_to_plugin)?
+            let entries = access.finish(
+                store
+                    .list_filtered(|path| predicate.allows(path))
+                    .map_err(memory_error_to_plugin),
+            )?;
+            let documents = entries
                 .into_iter()
                 .map(memory_document_from_entry)
                 .collect::<Vec<_>>();
@@ -284,7 +332,7 @@ impl MemoryPlugin {
         query: &str,
         limit: usize,
     ) -> SdkResult<Vec<MemorySearchDocument>> {
-        self.sync_and_search_documents(query, limit).await
+        self.sync_and_search_documents(query, limit, true).await
     }
 
     #[tool(
@@ -307,6 +355,8 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
+        self.require_memory(None, agena_domain::PathKind::Read)
+            .await?;
         let query = input.query.as_str();
         let limit = input
             .limit
@@ -358,6 +408,8 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
+        self.require_memory(Some(&input.name), agena_domain::PathKind::Read)
+            .await?;
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
         run_memory_blocking(move || {
@@ -400,13 +452,16 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
+        self.require_memory(None, agena_domain::PathKind::Read)
+            .await?;
         let workspace_root = self.workspace_root()?.to_path_buf();
         let limit = input.limit.unwrap_or(50).clamp(1, 200) as usize;
-        run_memory_blocking(move || {
+        let access = self.permissions.read_filter(true)?;
+        let predicate = access.predicate();
+        let result = run_memory_blocking(move || {
             let store = MemoryStore::for_workspace(&workspace_root);
-            let repository: &dyn MemoryRepository = &store;
-            let entries = repository
-                .list()
+            let entries = store
+                .list_filtered(|path| predicate.allows(path))
                 .map_err(memory_error_to_plugin)?
                 .into_iter()
                 .take(limit)
@@ -445,7 +500,8 @@ impl MemoryPlugin {
                 Vec::new(),
             ))
         })
-        .await
+        .await;
+        access.finish(result)
     }
 
     #[tool(
@@ -465,6 +521,11 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
+        self.require_memory(Some(&input.name), agena_domain::PathKind::Read)
+            .await?;
+        self.require_memory(Some(&input.name), agena_domain::PathKind::Write)
+            .await?;
+        self.require_memory_index_edit().await?;
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
         let content = input.content.clone();
@@ -533,6 +594,11 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
+        self.require_memory(Some(&input.name), agena_domain::PathKind::Read)
+            .await?;
+        self.require_memory(Some(&input.name), agena_domain::PathKind::Write)
+            .await?;
+        self.require_memory_index_edit().await?;
         let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
         // Same gate as `invoke_write`: a delete must not land between the
@@ -595,7 +661,22 @@ impl MemoryPlugin {
             .retrieval
             .limit
             .clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
-        let memories = match self.search_documents(query.as_str(), limit).await {
+        let host = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("memory permission host is unavailable"))?;
+        let query_permission = host
+            .check_path_permission(agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
+                self.memory_path(None)?.to_string_lossy(),
+            ))
+            .await?;
+        if !query_permission.is_allowed() {
+            return Ok(None);
+        }
+        let memories = match self
+            .sync_and_search_documents(query.as_str(), limit, false)
+            .await
+        {
             Ok(memories) => memories,
             Err(err) => {
                 tracing::warn!(target: "agena::memory", "memory retrieval skipped: {err}");

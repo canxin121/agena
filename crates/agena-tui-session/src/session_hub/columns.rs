@@ -17,7 +17,7 @@ impl HubColumns {
     pub(super) fn new(width: u16) -> Self {
         let width = usize::from(width);
         let (status, updated, separator) = if width >= 40 {
-            (12, 11, " │ ")
+            (8, 11, " │ ")
         } else if width >= 5 {
             let metadata = (width - 2) / 3;
             (metadata.min(8), metadata.min(11), "│")

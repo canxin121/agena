@@ -223,6 +223,10 @@ def main() -> int:
         client.send(b"\t\t", "switch-to-flat-view-for-mark-races")
         fixture.poll(lambda: "▾" not in client.text() and visible(*current), 10,
                      "flat view did not select the persisted session")
+        client.send(b"/rapid-mark-target", "filter-global-buckets-for-pending-view-switches")
+        client.wait_text("Filter: rapid-mark-target", "global-mark-search")
+        fixture.poll(lambda: "Loading" not in client.text(), 10, "global mark search did not finish")
+        client.send(b"\x1b[B", "leave-global-search-composition")
         for mode in ("keyboard", "mouse"):
             proxy.writes.clear()
             before = proxy.write_count

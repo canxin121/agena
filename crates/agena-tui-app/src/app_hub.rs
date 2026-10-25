@@ -204,21 +204,25 @@ impl App {
                 return;
             }
         };
-        let mut sections = [SessionHubSectionKind::All]
-            .into_iter()
-            .filter_map(|kind| {
-                let ids = catalog.members.get(&HubPageTarget::Section(kind))?;
-                Some(SessionHubSection::new(
-                    kind,
-                    catalog
-                        .sessions
-                        .iter()
-                        .filter(|session| ids.contains(&session.id))
-                        .map(|session| self.hub_session_item(session))
-                        .collect(),
-                ))
-            })
-            .collect::<Vec<_>>();
+        let mut sections = [
+            SessionHubSectionKind::Pinned,
+            SessionHubSectionKind::Favorites,
+            SessionHubSectionKind::All,
+        ]
+        .into_iter()
+        .filter_map(|kind| {
+            let ids = catalog.members.get(&HubPageTarget::Section(kind))?;
+            Some(SessionHubSection::new(
+                kind,
+                catalog
+                    .sessions
+                    .iter()
+                    .filter(|session| ids.contains(&session.id))
+                    .map(|session| self.hub_session_item(session))
+                    .collect(),
+            ))
+        })
+        .collect::<Vec<_>>();
         let mut directories = catalog
             .workspaces
             .iter()

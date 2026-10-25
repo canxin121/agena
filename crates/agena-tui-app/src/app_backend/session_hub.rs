@@ -224,13 +224,34 @@ fn session_requests(
     current: i64,
 ) -> Vec<(HubPageTarget, ListSessionsParams)> {
     let search = (!query.search.trim().is_empty()).then(|| query.search.trim().to_owned());
-    if query.view == HubView::AllSessions || (query.view == HubView::Projects && search.is_some()) {
+    if query.view == HubView::AllSessions {
+        return [
+            (
+                SessionHubSectionKind::Pinned,
+                Some(SessionListBucket::Pinned),
+            ),
+            (
+                SessionHubSectionKind::Favorites,
+                Some(SessionListBucket::Favorite),
+            ),
+            (SessionHubSectionKind::All, None),
+        ]
+        .into_iter()
+        .map(|(kind, bucket)| {
+            (
+                HubPageTarget::Section(kind),
+                ListSessionsParams {
+                    bucket,
+                    search: search.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    }
+    if query.view == HubView::Projects && search.is_some() {
         return vec![(
-            if query.view == HubView::Projects {
-                HubPageTarget::Workspaces
-            } else {
-                HubPageTarget::Section(SessionHubSectionKind::All)
-            },
+            HubPageTarget::Workspaces,
             ListSessionsParams {
                 search,
                 ..Default::default()
@@ -349,34 +370,49 @@ mod tests {
     }
 
     #[test]
-    fn all_sessions_and_grouped_search_use_single_unbucketed_global_page() {
-        for (view, search, target) in [
-            (
-                HubView::AllSessions,
-                "",
-                HubPageTarget::Section(SessionHubSectionKind::All),
-            ),
-            (
-                HubView::AllSessions,
-                "needle",
-                HubPageTarget::Section(SessionHubSectionKind::All),
-            ),
-            (HubView::Projects, "needle", HubPageTarget::Workspaces),
-        ] {
+    fn all_sessions_reads_global_marks_and_all_sessions_on_independent_pages() {
+        for search in ["", "needle"] {
             let query = HubCatalogQuery {
-                view,
+                view: HubView::AllSessions,
                 search: search.to_owned(),
                 ..Default::default()
             };
             let requests = session_requests(&query, &workspaces(), 1);
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].0, target);
-            assert!(requests[0].1.workspace_id.is_none());
-            assert!(requests[0].1.bucket.is_none());
-            assert_eq!(
-                requests[0].1.search.as_deref(),
-                (!search.is_empty()).then_some(search)
-            );
+            assert_eq!(requests.len(), 3);
+            for ((target, params), (kind, bucket)) in requests.iter().zip([
+                (
+                    SessionHubSectionKind::Pinned,
+                    Some(SessionListBucket::Pinned),
+                ),
+                (
+                    SessionHubSectionKind::Favorites,
+                    Some(SessionListBucket::Favorite),
+                ),
+                (SessionHubSectionKind::All, None),
+            ]) {
+                assert_eq!(*target, HubPageTarget::Section(kind));
+                assert_eq!(params.bucket, bucket);
+                assert!(params.workspace_id.is_none());
+                assert_eq!(
+                    params.search.as_deref(),
+                    (!search.is_empty()).then_some(search)
+                );
+            }
         }
+    }
+
+    #[test]
+    fn grouped_project_search_keeps_one_unbucketed_global_page() {
+        let query = HubCatalogQuery {
+            view: HubView::Projects,
+            search: "needle".to_owned(),
+            ..Default::default()
+        };
+        let requests = session_requests(&query, &workspaces(), 1);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, HubPageTarget::Workspaces);
+        assert!(requests[0].1.workspace_id.is_none());
+        assert!(requests[0].1.bucket.is_none());
+        assert_eq!(requests[0].1.search.as_deref(), Some("needle"));
     }
 }

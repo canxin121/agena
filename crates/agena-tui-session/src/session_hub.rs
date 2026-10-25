@@ -267,6 +267,7 @@ impl SessionHubPresentation {
 
     pub fn set_view(&mut self, view: HubView) {
         self.view = view;
+        self.rebuild_rows();
     }
 
     /// Jump between projects, skipping their buckets and session rows. A
@@ -539,8 +540,8 @@ impl SessionHubPresentation {
         }
     }
 
-    /// Update every duplicate, then adjust only the owning project's bucket.
-    /// Pinning and favoriting are independent and have independent pages.
+    /// Update every duplicate and adjust the bucket in the current scope.
+    /// Project and cross-project buckets keep independent pagination.
     fn set_item_mark(&mut self, session_id: i64, kind: SessionHubSectionKind, enabled: bool) {
         let mut source = None;
         let mut changed = false;
@@ -570,7 +571,11 @@ impl SessionHubPresentation {
             source = Some(item.clone());
         }
         if let Some(item) = source {
-            let target = HubPageTarget::DirectorySection(item.workspace_id, kind);
+            let target = if self.view == HubView::AllSessions {
+                HubPageTarget::Section(kind)
+            } else {
+                HubPageTarget::DirectorySection(item.workspace_id, kind)
+            };
             let page = self.pagination.get_mut(&target);
             let first_page = page.as_ref().is_none_or(|page| page.page == 0);
             if changed
@@ -583,7 +588,33 @@ impl SessionHubPresentation {
                     total.saturating_sub(1)
                 };
             }
-            if let Some(directory) = self
+            if self.view == HubView::AllSessions {
+                if let Some(section) = self
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.kind == kind)
+                {
+                    if !enabled {
+                        section.items.retain(|entry| entry.session_id != session_id);
+                    } else if first_page
+                        && !section
+                            .items
+                            .iter()
+                            .any(|entry| entry.session_id == session_id)
+                    {
+                        section.items.insert(0, item);
+                        section.items.truncate(20);
+                    }
+                } else if enabled && first_page {
+                    let index = self
+                        .sections
+                        .iter()
+                        .position(|section| section.kind > kind)
+                        .unwrap_or(self.sections.len());
+                    self.sections
+                        .insert(index, SessionHubSection::new(kind, vec![item]));
+                }
+            } else if let Some(directory) = self
                 .directories
                 .iter_mut()
                 .find(|directory| directory.workspace_id == item.workspace_id)
@@ -784,12 +815,20 @@ impl SessionHubPresentation {
                 SessionHubSection::new(section.kind, items)
             })
             .collect::<Vec<_>>();
-        self.rows = build_rows(filtered);
+        self.rows = build_rows(filtered, self.view);
         // Insert bounded server pages after their quick-access section.
         for (target, page) in self.pagination.iter().rev() {
             let HubPageTarget::Section(kind) = target else {
                 continue;
             };
+            if self.view != HubView::AllSessions
+                && matches!(
+                    kind,
+                    SessionHubSectionKind::Pinned | SessionHubSectionKind::Favorites
+                )
+            {
+                continue;
+            }
             let controls = page_rows(*target, page);
             if controls.is_empty() {
                 continue;
@@ -1000,18 +1039,18 @@ fn session_matches(item: &SessionHubItem, query_lower: &str) -> bool {
         || item.session_id.to_string().contains(query_lower)
 }
 
-/// Flatten global activity sections. Project actions and marked sessions live
-/// in the directory tree, never as global rows.
-fn build_rows(sections: Vec<SessionHubSection>) -> Vec<HubRow> {
+/// Only the all-sessions view owns cross-project pin/favorite buckets.
+/// Other views keep those buckets within their project tree.
+fn build_rows(sections: Vec<SessionHubSection>, view: HubView) -> Vec<HubRow> {
     let mut rows = Vec::new();
     for section in sections {
-        if section.items.is_empty()
-            || matches!(
-                section.kind,
-                SessionHubSectionKind::New
-                    | SessionHubSectionKind::Pinned
-                    | SessionHubSectionKind::Favorites
-            )
+        let marked = matches!(
+            section.kind,
+            SessionHubSectionKind::Pinned | SessionHubSectionKind::Favorites
+        );
+        if section.kind == SessionHubSectionKind::New
+            || (marked && view != HubView::AllSessions)
+            || (section.items.is_empty() && !(marked && view == HubView::AllSessions))
         {
             continue;
         }

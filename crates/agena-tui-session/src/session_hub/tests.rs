@@ -198,6 +198,143 @@ fn flat_sessions_use_all_available_space_without_project_rows() {
 }
 
 #[test]
+fn all_sessions_shows_global_mark_buckets_with_independent_pagination() {
+    let mut hub = SessionHubPresentation::empty();
+    hub.set_view(HubView::AllSessions);
+    let mut old_pin = item(2, 200);
+    old_pin.pinned = true;
+    let mut old_favorite = item(3, 300);
+    old_favorite.favorite = true;
+    hub.set_sections(vec![
+        SessionHubSection::new(SessionHubSectionKind::Pinned, vec![old_pin]),
+        SessionHubSection::new(SessionHubSectionKind::Favorites, vec![old_favorite]),
+        SessionHubSection::new(SessionHubSectionKind::All, vec![item(1, 100)]),
+    ]);
+    let pins = HubPageTarget::Section(SessionHubSectionKind::Pinned);
+    let favorites = HubPageTarget::Section(SessionHubSectionKind::Favorites);
+    let all = HubPageTarget::Section(SessionHubSectionKind::All);
+    hub.set_pagination(BTreeMap::from([
+        (
+            pins,
+            HubPagination {
+                page: 1,
+                has_more: false,
+                total: Some(21),
+            },
+        ),
+        (
+            favorites,
+            HubPagination {
+                page: 0,
+                has_more: true,
+                total: Some(22),
+            },
+        ),
+        (
+            all,
+            HubPagination {
+                page: 2,
+                has_more: true,
+                total: Some(100),
+            },
+        ),
+    ]));
+    for (target, id, previous, next) in [
+        (pins, 200, Some((pins, 0)), None),
+        (favorites, 300, None, Some((favorites, 1))),
+        (all, 100, Some((all, 1)), Some((all, 3))),
+    ] {
+        assert_eq!(scoped_ids(&hub, target), vec![id]);
+        select_item(&mut hub, target, id);
+        assert_eq!(hub.page_request(false), previous);
+        assert_eq!(hub.page_request(true), next);
+    }
+    assert!(!hub.rows.iter().any(|row| matches!(
+        row,
+        HubRow::Directory { .. } | HubRow::DirectoryHeader { .. }
+    )));
+    // Global mark pages must never appear in project views.
+    hub.set_view(HubView::Projects);
+    assert!(!hub.rows.iter().any(|row| matches!(
+        row,
+        HubRow::Header(SessionHubSectionKind::Pinned | SessionHubSectionKind::Favorites)
+    )));
+}
+
+#[test]
+fn all_sessions_marks_update_duplicates_and_keep_pending_rows_stable() {
+    let mut hub = SessionHubPresentation::empty();
+    hub.set_view(HubView::AllSessions);
+    let pins = HubPageTarget::Section(SessionHubSectionKind::Pinned);
+    let favorites = HubPageTarget::Section(SessionHubSectionKind::Favorites);
+    let all = HubPageTarget::Section(SessionHubSectionKind::All);
+    hub.set_sections(vec![
+        SessionHubSection::new(SessionHubSectionKind::Pinned, vec![]),
+        SessionHubSection::new(SessionHubSectionKind::Favorites, vec![]),
+        SessionHubSection::new(SessionHubSectionKind::All, vec![item(2, 200)]),
+    ]);
+    hub.set_pagination(BTreeMap::from([
+        (
+            pins,
+            HubPagination {
+                total: Some(0),
+                ..Default::default()
+            },
+        ),
+        (
+            favorites,
+            HubPagination {
+                total: Some(0),
+                ..Default::default()
+            },
+        ),
+    ]));
+    assert!(
+        hub.rows
+            .contains(&HubRow::Header(SessionHubSectionKind::Pinned))
+    );
+    assert!(
+        hub.rows
+            .contains(&HubRow::Header(SessionHubSectionKind::Favorites))
+    );
+    hub.set_item_pinned(200, true);
+    hub.set_item_favorite(200, true);
+    hub.set_item_pinned(200, true);
+    assert_eq!(hub.pagination[&pins].total, Some(1));
+    assert_eq!(hub.pagination[&favorites].total, Some(1));
+    assert_eq!(scoped_ids(&hub, pins), vec![200]);
+    assert_eq!(scoped_ids(&hub, favorites), vec![200]);
+    select_item(&mut hub, pins, 200);
+    let identities = hub.rows.iter().map(HubRow::identity).collect::<Vec<_>>();
+    let selection = hub.selection();
+    for index in 0..30 {
+        hub.set_pending_marks(200, Some(index % 2 == 0), Some(index % 3 == 0));
+        assert_eq!(
+            hub.rows.iter().map(HubRow::identity).collect::<Vec<_>>(),
+            identities
+        );
+        assert_eq!(hub.selection(), selection);
+        assert_eq!(hub.pagination[&pins].total, Some(1));
+        for row in hub.rows() {
+            if let HubRow::Item(item) = row {
+                assert_eq!(item.pinned, index % 2 == 0);
+                assert_eq!(item.favorite, index % 3 == 0);
+            }
+        }
+    }
+    // Reconcile pending markers before applying authoritative membership.
+    hub.set_pending_marks(200, Some(true), Some(true));
+    hub.set_item_pinned(200, false);
+    assert_eq!(hub.selected_item().unwrap().session_id, 200);
+    assert!(scoped_ids(&hub, pins).is_empty());
+    assert_eq!(scoped_ids(&hub, favorites), vec![200]);
+    hub.set_item_favorite(200, false);
+    assert_eq!(hub.selected_page_target(), all);
+    assert_eq!(hub.pagination[&pins].total, Some(0));
+    assert_eq!(hub.pagination[&favorites].total, Some(0));
+}
+
+#[test]
 fn pending_mark_bursts_keep_rows_counts_and_selection_stable() {
     let mut hub = SessionHubPresentation::empty();
     let mut project = marked_directory(1);

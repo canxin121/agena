@@ -101,7 +101,7 @@ def main() -> int:
                 if view == "Projects":
                     return "h/l ←→ project" in text
                 if view == "All sessions":
-                    return "All sessions  " in text and "▾" not in text
+                    return ("All sessions  " in text or "Pinned  " in text) and "▾" not in text
                 return "h/l ←→ project" not in text and "▾ workspace" in text
             fixture.poll(ready, 30, f"view did not become {view}")
 
@@ -120,7 +120,7 @@ def main() -> int:
                                        if line.lstrip("│ ").startswith("›") and label in line), None)
                 if selected_index is not None:
                     header = next((line for line in reversed(lines[:selected_index])
-                                   if any(kind + "  " in line for kind in ("Pinned", "Favorites", "Recent"))), "")
+                                   if any(kind + "  " in line for kind in ("Pinned", "Favorites", "Recent", "All sessions"))), "")
                     if bucket + "  " in header:
                         return
                 client.send(b"\x1b[B", f"find-{bucket}-{index}")
@@ -183,18 +183,42 @@ def main() -> int:
             time.sleep(0.2)
         checkpoint(client, "h-l-and-arrows-switch-projects")
         client.send(b"\t", "switch-to-all-sessions")
-        client.wait_text("B-only-marked", "flat-list-loaded")
-        fixture.require("A-recent-" in client.text(), "flat list did not include both projects")
+        wait_scope(client, "All sessions")
+        client.wait_text("Pinned  25", "global-pins-loaded")
+        client.wait_text("Favorites  2", "global-favorites-loaded")
+        fixture.require("A-pin-00" in client.text() and "B-only-marked" in client.text(),
+                        "global marks did not include older sessions and both projects")
         fixture.require("+ New session" not in client.text() and "▾" not in client.text() and "▸" not in client.text(),
                         "flat list still groups by project")
-        fixture.require("Pinned  " not in client.text() and "Favorites  " not in client.text(),
-                        "flat list duplicates project buckets")
+        checkpoint(client, "all-sessions-has-cross-project-pins-and-favorites")
+        select_bucket_item(client, "B-only-marked", "Pinned")
+        client.send(b"]", "global-pins-next-page")
+        wait_selected(client, "A-pin-04")
+        checkpoint(client, "global-pin-pagination-includes-old-sessions")
+        client.send(b"[", "global-pins-previous-page")
+        wait_selected(client, "A-pin-05")
+        select_bucket_item(client, "B-only-marked", "Favorites")
+        client.send(b"f", "unfavorite-global-item")
+        fixture.poll(lambda: not api.state(bsid)["session"]["favorite"], 30, "global unfavorite failed")
+        client.wait_text("Favorites  1", "global-favorite-count-updated")
+        fixture.require(api.state(bsid)["session"]["pinned"], "global unfavorite cleared the pin")
+        wait_selected(client, "B-only-marked")
+        client.send(b"f", "restore-global-favorite")
+        fixture.poll(lambda: api.state(bsid)["session"]["favorite"], 30, "global favorite restore failed")
+        client.wait_text("Favorites  2", "global-favorite-restored")
+        checkpoint(client, "global-marks-update-counts-and-preserve-selection")
+        select_bucket_item(client, "B-only-marked", "All sessions")
+        client.send(b"\x1b[B", "show-flat-sessions-from-another-project")
+        wait_selected(client, "A-recent-21")
+        fixture.require("▾" not in client.text(), "all sessions reintroduced project grouping")
+        client.send(b"\x1b[A", "select-first-flat-session")
+        wait_selected(client, "B-only-marked")
         checkpoint(client, "all-sessions-flat-cross-project-view")
         client.send(b"]", "flat-next-page")
-        client.wait_text("A-pin-", "flat-second-page")
+        wait_selected(client, "A-recent-02")
         client.send(b"[", "flat-previous-page")
-        client.wait_text("B-only-marked", "flat-first-page-restored")
-        checkpoint(client, "flat-pagination")
+        wait_selected(client, "A-recent-03")
+        checkpoint(client, "flat-pagination-independent-of-global-marks")
         client.send(b"\t", "wrap-to-current-project")
         client.wait_text("A-pin-23", "current-restored")
         fixture.require("B-only-marked" not in client.text(), "view wrap retained foreign sessions")
@@ -211,6 +235,9 @@ def main() -> int:
         client.send(b"\t", "keep-search-in-all-sessions")
         fixture.poll(lambda: any("B-only-marked" in line and "Ready" in line for line in client.text().splitlines())
                      and "▾" not in client.text(), 30, "flat search did not load")
+        client.wait_text("Pinned  1", "global-pin-search")
+        client.wait_text("Favorites  1", "global-favorite-search")
+        fixture.require("A-pin-" not in client.text(), "global mark search leaked a nonmatching session")
         checkpoint(client, "search-survives-view-changes-with-correct-scope")
         client.send(b"\x1b", "close-search-before-mouse-views")
         fixture.poll(lambda: "Filter:" not in client.text() and "Loading" not in client.text(),
@@ -355,6 +382,7 @@ def main() -> int:
             client.send(packet, "switch-with-delayed-reads")
             time.sleep(0.12)
         proxy.reads.set()
+        wait_scope(client, "All sessions")
         client.wait_text("B-only-marked", "delayed-final-flat-view")
         time.sleep(0.8)
         fixture.require("▾" not in client.text() and "+ New session" not in client.text(),

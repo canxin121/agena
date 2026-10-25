@@ -99,7 +99,6 @@
   "Catalog origin": "कैटलॉग उत्पत्ति",
   "Catalog template": "कैटलॉग टेम्पलेट",
   "Change catalog model": "कैटलॉग मॉडल बदलें",
-  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.": "ChatGPT इन समापन बिंदुओं को MCP सर्वर से खोजता है। चैटजीपीटी क्लाइंट रहस्य यहां पेस्ट न करें। CIMD डिफ़ॉल्ट रूप से समर्थित है; डायनामिक क्लाइंट पंजीकरण केवल तभी उपलब्ध होता है जब ऊपर स्पष्ट रूप से सक्षम किया गया हो।",
   "ChatGPT/Codex OAuth credentials.": "चैटजीपीटी/कोडेक्स ओएथ क्रेडेंशियल।",
   "Checking…": "जाँच हो रही है...",
   "Choose a response speed supported by this model.": "इस मॉडल द्वारा समर्थित प्रतिक्रिया गति चुनें।",
@@ -951,5 +950,6 @@
   "{variant} Code: {suffix}": "{variant} कोड: {suffix}",
   "{visible} of {total} providers": "{total} प्रदाताओं में से {visible}",
   "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.": "/mcp एंडपॉइंट उपलब्ध है। डिस्कवरी सार्वजनिक है और प्रत्येक टूल कॉल के लिए OAuth एक्सेस टोकन आवश्यक है, जब तक कि टूल स्वयं अनाम उपयोग के लिए सुरक्षित चिह्नित न हो।",
-  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "Agena ने OAuth प्राधिकरण पासवर्ड उत्पन्न किया क्योंकि कोई कॉन्फ़िगर नहीं था। अभी कॉपी करें; यह केवल एक बार दिखाया जाता है।"
+  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "Agena ने OAuth प्राधिकरण पासवर्ड उत्पन्न किया क्योंकि कोई कॉन्फ़िगर नहीं था। अभी कॉपी करें; यह केवल एक बार दिखाया जाता है।",
+  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.": "ChatGPT इन समापन बिंदुओं को MCP सर्वर से खोजता है। चैटजीपीटी क्लाइंट रहस्य यहां पेस्ट न करें। क्लाइंट मेटाडेटा दस्तावेज़ (CIMD) और डायनामिक क्लाइंट पंजीकरण दोनों समर्थित हैं।"
 }

@@ -99,7 +99,6 @@
   "Catalog origin": "Origem do catálogo",
   "Catalog template": "Modelo do catálogo",
   "Change catalog model": "Trocar modelo do catálogo",
-  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.": "ChatGPT descobre esses endpoints no servidor MCP. Não cole segredos do cliente ChatGPT aqui. CIMD é suportado por padrão; O Registro Dinâmico de Cliente está disponível somente quando habilitado explicitamente acima.",
   "ChatGPT/Codex OAuth credentials.": "Credenciais ChatGPT/Codex OAuth.",
   "Checking…": "Verificando…",
   "Choose a response speed supported by this model.": "Escolha uma velocidade de resposta compatível com este modelo.",
@@ -951,5 +950,6 @@
   "{variant} Code: {suffix}": "{variant} Código: {suffix}",
   "{visible} of {total} providers": "{visible} de {total} provedores",
   "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.": "O endpoint /mcp está disponível. A descoberta é pública e cada chamada de ferramenta exige um token de acesso OAuth, a menos que a própria ferramenta esteja marcada como segura para uso anônimo.",
-  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "O Agena gerou uma senha de autorização OAuth porque nenhuma estava configurada. Copie-a agora; ela é exibida apenas uma vez."
+  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "O Agena gerou uma senha de autorização OAuth porque nenhuma estava configurada. Copie-a agora; ela é exibida apenas uma vez.",
+  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.": "ChatGPT descobre esses endpoints no servidor MCP. Não cole segredos do cliente ChatGPT aqui. Documentos de metadados do cliente (CIMD) e registro dinâmico de clientes são ambos suportados."
 }

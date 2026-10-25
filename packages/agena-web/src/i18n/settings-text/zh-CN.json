@@ -99,7 +99,6 @@
   "Catalog origin": "目录来源",
   "Catalog template": "目录模板",
   "Change catalog model": "更换目录模型",
-  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.": "ChatGPT 会从 MCP 服务器发现这些端点。不要在此粘贴 ChatGPT 客户端密钥。默认支持 CIMD；只有在上方明确启用后才开放动态客户端注册。",
   "ChatGPT/Codex OAuth credentials.": "ChatGPT/Codex OAuth 凭据。",
   "Checking…": "正在检查…",
   "Choose a response speed supported by this model.": "选择该模型支持的响应速度。",
@@ -951,5 +950,6 @@
   "{variant} Code: {suffix}": "{variant} 代码：{suffix}",
   "{visible} of {total} providers": "{visible} / {total} 个服务商",
   "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.": "/mcp 端点已启用。协议发现是公开的，除非工具自身被标记为可匿名使用，否则每次工具调用都需要 OAuth 访问令牌。",
-  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "由于未配置密码，Agena 生成了一个 OAuth 授权密码。请立即复制，该密码仅显示一次。"
+  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "由于未配置密码，Agena 生成了一个 OAuth 授权密码。请立即复制，该密码仅显示一次。",
+  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.": "ChatGPT 会从 MCP 服务器发现这些端点。不要在此粘贴 ChatGPT 客户端密钥。客户端元数据文档（CIMD）与动态客户端注册均受支持。"
 }

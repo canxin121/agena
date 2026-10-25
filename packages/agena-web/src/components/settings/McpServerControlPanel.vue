@@ -339,7 +339,7 @@ onMounted(() => {
         :title="$st('OAuth authorization')"
         :description="
           $st(
-            'ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.',
+            'ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.',
           )
         "
       >

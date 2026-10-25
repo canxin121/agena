@@ -99,7 +99,6 @@
   "Catalog origin": "Catalog origin",
   "Catalog template": "Catalog template",
   "Change catalog model": "Change catalog model",
-  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.": "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.",
   "ChatGPT/Codex OAuth credentials.": "ChatGPT/Codex OAuth credentials.",
   "Checking…": "Checking…",
   "Choose a response speed supported by this model.": "Choose a response speed supported by this model.",
@@ -951,5 +950,6 @@
   "{variant} Code: {suffix}": "{variant} Code: {suffix}",
   "{visible} of {total} providers": "{visible} of {total} providers",
   "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.": "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.",
-  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once."
+  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.",
+  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.": "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported."
 }

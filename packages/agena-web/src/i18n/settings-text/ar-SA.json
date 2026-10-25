@@ -99,7 +99,6 @@
   "Catalog origin": "أصل الكتالوج",
   "Catalog template": "قالب الفهرس",
   "Change catalog model": "تغيير نموذج الفهرس",
-  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.": "يكتشف ChatGPT نقاط النهاية هذه من خادم MCP. لا تلصق أسرار عميل ChatGPT هنا. يتم دعم CIMD بشكل افتراضي؛ لا يتوفر تسجيل العميل الديناميكي إلا عند تمكينه صراحةً أعلاه.",
   "ChatGPT/Codex OAuth credentials.": "بيانات اعتماد ChatGPT/Codex OAuth.",
   "Checking…": "جارٍ التحقق…",
   "Choose a response speed supported by this model.": "اختر سرعة استجابة يدعمها هذا النموذج.",
@@ -951,5 +950,6 @@
   "{variant} Code: {suffix}": "{variant} الرمز: {suffix}",
   "{visible} of {total} providers": "{visible} من {total} مقدّم خدمة",
   "The /mcp endpoint is available. Discovery is public and every tool call requires an OAuth access token unless the tool itself is marked safe for anonymous use.": "نقطة نهاية /mcp متاحة. الاكتشاف عام، وكل استدعاء أداة يتطلب رمز وصول OAuth ما لم تكن الأداة نفسها مُعلَّمة كآمنة للاستخدام المجهول.",
-  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "أنشأ Agena كلمة مرور تفويض OAuth لعدم وجود كلمة مرور مُهيأة. انسخها الآن؛ يتم عرضها مرة واحدة فقط."
+  "Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.": "أنشأ Agena كلمة مرور تفويض OAuth لعدم وجود كلمة مرور مُهيأة. انسخها الآن؛ يتم عرضها مرة واحدة فقط.",
+  "ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. Client metadata documents (CIMD) and dynamic client registration are both supported.": "يكتشف ChatGPT نقاط النهاية هذه من خادم MCP. لا تلصق أسرار عميل ChatGPT هنا. يتم دعم مستندات بيانات تعريف العميل (CIMD) وتسجيل العميل الديناميكي معًا."
 }

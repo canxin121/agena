@@ -139,6 +139,7 @@ const MAX_OAUTH_URI_BYTES: usize = 4096;
 const MAX_OAUTH_LABEL_BYTES: usize = 256;
 const MAX_OAUTH_TOKEN_BYTES: usize = 8192;
 const MAX_OAUTH_SCOPE_BYTES: usize = 512;
+const MAX_REGISTERED_CLIENTS: usize = 256;
 // ChatGPT submits the user-facing OAuth authorization form from its hosted
 // connector origin. Keep this allowlist explicit and narrow; arbitrary
 // browser origins must not be accepted for the MCP/OAuth surface.
@@ -685,6 +686,8 @@ impl McpServerState {
                     .map(|url| url.origin().ascii_serialization() == candidate)
                     .unwrap_or(false)
             })
+            || (is_loopback_resource(self.fallback_resource.as_str())
+                && is_loopback_resource(candidate.as_str()))
     }
 
     fn identity_urls(&self) -> Vec<String> {
@@ -815,6 +818,7 @@ impl McpServerState {
 
     async fn clear_oauth_runtime_state(&self) -> Result<(), String> {
         self.oauth.cimd_clients.clear();
+        self.oauth.registered_clients.clear();
         self.oauth.authorization_codes.clear();
         self.oauth.refresh_tokens.clear();
         self.oauth.revoked_jti.clear();
@@ -841,7 +845,7 @@ impl McpServerState {
                     && matches!(self.ui_auth, UiAuth::Enabled(_)),
                 ready: readiness.ready,
                 authorization_server_kind: "agena-managed".to_owned(),
-                registration_methods: vec!["cimd".to_owned()],
+                registration_methods: vec!["cimd".to_owned(), "dcr".to_owned()],
                 // The current Agena token endpoint implements the public
                 // client/PKCE flow only. Do not advertise private_key_jwt
                 // until assertion signature and replay validation are live;
@@ -1295,6 +1299,7 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         )
         .route("/oauth/token", axum::routing::post(token))
         .route("/oauth/revoke", axum::routing::post(revoke))
+        .route("/register", axum::routing::post(register_client))
         .with_state(Arc::clone(&state));
 
     Router::new()
@@ -1796,6 +1801,7 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    registration_endpoint: String,
     revocation_endpoint: String,
     revocation_endpoint_auth_methods_supported: Vec<String>,
     client_id_metadata_document_supported: bool,
@@ -1837,6 +1843,7 @@ async fn authorization_server_metadata(
             authorization_response_iss_parameter_supported: true,
             client_id_metadata_document_supported: true,
             code_challenge_methods_supported: vec!["S256".to_owned()],
+            registration_endpoint: append_public_endpoint(&issuer, "/register"),
             grant_types_supported: vec![
                 "authorization_code".to_owned(),
                 "refresh_token".to_owned(),
@@ -1914,8 +1921,14 @@ fn client_metadata_supports_code_response(response_types: Option<&[String]>) -> 
 
 async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, String> {
     if !is_supported_cimd_client_id(client_id) {
-        return Err("CIMD client id is outside the supported metadata namespace".to_owned());
+        return Err("client id is not a usable metadata document URL".to_owned());
     }
+    let metadata_url = Url::parse(client_id.trim())
+        .map_err(|error| format!("client metadata URL is invalid: {error}"))?;
+    let host = metadata_url
+        .host_str()
+        .ok_or_else(|| "client metadata URL must include a host".to_owned())?;
+    ensure_public_metadata_host(host, metadata_url.port_or_known_default().unwrap_or(443)).await?;
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -2080,6 +2093,210 @@ async fn load_cimd_client(
 // Authorization code + PKCE
 // ---------------------------------------------------------------------------
 
+/// One dynamically registered OAuth client (RFC 7591).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegisteredClient {
+    client_id: String,
+    #[serde(default)]
+    client_name: Option<String>,
+    redirect_uris: Vec<String>,
+    created_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterClientRequest {
+    redirect_uris: Vec<String>,
+    #[serde(default)]
+    client_name: Option<String>,
+    #[serde(default)]
+    token_endpoint_auth_method: Option<String>,
+    #[serde(default)]
+    grant_types: Option<Vec<String>>,
+    #[serde(default)]
+    response_types: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterClientResponse {
+    client_id: String,
+    client_id_issued_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_name: Option<String>,
+    redirect_uris: Vec<String>,
+    token_endpoint_auth_method: &'static str,
+    grant_types: Vec<String>,
+    response_types: Vec<String>,
+    scope: String,
+}
+
+/// Register a public OAuth client, the way MCP clients that do not publish a
+/// client metadata document expect to start.
+///
+/// Agena only issues public clients: the token endpoint accepts
+/// `token_endpoint_auth_method=none` with PKCE, so no client secret is minted,
+/// stored, or rotated. Registrations are capped and the oldest is evicted, which
+/// keeps an unauthenticated endpoint from growing state without bound.
+async fn register_client(
+    State(state): State<Arc<McpServerState>>,
+    request: Result<Json<RegisterClientRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(request) = match request {
+        Ok(request) => request,
+        Err(error) => {
+            tracing::debug!(
+                target: "agena::server::mcp",
+                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                    "decode the OAuth client registration body",
+                    &error,
+                ),
+                "rejecting malformed OAuth client registration"
+            );
+            return registration_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "the registration body must be a JSON object",
+            );
+        }
+    };
+
+    if request.redirect_uris.is_empty() || request.redirect_uris.len() > 16 {
+        return registration_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "redirect_uris must contain between 1 and 16 URIs",
+        );
+    }
+    let mut redirect_uris = Vec::with_capacity(request.redirect_uris.len());
+    for uri in &request.redirect_uris {
+        if uri.len() > MAX_OAUTH_URI_BYTES {
+            return registration_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_redirect_uri",
+                "a redirect URI exceeds the length limit",
+            );
+        }
+        if let Err(error) = validate_redirect_uri(uri.as_str()) {
+            return registration_error(StatusCode::BAD_REQUEST, "invalid_redirect_uri", error);
+        }
+        redirect_uris.push(uri.clone());
+    }
+
+    if request
+        .token_endpoint_auth_method
+        .as_deref()
+        .is_some_and(|method| method != "none")
+    {
+        return registration_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "only token_endpoint_auth_method=none is supported",
+        );
+    }
+    let grant_types = match request.grant_types {
+        None => vec!["authorization_code".to_owned(), "refresh_token".to_owned()],
+        Some(values)
+            if !values.is_empty()
+                && values.iter().all(|value| {
+                    matches!(value.as_str(), "authorization_code" | "refresh_token")
+                }) =>
+        {
+            values
+        }
+        Some(_) => {
+            return registration_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "grant_types must be a non-empty subset of authorization_code and refresh_token",
+            );
+        }
+    };
+    let response_types = match request.response_types {
+        None => vec!["code".to_owned()],
+        Some(values) if !values.is_empty() && values.iter().all(|value| value == "code") => values,
+        Some(_) => {
+            return registration_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client_metadata",
+                "response_types must be a non-empty subset of code",
+            );
+        }
+    };
+    let client_name = request.client_name.filter(|name| !name.trim().is_empty());
+    if client_name
+        .as_deref()
+        .is_some_and(|name| name.len() > MAX_OAUTH_LABEL_BYTES)
+    {
+        return registration_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "client_name is too long",
+        );
+    }
+
+    if state.oauth.registered_clients.len() >= MAX_REGISTERED_CLIENTS
+        && let Some(oldest) = state
+            .oauth
+            .registered_clients
+            .iter()
+            .min_by_key(|entry| entry.value().created_at)
+            .map(|entry| entry.key().clone())
+    {
+        state.oauth.registered_clients.remove(oldest.as_str());
+    }
+
+    let client_id = crate::server::issue_token();
+    let created_at = unix_timestamp();
+    state.oauth.registered_clients.insert(
+        client_id.clone(),
+        RegisteredClient {
+            client_id: client_id.clone(),
+            client_name: client_name.clone(),
+            redirect_uris: redirect_uris.clone(),
+            created_at,
+        },
+    );
+    if let Err(error) = state.oauth.persist().await {
+        tracing::error!(
+            diagnostic = %error,
+            "OAuth client registration could not be persisted"
+        );
+        return registration_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "the authorization server could not persist the client registration",
+        );
+    }
+
+    json_no_store(
+        StatusCode::CREATED,
+        RegisterClientResponse {
+            client_id,
+            client_id_issued_at: created_at,
+            client_name,
+            redirect_uris,
+            token_endpoint_auth_method: "none",
+            grant_types,
+            response_types,
+            scope: DEFAULT_OAUTH_SCOPE.to_owned(),
+        },
+    )
+}
+
+fn registration_error(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<String>,
+) -> Response {
+    json_no_store(
+        status,
+        serde_json::json!({
+            "error": error,
+            "error_description": description.into(),
+        }),
+    )
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AuthorizeRequest {
     #[serde(default)]
@@ -2172,17 +2389,31 @@ async fn validate_authorization_client(
                 "client_id is required and must be at most 4096 bytes",
             )
         })?;
-    let cimd_client = load_cimd_client(state, client_id).await.map_err(|error| {
-        tracing::warn!(
-            client_id,
-            diagnostic = %error,
-            "CIMD client metadata validation failed"
-        );
-        OAuthRequestError::new(
-            "invalid_client",
-            "the CIMD client metadata document could not be validated",
-        )
-    })?;
+    // A client id resolves in two ways: a dynamically registered public client
+    // (RFC 7591) or a client metadata document URL (CIMD) hosted by the client.
+    // Both reduce to the same validated redirect-URI list.
+    let (client_name, client_redirect_uris) = match state
+        .oauth
+        .registered_clients
+        .get(client_id)
+        .map(|entry| (entry.client_name.clone(), entry.redirect_uris.clone()))
+    {
+        Some(registered) => registered,
+        None => {
+            let cimd_client = load_cimd_client(state, client_id).await.map_err(|error| {
+                tracing::warn!(
+                    client_id,
+                    diagnostic = %error,
+                    "client metadata document validation failed"
+                );
+                OAuthRequestError::new(
+                    "invalid_client",
+                    "the client is not registered and its metadata document could not be validated",
+                )
+            })?;
+            (cimd_client.client_name, cimd_client.redirect_uris)
+        }
+    };
     let redirect_uri = request
         .redirect_uri
         .as_deref()
@@ -2193,20 +2424,14 @@ async fn validate_authorization_client(
                 "redirect_uri is required and must be at most 4096 bytes",
             )
         })?;
-    let redirect_matches_client = cimd_client
-        .redirect_uris
-        .iter()
-        .any(|uri| uri == redirect_uri);
+    let redirect_matches_client = client_redirect_uris.iter().any(|uri| uri == redirect_uri);
     if !redirect_matches_client {
         return Err(OAuthRequestError::new(
             "invalid_request",
-            "redirect_uri does not match the registered client metadata",
+            "redirect_uri is not registered for this client",
         ));
     }
-    let client_name = cimd_client
-        .client_name
-        .clone()
-        .or_else(|| Some("ChatGPT".to_owned()));
+    let client_name = client_name.or_else(|| Some("MCP client".to_owned()));
     Ok(ValidatedAuthorizationClient {
         client_id: client_id.to_owned(),
         client_name,
@@ -2262,23 +2487,24 @@ async fn validate_authorization_request(
             "code_challenge_method=S256 is required",
         )));
     }
-    let resource = request
+    // RFC 8707 makes the resource indicator optional. A client that omits it
+    // gets a grant bound to this MCP resource, so audience restriction still
+    // holds for clients that never send one; an explicit value must match.
+    let expected_resource = state.public_resource(headers);
+    let resource = match request
         .resource
         .as_deref()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            redirect_error(OAuthRequestError::new(
-                "invalid_request",
-                "resource is required",
-            ))
-        })?;
-    let expected_resource = state.public_resource(headers);
-    if resource != expected_resource {
-        return Err(redirect_error(OAuthRequestError::new(
-            "invalid_target",
-            "resource does not match the MCP resource metadata",
-        )));
-    }
+    {
+        Some(resource) if resource != expected_resource => {
+            return Err(redirect_error(OAuthRequestError::new(
+                "invalid_target",
+                "resource does not match the MCP resource metadata",
+            )));
+        }
+        Some(resource) => resource,
+        None => expected_resource.as_str(),
+    };
     let scope = normalize_scope(request.scope.as_deref()).map_err(redirect_error)?;
     Ok(ValidatedAuthorizationRequest {
         client_id: client.client_id,
@@ -2566,6 +2792,8 @@ struct RefreshTokenRecord {
 struct PersistedOAuthRuntime {
     refresh_tokens: HashMap<String, RefreshTokenRecord>,
     revoked_jti: HashMap<String, u64>,
+    #[serde(default)]
+    clients: Vec<RegisteredClient>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2583,6 +2811,7 @@ struct AccessTokenClaims {
 
 struct OAuthState {
     cimd_clients: DashMap<String, CachedCimdClient>,
+    registered_clients: DashMap<String, RegisteredClient>,
     authorization_codes: DashMap<String, AuthorizationCodeRecord>,
     refresh_tokens: DashMap<String, RefreshTokenRecord>,
     revoked_jti: DashMap<String, u64>,
@@ -2602,6 +2831,7 @@ impl OAuthState {
     ) -> Self {
         let state = Self {
             cimd_clients: DashMap::new(),
+            registered_clients: DashMap::new(),
             authorization_codes: DashMap::new(),
             refresh_tokens: DashMap::new(),
             revoked_jti: DashMap::new(),
@@ -2618,6 +2848,11 @@ impl OAuthState {
             }
             for (jti, expires_at) in persisted.revoked_jti {
                 state.revoked_jti.insert(jti, expires_at);
+            }
+            for client in persisted.clients {
+                state
+                    .registered_clients
+                    .insert(client.client_id.clone(), client);
             }
         }
         state
@@ -2640,12 +2875,18 @@ impl OAuthState {
             .iter()
             .map(|entry| (entry.key().clone(), *entry.value()))
             .collect();
+        let clients = self
+            .registered_clients
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
         database
             .set_json(
                 KV_KEY_MCP_OAUTH_RUNTIME,
                 PersistedOAuthRuntime {
                     refresh_tokens,
                     revoked_jti,
+                    clients,
                 },
             )
             .await
@@ -2806,6 +3047,16 @@ async fn token(
             );
         }
     };
+    // Defence in depth: never mint a token over a transport identity the
+    // deployment could not advertise safely. Startup and control updates already
+    // enforce this, but the effective identity can drift with the listener.
+    if !is_acceptable_oauth_origin(state.public_resource(&headers).as_str()) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_target",
+            "the MCP resource URL must be HTTPS (loopback HTTP is allowed for local use)",
+        );
+    }
     if request.grant_type.len() > 64 {
         return oauth_error(
             StatusCode::BAD_REQUEST,
@@ -3487,34 +3738,94 @@ fn validate_redirect_uri(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// ChatGPT's CIMD client ID is an HTTPS metadata-document URL. Keep the accepted
-/// surface deliberately narrow: only OpenAI's production ChatGPT metadata namespace is
-/// trusted, and the document is fetched and validated before use.
+/// Whether a client id can be treated as a Client ID Metadata Document URL.
+///
+/// Any HTTPS origin may host the document: MCP clients that support CIMD
+/// describe themselves this way, and keeping the surface to one vendor would
+/// exclude every other client. Nothing about the URL is trusted on its own;
+/// the fetch refuses non-public address space and the document is validated
+/// against the URL it came from.
 fn is_supported_cimd_client_id(value: &str) -> bool {
     let Ok(url) = Url::parse(value.trim()) else {
         return false;
     };
-    let path = url.path();
     url.scheme() == "https"
-        && url.host_str() == Some("chatgpt.com")
-        && url.port().is_none()
+        && url.host_str().is_some()
         && url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
-        && (path == "/oauth/client.json"
-            || (path.starts_with("/oauth/") && path.ends_with("/client.json")))
-        && path
+        && !matches!(url.path(), "" | "/")
+        && url
+            .path()
             .split('/')
             .all(|segment| segment != "." && segment != "..")
-        && (path == "/oauth/client.json"
-            || path
-                .strip_prefix("/oauth/")
-                .is_some_and(|suffix| suffix.len() > "/client.json".len()))
 }
 
 fn is_loopback_host(url: &Url) -> bool {
     url.host_str().is_some_and(is_loopback_host_name)
+}
+
+/// Reject client metadata URLs that resolve into address space Agena cannot
+/// safely reach from a public endpoint.
+///
+/// Opening CIMD to any HTTPS origin would otherwise let an unauthenticated
+/// caller point the authorization server at loopback, link-local, or private
+/// networks (SSRF). Every resolved address must be globally routable; the fetch
+/// client already refuses redirects and bounds time and size.
+async fn ensure_public_metadata_host(host: &str, port: u16) -> Result<(), String> {
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        return if is_public_ip(address) {
+            Ok(())
+        } else {
+            Err(format!(
+                "client metadata host {host} is not a public address"
+            ))
+        };
+    }
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("client metadata host {host} could not be resolved: {error}"))?;
+    let mut resolved = false;
+    for address in addresses {
+        resolved = true;
+        if !is_public_ip(address.ip()) {
+            return Err(format!(
+                "client metadata host {host} resolves to the non-public address {}",
+                address.ip()
+            ));
+        }
+    }
+    if !resolved {
+        return Err(format!("client metadata host {host} did not resolve"));
+    }
+    Ok(())
+}
+
+fn is_public_ip(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(address) => {
+            !(address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_broadcast()
+                || address.is_documentation()
+                || address.is_unspecified()
+                || address.is_multicast())
+        }
+        std::net::IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                // An IPv4-mapped address must be judged as the IPv4 address the
+                // connection actually reaches.
+                return is_public_ip(std::net::IpAddr::V4(mapped));
+            }
+            !(address.is_loopback()
+                || address.is_unspecified()
+                || address.is_multicast()
+                || address.is_unique_local()
+                || address.is_unicast_link_local())
+        }
+    }
 }
 
 fn is_loopback_host_name(host: &str) -> bool {
@@ -3757,4 +4068,142 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redirect_uri_policy_matches_oauth_requirements() {
+        assert!(validate_redirect_uri("https://chatgpt.com/connector_oauth_redirect").is_ok());
+        assert!(validate_redirect_uri("http://127.0.0.1:6274/callback").is_ok());
+        assert!(validate_redirect_uri("http://localhost:1234/callback").is_ok());
+        assert!(validate_redirect_uri("http://example.com/callback").is_err());
+        assert!(validate_redirect_uri("https://example.com/cb#fragment").is_err());
+        assert!(validate_redirect_uri("https://user:pass@example.com/cb").is_err());
+        assert!(validate_redirect_uri("https://example.com/cb?state=abc").is_err());
+    }
+
+    #[test]
+    fn client_ids_must_be_https_metadata_documents() {
+        assert!(is_supported_cimd_client_id(
+            "https://chatgpt.com/oauth/client.json"
+        ));
+        assert!(is_supported_cimd_client_id(
+            "https://example.com/clients/acme/client.json"
+        ));
+        assert!(!is_supported_cimd_client_id(
+            "http://example.com/client.json"
+        ));
+        assert!(!is_supported_cimd_client_id(
+            "https://example.com/client.json?x=1"
+        ));
+        assert!(!is_supported_cimd_client_id("https://example.com/"));
+        // The URL parser collapses literal dot segments, so a document URL that
+        // only names a directory is the case to reject.
+        assert!(!is_supported_cimd_client_id("https://example.com/."));
+        assert!(!is_supported_cimd_client_id("agena-static-client"));
+    }
+
+    #[test]
+    fn client_metadata_fetch_refuses_non_public_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "169.254.169.254",
+            "0.0.0.0",
+            "::1",
+            "fd00::1",
+            "::ffff:10.0.0.1",
+        ] {
+            let parsed: std::net::IpAddr = address.parse().expect("valid test address");
+            assert!(
+                !is_public_ip(parsed),
+                "{address} must not be treated as public"
+            );
+        }
+        for address in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            let parsed: std::net::IpAddr = address.parse().expect("valid test address");
+            assert!(is_public_ip(parsed), "{address} must be treated as public");
+        }
+    }
+
+    #[test]
+    fn pkce_verification_uses_s256() {
+        assert!(pkce_matches(
+            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        ));
+        assert!(!pkce_matches(
+            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cX"
+        ));
+    }
+
+    #[test]
+    fn scope_normalization_always_grants_tool_access() {
+        assert_eq!(
+            normalize_scope(None).expect("default scope"),
+            DEFAULT_OAUTH_SCOPE
+        );
+        assert_eq!(
+            normalize_scope(Some("agena:tools")).expect("tools scope"),
+            MCP_SCOPE
+        );
+        assert_eq!(
+            normalize_scope(Some("agena:tools offline_access")).expect("offline scope"),
+            DEFAULT_OAUTH_SCOPE
+        );
+        assert!(normalize_scope(Some("offline_access")).is_err());
+        assert!(normalize_scope(Some("agena:tools admin")).is_err());
+    }
+
+    #[test]
+    fn loopback_identities_are_accepted_without_tls() {
+        assert!(is_acceptable_oauth_origin("http://127.0.0.1:3210/mcp"));
+        assert!(is_acceptable_oauth_origin("https://agena.example.com/mcp"));
+        assert!(!is_acceptable_oauth_origin("http://agena.example.com/mcp"));
+        let identity = validate_managed_oauth_identity("http://127.0.0.1:3210/mcp", None)
+            .expect("loopback identity is accepted");
+        assert_eq!(identity, "http://127.0.0.1:3210");
+        assert!(validate_managed_oauth_identity("http://agena.example.com/mcp", None).is_err());
+    }
+
+    #[test]
+    fn public_url_normalization_appends_the_mcp_path() {
+        assert_eq!(
+            normalize_public_mcp_url("https://agena.example.com").expect("origin"),
+            "https://agena.example.com/mcp"
+        );
+        assert_eq!(
+            normalize_public_mcp_url("https://tunnel.example.com/v1/mcp/tunnel_id")
+                .expect("tunnel path"),
+            "https://tunnel.example.com/v1/mcp/tunnel_id"
+        );
+    }
+
+    #[test]
+    fn tool_security_schemes_follow_the_tool_policy() {
+        let mut requirements = HashMap::new();
+        requirements.insert("fs.read".to_owned(), true);
+        requirements.insert("ping.health".to_owned(), false);
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "tools": [
+                { "name": "fs.read" },
+                { "name": "ping.health" },
+                { "name": "unknown.tool" }
+            ] }
+        });
+        let rewritten = add_tool_security_schemes(payload, &requirements).expect("rewritten");
+        let tools = rewritten["result"]["tools"]
+            .as_array()
+            .expect("tools array");
+        assert_eq!(tools[0]["securitySchemes"][0]["type"], "oauth2");
+        assert_eq!(tools[1]["securitySchemes"][0]["type"], "noauth");
+        // A tool missing from the catalog must never become anonymous.
+        assert_eq!(tools[2]["securitySchemes"][0]["type"], "oauth2");
+    }
 }

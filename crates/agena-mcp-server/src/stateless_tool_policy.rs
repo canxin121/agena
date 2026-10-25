@@ -107,3 +107,62 @@ fn tool_has_known_interactive_name(name: &str) -> bool {
             .iter()
             .any(|prefix| name.starts_with(prefix))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata<'a>(name: &'a str, plugin_id: &'a str) -> StatelessMcpToolMetadata<'a> {
+        StatelessMcpToolMetadata {
+            name,
+            plugin_id,
+            interactive: false,
+            agent: false,
+        }
+    }
+
+    #[test]
+    fn workspace_tools_stay_exposed() {
+        assert!(is_stateless_mcp_tool_exposed(metadata(
+            "fs.read", "agena.fs"
+        )));
+        assert!(is_stateless_mcp_tool_exposed(metadata(
+            "shell.exec",
+            "agena.shell"
+        )));
+    }
+
+    #[test]
+    fn provider_session_and_control_plugins_are_hidden() {
+        for plugin in [
+            "agena.chatgpt",
+            "agena.session",
+            "agena.interaction",
+            "agena.settings",
+            "agena.mcp",
+        ] {
+            assert!(
+                !is_stateless_mcp_tool_exposed(metadata("some.tool", plugin)),
+                "{plugin} must not be exposed on a stateless transport"
+            );
+        }
+        assert!(!is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
+            name: "interaction.ask",
+            plugin_id: "agena.core",
+            interactive: false,
+            agent: false,
+        }));
+    }
+
+    #[test]
+    fn every_exposed_tool_requires_a_token_until_it_opts_out() {
+        assert_eq!(
+            mcp_tool_access(metadata("fs.read", "agena.fs")),
+            McpToolAccess::OAuth
+        );
+        assert_eq!(
+            mcp_tool_access(metadata("shell.exec", "agena.shell")),
+            McpToolAccess::OAuth
+        );
+    }
+}

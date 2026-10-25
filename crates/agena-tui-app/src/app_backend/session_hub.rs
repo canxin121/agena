@@ -18,6 +18,7 @@ pub(crate) const HUB_PAGE_SIZE: u64 = 20;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HubCatalogQuery {
     pub view: HubView,
+    pub revealed_workspace: Option<i64>,
     pub page_size: Option<usize>,
     pub pages: BTreeMap<HubPageTarget, usize>,
     pub expanded: BTreeSet<i64>,
@@ -87,6 +88,16 @@ impl TuiBackend {
                     catalog
                         .workspaces
                         .insert(0, self.hub_workspace(self.workspace_id()).await?);
+                }
+                // Adding an existing project may resolve a path outside this
+                // page. Keep that explicitly requested project reachable.
+                if let Some(id) = query.revealed_workspace
+                    && !catalog
+                        .workspaces
+                        .iter()
+                        .any(|workspace| workspace.id == id)
+                {
+                    catalog.workspaces.push(self.hub_workspace(id).await?);
                 }
             }
             HubView::Projects | HubView::AllSessions => {}
@@ -207,6 +218,22 @@ impl TuiBackend {
             .await?
         else {
             bail!("expected a workspace");
+        };
+        Ok(workspace)
+    }
+
+    pub(crate) async fn add_hub_project(&self, path: String) -> Result<WorkspaceResource> {
+        let result = self
+            .client()
+            .command(agena_api::commands::Command::ResolveWorkspace(
+                agena_api::commands::ResolveWorkspaceParams {
+                    path,
+                    create_if_missing: true,
+                },
+            ))
+            .await?;
+        let agena_api::commands::CommandResult::Workspace(workspace) = result else {
+            bail!("expected a workspace while adding a project");
         };
         Ok(workspace)
     }

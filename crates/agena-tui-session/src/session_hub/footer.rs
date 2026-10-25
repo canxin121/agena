@@ -31,6 +31,7 @@ impl Footer {
         footer.push("Tab/⇧Tab", "hub-hint-view", None, i18n);
         if view == HubView::Projects {
             footer.push("h/l ←→", "hub-hint-project", None, i18n);
+            footer.push("Ctrl+P", "hub-action-add-project", ctrl('p'), i18n);
         }
         footer.push("[ ]", "session-action-page", None, i18n);
         footer.push("PgUp/Dn", "session-action-scroll", None, i18n);

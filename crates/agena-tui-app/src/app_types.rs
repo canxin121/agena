@@ -626,6 +626,10 @@ pub(super) enum AppMessage {
         request_id: u64,
         result: UiResult<crate::app_backend::session_hub::HubCatalog>,
     },
+    HubProjectAdded {
+        request_id: u64,
+        result: UiResult<agena_api::resource::WorkspaceResource>,
+    },
     SessionsLoaded {
         requested_at: Instant,
         scope: SessionLoadScope,
@@ -976,6 +980,7 @@ pub(super) enum Overlay {
     TranscriptSearch(LineInputOverlay),
     TranscriptFoldLoad(crate::app_transcript_fold::FoldLoadDialog),
     SessionRename(LineInputOverlay),
+    HubProject(crate::app_hub::HubProjectDialog),
     SettingsValueEdit(SettingsValueEditOverlay),
     Choice(ChoiceOverlay),
     QueueEditor(crate::app_queue_editor::QueueEditorOverlay),
@@ -1018,6 +1023,8 @@ pub(super) enum Route {
 pub(super) struct HubState {
     pub(super) dirty: bool,
     pub(super) pages: BTreeMap<agena_tui_session::session_hub::HubPageTarget, usize>,
+    pub(super) revealed_workspace: Option<i64>,
+    pub(super) pending_project: Option<i64>,
     pub(super) page_size: usize,
     pub(super) loaded_page_size: usize,
     pub(super) loaded_query: String,
@@ -1044,6 +1051,8 @@ impl HubState {
             dirty: false,
             presentation: SessionHubPresentation::empty(),
             pages: BTreeMap::new(),
+            revealed_workspace: None,
+            pending_project: None,
             page_size: crate::app_backend::session_hub::HUB_PAGE_SIZE as usize,
             loaded_page_size: crate::app_backend::session_hub::HUB_PAGE_SIZE as usize,
             loaded_query: String::new(),

@@ -51,6 +51,9 @@ impl App {
             AppMessage::HubCatalogLoaded { request_id, result } => {
                 self.handle_hub_catalog_loaded(request_id, result)
             }
+            AppMessage::HubProjectAdded { request_id, result } => {
+                self.handle_hub_project_added(request_id, result)
+            }
             AppMessage::SessionsLoaded {
                 requested_at,
                 scope,

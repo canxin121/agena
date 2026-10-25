@@ -562,6 +562,7 @@ pub fn preset_specs(
                     actions,
                     vec![
                         ("Ctrl+N / c", "context-help-key-create-session"),
+                        ("Ctrl+P", "context-help-key-hub-add-project"),
                         ("h / l / ← / →", "context-help-key-hub-project"),
                         ("[ / ]", "session-action-page"),
                         ("PgUp / PgDn", "session-action-scroll"),

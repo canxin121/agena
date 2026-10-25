@@ -11,6 +11,9 @@ use crate::{SessionHubItem, SessionHubSection, SessionHubSectionKind, SessionRes
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 
+mod project;
+pub(crate) use project::HubProjectDialog;
+
 impl HubState {
     fn resize_page_size(&mut self, size: usize) -> bool {
         let size = size.clamp(1, agena_api::pagination::MAX_LIMIT as usize);
@@ -119,6 +122,8 @@ impl App {
         state.presentation = crate::SessionHubPresentation::empty();
         state.presentation.set_view(view);
         state.pages.clear();
+        state.revealed_workspace = None;
+        state.pending_project = None;
         state.page_size = crate::app_backend::session_hub::HUB_PAGE_SIZE as usize;
         state.loaded_page_size = state.page_size;
         state.loaded_query.clear();
@@ -172,9 +177,11 @@ impl App {
         let request_id = state.request_id;
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let expanded = state.presentation.expanded_directories();
+        let mut expanded = state.presentation.expanded_directories();
+        expanded.extend(state.pending_project);
         let query = crate::app_backend::session_hub::HubCatalogQuery {
             view: state.presentation.view(),
+            revealed_workspace: state.revealed_workspace,
             page_size: Some(state.page_size),
             pages: state.pages.clone(),
             expanded,
@@ -243,6 +250,8 @@ impl App {
         state.request_id = self.next_hub_request_id;
         state.search_changed_at = Some(std::time::Instant::now());
         state.pages.clear();
+        state.revealed_workspace = None;
+        state.pending_project = None;
         state.pending_page = None;
         state.loading = false;
     }
@@ -364,6 +373,12 @@ impl App {
                 .collect();
             state.presentation.set_catalog(directories, sections);
             state.presentation.set_pagination(catalog.pages);
+            if let Some(workspace_id) = state.pending_project.take() {
+                state
+                    .presentation
+                    .toggle_directory(workspace_id, Some(true));
+                state.presentation.select_new_session(workspace_id);
+            }
             if let Some((target, last)) = state.pending_page.take() {
                 state.presentation.select_page_target(target, last);
             }
@@ -404,6 +419,9 @@ impl App {
             }
             Some(HubRow::Page { target, page, .. }) => {
                 if !state.loading {
+                    if target == HubPageTarget::Workspaces {
+                        state.revealed_workspace = None;
+                    }
                     state.pages.insert(target, page);
                     state.pending_page = Some((target, false));
                     self.spawn_hub_overview_request(state);
@@ -457,6 +475,9 @@ impl App {
             return false;
         }
         match resolve_tui_key(KeyContext::Hub, key) {
+            Some(KeyAction::HubAddProject) if state.presentation.view() == HubView::Projects => {
+                self.open_hub_project_dialog();
+            }
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
                 if state
                     .presentation
@@ -475,6 +496,9 @@ impl App {
                 if !state.loading
                     && let Some((target, page)) = state.presentation.page_request(forward)
                 {
+                    if target == HubPageTarget::Workspaces {
+                        state.revealed_workspace = None;
+                    }
                     state.pages.insert(target, page);
                     state.pending_page = Some((target, !forward));
                     self.spawn_hub_overview_request(state);

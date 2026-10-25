@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import traceback
+import uuid
 
 import http_experience as fixture
 import tui_experience as tui
@@ -20,6 +21,8 @@ import tui_experience as tui
 
 class DelayedProxy(http.server.ThreadingHTTPServer):
     daemon_threads = True
+    # Bootstrap opens several reads alongside long-lived SSE connections.
+    request_queue_size = 128
 
     def __init__(self, port: int, trace):
         super().__init__(("127.0.0.1", 0), ProxyHandler)
@@ -32,6 +35,11 @@ class DelayedProxy(http.server.ThreadingHTTPServer):
         self.captured_read = threading.Event()
         self.write_count = 0
         self.fail_next = False
+        self.project_writes = threading.Event()
+        self.project_writes.set()
+        self.captured_project_write = threading.Event()
+        self.project_write_count = 0
+        self.fail_project_next = False
         self.lock = threading.Lock()
         self.requests = []
 
@@ -46,17 +54,27 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         with proxy.lock:
             proxy.requests.append((self.command, self.path))
         is_write = self.command == "PUT" and re.fullmatch(r"/api/v1/sessions/\d+", self.path)
+        is_project = self.command == "POST" and self.path == "/api/v1/workspaces/resolve"
         fail = False
         if is_write:
             with proxy.lock:
                 proxy.write_count += 1
                 fail, proxy.fail_next = proxy.fail_next, False
+        if is_project:
+            with proxy.lock:
+                proxy.project_write_count += 1
+                fail, proxy.fail_project_next = proxy.fail_project_next, False
         connection = http.client.HTTPConnection("127.0.0.1", proxy.upstream_port, timeout=30)
         try:
             if fail:
                 status = 500
                 headers = [("Content-Type", "application/json")]
-                payload = json.dumps({"error": {"code": "internal", "message": "injected marker failure"}}).encode()
+                message = "injected project failure" if is_project else "injected marker failure"
+                payload = json.dumps({"problem": {
+                    "id": str(uuid.uuid4()), "code": "internal.unexpected", "category": "internal",
+                    "responsibility": "system", "retry": "unknown", "recovery": "retry",
+                    "impact": "request_rejected", "user": {"key": "probe-failure", "fallback": message},
+                }}).encode()
             else:
                 headers_in = {k: v for k, v in self.headers.items()
                               if k.lower() not in ("host", "connection", "content-length")}
@@ -76,6 +94,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 payload = response.read()
             if is_write:
                 proxy.writes.wait(15)
+            if is_project:
+                proxy.captured_project_write.set()
+                proxy.project_writes.wait(15)
             if self.command == "GET" and self.path.startswith("/api/v1/sessions?") and not proxy.reads.is_set():
                 proxy.captured_read.set()
                 proxy.reads.wait(15)

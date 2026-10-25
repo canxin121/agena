@@ -163,6 +163,9 @@ def main() -> int:
         for sid in ids[:30]:
             api.call("PUT", f"/api/v1/sessions/{sid}", {"pinned": True, "favorite": True})
         client.send(b"\x12", "refresh-marked-buckets")
+        # Keeping the selected Recent item visible can legitimately scroll
+        # the Pinned header above the viewport once all 30 marks arrive.
+        client.send(b"\x1b[H", "show-top-marked-buckets")
         client.wait_text("Pinned  30", "pins-refreshed")
         fixture.poll(lambda: "Favorites  30" in client.text() or
                      any(params.get("bucket") == ["favorite"] and params.get("limit") == ["15"]

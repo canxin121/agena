@@ -402,6 +402,132 @@ def main() -> int:
         fixture.require("project-beta" not in client.text() and "B-only-marked" not in client.text(),
                         "foreign rows survived final current-project selection")
         checkpoint(client, "current-project-scope-survives-delayed-view-switches")
+
+        def workspaces():
+            return api.get("/api/v1/workspaces?limit=100")["items"]
+
+        def paste_path(value):
+            client.send(b"\x1b[200~" + str(value).encode() + b"\x1b[201~", "paste-project-path")
+
+        def open_project_dialog():
+            client.send(b"\x10", "add-project-ctrl-p")
+            client.wait_text("Add project", "project-dialog")
+            client.wait_text("Enter add project", "project-dialog-submit-hint")
+            prompt = "".join(line.split("║")[1].strip() for line in client.text().splitlines() if "║" in line)
+            fixture.require(str(alpha) in prompt, "long project root was clipped in the dialog")
+
+        def wait_project(name):
+            fixture.poll(lambda: "Add project" not in client.text() and "Loading" not in client.text()
+                         and any("▾ " + name in line for line in client.text().splitlines()),
+                         30, f"project was not revealed: {name}: {client.text()}")
+            wait_selected(client, "+ New session")
+
+        # Keep an existing empty project outside the first 20-workspace page.
+        old = out / "old-project"
+        old.mkdir()
+        old_id = resolve(old)
+        for index in range(24):
+            path = out / f"filler-project-{index:02}"
+            path.mkdir()
+            resolve(path)
+        client.send(b"\x10", "current-project-does-not-add-project")
+        time.sleep(0.2)
+        fixture.require("Add project" not in client.text(), "project command escaped its Projects view")
+        client.send(b"\t", "projects-for-new-project")
+        wait_scope(client, "Projects")
+        client.wait_text("Ctrl+P add project", "project-action-in-footer")
+        before = len(workspaces())
+        open_project_dialog()
+        client.send(b"\r", "reject-empty-project-path")
+        client.wait_text("Enter a project directory path", "project-empty-validation")
+        fixture.require(len(workspaces()) == before, "empty path created a project")
+        paste_path("../cancelled-project")
+        client.send(b"\x1b", "cancel-project-dialog")
+        time.sleep(0.2)
+        fixture.require("Add project" not in client.text() and len(workspaces()) == before,
+                        "cancel created a project or did not close the dialog")
+        checkpoint(client, "project-path-validation-and-cancel")
+
+        # The footer's pointer action opens the same editor. Preserve spaces
+        # and non-ASCII names, resolve relative to the launch project, and
+        # keep failed input for retry instead of losing it.
+        row, line = next((i + 1, line) for i, line in enumerate(client.text().splitlines())
+                         if "Ctrl+P add project" in line)
+        column = line.index("Ctrl+P add project") + 4
+        client.send(f"\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m".encode(), "click-add-project")
+        client.wait_text("Add project", "mouse-project-dialog")
+        target = out / "新项目 space"
+        target.mkdir()
+        paste_path("../新项目 space")
+        proxy.fail_project_next = True
+        client.send(b"\r", "project-failure-retains-input")
+        client.wait_text("injected project failure", "project-error-inline")
+        fixture.require("新项目 space" in client.text() and len(workspaces()) == before,
+                        "failed project input was lost or changed the catalog")
+        checkpoint(client, "project-errors-preserve-input-for-retry")
+        proxy.project_writes.clear()
+        proxy.captured_project_write.clear()
+        before_writes = proxy.project_write_count
+        client.send(b"\r\r\r", "project-submit-only-once")
+        fixture.require(proxy.captured_project_write.wait(5), "project response was not held")
+        time.sleep(0.2)
+        fixture.require(proxy.project_write_count == before_writes + 1, "repeated Enter duplicated project requests")
+        proxy.project_writes.set()
+        wait_project(target.name)
+        matches = [workspace for workspace in workspaces() if workspace["path"] == str(target)]
+        fixture.require(len(matches) == 1, "relative/Unicode path did not resolve on the server")
+        target_id = matches[0]["id"]
+        fixture.require(len(sessions(target_id)) == 0, "adding a project implicitly created a session")
+        checkpoint(client, "add-relative-project-once-and-focus-create")
+
+        open_project_dialog()
+        paste_path(str(target) + "/./")
+        client.send(b"\r", "resolve-existing-project-without-duplicate")
+        wait_project(target.name)
+        fixture.require(len(workspaces()) == before + 1, "same canonical project path was duplicated")
+        checkpoint(client, "canonical-project-paths-are-idempotent")
+
+        client.send(b"/no-session-matches", "filter-before-resolving-old-project")
+        client.wait_text("Filter: no-session-matches", "project-search-before-add")
+        open_project_dialog()
+        paste_path(old)
+        client.send(b"\r", "reveal-old-empty-project")
+        wait_project(old.name)
+        fixture.require("Filter:" not in client.text(), "search hid the added empty project")
+        fixture.require(len(workspaces()) == before + 1, "existing old project was duplicated")
+        checkpoint(client, "old-project-outside-page-is-revealed-and-expanded")
+        client.send(b"\r", "create-session-in-added-project")
+        fixture.poll(lambda: len(sessions(old_id)) == 1, 30, "new session used the wrong project")
+        checkpoint(client, "added-project-creates-session-in-correct-workspace")
+        client.close()
+        clients.remove(client)
+        client = launch(alpha, "project-persistence")
+        client.send(b"\t", "projects-after-reopen")
+        wait_scope(client, "Projects")
+        fixture.require(any(workspace["id"] == target_id for workspace in workspaces()),
+                        "registered project did not persist after reopening")
+        checkpoint(client, "new-project-persists-after-reopening")
+
+        # A submitted operation can finish after Esc. Its old response must
+        # not close a new editor or replace the new editor's input.
+        late = out / "late-project"
+        late.mkdir()
+        open_project_dialog()
+        paste_path(late)
+        proxy.project_writes.clear()
+        proxy.captured_project_write.clear()
+        client.send(b"\r", "hold-old-project-response")
+        fixture.require(proxy.captured_project_write.wait(5), "old project response was not captured")
+        client.send(b"\x1b", "dismiss-submitted-project")
+        fixture.poll(lambda: "Add project" not in client.text(), 5, "submitted project dialog did not close")
+        open_project_dialog()
+        paste_path("keep-this-new-input")
+        proxy.project_writes.set()
+        time.sleep(0.6)
+        fixture.require("Add project" in client.text() and "keep-this-new-input" in client.text(),
+                        "old project response overwrote the new dialog")
+        checkpoint(client, "late-project-response-cannot-overwrite-new-dialog")
+        client.send(b"\x1b", "cancel-new-editor-after-late-response")
         result["status"] = "passed"
     except BaseException:
         result["error"] = traceback.format_exc()
@@ -409,6 +535,7 @@ def main() -> int:
         if proxy is not None:
             proxy.reads.set()
             proxy.writes.set()
+            proxy.project_writes.set()
         for client in clients:
             client.close()
         if proxy is not None:

@@ -4,6 +4,8 @@ use super::super::{
 };
 use crate::MCP_OAUTH_PASSWORD_SETTINGS_PATH;
 use crate::ui_text;
+use agena_tui_components::{EditorDialogSpec, render_editor_dialog};
+use ratatui::widgets::{Paragraph, Wrap};
 
 impl App {
     pub(crate) fn render_overlay(&self, frame: &mut Frame, area: Rect) {
@@ -12,6 +14,40 @@ impl App {
         };
 
         match overlay {
+            Overlay::HubProject(dialog) => {
+                // Errors remain visible even when a long server path needs
+                // more prompt rows than this terminal can accommodate.
+                let prompt = match &dialog.error {
+                    Some(error) => format!("{error}\n{}", dialog.editor.prompt),
+                    None => dialog.editor.prompt.clone(),
+                };
+                let footer = self.i18n.text(if dialog.submitting {
+                    "hub-project-submitting"
+                } else {
+                    "hub-project-footer"
+                });
+                let prompt = sanitize_display_text(&prompt);
+                let prompt_height = Paragraph::new(prompt.as_str())
+                    .wrap(Wrap { trim: false })
+                    .line_count(SurfaceMode::Overlay.content_width(area, 88).max(1))
+                    .clamp(1, area.height.saturating_sub(8).max(1) as usize)
+                    as u16;
+                render_editor_dialog(
+                    frame,
+                    area,
+                    SurfaceMode::Overlay,
+                    &EditorDialogSpec {
+                        title: sanitize_display_text(&dialog.editor.title).into(),
+                        prompt: prompt.into(),
+                        footer: sanitize_display_text(&footer).into(),
+                        target_width: 88,
+                        multiline: false,
+                        prompt_height_bounds: (prompt_height, prompt_height),
+                        footer_height_bounds: (1, 2),
+                    },
+                    &dialog.editor.input,
+                );
+            }
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 render_overlay_line_input_dialog(
                     frame,

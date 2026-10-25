@@ -136,6 +136,7 @@ pub enum KeyAction {
     Continue,
     OpenUsage,
     HubCreateSession,
+    HubAddProject,
     HubPreviousPage,
     HubNextPage,
     HubTogglePinned,

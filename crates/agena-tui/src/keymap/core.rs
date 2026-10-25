@@ -166,6 +166,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Hub => match key.code {
+            K::Char('p') if only_ctrl(key) => Some(A::HubAddProject),
             K::Esc if unmodified(key) => Some(A::Close),
             K::Left | K::Char('h') if unmodified(key) => Some(A::MoveLeft),
             K::Right | K::Char('l') if unmodified(key) => Some(A::MoveRight),

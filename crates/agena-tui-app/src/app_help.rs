@@ -169,6 +169,7 @@ impl App {
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)
             }
+            Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
             Overlay::TranscriptFoldLoad(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)

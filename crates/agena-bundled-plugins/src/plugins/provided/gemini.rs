@@ -1,4 +1,4 @@
-//! Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
+//! Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback.
 
 use std::{
     collections::BTreeMap,
@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
-    ProviderUsageKind, append_prompt_to_items, configured_model, endpoint, env_secret,
-    merge_object_options, post_json, provider_output, read_image_input_bounded, resolve_local_path,
+    ProviderUsageKind, append_prompt_to_items, configured_model, endpoint, merge_object_options,
+    post_json, provider_output, read_image_input_bounded, resolve_local_path,
 };
 use agena_plugin_host::sdk::ToolInvokeContext;
 
@@ -34,22 +34,12 @@ pub(crate) struct GeminiToolsPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct GeminiToolsConfig {
-    base_url: String,
-    api_key_env: String,
-    model: Option<String>,
-    image_model: Option<String>,
-    timeout_secs: u64,
     stable_system_instruction: Option<String>,
 }
 
 impl Default for GeminiToolsConfig {
     fn default() -> Self {
         Self {
-            base_url: "https://generativelanguage.googleapis.com/v1beta".to_owned(),
-            api_key_env: "GEMINI_API_KEY".to_owned(),
-            model: None,
-            image_model: None,
-            timeout_secs: 180,
             stable_system_instruction: None,
         }
     }
@@ -68,6 +58,7 @@ struct GeminiToolInput {
     /// Stable prefix used to improve Gemini implicit cache reuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stable_system_instruction: Option<String>,
+    /// Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -90,6 +81,7 @@ struct GeminiToolInput {
 #[serde(deny_unknown_fields)]
 struct GeminiImageGenerateInput {
     prompt: String,
+    /// Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -112,6 +104,7 @@ struct GeminiImageGenerateInput {
 struct GeminiImageEditInput {
     prompt: String,
     images: Vec<String>,
+    /// Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -123,16 +116,14 @@ struct GeminiImageEditInput {
 }
 
 impl GeminiToolsPlugin {
-    fn media_service(&self) -> SdkResult<Service<'_>> {
-        Ok(Service {
-            provider: "gemini",
-            root: self.workspace_root()?,
-            host: self.host()?,
-            base_url: &self.config()?.base_url,
-            key_env: &self.config()?.api_key_env,
-            timeout_secs: self.config()?.timeout_secs,
-            anthropic_version: "2023-06-01",
-        })
+    async fn media_service(&self) -> SdkResult<Service<'_>> {
+        Service::new(
+            "gemini",
+            self.workspace_root()?,
+            self.host()?,
+            self.host()?.builtin_provider_connection().await?,
+            "2023-06-01",
+        )
     }
 
     pub(crate) fn new() -> Self {
@@ -158,23 +149,6 @@ impl GeminiToolsPlugin {
             .get()
             .ok_or_else(|| PluginError::internal("Gemini tools plugin invoked before init"))
     }
-    fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
-        configured_model(
-            requested,
-            self.config()?.model.as_deref(),
-            &["GEMINI_MODEL", "GOOGLE_GENAI_MODEL"],
-            tool,
-        )
-    }
-    fn image_model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
-        configured_model(
-            requested,
-            self.config()?.image_model.as_deref(),
-            &["GEMINI_IMAGE_MODEL", "GOOGLE_GENAI_IMAGE_MODEL"],
-            tool,
-        )
-    }
-
     async fn interactions_tool(
         &self,
         tool_name: &str,
@@ -191,7 +165,12 @@ impl GeminiToolsPlugin {
             "gemini",
             &serde_json::json!(&input.input_steps),
         )?;
-        let model = self.model(input.model, format!("gemini.cloud_{tool_name}").as_str())?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            &format!("gemini.{tool_name}"),
+        )?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
         super::official_service::hosted::validate_declaration("gemini", tool_name, &declaration)?;
@@ -226,20 +205,14 @@ impl GeminiToolsPlugin {
             ],
             "request_options",
         )?;
-        let url = endpoint(self.config()?.base_url.as_str(), "interactions")?;
-        let headers = BTreeMap::from([
-            (
-                "x-goog-api-key".to_owned(),
-                env_secret(self.config()?.api_key_env.as_str(), "Gemini")?,
-            ),
-            ("content-type".to_owned(), "application/json".to_owned()),
-        ]);
+        let url = endpoint(&connection.base_url, "interactions")?;
+        let headers = connection.headers.clone();
         let response = post_json(
             self.host()?,
             url.as_str(),
             &headers,
             body,
-            self.config()?.timeout_secs,
+            &connection,
             "gemini",
             tool_name,
         )
@@ -253,12 +226,14 @@ impl GeminiToolsPlugin {
             title,
             ProviderUsageKind::GeminiInteractions,
             response,
+            &connection,
         )
         .await
     }
 
     async fn generate_content(
         &self,
+        connection: agena_plugin_sdk::host_api::BuiltinProviderConnection,
         tool_name: &str,
         title: &str,
         model: String,
@@ -272,22 +247,8 @@ impl GeminiToolsPlugin {
         generation_config
             .entry("responseModalities".to_owned())
             .or_insert_with(|| serde_json::json!(["TEXT", "IMAGE"]));
-        let model_path = if model.starts_with("models/") {
-            model.clone()
-        } else {
-            format!("models/{model}")
-        };
-        let url = endpoint(
-            self.config()?.base_url.as_str(),
-            format!("{model_path}:generateContent").as_str(),
-        )?;
-        let headers = BTreeMap::from([
-            (
-                "x-goog-api-key".to_owned(),
-                env_secret(self.config()?.api_key_env.as_str(), "Gemini")?,
-            ),
-            ("content-type".to_owned(), "application/json".to_owned()),
-        ]);
+        let url = super::official_service::gemini_model_endpoint(&connection.base_url, &model)?;
+        let headers = connection.headers.clone();
         let mut base = serde_json::json!({
             "contents": [{"role":"user","parts":parts}],
             "generationConfig": generation_config
@@ -309,7 +270,7 @@ impl GeminiToolsPlugin {
             url.as_str(),
             &headers,
             body,
-            self.config()?.timeout_secs,
+            &connection,
             "gemini",
             tool_name,
         )
@@ -323,6 +284,7 @@ impl GeminiToolsPlugin {
             title,
             ProviderUsageKind::GeminiGenerateContent,
             response,
+            &connection,
         )
         .await
     }
@@ -332,18 +294,18 @@ impl GeminiToolsPlugin {
     namespace = "agena",
     name = "gemini",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.",
+    summary = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback.",
     translations(
-        locale("zh-CN", summary = "使用 Google 云端搜索、计算和图像能力。输入会离开本机；不会回退到本地执行。"),
-        locale("zh-TW", summary = "使用 Google 雲端搜尋、運算與影像功能。輸入會離開這台電腦；不會改用本機執行。"),
-        locale("ja-JP", summary = "Google のクラウド検索・計算・画像機能を利用します。入力は端末外へ送信され、ローカル実行には切り替わりません。"),
-        locale("ko-KR", summary = "Google 클라우드 검색, 계산, 이미지 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
-        locale("fr-FR", summary = "Utiliser les fonctions de recherche, de calcul et d’image dans le cloud Google. Les données sont envoyées hors de cet ordinateur, sans repli local."),
-        locale("de-DE", summary = "Google-Cloudfunktionen für Suche, Berechnungen und Bilder nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
-        locale("es-ES", summary = "Usa las funciones de búsqueda, cálculo e imagen en la nube de Google. Los datos salen de este equipo y no hay ejecución local alternativa."),
-        locale("hi-IN", summary = "Google क्लाउड की खोज, गणना और छवि सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
-        locale("ar-SA", summary = "استخدم إمكانات البحث والحوسبة والصور في سحابة Google. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
-        locale("pt-BR", summary = "Use os recursos de busca, computação e imagem na nuvem do Google. As entradas saem deste computador; não há execução local alternativa.")
+        locale("zh-CN", summary = "需要模型的工具默认使用当前会话模型。当前模型须为支持该操作的 Google Gemini 模型，否则必须显式传入 model 指定合适模型。复用当前会话的 provider 连接，无需单独配置。使用 Google 云端推理、搜索、文件、知识库、图像、音频、视频、音乐、Live 语音与智能体 API。输入会离开本机；不会回退到本地执行。"),
+        locale("zh-TW", summary = "需要模型的工具預設使用目前工作階段模型。目前模型須為支援該操作的 Google Gemini 模型，否則必須明確傳入 model 指定合適模型。沿用目前工作階段的 provider 連線，無需另外設定。使用 Google 雲端搜尋、運算與影像功能。輸入會離開這台電腦；不會改用本機執行。"),
+        locale("ja-JP", summary = "モデルが必要なツールは現在のセッションモデルを使用します。対象操作に対応する Google Gemini モデルが必要です。現在のモデルが適合しない場合は model を明示してください。現在のセッションのプロバイダー接続を使用します。Google のクラウド検索・計算・画像機能を利用します。入力は端末外へ送信され、ローカル実行には切り替わりません。"),
+        locale("ko-KR", summary = "모델이 필요한 도구는 현재 세션 모델을 기본으로 사용합니다. 작업을 지원하는 Google Gemini 모델이 필요하며, 현재 모델이 적합하지 않으면 model을 명시하세요. 현재 세션의 공급자 연결을 사용합니다. Google 클라우드 검색, 계산, 이미지 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
+        locale("fr-FR", summary = "Les outils nécessitant un modèle utilisent celui de la session. Choisissez un modèle Google Gemini compatible avec l’opération ; sinon, renseignez explicitement model. Utilise la connexion du fournisseur de la session courante. Utiliser les fonctions de recherche, de calcul et d’image dans le cloud Google. Les données sont envoyées hors de cet ordinateur, sans repli local."),
+        locale("de-DE", summary = "Modellbasierte Werkzeuge verwenden das aktuelle Sitzungsmodell. Ein für die Aktion geeignetes Google Gemini-Modell ist erforderlich; andernfalls model explizit angeben. Verwendet die Provider-Verbindung der aktuellen Sitzung. Google-Cloudfunktionen für Suche, Berechnungen und Bilder nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
+        locale("es-ES", summary = "Las herramientas que requieren modelo usan el de la sesión. Se necesita un modelo de Google Gemini compatible con la operación; de lo contrario, indica model explícitamente. Usa la conexión del proveedor de la sesión actual. Usa las funciones de búsqueda, cálculo e imagen en la nube de Google. Los datos salen de este equipo y no hay ejecución local alternativa."),
+        locale("hi-IN", summary = "मॉडल वाले टूल वर्तमान सत्र का मॉडल इस्तेमाल करते हैं। इस कार्य का समर्थन करने वाला Google Gemini मॉडल चाहिए; अन्यथा model स्पष्ट रूप से दें। वर्तमान सत्र के प्रदाता कनेक्शन का उपयोग करता है। Google क्लाउड की खोज, गणना और छवि सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
+        locale("ar-SA", summary = "تستخدم الأدوات التي تحتاج نموذجًا نموذج الجلسة الحالي. يجب استخدام نموذج من Google Gemini يدعم العملية؛ وإلا فحدّد model صراحةً. يستخدم اتصال المزوّد للجلسة الحالية. استخدم إمكانات البحث والحوسبة والصور في سحابة Google. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
+        locale("pt-BR", summary = "Ferramentas que exigem modelo usam o da sessão. É necessário um modelo da Google Gemini compatível com a operação; caso contrário, informe model explicitamente. Usa a conexão do provedor da sessão atual. Use os recursos de busca, computação e imagem na nuvem do Google. As entradas saem deste computador; não há execução local alternativa.")
     ),
     settings = GeminiToolsConfig,
     settings_default = default
@@ -371,10 +333,437 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_understanding",
+        name = "models",
+        tags(network, discovery, query),
+        summary = "List or inspect vendor models on the current provider.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.",
+        translations(locale(
+            "zh-CN",
+            summary = "列出或查看当前 provider 上的厂商模型。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get，get 需要 id；query 可传分页参数。模型出现在列表中，不代表网关或账号支持所有工具。"
+        ))
+    )]
+    async fn api_models(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Models,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "files",
+        tags(network, mutate),
+        summary = "Manage remote files and download cloud-generated artifacts.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理远程文件，下载厂商生成的文件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get、wait、delete、download。OpenAI/Claude 还支持 upload：path 指定本地文件，parameters.purpose 按厂商要求填写。Gemini 使用 file_upload 上传。download 将实际字节保存为附件或新的 output_path；Claude 仅支持下载厂商生成的文件。id 属于当前 provider，列表与管理接口不需要模型。"
+        ))
+    )]
+    async fn api_files(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Files,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "inference",
+        tags(network, mutate),
+        summary = "Run a vendor inference request with official tool combinations and continuation.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用厂商原生接口组合工具、推理并继续对话。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create；prompt 或 parameters 中填写厂商原生 input/messages，可组合托管工具、远程 MCP、工具搜索、编程式调用、云端 Skills 或客户端工具声明。返回的工具调用是数据，不会自动执行本机操作。需要本地执行时，使用正常 Agena 工具及其权限，再显式提交厂商格式的调用结果。顶层 stream=true 可接收限时 SSE，wait_seconds 为 1..50，保留完整事件与 SSE 游标。"
+        ))
+    )]
+    async fn api_inference(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Inference,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "batches",
+        tags(network, mutate),
+        summary = "Create, inspect, cancel and retrieve asynchronous batch jobs.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Google Gemini model supporting generation or embedding batches, or explicitly pass model. Actions: create/list/get/wait/cancel/delete/update. resource=generate_content (default) creates batchGenerateContent; resource=embeddings creates asyncBatchEmbedContent. parameters uses the official batch body. update calls updateGenerateContentBatch or updateEmbedContentBatch, with id=batches/ID, top-level model and the official update fields; query.updateMask selects fields. Get/wait/cancel/delete need only id. Results may be inline or downloaded using files.download. wait_seconds is 1..50; waits never resubmit jobs.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建、查询、取消异步批处理并获取结果。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 create/list/get/wait/cancel/delete/update。resource=generate_content（默认）创建生成批次，resource=embeddings 创建异步嵌入批次。parameters 使用官方请求体。update 按 resource 调用对应批次更新接口，id 为 batches/ID，模型用顶层 model，更新字段放 parameters，可传 query.updateMask。查询、等待、取消、删除无需模型。输出文件用 files.download 获取，wait 不会重建任务。"
+        ))
+    )]
+    async fn api_batches(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Batches,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "count_tokens",
+        tags(network, mutate),
+        summary = "Count tokens using the vendor token-counting endpoint.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过厂商接口计算输入 token 数量。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create；parameters 使用厂商的 input/messages/contents 格式。只计算输入 token，不生成文本。"
+        ))
+    )]
+    async fn api_count_tokens(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Tokens,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "agents",
+        tags(network, mutate),
+        summary = "Manage vendor-hosted agents, sessions and environments.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions depend on the vendor resource: create, list, get, update, delete, wait, archive, events, create_event, items, list_versions, get_version, run, pause, unpause. Unsupported actions are rejected per collection. resource selects the documented collection. OpenAI: agents, sessions (default), environments. Claude: agents (default), sessions, environments, deployments. Gemini: agents. parameters/query carry official fields, including nested agent.model when required. Runs on vendor infrastructure; local files and tools are not automatically available. Inference on a Gemini agent uses inference with parameters.agent and no model override. Provider support and access are required.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理厂商托管的智能体、会话与环境。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。resource 选择资源：OpenAI 为 agents、sessions（默认）、environments；Claude 为 agents（默认）、sessions、environments、deployments；Gemini 为 agents。操作因资源而异，不支持的 action 会在本地拒绝。会话可用 events/create_event；OpenAI 还支持 items，Claude agents 支持 list_versions/get_version。parameters/query 使用官方字段；创建内联 agent 配置时默认沿用当前模型，可用顶层 model 覆盖。运行已有 Gemini agent 请用 inference 的 parameters.agent，不传顶层 model。托管环境不会自动取得本地文件或工具。"
+        ))
+    )]
+    async fn api_agents(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Agents,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "knowledge",
+        tags(network, mutate),
+        summary = "Create, populate and manage Gemini File Search Stores.",
+        help = "Uses the current provider connection. Model-based tools default to the current session model; use a compatible Google Gemini model or explicitly pass model. Resource management needs no model. Actions: create/list/get/delete/import_file/upload/list_files/get_file/delete_file. id is store ID or fileSearchStores/ID; item_id is document ID. upload directly sends one authorized path into the store using resumable upload; parameters supports displayName/mimeType/customMetadata/chunkingConfig. Alternatively file_upload then import_file with parameters.fileName=files/ID. Poll returned operations with operations.get/wait, including fileSearchStores/ID/upload/operations/ID. Upload readiness is different from indexing completion. Use file_search with the resulting store name. Delete query.force=true explicitly deletes a nonempty store.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建、导入和管理厂商知识库。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。资源管理无需模型。支持 create/list/get/delete/import_file/upload/list_files/get_file/delete_file。id 为 Store，item_id 为文档；upload 将 path 指定的单个获准文件直接上传并索引，可传 displayName/mimeType/customMetadata/chunkingConfig。也可先 file_upload，再 import_file。两种流程返回的 operation 均可用 operations.get/wait 查询，包括含 upload/operations 的路径。上传就绪不等于索引完成。"
+        ))
+    )]
+    async fn api_knowledge(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Knowledge,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "operations",
+        tags(network, mutate),
+        summary = "Inspect or wait for Gemini file-import operations.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: get, wait. id is operations/ID or fileSearchStores/ID/operations/ID. wait_seconds is 1..50. Returns done/error/response without creating another import.",
+        translations(locale(
+            "zh-CN",
+            summary = "查询或等待 Gemini 长任务。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 get/wait；id 为 operations/ID、fileSearchStores/ID/operations/ID 或 files/ID/operations/ID。wait_seconds 为 1..50，返回 done/error/response，不会重新导入文件。"
+        ))
+    )]
+    async fn api_operations(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Operations,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "interactions",
+        tags(network, mutate),
+        summary = "Retrieve, wait for, cancel or delete Gemini background interactions.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, get, wait, cancel, delete. create accepts prompt or parameters.input and background=true. For Deep Research/managed agents use parameters.agent instead of a model; supplying both is rejected. id is an existing interaction ID for get/wait/cancel/delete. Polling does not create a new interaction.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建和管理 Gemini 后台交互与深度研究任务。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 create/get/wait/cancel/delete；创建可用 prompt 或 parameters.input，以及 parameters.background=true。Deep Research 或托管智能体使用 parameters.agent，不传顶层 model，两者同时传入会拒绝。已有任务通过 id 查询、等待、取消或删除。"
+        ))
+    )]
+    async fn api_interactions(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Tasks,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "speech",
+        tags(network, mutate),
+        summary = "Generate Gemini text-to-speech audio as local attachments.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the text to speak. Use a Gemini TTS model and parameters.generation_config.speech_config for single/multiple speakers and voices. Advanced input with speech_metadata belongs in parameters.input. Agena sets response_format.type=audio. Audio-only output is saved; output_path optionally selects a new local file.",
+        translations(locale(
+            "zh-CN",
+            summary = "生成语音并保存为本地音频附件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create，prompt 为待朗读文本。OpenAI 使用 parameters.voice 等官方语音字段。Gemini 使用 parameters.generation_config.speech_config，复杂输入和 speech_metadata 放入 parameters.input；自动设置 response_format.type=audio。必须使用支持语音合成的模型。output_path 可指定新的输出文件。"
+        ))
+    )]
+    async fn api_speech(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Speech,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "video_generation",
+        tags(network, mutate),
+        summary = "Generate a video using the Gemini Interactions API.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Use a supported Gemini video generation model, such as the current Omni family, not a chat-only model. prompt or parameters.input supplies text/images/audio/video. parameters.response_format supplies official video settings such as aspect_ratio and resolution. Supports background execution; inspect the returned interaction ID with interactions.get/wait. Inline video becomes an attachment; remote file references can be retrieved using files.download. Do not use retired Veo preview aliases.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过 Gemini Interactions 接口生成视频。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create，需选择支持视频生成的模型。prompt 或 parameters.input 指定文本、图像、音频或视频输入；parameters.response_format 控制 aspect_ratio、resolution 等，自动设置 type=video。后台任务用 interactions.get/wait 查询；内联视频保存为附件，远程文件用 files.download 下载。"
+        ))
+    )]
+    async fn api_video_generation(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Video,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "video_edit",
+        tags(network, mutate),
+        summary = "Edit or extend a video using Gemini multimodal interactions.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Select a supported video editing model. parameters.input contains the explicit video/media inputs and instructions, or use prompt with parameters.previous_interaction_id for conversational editing. parameters.response_format contains official video settings. Use interactions.get/wait for background work. Inline video becomes an attachment.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过 Gemini 多模态交互编辑或扩展视频。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create，需支持视频编辑的模型。parameters.input 传视频及编辑要求，或用 prompt 配合 parameters.previous_interaction_id 继续编辑。parameters.response_format 控制视频格式。后台任务通过 interactions 查询，视频结果保存为附件。"
+        ))
+    )]
+    async fn api_video_edit(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Video,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "music_generation",
+        tags(network, mutate),
+        summary = "Generate music using Gemini Lyria and save audio attachments.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Select an available Lyria music model. prompt or parameters.input describes the music and optional image inputs; parameters.response_format contains supported audio settings. Returned lyrics and metadata remain in the receipt; inline audio becomes a local attachment. This is not a speech or ordinary chat model operation.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用 Gemini Lyria 生成音乐并保存音频。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。默认 create，需可用的 Lyria 音乐模型。prompt 或 parameters.input 描述音乐与可选图像，parameters.response_format 传音频设置，自动设置 type=audio。歌词与元数据保留在响应文件中，内联音频保存为本地附件。"
+        ))
+    )]
+    async fn api_music_generation(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Music,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "embeddings",
+        tags(network, mutate),
+        summary = "Create Gemini text or multimodal embeddings.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Google Gemini embedding model or explicitly pass model. create uses models/{model}:embedContent with prompt or parameters.content and optional taskType/title/outputDimensionality. create_batch uses models/{model}:batchEmbedContents with parameters.requests array; each request inherits the selected model if absent, and an explicit top-level model overrides entry models. Async embedding batches use batches with resource=embeddings. Large vectors are retained in the receipt.",
+        translations(locale(
+            "zh-CN",
+            summary = "生成文本或多模态嵌入向量。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。需要 Google 嵌入模型。create 使用 embedContent，传 prompt 或 parameters.content；create_batch 使用 batchEmbedContents，传 parameters.requests 数组，条目缺少模型时补入选定模型，显式顶层 model 会覆盖条目模型。异步批量嵌入使用 batches 的 resource=embeddings。向量保存在完整响应文件。"
+        ))
+    )]
+    async fn api_embeddings(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Embeddings,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "caches",
+        tags(network, mutate),
+        summary = "Manage explicit Gemini context caches for compatible models.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, update, delete. create uses the current session model unless model is supplied; parameters contains contents, ttl/expireTime and other official fields. update changes supported lifecycle fields using query.updateMask. id accepts cachedContents/ID. Explicit caching is model-dependent; models with implicit caching only reject this API.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理 Gemini 显式上下文缓存。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Google Gemini 模型，否则显式传入 model。资源管理操作无需模型。支持 create/list/get/update/delete。create 使用支持显式缓存的模型与官方 contents/systemInstruction/tools/ttl/expireTime 等字段。update 用于更新生命周期；id 为 cachedContents/ID 或 ID。并非所有 Gemini 模型支持显式缓存。"
+        ))
+    )]
+    async fn api_caches(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Caches,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "audio_understanding",
+        tags(network),
+        summary = "Analyze audio with a selected Google Gemini model.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting audio input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用指定模型理解音频。",
+            help = "默认使用当前会话模型；必须为支持该媒体的 Google Gemini 模型，否则显式传入 model。复用当前 provider 连接。仅发送 inputs 显式指定并获准读取的文件；Gemini 可用本会话上传句柄，OpenAI 音频需本地 WAV/MP3。"
+        ))
+    )]
+    async fn audio_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "gemini.audio_understanding",
+        )?;
+        service
+            .analyze_kind(
+                context,
+                input,
+                model,
+                Some(agena_domain::AttachmentKind::Audio),
+            )
+            .await
+    }
+
+    #[tool(
+        name = "video_understanding",
+        tags(network),
+        summary = "Analyze video with a selected Google Gemini model.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model supporting video input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用指定模型理解视频。",
+            help = "默认使用当前会话模型；必须为支持该媒体的 Google Gemini 模型，否则显式传入 model。复用当前 provider 连接。仅发送 inputs 显式指定并获准读取的文件；Gemini 可用本会话上传句柄，OpenAI 音频需本地 WAV/MP3。"
+        ))
+    )]
+    async fn video_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "gemini.video_understanding",
+        )?;
+        service
+            .analyze_kind(
+                context,
+                input,
+                model,
+                Some(agena_domain::AttachmentKind::Video),
+            )
+            .await
+    }
+
+    #[tool(
+        name = "realtime",
+        tags(network, mutate),
+        summary = "Run one bounded Google Gemini realtime voice turn and save audio.",
+        help = "Defaults to the current session model. Use a Google Gemini realtime voice model; otherwise explicitly pass model. Reuses the current provider endpoint and credentials. Supply text or an explicit raw 16-bit mono PCM audio_path. Returns transcript, actual WAV audio, completion state and provider events. Does not open a microphone or execute tool calls. duration_seconds is 1..50; partial output is retained on a receive deadline. Requires the gateway to expose the vendor WebSocket API.",
+        translations(locale(
+            "zh-CN",
+            summary = "调用实时语音 API 并保存返回音频。",
+            help = "默认使用当前会话模型；须为支持实时语音的 Google Gemini 模型，否则显式传入 model。复用当前 provider 连接。输入为 text 或明确指定的原始 16 位单声道 PCM 文件；返回转录与 WAV 附件，不会打开麦克风或执行工具回调。"
+        ))
+    )]
+    async fn realtime(
+        &self,
+        input: super::provider_api::realtime::RealtimeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::realtime::invoke(self.media_service().await?, input).await
+    }
+
+    #[tool(
+        name = "image_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit images to Google cloud for understanding; not local file viewing.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Send explicit images to Google cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -423,17 +812,20 @@ impl GeminiToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "gemini.cloud_image_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, true)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "gemini.image_understanding",
+        )?;
+        service.analyze(context, input, model, true).await
     }
 
     #[tool(
-        name = "cloud_document_understanding",
+        name = "document_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -482,17 +874,20 @@ impl GeminiToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "gemini.cloud_document_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, false)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "gemini.document_understanding",
+        )?;
+        service.analyze(context, input, model, false).await
     }
 
     #[tool(
-        name = "cloud_file_upload",
+        name = "file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to Google cloud and return a session-owned handle.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Uploads accept arbitrary explicit data files up to 512 MiB and optional SHA256 revision checks; analysis has separate format/size limits. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
         translations(
             locale(
                 "ar-SA",
@@ -541,14 +936,14 @@ impl GeminiToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &UploadInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?.upload(context, input).await
+        self.media_service().await?.upload(context, input).await
     }
 
     #[tool(
-        name = "cloud_file_status",
+        name = "file_status",
         tags(query, network, mutate),
         summary = "Query the remote status of an owned Google cloud file, not a local path.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
         translations(
             locale(
                 "ar-SA",
@@ -597,16 +992,17 @@ impl GeminiToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, false)
             .await
     }
 
     #[tool(
-        name = "cloud_file_delete",
+        name = "file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from Google cloud; preserve the local original.",
-        help = "Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
         translations(
             locale(
                 "ar-SA",
@@ -652,16 +1048,17 @@ impl GeminiToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, true)
             .await
     }
     #[tool(
-        name = "cloud_code_execution",
+        name = "code_execution",
         stream = code_execution_stream,
         tags(network, interactive, read_only),
-        summary = "Execute code in Google cloud infrastructure, not on this computer.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Execute code in Google cloud infrastructure, not on this computer.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.",
     translations(
         locale("ar-SA", summary = "نفّذ تعليمة برمجية في البنية السحابية لـ Google، وليس على هذا الحاسوب."),
         locale("de-DE", summary = "Führt Code in der Google-Cloud-Infrastruktur aus, nicht auf diesem Computer."),
@@ -697,10 +1094,10 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_url_context",
+        name = "url_context",
         tags(network, interactive, discovery, read_only),
-        summary = "Retrieve and ground URL content in Google cloud; no local-file access.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Retrieve and ground URL content in Google cloud; no local-file access.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.",
         translations(
             locale(
                 "ar-SA",
@@ -755,10 +1152,10 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_google_search",
+        name = "google_search",
         tags(network, interactive, discovery, read_only),
-        summary = "Search Google and ground answers in Google cloud, not the local browser.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Search Google and ground answers in Google cloud, not the local browser.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.",
         translations(
             locale(
                 "ar-SA",
@@ -813,10 +1210,10 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_file_search",
+        name = "file_search",
         tags(network, interactive, discovery, read_only),
-        summary = "Search configured Google cloud file stores, not files on this computer.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Search configured Google cloud file stores, not files on this computer.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.",
         translations(
             locale(
                 "ar-SA",
@@ -868,10 +1265,10 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_google_maps",
+        name = "google_maps",
         tags(network, interactive, discovery, read_only),
-        summary = "Query Google Maps data in Google cloud and return grounding sources.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Query Google Maps data in Google cloud and return grounding sources.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.",
         translations(
             locale(
                 "ar-SA",
@@ -926,10 +1323,10 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_generation",
+        name = "image_generation",
         tags(network, interactive, mutate),
-        summary = "Generate images in Google cloud; save returned images as local attachments.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Generate images in Google cloud; save returned images as local attachments.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Use the current session model or specify input.model. Inline image data is persisted as managed attachments.",
         translations(
             locale(
                 "ar-SA",
@@ -977,8 +1374,14 @@ impl GeminiToolsPlugin {
         &self,
         input: GeminiImageGenerateInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.image_model(input.model, "gemini.cloud_image_generation")?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            "gemini.image_generation",
+        )?;
         self.generate_content(
+            connection,
             "image_generation",
             "Gemini image generation",
             model,
@@ -991,9 +1394,9 @@ impl GeminiToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_edit",
-        summary = "Upload permitted images for editing in Google cloud; save the returned image separately.",
-        help = "Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.",
+        name = "image_edit",
+        summary = "Requires a Google Gemini model; defaults to the current model or accepts model override. Upload permitted images for editing in Google cloud; save the returned image separately.",
+        help = "Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.",
         tags(mutate),
         translations(
             locale(
@@ -1039,7 +1442,12 @@ impl GeminiToolsPlugin {
         )
     )]
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput> {
-        let model = self.image_model(input.model, "gemini.cloud_image_edit")?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            "gemini.image_edit",
+        )?;
         let mut parts = Vec::new();
         let mut image_input_bytes = 0_u64;
         for source in input.images {
@@ -1062,6 +1470,7 @@ impl GeminiToolsPlugin {
         }
         parts.push(serde_json::json!({"text":input.prompt}));
         self.generate_content(
+            connection,
             "image_edit",
             "Gemini image edit",
             model,

@@ -111,7 +111,8 @@ impl Service<'_> {
         Ok(hmac(
             key.as_bytes(),
             format!(
-                "agena-cloud-media-connection\0{}\0{}",
+                "agena-cloud-media-connection\0{}\0{}\0{}",
+                self.connection.provider_id,
                 self.provider,
                 self.base()?
             )
@@ -273,10 +274,7 @@ impl Service<'_> {
                     "unsafe provider remote file identifier",
                 ));
             }
-            format!(
-                "{}files/{id}",
-                if self.provider == "claude" { "v1/" } else { "" }
-            )
+            format!("files/{id}")
         };
         self.endpoint(&path)
     }
@@ -355,35 +353,50 @@ impl Service<'_> {
                 "expires_in_seconds must be 3600..2592000",
             ));
         }
-        let key = official_service::env_secret(self.key_env, self.provider)?;
-        let local_path = self.root.join(&input.path);
-        crate::permissions::require_path(
-            self.host.as_ref(),
-            agena_domain::PathKind::Read,
-            &local_path.to_string_lossy(),
+        let key = &self.connection.receipt_key;
+        let bytes = super::super::provider_api::authorized_input(
+            self,
+            &input.path,
+            input.expected_sha256.as_deref(),
+            512 * 1024 * 1024,
         )
         .await?;
-        let root = self.root.to_owned();
-        let path = input.path.clone();
-        let expected = input.expected_sha256.clone();
-        let media = tokio::task::spawn_blocking(move || {
-            media_input::read_local(&root, &path, expected.as_deref())
-        })
-        .await
-        .map_err(|e| PluginError::internal_error(&e))?
-        .map_err(PluginError::invalid_params)?;
-        if self.provider != "gemini"
-            && !matches!(
-                media.kind,
-                agena_domain::AttachmentKind::Image
-                    | agena_domain::AttachmentKind::Pdf
-                    | agena_domain::AttachmentKind::File
-            )
-        {
-            return Err(PluginError::invalid_params(
-                "this file upload tool supports image/PDF/text inputs only",
-            ));
+        let filename = std::path::Path::new(&input.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("input")
+            .to_owned();
+        // Uploads transport arbitrary datasets and archives; interpreting media
+        // remains a separate, content-checked operation with its own limits.
+        let media = if bytes.len() <= media_input::MAX_MEDIA_BYTES {
+            media_input::from_bytes(&filename, bytes.clone(), None).ok()
+        } else {
+            // Container signatures identify audio/video without decoding large files.
+            media_input::from_bytes(&filename, bytes[..bytes.len().min(4096)].to_vec(), None)
+                .ok()
+                .filter(|m| {
+                    matches!(
+                        m.kind,
+                        agena_domain::AttachmentKind::Audio | agena_domain::AttachmentKind::Video
+                    )
+                })
+                .map(|mut m| {
+                    m.bytes = bytes.clone();
+                    m.size_bytes = bytes.len() as u64;
+                    m.sha256 = hex::encode(Sha256::digest(&bytes));
+                    m
+                })
         }
+        .unwrap_or_else(|| PreparedMedia {
+            filename,
+            mime: "application/octet-stream".into(),
+            kind: agena_domain::AttachmentKind::File,
+            size_bytes: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            width: None,
+            height: None,
+            bytes,
+        });
         let _gate = self.gate().await?;
         let handle = format!(
             "media_{}",
@@ -405,7 +418,7 @@ impl Service<'_> {
                 .map_err(|e| PluginError::internal_error(&e))?
                 .display()
                 .to_string(),
-            connection: self.connection(&key)?,
+            connection: self.connection(key)?,
             reference: String::new(),
             remote_id: String::new(),
             filename: media.filename.clone(),
@@ -419,7 +432,7 @@ impl Service<'_> {
             signature: String::new(),
         };
         if self.record_path(&record.handle)?.exists() {
-            let prior = self.load_record(context, &record.handle, &key).await?;
+            let prior = self.load_record(context, &record.handle, key).await?;
             if prior.sha256 != record.sha256 {
                 return Err(PluginError::invalid_params(
                     "call id already reserved for different media bytes",
@@ -427,14 +440,14 @@ impl Service<'_> {
             }
             return prior.output(Some("Existing upload attempt was not repeated. Query status; an unknown submission may require provider-side inspection.".into()));
         }
-        record.sign(&key);
+        record.sign(key);
         self.save(&record, true).await?;
-        let attempt = self.upload_bytes(&media, expiry, &key).await;
+        let attempt = self.upload_bytes(&media, expiry).await;
         let response=match attempt{Ok(response)=>response,Err(error)=>return record.output(Some(format!("Upload did not return a confirmed result: {}. Remote acceptance is unknown; do not automatically repeat.",error.failure.user.fallback)))};
         record.request_id = response.request_id;
         if let Err(error) = self.update_remote(&mut record, &response.value) {
             record.state = "response_invalid".into();
-            record.sign(&key);
+            record.sign(key);
             let persistence = self
                 .save(&record, false)
                 .await
@@ -443,7 +456,7 @@ impl Service<'_> {
                 .unwrap_or_default();
             return record.output(Some(format!("Provider response was received but metadata validation failed: {}. Inspect provider records before retrying.{persistence}",error.failure.user.fallback)));
         }
-        record.sign(&key);
+        record.sign(key);
         let warning=self.save(&record,false).await.err().map(|e|format!("Remote upload succeeded, but its local manifest could not be saved: {}. Retain the remote file ID; do not repeat upload.",e.failure.user.fallback));
         record.output(warning)
     }
@@ -451,7 +464,6 @@ impl Service<'_> {
         &self,
         media: &PreparedMedia,
         expiry: u32,
-        key: &str,
     ) -> SdkResult<ProviderHttpResponse> {
         if self.provider != "gemini" {
             let mut form = reqwest::multipart::Form::new().part(
@@ -471,16 +483,7 @@ impl Service<'_> {
             }
             return self
                 .response(
-                    self.authenticated(
-                        crate::PROVIDER_HTTP_CLIENT
-                            .post(self.endpoint(if self.provider == "claude" {
-                                "v1/files"
-                            } else {
-                                "files"
-                            })?)
-                            .multipart(form),
-                        key,
-                    ),
+                    self.authenticated(self.client.post(self.endpoint("files")?).multipart(form)),
                     "file upload",
                 )
                 .await;
@@ -492,14 +495,13 @@ impl Service<'_> {
         official_service::validate_provider_endpoint(self.host, start.as_str()).await?;
         let begin = self
             .authenticated(
-                crate::PROVIDER_HTTP_CLIENT
+                self.client
                     .post(start)
                     .header("X-Goog-Upload-Protocol", "resumable")
                     .header("X-Goog-Upload-Command", "start")
                     .header("X-Goog-Upload-Header-Content-Length", media.size_bytes)
                     .header("X-Goog-Upload-Header-Content-Type", &media.mime)
                     .json(&json!({"file":{"display_name":media.filename}})),
-                key,
             )
             .send()
             .await
@@ -526,15 +528,14 @@ impl Service<'_> {
             ));
         }
         self.response(
-            crate::PROVIDER_HTTP_CLIENT
-                .post(target)
-                .timeout(std::time::Duration::from_secs(
-                    self.timeout_secs.clamp(1, 300),
-                ))
-                .header("X-Goog-Upload-Offset", "0")
-                .header("X-Goog-Upload-Command", "upload, finalize")
-                .header("content-type", &media.mime)
-                .body(media.bytes.clone()),
+            self.authenticated(
+                self.client
+                    .post(target)
+                    .header("X-Goog-Upload-Offset", "0")
+                    .header("X-Goog-Upload-Command", "upload, finalize")
+                    .header("content-type", &media.mime)
+                    .body(media.bytes.clone()),
+            ),
             "file upload completion",
         )
         .await
@@ -546,33 +547,29 @@ impl Service<'_> {
         delete: bool,
     ) -> SdkResult<ToolInvokeOutput> {
         self.base()?;
-        let key = official_service::env_secret(self.key_env, self.provider)?;
+        let key = &self.connection.receipt_key;
         let _gate = self.gate().await?;
-        let mut record = self.load_record(context, &input.handle, &key).await?;
+        let mut record = self.load_record(context, &input.handle, key).await?;
         if record.state == "deleted" || record.remote_id.is_empty() {
             return record.output(None);
         }
         let url = self.remote_endpoint(&record.remote_id)?;
         official_service::validate_provider_endpoint(self.host, &url).await?;
         let request = if delete {
-            crate::PROVIDER_HTTP_CLIENT.delete(url)
+            self.client.delete(url)
         } else {
-            crate::PROVIDER_HTTP_CLIENT.get(url)
+            self.client.get(url)
         };
         if delete {
             record.state = "deletion_unconfirmed".into();
-            record.sign(&key);
+            record.sign(key);
             self.save(&record, false).await?;
         }
-        let response = self
-            .authenticated(request, &key)
-            .send()
-            .await
-            .map_err(|error| {
-                PluginError::internal(format!(
-                    "cloud file request failed; completion is not confirmed: {error}"
-                ))
-            })?;
+        let response = self.authenticated(request).send().await.map_err(|error| {
+            PluginError::internal(format!(
+                "cloud file request failed; completion is not confirmed: {error}"
+            ))
+        })?;
         let status = response.status();
         if delete && (status.is_success() || status == reqwest::StatusCode::NOT_FOUND) {
             if self.provider == "chatgpt"
@@ -610,7 +607,7 @@ impl Service<'_> {
             self.update_remote(&mut record, &value)?;
             record.request_id = request_id;
         }
-        record.sign(&key);
+        record.sign(key);
         let warning = self.save(&record, false).await.err().map(|e| {
             format!(
                 "Remote response received; local status persistence failed: {}",

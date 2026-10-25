@@ -39,6 +39,12 @@
 | `agena.terminal` | TUI 活动状态、展示贡献与通知 | 更新宿主展示状态，不执行终端命令。贡献归属与清理由插件 effect scope 管理。 |
 | `agena.report` | 生成结构化发现和展示结果 | 无文件、网络或进程副作用；工具名策略仍适用。 |
 
+`agena.chatgpt`、`agena.claude`、`agena.gemini` 在每次调用时复用当前会话的 provider 连接，包括认证、协议路径、适配器请求头和网络超时。插件不再提供独立的 API key、base URL、超时或默认模型配置，也不读取插件专用的模型/密钥环境变量。凭证只通过内置插件的宿主回调取得，不开放到外部插件 RPC，不进入工具输出。三组工具均使用简短名称，例如 `chatgpt.web_search`、`claude.web_fetch`、`gemini.image_generation`；云端执行与输入传输在简介和帮助中说明。
+
+连接选择与模型选择分别处理：需要模型的接口默认采用当前会话模型，也可通过单次调用的 `model` 覆盖。当前模型须属于工具对应厂商（OpenAI、Anthropic Claude 或 Google Gemini）且支持所需操作；否则调用者必须显式指定合适的 `model`。模型默认值不会因工具协议不同而改选 provider 内其他模型；文件上传、查询、删除无需模型参数。插件保留各自的 Responses、Messages、Interactions / generateContent 等 API 协议，不做官方地址回退或本地执行回退。当前 provider 或网关必须支持请求的接口；仅支持聊天协议的网关不代表支持 Files 等接口。专用 OAuth 后端若未定义对应通用 API 连接，会明确报错。发送的会话标识可供网关维持亲和性，多账号下的远程文件和容器归属仍由网关负责。
+
+完整接口、资源生命周期、模型发现、实时音频和网关要求见 [Provider API 工具说明](provider-apis.md)。`session.models` 的远程发现同样检查网络权限；文件下载的显式输出路径经过 Write 检查，已有文件不会被覆盖。
+
 ## 宿主和传输补强
 
 stdio 和 HTTP 使用独立的 `host/permission.require_path`、`host/permission.require_network` RPC；所有代理显式转发 enforcing 方法，保留宿主签发的上下文和结构化拒绝结果。只读 check 回调也携带上下文。HTTP 插件请求和回调均关闭自动重定向。

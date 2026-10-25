@@ -53,34 +53,22 @@ pub(crate) struct ProviderHttpResponse {
 
 pub(crate) fn configured_model(
     requested: Option<String>,
-    configured: Option<&str>,
-    env_names: &[&str],
+    current_model: Option<&str>,
     tool_name: &str,
 ) -> SdkResult<String> {
     requested
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            configured
+            current_model
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
         })
-        .or_else(|| {
-            env_names.iter().find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty())
-            })
-        })
         .ok_or_else(|| {
             PluginError::configuration_required(
                 tool_name,
-                format!(
-                    "Provide input.model, configure the plugin model, or set {}.",
-                    env_names.join(" or ")
-                ),
+                "Provide input.model on the current provider or select a current session model. The model must belong to this tool's AI vendor and support the requested operation.",
             )
         })
 }
@@ -111,6 +99,19 @@ pub(crate) fn endpoint(base_url: &str, path: &str) -> SdkResult<String> {
         ));
     }
     Ok(format!("{base}/{}", path.trim_start_matches('/')))
+}
+
+pub(crate) fn gemini_model_endpoint(base_url: &str, model: &str) -> SdkResult<String> {
+    let model = model.strip_prefix("models/").unwrap_or(model);
+    if model.trim().is_empty() || model.len() > 200 || model.chars().any(char::is_control) {
+        return Err(PluginError::invalid_params("invalid model identifier"));
+    }
+    let mut url = url::Url::parse(&endpoint(base_url, "models")?)
+        .map_err(|_| PluginError::invalid_params("invalid provider endpoint"))?;
+    url.path_segments_mut()
+        .map_err(|_| PluginError::invalid_params("invalid provider endpoint"))?
+        .push(&format!("{model}:generateContent"));
+    Ok(url.into())
 }
 
 pub(crate) async fn validate_provider_endpoint(
@@ -297,12 +298,38 @@ pub(crate) fn merge_object_options(
     Ok(serde_json::Value::Object(object))
 }
 
+pub(crate) fn provider_headers(
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
+) -> SdkResult<reqwest::header::HeaderMap> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in &connection.headers {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| PluginError::invalid_params("invalid provider header name"))?;
+        let mut value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| PluginError::invalid_params("invalid provider header value"))?;
+        value.set_sensitive(true);
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
+pub(crate) fn provider_http_client(
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
+) -> SdkResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(connection.timeout_secs.max(1)))
+        .connect_timeout(Duration::from_secs(connection.connect_timeout_secs.max(1)))
+        .build()
+        .map_err(|error| PluginError::internal_error(&error))
+}
+
 pub(crate) async fn post_json(
     host: &Arc<dyn HostClient>,
     url: &str,
     headers: &BTreeMap<String, String>,
     body: serde_json::Value,
-    timeout_secs: u64,
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
     provider: &str,
     operation: &str,
 ) -> SdkResult<ProviderHttpResponse> {
@@ -316,9 +343,8 @@ pub(crate) async fn post_json(
         .map_err(|error| {
             PluginError::internal(format!("cannot serialize provider request: {error}"))
         })?;
-    let mut request = crate::PROVIDER_HTTP_CLIENT
+    let mut request = provider_http_client(connection)?
         .post(url)
-        .timeout(Duration::from_secs(timeout_secs.max(1)))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(bytes);
     for (name, value) in headers {
@@ -351,6 +377,7 @@ pub(crate) async fn provider_output(
     title: &str,
     usage_kind: ProviderUsageKind,
     response: ProviderHttpResponse,
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
 ) -> SdkResult<ToolInvokeOutput> {
     let request_id = response.request_id;
     let response = Arc::new(response.value);
@@ -439,7 +466,7 @@ pub(crate) async fn provider_output(
     let mut usage = parse_provider_usage(usage_kind, provider, tool, model, &response);
     finalize_usage_estimate(provider, model, &mut usage);
     let attributed = AttributedCompletionUsage {
-        provider_id: provider.to_owned(),
+        provider_id: connection.provider_id.clone(),
         model_id: model.to_owned(),
         operation: tool.to_owned(),
         request_id: request_id.clone(),
@@ -448,6 +475,7 @@ pub(crate) async fn provider_output(
 
     let mut payload = serde_json::json!({
         "provider": provider,
+        "provider_id": connection.provider_id,
         "tool": tool,
         "public_tool_name": public_tool_name,
         "execution_location": "vendor_cloud",
@@ -799,6 +827,50 @@ fn parse_provider_usage(
         ProviderUsageKind::AnthropicMessages => parse_anthropic_usage(response),
     }
     .with_provider_units(provider, model, tool, response)
+}
+
+/// Attribute native API usage using the same accounting channel as hosted tools.
+/// Resource polling is not counted again; absent media/runtime prices stay unknown.
+pub(crate) fn resource_usage(
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
+    provider: &str,
+    operation: &str,
+    model: &str,
+    response: &serde_json::Value,
+    unpriced_units: bool,
+) -> SdkResult<BTreeMap<String, String>> {
+    let kind = match provider {
+        "claude" => ProviderUsageKind::AnthropicMessages,
+        "gemini"
+            if response.get("usageMetadata").is_some()
+                || response.get("usage_metadata").is_some() =>
+        {
+            ProviderUsageKind::GeminiGenerateContent
+        }
+        "gemini" => ProviderUsageKind::GeminiInteractions,
+        _ => ProviderUsageKind::OpenAiResponses,
+    };
+    let mut usage = parse_provider_usage(kind, provider, operation, model, response);
+    if unpriced_units || usage.own_total_tokens() == 0 {
+        usage.cost_estimate_incomplete = true;
+        usage.billable_items.push(unpriced_item(
+            format!("{provider}.{operation}"), 1.0, "request",
+            "Native API costs may include media, storage, runtime or other units not priced in this response.",
+        ));
+    }
+    finalize_usage_estimate(provider, model, &mut usage);
+    let attributed = AttributedCompletionUsage {
+        provider_id: connection.provider_id.clone(),
+        model_id: model.to_owned(),
+        operation: operation.to_owned(),
+        request_id: None,
+        usage: Box::new(usage),
+    };
+    let value = serde_json::to_string(&attributed).map_err(|e| PluginError::internal_error(&e))?;
+    Ok(BTreeMap::from([(
+        PROVIDER_TOOL_USAGE_METADATA_KEY.to_owned(),
+        value,
+    )]))
 }
 
 trait CompletionUsageProviderUnits {

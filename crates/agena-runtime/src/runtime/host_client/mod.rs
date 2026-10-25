@@ -876,6 +876,124 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
+    async fn builtin_provider_models(&self) -> Result<serde_json::Value, PluginError> {
+        let context = current_host_callback_context()
+            .ok_or_else(|| host_unavailable("model discovery requires an active tool callback"))?;
+        if context.plugin_id.as_deref() != Some("agena.session") {
+            return Err(host_unavailable(
+                "provider model discovery is restricted to the bundled session plugin",
+            ));
+        }
+        let (session_id, _) = self.callback_session_and_call()?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .map_err(plugin_error)?;
+        let snapshot = self.snapshot()?;
+        let selected = snapshot
+            .provider_registry()
+            .resolve_default_model_selection(&session.execution.selection)
+            .map_err(plugin_error)?
+            .ok_or_else(|| host_unavailable("select a provider before discovering models"))?;
+        let provider_id = selected.provider_id.to_string();
+        let config = snapshot
+            .provider_configs()
+            .get::<str>(&provider_id)
+            .ok_or_else(|| host_unavailable("the current provider has no configuration"))?;
+        let targets =
+            agena_runtime_provider_adapters::config_support::provider_model_discovery_targets(
+                &provider_id,
+                config,
+            )
+            .map_err(plugin_error)?;
+        for target in targets {
+            self.require_network_permission(target).await?;
+        }
+        let catalog = snapshot.provider_registry();
+        let (models, source, warning) = match catalog.list_models(&provider_id).await {
+            Ok(models) if !models.is_empty() => (models, "provider_discovery", None),
+            result => {
+                let warning = result
+                    .err()
+                    .map(|_| "Remote discovery failed; showing configured models only.");
+                let models = snapshot
+                    .configured_local_models(&provider_id)
+                    .map_err(plugin_error)?;
+                (models, "configured", warning)
+            }
+        };
+        Ok(
+            serde_json::json!({"provider_id":provider_id,"current_model":selected.model_id,
+            "source":source,"warning":warning,"models":models,
+            "capability_notice":"Catalog capability metadata may be unknown or inferred. A listed model does not guarantee support for Files, hosted tools or other platform APIs."}),
+        )
+    }
+
+    async fn builtin_provider_connection(
+        &self,
+    ) -> Result<agena_plugin_sdk::host_api::BuiltinProviderConnection, PluginError> {
+        let context = current_host_callback_context()
+            .ok_or_else(|| host_unavailable("provider tools require an active tool callback"))?;
+        let protocol = match context.plugin_id.as_deref() {
+            Some("agena.chatgpt") => "chatgpt",
+            Some("agena.claude") => "claude",
+            Some("agena.gemini") => "gemini",
+            _ => {
+                return Err(host_unavailable(
+                    "provider connection is restricted to bundled provider tools",
+                ));
+            }
+        };
+        let (session_id, _) = self.callback_session_and_call()?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .map_err(plugin_error)?;
+        let snapshot = self.snapshot()?;
+        let model = snapshot
+            .provider_registry()
+            .resolve_default_model_selection(&session.execution.selection)
+            .map_err(plugin_error)?
+            .ok_or_else(|| host_unavailable("select a provider before using provider tools"))?;
+        let config = snapshot
+            .provider_configs()
+            .get::<str>(model.provider_id.as_ref())
+            .ok_or_else(|| {
+                host_unavailable("the current provider has no connection configuration")
+            })?;
+        let mut connection =
+            agena_runtime_provider_adapters::config_support::resolve_provider_tool_connection(
+                model.provider_id.as_ref(),
+                config,
+                protocol,
+                model.adapter_id.as_ref().map(AsRef::as_ref),
+                model.model_id.as_ref(),
+                &agena_runtime_config::ProcessEnvironment,
+                snapshot.client_identity(),
+            )
+            .await
+            .map_err(plugin_error)?;
+        connection
+            .headers
+            .insert("x-session-id".into(), session_id.to_string());
+        connection
+            .headers
+            .insert("session_id".into(), session_id.to_string());
+        Ok(agena_plugin_sdk::host_api::BuiltinProviderConnection {
+            realtime_ws_url: connection.realtime_ws_url,
+            provider_id: model.provider_id.to_string(),
+            base_url: connection.base_url,
+            messages_url: connection.messages_url,
+            headers: connection.headers,
+            model: connection.model,
+            timeout_secs: config.network.request_timeout_secs,
+            connect_timeout_secs: config.network.connect_timeout_secs,
+            receipt_key: connection.receipt_key,
+        })
+    }
+
     async fn image_execute(
         &self,
         req: HostImageExecuteRequest,

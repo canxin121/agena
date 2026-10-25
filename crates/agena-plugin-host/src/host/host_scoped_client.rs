@@ -358,6 +358,29 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn builtin_provider_connection(
+        &self,
+    ) -> crate::sdk::Result<crate::sdk::host_api::BuiltinProviderConnection> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.builtin_provider_connection(),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn builtin_provider_models(&self) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.builtin_provider_models())
+                .await
+        })
+        .await
+    }
+
     async fn image_execute(
         &self,
         req: HostImageExecuteRequest,

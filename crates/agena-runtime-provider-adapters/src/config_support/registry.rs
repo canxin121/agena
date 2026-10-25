@@ -208,9 +208,14 @@ impl ModelRuntime for GitlabRoutedAdapter {
 mod auth_resolution;
 mod model_listing;
 mod provider_registry;
+mod tool_connection;
+#[cfg(test)]
+mod tool_connection_tests;
+
+pub use tool_connection::{ProviderToolConnection, resolve_provider_tool_connection};
 
 pub(crate) use self::auth_resolution::*;
-pub use self::model_listing::list_provider_adapter_models;
 pub(crate) use self::model_listing::*;
+pub use self::model_listing::{list_provider_adapter_models, provider_model_discovery_targets};
 pub use self::provider_registry::build_provider_registry_from_configs;
 pub(crate) use self::provider_registry::*;

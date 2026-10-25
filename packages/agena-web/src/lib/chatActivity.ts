@@ -135,10 +135,10 @@ export function normalizeChatToolActivityId(value: unknown): string {
   if (namespace === 'lsp') return 'lsp'
 
   if (['chatgpt', 'claude', 'gemini'].includes(namespace)) {
-    if (['cloud_shell', 'cloud_code_execution', 'cloud_code_interpreter'].includes(name)) return 'bash'
-    if (['cloud_web_fetch', 'cloud_url_context'].includes(name)) return 'webfetch'
-    if (['cloud_web_search', 'cloud_google_search'].includes(name)) return 'websearch'
-    if (name === 'cloud_file_search') return 'codesearch'
+    if (['shell', 'code_execution', 'code_interpreter'].includes(name)) return 'bash'
+    if (['web_fetch', 'url_context'].includes(name)) return 'webfetch'
+    if (['web_search', 'google_search'].includes(name)) return 'websearch'
+    if (name === 'file_search') return 'codesearch'
   }
 
   return raw

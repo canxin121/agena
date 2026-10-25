@@ -36,6 +36,7 @@ pub enum MediaSource {
 pub struct AnalyzeInput {
     pub inputs: Vec<MediaSource>,
     pub prompt: String,
+    /// Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -77,14 +78,31 @@ pub struct Service<'a> {
     pub provider: &'static str,
     pub root: &'a Path,
     pub host: &'a Arc<dyn HostClient>,
-    pub base_url: &'a str,
-    pub key_env: &'a str,
-    pub timeout_secs: u64,
+    pub connection: agena_plugin_sdk::host_api::BuiltinProviderConnection,
+    pub client: reqwest::Client,
     pub anthropic_version: &'a str,
 }
-impl Service<'_> {
+impl<'a> Service<'a> {
+    pub fn new(
+        provider: &'static str,
+        root: &'a Path,
+        host: &'a Arc<dyn HostClient>,
+        connection: agena_plugin_sdk::host_api::BuiltinProviderConnection,
+        anthropic_version: &'a str,
+    ) -> SdkResult<Self> {
+        let client = official_service::provider_http_client(&connection)?;
+        Ok(Self {
+            provider,
+            root,
+            host,
+            connection,
+            client,
+            anthropic_version,
+        })
+    }
+
     fn base(&self) -> SdkResult<url::Url> {
-        let base = url::Url::parse(self.base_url).map_err(|e| {
+        let base = url::Url::parse(&self.connection.base_url).map_err(|e| {
             PluginError::invalid_params(format!("invalid cloud media endpoint: {e}"))
         })?;
         if !base.username().is_empty()
@@ -96,38 +114,26 @@ impl Service<'_> {
                 "media endpoint must not contain userinfo, query credentials or a fragment",
             ));
         }
-        let local = base.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-        });
-        if base.scheme() != "https" && !(base.scheme() == "http" && local) {
+        if !matches!(base.scheme(), "http" | "https") {
             return Err(PluginError::invalid_params(
-                "cloud media requires HTTPS, except an explicitly configured loopback test endpoint",
+                "provider media endpoint must use HTTP or HTTPS",
             ));
         }
         Ok(base)
     }
     fn endpoint(&self, suffix: &str) -> SdkResult<String> {
         self.base()?;
-        official_service::endpoint(self.base_url, suffix)
+        official_service::endpoint(&self.connection.base_url, suffix)
     }
-    fn authenticated(
-        &self,
-        request: reqwest::RequestBuilder,
-        key: &str,
-    ) -> reqwest::RequestBuilder {
-        let request = request.timeout(std::time::Duration::from_secs(
-            self.timeout_secs.clamp(1, 300),
-        ));
-        match self.provider {
-            "chatgpt" => request.bearer_auth(key),
-            "claude" => request
-                .header("x-api-key", key)
-                .header("anthropic-version", self.anthropic_version),
-            _ => request.header("x-goog-api-key", key),
+    fn authenticated(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        request = request.header("x-agena-provider-api", self.provider);
+        for (name, value) in &self.connection.headers {
+            request = request.header(name, value);
         }
+        if self.provider == "claude" && !self.connection.headers.contains_key("anthropic-version") {
+            request = request.header("anthropic-version", self.anthropic_version);
+        }
+        request
     }
     async fn response(
         &self,
@@ -138,7 +144,7 @@ impl Service<'_> {
             .build()
             .map_err(|error| PluginError::internal_error(&error))?;
         official_service::validate_provider_endpoint(self.host, request.url().as_str()).await?;
-        let response=crate::PROVIDER_HTTP_CLIENT.execute(request).await.map_err(|error|PluginError::internal(format!("cloud {operation} transport failed; remote acceptance is unknown, do not automatically repeat: {}",error.without_url())))?;
+        let response=self.client.execute(request).await.map_err(|error|PluginError::internal(format!("cloud {operation} transport failed; remote acceptance is unknown, do not automatically repeat: {}",error.without_url())))?;
         let (status, request_id, value) =
             official_service::read_json_response_bounded(response, self.provider, operation)
                 .await?;
@@ -155,6 +161,22 @@ impl Service<'_> {
         input: &AnalyzeInput,
         model: String,
         images_only: bool,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.analyze_kind(
+            context,
+            input,
+            model,
+            images_only.then_some(agena_domain::AttachmentKind::Image),
+        )
+        .await
+    }
+
+    pub async fn analyze_kind(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+        model: String,
+        expected_kind: Option<agena_domain::AttachmentKind>,
     ) -> SdkResult<ToolInvokeOutput> {
         self.base()?;
         if input.inputs.is_empty() || input.inputs.len() > media_input::MAX_MEDIA_INPUTS {
@@ -174,7 +196,7 @@ impl Service<'_> {
             || model.len() > 200
             || !model
                 .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b':'))
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b':' | b'/'))
         {
             return Err(PluginError::invalid_params("invalid model identifier"));
         }
@@ -183,7 +205,7 @@ impl Service<'_> {
                 "this provider does not accept OpenAI's image detail setting; use detail=auto",
             ));
         }
-        let key = official_service::env_secret(self.key_env, self.provider)?;
+        let key = &self.connection.receipt_key;
         let mut parts = Vec::new();
         let mut receipts = Vec::new();
         let mut total = 0usize;
@@ -214,7 +236,7 @@ impl Service<'_> {
                     total = total.saturating_add(prepared.bytes.len());
                     if total > 12 * 1024 * 1024 {
                         return Err(PluginError::invalid_params(
-                            "inline analysis inputs exceed 12 MiB; use this provider's cloud_file_upload and a cloud handle",
+                            "inline analysis inputs exceed 12 MiB; use this provider's file_upload and a cloud handle",
                         ));
                     }
                     if self.provider == "claude"
@@ -236,7 +258,7 @@ impl Service<'_> {
                     )
                 }
                 MediaSource::Cloud { handle } => {
-                    let record = self.load_record(context, handle, &key).await?;
+                    let record = self.load_record(context, handle, key).await?;
                     if record.is_expired() {
                         return Err(PluginError::invalid_params(
                             "cloud file expired; upload an explicitly selected new input instead",
@@ -244,7 +266,7 @@ impl Service<'_> {
                     }
                     if record.state != "ready" {
                         return Err(PluginError::invalid_params(format!(
-                            "cloud file is {}; query cloud_file_status before using it",
+                            "cloud file is {}; query file_status before using it",
                             record.state
                         )));
                     }
@@ -259,22 +281,39 @@ impl Service<'_> {
                     )
                 }
             };
-            if images_only && kind != agena_domain::AttachmentKind::Image {
+            if expected_kind.is_some_and(|expected| kind != expected) {
                 return Err(PluginError::invalid_params(
-                    "cloud_image_understanding accepts images only",
+                    "input media kind does not match the requested understanding tool",
                 ));
             }
-            if !images_only
+            if expected_kind.is_none()
                 && !matches!(
                     kind,
                     agena_domain::AttachmentKind::Pdf | agena_domain::AttachmentKind::File
                 )
             {
                 return Err(PluginError::invalid_params(
-                    "cloud_document_understanding accepts PDF or UTF-8 text documents",
+                    "document_understanding accepts PDF or UTF-8 text documents",
                 ));
             }
             let block = match (self.provider, kind, inline.as_deref(), remote.as_deref()) {
+                ("chatgpt", agena_domain::AttachmentKind::Audio, Some(bytes), _) => {
+                    let format = match mime.as_str() {
+                        "audio/wav" => "wav",
+                        "audio/mpeg" => "mp3",
+                        _ => {
+                            return Err(PluginError::invalid_params(
+                                "OpenAI audio understanding accepts WAV or MP3; convert explicitly first",
+                            ));
+                        }
+                    };
+                    json!({"type":"input_audio","input_audio":{"data":STANDARD.encode(bytes),"format":format}})
+                }
+                ("chatgpt", agena_domain::AttachmentKind::Audio, None, _) => {
+                    return Err(PluginError::invalid_params(
+                        "OpenAI Chat audio input requires an explicit local WAV/MP3 file, not a Files API handle",
+                    ));
+                }
                 ("chatgpt", agena_domain::AttachmentKind::Image, bytes, remote) => {
                     let mut block = json!({"type":"input_image","detail":match input.detail{ImageDetail::Auto=>"auto",ImageDetail::Low=>"low",ImageDetail::High=>"high"}});
                     if let Some(bytes) = bytes {
@@ -324,6 +363,14 @@ impl Service<'_> {
             parts.push(block);
         }
         let (url, body, usage) = match self.provider {
+            "chatgpt" if expected_kind == Some(agena_domain::AttachmentKind::Audio) => {
+                parts.push(json!({"type":"text","text":input.prompt}));
+                (
+                    self.endpoint("chat/completions")?,
+                    json!({"model":model,"messages":[{"role":"user","content":parts}],"max_completion_tokens":input.max_output_tokens,"stream":false}),
+                    ProviderUsageKind::OpenAiResponses,
+                )
+            }
             "chatgpt" => {
                 parts.push(json!({"type":"input_text","text":input.prompt}));
                 (
@@ -335,7 +382,10 @@ impl Service<'_> {
             "claude" => {
                 parts.push(json!({"type":"text","text":input.prompt}));
                 (
-                    self.endpoint("v1/messages")?,
+                    self.connection
+                        .messages_url
+                        .clone()
+                        .unwrap_or(self.endpoint("messages")?),
                     json!({"model":model,"messages":[{"role":"user","content":parts}],"max_tokens":input.max_output_tokens,"stream":false}),
                     ProviderUsageKind::AnthropicMessages,
                 )
@@ -343,7 +393,7 @@ impl Service<'_> {
             _ => {
                 parts.push(json!({"text":input.prompt}));
                 (
-                    self.endpoint(&format!("models/{model}:generateContent"))?,
+                    official_service::gemini_model_endpoint(&self.connection.base_url, &model)?,
                     json!({"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":input.max_output_tokens}}),
                     ProviderUsageKind::GeminiGenerateContent,
                 )
@@ -351,14 +401,15 @@ impl Service<'_> {
         };
         let response = self
             .response(
-                self.authenticated(crate::PROVIDER_HTTP_CLIENT.post(url).json(&body), &key),
+                self.authenticated(self.client.post(url).json(&body)),
                 "media analysis",
             )
             .await?;
-        let operation = if images_only {
-            "image_understanding"
-        } else {
-            "document_understanding"
+        let operation = match expected_kind {
+            Some(agena_domain::AttachmentKind::Image) => "image_understanding",
+            Some(agena_domain::AttachmentKind::Audio) => "audio_understanding",
+            Some(agena_domain::AttachmentKind::Video) => "video_understanding",
+            _ => "document_understanding",
         };
         let mut result = official_service::provider_output(
             self.host,
@@ -369,6 +420,7 @@ impl Service<'_> {
             "Cloud media analysis",
             usage,
             response,
+            &self.connection,
         )
         .await?;
         if let Some(payload) = result.payload.as_mut() {

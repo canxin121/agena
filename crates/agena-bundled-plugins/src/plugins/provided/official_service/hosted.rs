@@ -91,7 +91,7 @@ pub(crate) fn validate_declaration(
     }
     if provider == "chatgpt" && tool == "shell" {
         let env=declaration.get("environment").and_then(Value::as_object)
-            .ok_or_else(||invalid("chatgpt.cloud_shell requires a hosted environment object; local execution is not supported"))?;
+            .ok_or_else(||invalid("chatgpt.shell requires a hosted environment object; local execution is not supported"))?;
         match env.get("type").and_then(Value::as_str) {
             Some("container_auto") => {
                 if env.contains_key("container_id") {
@@ -113,7 +113,7 @@ pub(crate) fn validate_declaration(
             }
             _ => {
                 return Err(invalid(
-                    "chatgpt.cloud_shell permits container_auto or container_reference only; never local/custom environments",
+                    "chatgpt.shell permits container_auto or container_reference only; never local/custom environments",
                 ));
             }
         }
@@ -138,7 +138,7 @@ pub(crate) fn validate_declaration(
             .is_some_and(|model| !model.trim().is_empty())
     {
         return Err(invalid(
-            "claude.cloud_advisor requires tool_options.model identifying the hosted advisor model",
+            "claude.advisor requires tool_options.model identifying the hosted advisor model",
         ));
     }
     Ok(())

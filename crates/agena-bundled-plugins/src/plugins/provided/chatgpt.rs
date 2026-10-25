@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
     ProviderHttpResponse, ProviderUsageKind, append_prompt_to_items, configured_model, endpoint,
-    env_secret, merge_object_options, post_json, provider_output, read_image_input_bounded,
+    merge_object_options, post_json, provider_output, read_image_input_bounded,
     read_json_response_bounded, resolve_local_path, stable_cache_key,
 };
 use agena_plugin_host::sdk::ToolInvokeContext;
@@ -34,11 +34,6 @@ pub(crate) struct ChatGptToolsPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct ChatGptToolsConfig {
-    base_url: String,
-    api_key_env: String,
-    model: Option<String>,
-    image_model: Option<String>,
-    timeout_secs: u64,
     cache_namespace: String,
     cache_mode: OpenAiPromptCacheMode,
     stable_instructions: Option<String>,
@@ -56,11 +51,6 @@ enum OpenAiPromptCacheMode {
 impl Default for ChatGptToolsConfig {
     fn default() -> Self {
         Self {
-            base_url: "https://api.openai.com/v1".to_owned(),
-            api_key_env: "OPENAI_API_KEY".to_owned(),
-            model: None,
-            image_model: None,
-            timeout_secs: 180,
             cache_namespace: "agena-provider-tools".to_owned(),
             cache_mode: OpenAiPromptCacheMode::Automatic,
             stable_instructions: None,
@@ -82,7 +72,7 @@ struct ChatGptToolInput {
     /// Stable developer prefix eligible for an explicit OpenAI cache breakpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stable_instructions: Option<String>,
-    /// Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.
+    /// Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     /// Official fields merged into this tool's declaration. `type` is protected.
@@ -113,6 +103,7 @@ struct ChatGptToolInput {
 struct ChatGptImageEditInput {
     prompt: String,
     images: Vec<String>,
+    /// Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -120,16 +111,14 @@ struct ChatGptImageEditInput {
 }
 
 impl ChatGptToolsPlugin {
-    fn media_service(&self) -> SdkResult<Service<'_>> {
-        Ok(Service {
-            provider: "chatgpt",
-            root: self.workspace_root()?,
-            host: self.host()?,
-            base_url: &self.config()?.base_url,
-            key_env: &self.config()?.api_key_env,
-            timeout_secs: self.config()?.timeout_secs,
-            anthropic_version: "2023-06-01",
-        })
+    async fn media_service(&self) -> SdkResult<Service<'_>> {
+        Service::new(
+            "chatgpt",
+            self.workspace_root()?,
+            self.host()?,
+            self.host()?.builtin_provider_connection().await?,
+            "2023-06-01",
+        )
     }
 
     pub(crate) fn new() -> Self {
@@ -159,24 +148,6 @@ impl ChatGptToolsPlugin {
             .ok_or_else(|| PluginError::internal("ChatGPT tools plugin invoked before init"))
     }
 
-    fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
-        configured_model(
-            requested,
-            self.config()?.model.as_deref(),
-            &["CHATGPT_MODEL", "OPENAI_MODEL"],
-            tool,
-        )
-    }
-
-    fn image_model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
-        configured_model(
-            requested,
-            self.config()?.image_model.as_deref(),
-            &["CHATGPT_IMAGE_MODEL", "OPENAI_IMAGE_MODEL"],
-            tool,
-        )
-    }
-
     async fn responses_tool(
         &self,
         tool_name: &str,
@@ -193,7 +164,12 @@ impl ChatGptToolsPlugin {
             "chatgpt",
             &serde_json::json!(&input.input_items),
         )?;
-        let model = self.model(input.model, format!("chatgpt.cloud_{tool_name}").as_str())?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            &format!("chatgpt.{tool_name}"),
+        )?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
         super::official_service::hosted::validate_declaration("chatgpt", tool_name, &declaration)?;
@@ -300,23 +276,14 @@ impl ChatGptToolsPlugin {
             ],
             "request_options",
         )?;
-        let url = endpoint(self.config()?.base_url.as_str(), "responses")?;
-        let headers = BTreeMap::from([
-            (
-                "authorization".to_owned(),
-                format!(
-                    "Bearer {}",
-                    env_secret(self.config()?.api_key_env.as_str(), "ChatGPT/OpenAI")?
-                ),
-            ),
-            ("content-type".to_owned(), "application/json".to_owned()),
-        ]);
+        let url = endpoint(&connection.base_url, "responses")?;
+        let headers = connection.headers.clone();
         let response = post_json(
             self.host()?,
             url.as_str(),
             &headers,
             body,
-            self.config()?.timeout_secs,
+            &connection,
             "chatgpt",
             tool_name,
         )
@@ -330,6 +297,7 @@ impl ChatGptToolsPlugin {
             title,
             ProviderUsageKind::OpenAiResponses,
             response,
+            &connection,
         )
         .await
     }
@@ -339,18 +307,18 @@ impl ChatGptToolsPlugin {
     namespace = "agena",
     name = "chatgpt",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.",
+    summary = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback.",
     translations(
-        locale("zh-CN", summary = "使用 OpenAI 云端搜索、计算和图像能力。输入会离开本机；不会回退到本地执行。"),
-        locale("zh-TW", summary = "使用 OpenAI 雲端搜尋、運算與影像功能。輸入會離開這台電腦；不會改用本機執行。"),
-        locale("ja-JP", summary = "OpenAI のクラウド検索・計算・画像機能を利用します。入力はこの端末の外部に送信され、ローカル実行には切り替わりません。"),
-        locale("ko-KR", summary = "OpenAI 클라우드 검색, 계산, 이미지 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
-        locale("fr-FR", summary = "Utiliser les fonctions de recherche, de calcul et d’image dans le cloud OpenAI. Les données sont envoyées hors de cet ordinateur, sans solution de repli locale."),
-        locale("de-DE", summary = "OpenAI-Cloudfunktionen für Suche, Berechnungen und Bilder nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
-        locale("es-ES", summary = "Usa las funciones de búsqueda, cálculo e imagen en la nube de OpenAI. Los datos salen de este equipo y no hay ejecución local alternativa."),
-        locale("hi-IN", summary = "OpenAI क्लाउड की खोज, गणना और छवि सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
-        locale("ar-SA", summary = "استخدم إمكانات البحث والحوسبة والصور في سحابة OpenAI. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
-        locale("pt-BR", summary = "Use os recursos de busca, computação e imagem na nuvem da OpenAI. As entradas saem deste computador; não há alternativa de execução local.")
+        locale("zh-CN", summary = "需要模型的工具默认使用当前会话模型。当前模型须为支持该操作的 OpenAI 模型，否则必须显式传入 model 指定合适模型。复用当前会话的 provider 连接，无需单独配置。使用 OpenAI 云端推理、文件、知识库、图像、音频、实时语音、批处理与智能体 API。输入会离开本机；不会回退到本地执行。"),
+        locale("zh-TW", summary = "需要模型的工具預設使用目前工作階段模型。目前模型須為支援該操作的 OpenAI 模型，否則必須明確傳入 model 指定合適模型。沿用目前工作階段的 provider 連線，無需另外設定。使用 OpenAI 雲端搜尋、運算與影像功能。輸入會離開這台電腦；不會改用本機執行。"),
+        locale("ja-JP", summary = "モデルが必要なツールは現在のセッションモデルを使用します。対象操作に対応する OpenAI モデルが必要です。現在のモデルが適合しない場合は model を明示してください。現在のセッションのプロバイダー接続を使用します。OpenAI のクラウド検索・計算・画像機能を利用します。入力はこの端末の外部に送信され、ローカル実行には切り替わりません。"),
+        locale("ko-KR", summary = "모델이 필요한 도구는 현재 세션 모델을 기본으로 사용합니다. 작업을 지원하는 OpenAI 모델이 필요하며, 현재 모델이 적합하지 않으면 model을 명시하세요. 현재 세션의 공급자 연결을 사용합니다. OpenAI 클라우드 검색, 계산, 이미지 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
+        locale("fr-FR", summary = "Les outils nécessitant un modèle utilisent celui de la session. Choisissez un modèle OpenAI compatible avec l’opération ; sinon, renseignez explicitement model. Utilise la connexion du fournisseur de la session courante. Utiliser les fonctions de recherche, de calcul et d’image dans le cloud OpenAI. Les données sont envoyées hors de cet ordinateur, sans solution de repli locale."),
+        locale("de-DE", summary = "Modellbasierte Werkzeuge verwenden das aktuelle Sitzungsmodell. Ein für die Aktion geeignetes OpenAI-Modell ist erforderlich; andernfalls model explizit angeben. Verwendet die Provider-Verbindung der aktuellen Sitzung. OpenAI-Cloudfunktionen für Suche, Berechnungen und Bilder nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
+        locale("es-ES", summary = "Las herramientas que requieren modelo usan el de la sesión. Se necesita un modelo de OpenAI compatible con la operación; de lo contrario, indica model explícitamente. Usa la conexión del proveedor de la sesión actual. Usa las funciones de búsqueda, cálculo e imagen en la nube de OpenAI. Los datos salen de este equipo y no hay ejecución local alternativa."),
+        locale("hi-IN", summary = "मॉडल वाले टूल वर्तमान सत्र का मॉडल इस्तेमाल करते हैं। इस कार्य का समर्थन करने वाला OpenAI मॉडल चाहिए; अन्यथा model स्पष्ट रूप से दें। वर्तमान सत्र के प्रदाता कनेक्शन का उपयोग करता है। OpenAI क्लाउड की खोज, गणना और छवि सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
+        locale("ar-SA", summary = "تستخدم الأدوات التي تحتاج نموذجًا نموذج الجلسة الحالي. يجب استخدام نموذج من OpenAI يدعم العملية؛ وإلا فحدّد model صراحةً. يستخدم اتصال المزوّد للجلسة الحالية. استخدم إمكانات البحث والحوسبة والصور في سحابة OpenAI. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
+        locale("pt-BR", summary = "Ferramentas que exigem modelo usam o da sessão. É necessário um modelo da OpenAI compatível com a operação; caso contrário, informe model explicitamente. Usa a conexão do provedor da sessão atual. Use os recursos de busca, computação e imagem na nuvem da OpenAI. As entradas saem deste computador; não há alternativa de execução local.")
     ),
     settings = ChatGptToolsConfig,
     settings_default = default,
@@ -378,10 +346,405 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_understanding",
+        name = "models",
+        tags(network, discovery, query),
+        summary = "List or inspect vendor models on the current provider.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.",
+        translations(locale(
+            "zh-CN",
+            summary = "列出或查看当前 provider 上的厂商模型。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get，get 需要 id；query 可传分页参数。模型出现在列表中，不代表网关或账号支持所有工具。"
+        ))
+    )]
+    async fn api_models(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Models,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "files",
+        tags(network, mutate),
+        summary = "Manage remote files and download cloud-generated artifacts.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理远程文件，下载厂商生成的文件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get、wait、delete、download。OpenAI/Claude 还支持 upload：path 指定本地文件，parameters.purpose 按厂商要求填写。Gemini 使用 file_upload 上传。download 将实际字节保存为附件或新的 output_path；Claude 仅支持下载厂商生成的文件。id 属于当前 provider，列表与管理接口不需要模型。"
+        ))
+    )]
+    async fn api_files(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Files,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "inference",
+        tags(network, mutate),
+        summary = "Run a vendor inference request with official tool combinations and continuation.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用厂商原生接口组合工具、推理并继续对话。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；prompt 或 parameters 中填写厂商原生 input/messages，可组合托管工具、远程 MCP、工具搜索、编程式调用、云端 Skills 或客户端工具声明。返回的工具调用是数据，不会自动执行本机操作。需要本地执行时，使用正常 Agena 工具及其权限，再显式提交厂商格式的调用结果。顶层 stream=true 可接收限时 SSE，wait_seconds 为 1..50，保留完整事件与 SSE 游标。"
+        ))
+    )]
+    async fn api_inference(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Inference,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "batches",
+        tags(network, mutate),
+        summary = "Create, inspect, cancel and retrieve asynchronous batch jobs.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, cancel; Claude/Gemini also delete, Claude also results. parameters contains official batch input. OpenAI result output_file_id is downloaded with files.download; Gemini output file names use files.download. Claude results are saved as a JSONL attachment. A wait is bounded and never resubmits a job.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建、查询、取消异步批处理并获取结果。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 create、list、get、wait、cancel；Claude/Gemini 支持 delete，Claude 支持 results 并保存 JSONL。parameters 使用官方批处理格式。Claude requests[].params 未指定 model 时沿用顶层 model 或当前模型；OpenAI 输入 JSONL 中的各行模型由文件内容决定。OpenAI output_file_id 和 Gemini 输出文件可用 files.download 下载。wait 有时限且不会重建任务。"
+        ))
+    )]
+    async fn api_batches(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Batches,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "count_tokens",
+        tags(network, mutate),
+        summary = "Count tokens using the vendor token-counting endpoint.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过厂商接口计算输入 token 数量。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；parameters 使用厂商的 input/messages/contents 格式。只计算输入 token，不生成文本。"
+        ))
+    )]
+    async fn api_count_tokens(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Tokens,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "agents",
+        tags(network, mutate),
+        summary = "Manage vendor-hosted agents, sessions and environments.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model for agent creation. Resource management needs no model. resource=agents: create/list/get/update/delete; sessions (default): create/list/get/wait/update/delete/events/create_event/items; environments: create/list/get/add_file/list_files. Additional resources: sessions/artifacts list/get/download/delete; sessions/turns list/get/items; sessions/subagents list/get/items; sessions/subagents/turns list/get/items; sessions/traces list. Nested resources use id=session, item_id=artifact/turn/subagent; subagent turns also use sub_item_id=turn. download saves actual artifact bytes. Event streams are bounded by wait_seconds and accept last_event_id for resumption. parameters/query use official schemas. Hosted agents do not automatically receive local files or tools.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理厂商托管的智能体、会话与环境。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。resource=agents 支持 create/list/get/update/delete；sessions（默认）支持 create/list/get/wait/update/delete/events/create_event/items；environments 支持 create/list/get/add_file/list_files。新增 sessions/artifacts 支持 list/get/download/delete，sessions/turns、sessions/subagents、sessions/subagents/turns 支持 list/get/items，sessions/traces 支持 list。嵌套资源 id 为会话，item_id 为产物、turn 或子智能体；子智能体 turn 另用 sub_item_id。download 保存真实文件。事件流由 wait_seconds 限时，可传 last_event_id 续接。资源查询无需模型。"
+        ))
+    )]
+    async fn api_agents(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Agents,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "knowledge",
+        tags(network, mutate),
+        summary = "Create, populate, search and manage OpenAI vector stores.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, update, delete, search, add_file, list_files, get_file, update_file, delete_file, download_file, create_batch, get_batch, cancel_batch, list_batch_files. id is the vector store ID; item_id identifies a nested file or file batch. Upload with files.upload purpose=assistants, then add_file with parameters.file_id. Poll get_file until indexing completes; file_upload alone does not index. File batch creation uses parameters.file_ids. search returns chunks directly without a generation model.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建、导入和管理厂商知识库。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。OpenAI 支持 create/list/get/wait/update/delete/search，以及 add_file/list_files/get_file/update_file/delete_file/download_file/create_batch/get_batch/cancel_batch/list_batch_files。id 为向量库，item_id 为文件或文件批次；先上传 purpose=assistants，再 add_file，等待索引完成后搜索。Gemini 支持 create/list/get/delete/import_file/list_files/get_file/delete_file；id 为 File Search Store，item_id 为文档。import_file 使用 parameters.fileName，返回的操作交给 operations.get/wait。上传文件本身不会自动建立知识库索引。"
+        ))
+    )]
+    async fn api_knowledge(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Knowledge,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "containers",
+        tags(network, mutate),
+        summary = "Manage OpenAI cloud containers and their input/output files.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, delete, upload/add_file, list_files, get_file, delete_file, download_file. id is container ID; item_id is container-file ID. Add an existing file with parameters.file_id, or upload path. download_file saves actual bytes locally. Container execution is remote.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理 OpenAI 执行容器与生成文件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 create/list/get/delete/upload/add_file/list_files/get_file/delete_file/download_file。id 为容器，item_id 为文件。upload 使用 path；也可 add_file 引用 parameters.file_id。下载保存实际字节，容器中的文件不会自动出现在本地工作区。"
+        ))
+    )]
+    async fn api_containers(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Containers,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "responses",
+        tags(network, mutate),
+        summary = "Retrieve, wait for, cancel or delete OpenAI background responses.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model. Actions: create/get/wait/cancel/delete/items/compact. Create accepts prompt or parameters.input, optional background/tools, and top-level stream=true for bounded SSE. compact calls responses/compact with parameters.input and optional instructions. Other actions use id. wait_seconds is 1..50; get/wait never recreate a task. SSE returns events, sse_events with id/event/retry, and last_event_id; pass last_event_id to resume supported event resources. Continuation via previous_response_id creates a new response. Never retry create automatically.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建和管理 OpenAI Responses 后台任务。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 create/get/wait/cancel/delete/items/compact。compact 调用 Responses 压缩接口，parameters.input 为待压缩消息，可传 instructions。create 可传 background/tools，顶层 stream=true 开启有时限的 SSE。后续查询使用 id；wait_seconds 为 1..50。SSE 保留事件类型、事件 ID 和重连等待值；查询不会重建任务。"
+        ))
+    )]
+    async fn api_responses(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Tasks,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "image_generate",
+        tags(network, mutate),
+        summary = "Generate images directly through the OpenAI Images API.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the image description; model is the IMAGE model, unlike the existing Responses-based image_generation tool whose outer model orchestrates the image tool. parameters supports size, quality, n, output_format, background and other official image fields. Base64 results become local attachments.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过 OpenAI Images 接口直接生成图像。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；prompt 为绘图要求，parameters 可传 size、quality、n、output_format 等官方参数。需要图像生成模型；与 Responses 中的 image_generation 工具不同。结果保存为图像附件。"
+        ))
+    )]
+    async fn api_image_generate(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Images,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "transcription",
+        tags(network, mutate),
+        summary = "Transcribe or translate an audio file using OpenAI Audio APIs.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. path selects one authorized audio file; model defaults to the current session model, so explicitly pass an appropriate transcription model when necessary. resource=translations selects audio translation; otherwise transcription. parameters supports language, prompt, response_format and timestamp/diarization fields according to model compatibility. Text, JSON and subtitle outputs are retained as artifacts.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过 OpenAI Audio 接口转写或翻译音频。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；path 指定获准读取的音频，resource=translations 选择翻译，否则转写。parameters 支持 language、prompt、response_format、时间戳和说话人字段，具体依模型而定。文本、JSON 和字幕均保留为结果文件。"
+        ))
+    )]
+    async fn api_transcription(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Transcription,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "speech",
+        tags(network, mutate),
+        summary = "Generate speech and save the resulting audio.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the exact text to speak; parameters.voice and other official speech fields control voice, format and style. Select an OpenAI TTS model. Saves actual audio bytes as an attachment; output_path optionally selects a new workspace file.",
+        translations(locale(
+            "zh-CN",
+            summary = "生成语音并保存为本地音频附件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create，prompt 为待朗读文本。OpenAI 使用 parameters.voice 等官方语音字段。Gemini 使用 parameters.generation_config.speech_config，复杂输入和 speech_metadata 放入 parameters.input；自动设置 response_format.type=audio。必须使用支持语音合成的模型。output_path 可指定新的输出文件。"
+        ))
+    )]
+    async fn api_speech(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Speech,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "embeddings",
+        tags(network, mutate),
+        summary = "Create OpenAI embeddings for supplied inputs.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. parameters.input contains text or token inputs; parameters supports dimensions and encoding_format. Requires an embedding model. Large vectors are saved in the response receipt.",
+        translations(locale(
+            "zh-CN",
+            summary = "生成文本或多模态嵌入向量。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create，需要嵌入模型。OpenAI 使用 parameters.input，可选 dimensions/encoding_format；Gemini 使用 parameters.content，按模型支持传 taskType/title/outputDimensionality。大向量保存在完整响应文件中。"
+        ))
+    )]
+    async fn api_embeddings(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Embeddings,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "moderation",
+        tags(network, mutate),
+        summary = "Classify supplied content with the OpenAI Moderations API.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. parameters.input contains supported text/image inputs. Requires a moderation model, not an ordinary chat model. Returns provider categories and scores.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过 OpenAI Moderations 接口审核内容。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；parameters.input 为待审核的文本或图像。需使用兼容的内容审核模型；结果保留分类、分数和标记。"
+        ))
+    )]
+    async fn api_moderation(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Moderation,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "platform",
+        tags(network, mutate),
+        summary = "Manage OpenAI conversations, fine-tuning jobs, evaluations and uploads.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model for fine-tuning. Resource operations need no model. resource=conversations: create/get/update/delete/items/add_items/get_item/delete_item; fine_tuning/jobs: create/list/get/wait/cancel/events/pause/unpause; fine_tuning/jobs/checkpoints: list (id=job); fine_tuning/checkpoints/permissions: create/list/delete (id=checkpoint, item_id=permission); fine_tuning/alpha/graders: run/validate; evals: create/list/get/update/delete/create_run/list_runs/get_run/cancel_run/delete_run; evals/runs/output_items: list/get (id=eval, item_id=run, sub_item_id=output for get); uploads: create/add_part/complete/cancel (add_part path, complete parameters.part_ids); audio/voice_consents: create/list/get/update/delete (create path is the consent recording, parameters.name/language); audio/voices: create/delete (audio-sample creation uses path and parameters.name/consent, prompt creation uses parameters.type=prompt/name/prompt without a file). Voice recordings have a 10 MiB limit and supported audio MIME types. Nested grader model fields remain in parameters. No API key, billing or membership administration.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理 OpenAI 对话、微调、评估与分片上传。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。resource=conversations 管理对话及 items；fine_tuning/jobs 管理微调任务，支持 create/list/get/wait/cancel/events/pause/unpause；fine_tuning/jobs/checkpoints 用 list 查看检查点；fine_tuning/checkpoints/permissions 支持 create/list/delete；fine_tuning/alpha/graders 支持 run/validate。evals 支持 create/list/get/update/delete/create_run/list_runs/get_run/cancel_run/delete_run；evals/runs/output_items 支持 list/get，id 为 eval、item_id 为 run，get 另需 sub_item_id。uploads 支持 create/add_part/complete/cancel。audio/voice_consents 支持 create/list/get/update/delete，创建时 path 为授权录音，parameters 包含 name/language；audio/voices 支持 create/delete，录音方式使用 path 和 name/consent，文字方式使用 parameters.type=prompt/name/prompt，无需文件。录音上限 10 MiB。资源管理不要求聊天模型。"
+        ))
+    )]
+    async fn api_platform(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Platform,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "audio_understanding",
+        tags(network),
+        summary = "Analyze audio with a selected OpenAI model.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model supporting audio input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用指定模型理解音频。",
+            help = "默认使用当前会话模型；必须为支持该媒体的 OpenAI 模型，否则显式传入 model。复用当前 provider 连接。仅发送 inputs 显式指定并获准读取的文件；Gemini 可用本会话上传句柄，OpenAI 音频需本地 WAV/MP3。"
+        ))
+    )]
+    async fn audio_understanding(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &AnalyzeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "chatgpt.audio_understanding",
+        )?;
+        service
+            .analyze_kind(
+                context,
+                input,
+                model,
+                Some(agena_domain::AttachmentKind::Audio),
+            )
+            .await
+    }
+
+    #[tool(
+        name = "realtime",
+        tags(network, mutate),
+        summary = "Run one bounded OpenAI realtime voice turn and save audio.",
+        help = "Defaults to the current session model. Use an OpenAI realtime voice model; otherwise explicitly pass model. Reuses the current provider endpoint and credentials. Supply text or an explicit raw 16-bit mono PCM audio_path. Returns transcript, actual WAV audio, completion state and provider events. Does not open a microphone or execute tool calls. duration_seconds is 1..50; partial output is retained on a receive deadline. Requires the gateway to expose the vendor WebSocket API.",
+        translations(locale(
+            "zh-CN",
+            summary = "调用实时语音 API 并保存返回音频。",
+            help = "默认使用当前会话模型；须为支持实时语音的 OpenAI 模型，否则显式传入 model。复用当前 provider 连接。输入为 text 或明确指定的原始 16 位单声道 PCM 文件；返回转录与 WAV 附件，不会打开麦克风或执行工具回调。"
+        ))
+    )]
+    async fn realtime(
+        &self,
+        input: super::provider_api::realtime::RealtimeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::realtime::invoke(self.media_service().await?, input).await
+    }
+
+    #[tool(
+        name = "image_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit images to OpenAI cloud for understanding; not local file viewing.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Send explicit images to OpenAI cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -430,17 +793,20 @@ impl ChatGptToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "chatgpt.cloud_image_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, true)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "chatgpt.image_understanding",
+        )?;
+        service.analyze(context, input, model, true).await
     }
 
     #[tool(
-        name = "cloud_document_understanding",
+        name = "document_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -489,17 +855,20 @@ impl ChatGptToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "chatgpt.cloud_document_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, false)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "chatgpt.document_understanding",
+        )?;
+        service.analyze(context, input, model, false).await
     }
 
     #[tool(
-        name = "cloud_file_upload",
+        name = "file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to OpenAI cloud and return a session-owned handle.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Uploads accept arbitrary explicit data files up to 512 MiB and optional SHA256 revision checks; analysis has separate format/size limits. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
         translations(
             locale(
                 "ar-SA",
@@ -548,14 +917,14 @@ impl ChatGptToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &UploadInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?.upload(context, input).await
+        self.media_service().await?.upload(context, input).await
     }
 
     #[tool(
-        name = "cloud_file_status",
+        name = "file_status",
         tags(query, network, mutate),
         summary = "Query the remote status of an owned OpenAI cloud file, not a local path.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
         translations(
             locale(
                 "ar-SA",
@@ -604,16 +973,17 @@ impl ChatGptToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, false)
             .await
     }
 
     #[tool(
-        name = "cloud_file_delete",
+        name = "file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from OpenAI cloud; preserve the local original.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
         translations(
             locale(
                 "ar-SA",
@@ -659,15 +1029,16 @@ impl ChatGptToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, true)
             .await
     }
     #[tool(
-        name = "cloud_web_search",
+        name = "web_search",
         tags(network, interactive, discovery, read_only),
-        summary = "Search the web in OpenAI cloud and return sources; not a local browser operation.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Search the web in OpenAI cloud and return sources; not a local browser operation.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.",
         translations(
             locale(
                 "ar-SA",
@@ -722,10 +1093,10 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_file_search",
+        name = "file_search",
         tags(network, interactive, discovery, read_only),
-        summary = "Search configured OpenAI cloud file stores, not files on this computer.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Search configured OpenAI cloud file stores, not files on this computer.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.",
         translations(
             locale(
                 "ar-SA",
@@ -777,11 +1148,11 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_code_interpreter",
+        name = "code_interpreter",
         stream = code_interpreter_stream,
         tags(network, interactive, read_only),
-        summary = "Run Python in an OpenAI cloud container, not the Agena local workspace.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Run Python in an OpenAI cloud container, not the Agena local workspace.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.",
     translations(
         locale("ar-SA", summary = "شغّل Python في حاوية OpenAI سحابية، وليس في مساحة عمل Agena المحلية."),
         locale("de-DE", summary = "Führt Python in einem OpenAI-Cloud-Container aus, nicht im lokalen Agena-Arbeitsbereich."),
@@ -818,10 +1189,10 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_generation",
+        name = "image_generation",
         tags(network, interactive, mutate),
-        summary = "Generate images in OpenAI cloud; save returned images as local attachments.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Generate images in OpenAI cloud; save returned images as local attachments.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
         translations(
             locale(
                 "ar-SA",
@@ -876,11 +1247,11 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_shell",
+        name = "shell",
         stream = shell_stream,
         tags(network, interactive, mutate),
-        summary = "Run shell commands in an OpenAI cloud container, never in the local terminal.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Run shell commands in an OpenAI cloud container, never in the local terminal.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.",
     translations(
         locale("ar-SA", summary = "نفّذ أوامر الصدفة في حاوية OpenAI سحابية، وليس في الطرفية المحلية أبدًا."),
         locale("de-DE", summary = "Führt Shell-Befehle in einem OpenAI-Cloud-Container aus, niemals im lokalen Terminal."),
@@ -917,9 +1288,9 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_edit",
-        summary = "Upload permitted images for editing in OpenAI cloud; save the returned image separately.",
-        help = "Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.",
+        name = "image_edit",
+        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Upload permitted images for editing in OpenAI cloud; save the returned image separately.",
+        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.",
         tags(mutate),
         translations(
             locale(
@@ -966,8 +1337,13 @@ impl ChatGptToolsPlugin {
     )]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
         super::official_service::hosted::validate_options(&input.options, "options")?;
-        let model = self.image_model(input.model, "chatgpt.cloud_image_edit")?;
-        let url = endpoint(self.config()?.base_url.as_str(), "images/edits")?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            "chatgpt.image_edit",
+        )?;
+        let url = endpoint(&connection.base_url, "images/edits")?;
         super::official_service::validate_provider_endpoint(self.host()?, url.as_str()).await?;
         let mut form = reqwest::multipart::Form::new()
             .text("model", model.clone())
@@ -1015,15 +1391,9 @@ impl ChatGptToolsPlugin {
                 .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
-        let response = crate::PROVIDER_HTTP_CLIENT
+        let response = super::official_service::provider_http_client(&connection)?
             .post(url)
-            .timeout(std::time::Duration::from_secs(
-                self.config()?.timeout_secs.max(1),
-            ))
-            .bearer_auth(env_secret(
-                self.config()?.api_key_env.as_str(),
-                "ChatGPT/OpenAI",
-            )?)
+            .headers(super::official_service::provider_headers(&connection)?)
             .multipart(form)
             .send()
             .await
@@ -1044,6 +1414,7 @@ impl ChatGptToolsPlugin {
             "ChatGPT image edit",
             ProviderUsageKind::OpenAiImage,
             ProviderHttpResponse { value, request_id },
+            &connection,
         )
         .await
     }

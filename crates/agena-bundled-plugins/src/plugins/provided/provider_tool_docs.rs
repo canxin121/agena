@@ -24,7 +24,12 @@ pub(crate) fn localize_provider_manifest(manifest: &mut PluginManifest) {
                 locale.to_owned(),
                 ToolDocsTranslation {
                     summary: Some(summary.to_owned()),
-                    help: Some(help(key, locale).to_owned()),
+                    help: Some(format!(
+                        "{}{}{}",
+                        connection_help(locale),
+                        model_help(&manifest.name, key, locale),
+                        help(key, locale)
+                    )),
                     ..Default::default()
                 },
             );
@@ -32,27 +37,92 @@ pub(crate) fn localize_provider_manifest(manifest: &mut PluginManifest) {
     }
 }
 
+fn model_help(plugin: &str, key: &str, locale: &str) -> String {
+    if matches!(key, "file_upload" | "file_status" | "file_delete") {
+        return String::new();
+    }
+    let vendor = match plugin {
+        "chatgpt" => "OpenAI",
+        "claude" => "Anthropic Claude",
+        "gemini" => "Google Gemini",
+        _ => return String::new(),
+    };
+    match locale {
+        "en-US" => format!(
+            "Model-based tools default to the current session model. Use a model from {vendor} that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. "
+        ),
+        "zh-CN" => format!(
+            "需要模型的工具默认使用当前会话模型。当前模型须为支持该操作的 {vendor} 模型，否则必须显式传入 model 指定合适模型。"
+        ),
+        "zh-TW" => format!(
+            "需要模型的工具預設使用目前工作階段模型。目前模型須為支援該操作的 {vendor} 模型，否則必須明確傳入 model 指定合適模型。"
+        ),
+        "ja-JP" => format!(
+            "モデルが必要なツールは現在のセッションモデルを使用します。対象操作に対応する {vendor} モデルが必要です。現在のモデルが適合しない場合は model を明示してください。"
+        ),
+        "ko-KR" => format!(
+            "모델이 필요한 도구는 현재 세션 모델을 기본으로 사용합니다. 작업을 지원하는 {vendor} 모델이 필요하며, 현재 모델이 적합하지 않으면 model을 명시하세요. "
+        ),
+        "fr-FR" => format!(
+            "Les outils nécessitant un modèle utilisent celui de la session. Choisissez un modèle {vendor} compatible avec l’opération ; sinon, renseignez explicitement model. "
+        ),
+        "de-DE" => format!(
+            "Modellbasierte Werkzeuge verwenden das aktuelle Sitzungsmodell. Ein für die Aktion geeignetes {vendor}-Modell ist erforderlich; andernfalls model explizit angeben. "
+        ),
+        "es-ES" => format!(
+            "Las herramientas que requieren modelo usan el de la sesión. Se necesita un modelo de {vendor} compatible con la operación; de lo contrario, indica model explícitamente. "
+        ),
+        "hi-IN" => format!(
+            "मॉडल वाले टूल वर्तमान सत्र का मॉडल इस्तेमाल करते हैं। इस कार्य का समर्थन करने वाला {vendor} मॉडल चाहिए; अन्यथा model स्पष्ट रूप से दें। "
+        ),
+        "ar-SA" => format!(
+            "تستخدم الأدوات التي تحتاج نموذجًا نموذج الجلسة الحالي. يجب استخدام نموذج من {vendor} يدعم العملية؛ وإلا فحدّد model صراحةً. "
+        ),
+        "pt-BR" => format!(
+            "Ferramentas que exigem modelo usam o da sessão. É necessário um modelo da {vendor} compatível com a operação; caso contrário, informe model explicitamente. "
+        ),
+        _ => format!(
+            "Model-based tools default to the current session model. Use a model from {vendor} that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. "
+        ),
+    }
+}
+
+fn connection_help(locale: &str) -> &'static str {
+    match locale {
+        "en-US" => "Uses the current session’s provider connection. ",
+        "zh-CN" => "复用当前会话的 provider 连接，无需单独配置。",
+        "zh-TW" => "沿用目前工作階段的 provider 連線，無需另外設定。",
+        "ja-JP" => "現在のセッションのプロバイダー接続を使用します。",
+        "ko-KR" => "현재 세션의 공급자 연결을 사용합니다. ",
+        "fr-FR" => "Utilise la connexion du fournisseur de la session courante. ",
+        "de-DE" => "Verwendet die Provider-Verbindung der aktuellen Sitzung. ",
+        "es-ES" => "Usa la conexión del proveedor de la sesión actual. ",
+        "hi-IN" => "वर्तमान सत्र के प्रदाता कनेक्शन का उपयोग करता है। ",
+        "ar-SA" => "يستخدم اتصال المزوّد للجلسة الحالية. ",
+        "pt-BR" => "Usa a conexão do provedor da sessão atual. ",
+        _ => "Uses the current session provider connection. ",
+    }
+}
+
 fn tool_key(plugin: &str, tool: &str) -> Option<&'static str> {
     match (plugin, tool) {
-        (_, "cloud_image_understanding") => Some("image_understanding"),
-        (_, "cloud_document_understanding") => Some("document_understanding"),
-        (_, "cloud_file_upload") => Some("file_upload"),
-        (_, "cloud_file_status") => Some("file_status"),
-        (_, "cloud_file_delete") => Some("file_delete"),
-        ("claude", "cloud_code_execution") | ("gemini", "cloud_code_execution") => {
-            Some("code_execution")
-        }
-        ("chatgpt", "cloud_web_search") | ("claude", "cloud_web_search") => Some("web_search"),
-        ("claude", "cloud_web_fetch") => Some("web_fetch"),
-        ("claude", "cloud_advisor") => Some("advisor"),
-        ("gemini", "cloud_url_context") => Some("url_context"),
-        ("gemini", "cloud_google_search") => Some("google_search"),
-        ("gemini", "cloud_google_maps") => Some("google_maps"),
-        ("chatgpt", "cloud_file_search") | ("gemini", "cloud_file_search") => Some("file_search"),
-        ("chatgpt", "cloud_code_interpreter") => Some("code_interpreter"),
-        ("chatgpt", "cloud_shell") => Some("shell"),
-        (_, "cloud_image_generation") => Some("image_generation"),
-        (_, "cloud_image_edit") => Some("image_edit"),
+        (_, "image_understanding") => Some("image_understanding"),
+        (_, "document_understanding") => Some("document_understanding"),
+        (_, "file_upload") => Some("file_upload"),
+        (_, "file_status") => Some("file_status"),
+        (_, "file_delete") => Some("file_delete"),
+        ("claude", "code_execution") | ("gemini", "code_execution") => Some("code_execution"),
+        ("chatgpt", "web_search") | ("claude", "web_search") => Some("web_search"),
+        ("claude", "web_fetch") => Some("web_fetch"),
+        ("claude", "advisor") => Some("advisor"),
+        ("gemini", "url_context") => Some("url_context"),
+        ("gemini", "google_search") => Some("google_search"),
+        ("gemini", "google_maps") => Some("google_maps"),
+        ("chatgpt", "file_search") | ("gemini", "file_search") => Some("file_search"),
+        ("chatgpt", "code_interpreter") => Some("code_interpreter"),
+        ("chatgpt", "shell") => Some("shell"),
+        (_, "image_generation") => Some("image_generation"),
+        (_, "image_edit") => Some("image_edit"),
         _ => None,
     }
 }

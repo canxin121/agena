@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::cloud_media::{AnalyzeInput, FileInput, Service, UploadInput};
 use super::official_service::{
-    ProviderUsageKind, configured_model, dedup_strings, endpoint, env_secret, merge_object_options,
-    post_json, provider_output,
+    ProviderUsageKind, configured_model, dedup_strings, endpoint, merge_object_options, post_json,
+    provider_output,
 };
 use agena_plugin_host::sdk::ToolInvokeContext;
 
@@ -33,13 +33,9 @@ pub(crate) struct ClaudeToolsPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct ClaudeToolsConfig {
-    base_url: String,
-    api_key_env: String,
     anthropic_version: String,
-    model: Option<String>,
     max_tokens: u32,
     beta_headers: Vec<String>,
-    timeout_secs: u64,
     cache_ttl: ClaudeCacheTtl,
     stable_system: Option<String>,
 }
@@ -56,13 +52,9 @@ enum ClaudeCacheTtl {
 impl Default for ClaudeToolsConfig {
     fn default() -> Self {
         Self {
-            base_url: "https://api.anthropic.com".to_owned(),
-            api_key_env: "ANTHROPIC_API_KEY".to_owned(),
             anthropic_version: "2023-06-01".to_owned(),
-            model: None,
             max_tokens: 4096,
             beta_headers: Vec::new(),
-            timeout_secs: 180,
             cache_ttl: ClaudeCacheTtl::FiveMinutes,
             stable_system: None,
         }
@@ -85,6 +77,7 @@ struct ClaudeToolInput {
     stable_system: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cache_ttl: Option<ClaudeCacheTtl>,
+    /// Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,16 +95,14 @@ struct ClaudeToolInput {
 }
 
 impl ClaudeToolsPlugin {
-    fn media_service(&self) -> SdkResult<Service<'_>> {
-        Ok(Service {
-            provider: "claude",
-            root: self.workspace_root()?,
-            host: self.host()?,
-            base_url: &self.config()?.base_url,
-            key_env: &self.config()?.api_key_env,
-            timeout_secs: self.config()?.timeout_secs,
-            anthropic_version: self.config()?.anthropic_version.as_str(),
-        })
+    async fn media_service(&self) -> SdkResult<Service<'_>> {
+        Service::new(
+            "claude",
+            self.workspace_root()?,
+            self.host()?,
+            self.host()?.builtin_provider_connection().await?,
+            self.config()?.anthropic_version.as_str(),
+        )
     }
 
     pub(crate) fn new() -> Self {
@@ -137,15 +128,6 @@ impl ClaudeToolsPlugin {
             .get()
             .ok_or_else(|| PluginError::internal("Claude tools plugin invoked before init"))
     }
-    fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
-        configured_model(
-            requested,
-            self.config()?.model.as_deref(),
-            &["CLAUDE_MODEL", "ANTHROPIC_MODEL"],
-            tool,
-        )
-    }
-
     async fn messages_tool(
         &self,
         tool_name: &str,
@@ -163,7 +145,12 @@ impl ClaudeToolsPlugin {
             "claude",
             &serde_json::json!(&input.messages),
         )?;
-        let model = self.model(input.model, format!("claude.cloud_{tool_name}").as_str())?;
+        let connection = self.host()?.builtin_provider_connection().await?;
+        let model = configured_model(
+            input.model,
+            connection.model.as_deref(),
+            &format!("claude.{tool_name}"),
+        )?;
         let declaration = merge_object_options(
             declaration,
             &input.tool_options,
@@ -228,23 +215,26 @@ impl ClaudeToolsPlugin {
             ],
             "request_options",
         )?;
-        let url = endpoint(self.config()?.base_url.as_str(), "v1/messages")?;
-        let mut headers = BTreeMap::from([
-            (
-                "x-api-key".to_owned(),
-                env_secret(self.config()?.api_key_env.as_str(), "Claude/Anthropic")?,
-            ),
-            (
-                "anthropic-version".to_owned(),
-                self.config()?.anthropic_version.clone(),
-            ),
-            ("content-type".to_owned(), "application/json".to_owned()),
-        ]);
+        let url = connection
+            .messages_url
+            .clone()
+            .unwrap_or(endpoint(&connection.base_url, "messages")?);
+        let mut headers = connection.headers.clone();
+        headers
+            .entry("anthropic-version".into())
+            .or_insert(self.config()?.anthropic_version.clone());
         let betas = dedup_strings(
             self.config()?
                 .beta_headers
                 .iter()
                 .cloned()
+                .chain(
+                    connection
+                        .headers
+                        .get("anthropic-beta")
+                        .into_iter()
+                        .flat_map(|value| value.split(',').map(str::to_owned)),
+                )
                 .chain(default_betas.iter().map(|value| value.to_string()))
                 .chain(input.beta_headers),
         );
@@ -256,7 +246,7 @@ impl ClaudeToolsPlugin {
             url.as_str(),
             &headers,
             body,
-            self.config()?.timeout_secs,
+            &connection,
             "claude",
             tool_name,
         )
@@ -270,6 +260,7 @@ impl ClaudeToolsPlugin {
             title,
             ProviderUsageKind::AnthropicMessages,
             response,
+            &connection,
         )
         .await
     }
@@ -279,18 +270,18 @@ impl ClaudeToolsPlugin {
     namespace = "agena",
     name = "claude",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.",
+    summary = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback.",
     translations(
-        locale("zh-CN", summary = "使用 Anthropic 云端搜索、网页抓取、计算和顾问模型。输入会离开本机；不会回退到本地执行。"),
-        locale("zh-TW", summary = "使用 Anthropic 雲端搜尋、網頁擷取、運算與顧問模型。輸入會離開這台電腦；不會改用本機執行。"),
-        locale("ja-JP", summary = "Anthropic のクラウド検索・取得・計算・アドバイザー機能を利用します。入力は端末外へ送信され、ローカル実行には切り替わりません。"),
-        locale("ko-KR", summary = "Anthropic 클라우드 검색, 가져오기, 계산 및 어드바이저 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
-        locale("fr-FR", summary = "Utiliser la recherche, la récupération, le calcul et le modèle conseiller dans le cloud Anthropic. Les données quittent cet ordinateur, sans repli local."),
-        locale("de-DE", summary = "Anthropic-Cloudfunktionen für Suche, Abruf, Berechnungen und Beratung nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
-        locale("es-ES", summary = "Usa las funciones de búsqueda, obtención, cálculo y asesoramiento en la nube de Anthropic. Los datos salen de este equipo y no hay ejecución local alternativa."),
-        locale("hi-IN", summary = "Anthropic क्लाउड की खोज, फ़ेच, गणना और सलाहकार सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
-        locale("ar-SA", summary = "استخدم البحث والجلب والحوسبة ونموذج الاستشارة في سحابة Anthropic. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
-        locale("pt-BR", summary = "Use os recursos de busca, obtenção, computação e consultoria na nuvem da Anthropic. As entradas saem deste computador; não há execução local alternativa.")
+        locale("zh-CN", summary = "需要模型的工具默认使用当前会话模型。当前模型须为支持该操作的 Anthropic Claude 模型，否则必须显式传入 model 指定合适模型。复用当前会话的 provider 连接，无需单独配置。使用 Anthropic 云端搜索、网页抓取、计算和顾问模型。输入会离开本机；不会回退到本地执行。"),
+        locale("zh-TW", summary = "需要模型的工具預設使用目前工作階段模型。目前模型須為支援該操作的 Anthropic Claude 模型，否則必須明確傳入 model 指定合適模型。沿用目前工作階段的 provider 連線，無需另外設定。使用 Anthropic 雲端搜尋、網頁擷取、運算與顧問模型。輸入會離開這台電腦；不會改用本機執行。"),
+        locale("ja-JP", summary = "モデルが必要なツールは現在のセッションモデルを使用します。対象操作に対応する Anthropic Claude モデルが必要です。現在のモデルが適合しない場合は model を明示してください。現在のセッションのプロバイダー接続を使用します。Anthropic のクラウド検索・取得・計算・アドバイザー機能を利用します。入力は端末外へ送信され、ローカル実行には切り替わりません。"),
+        locale("ko-KR", summary = "모델이 필요한 도구는 현재 세션 모델을 기본으로 사용합니다. 작업을 지원하는 Anthropic Claude 모델이 필요하며, 현재 모델이 적합하지 않으면 model을 명시하세요. 현재 세션의 공급자 연결을 사용합니다. Anthropic 클라우드 검색, 가져오기, 계산 및 어드바이저 기능을 사용합니다. 입력은 이 컴퓨터 밖으로 전송되며 로컬 실행으로 대체되지 않습니다."),
+        locale("fr-FR", summary = "Les outils nécessitant un modèle utilisent celui de la session. Choisissez un modèle Anthropic Claude compatible avec l’opération ; sinon, renseignez explicitement model. Utilise la connexion du fournisseur de la session courante. Utiliser la recherche, la récupération, le calcul et le modèle conseiller dans le cloud Anthropic. Les données quittent cet ordinateur, sans repli local."),
+        locale("de-DE", summary = "Modellbasierte Werkzeuge verwenden das aktuelle Sitzungsmodell. Ein für die Aktion geeignetes Anthropic Claude-Modell ist erforderlich; andernfalls model explizit angeben. Verwendet die Provider-Verbindung der aktuellen Sitzung. Anthropic-Cloudfunktionen für Suche, Abruf, Berechnungen und Beratung nutzen. Eingaben verlassen diesen Rechner; eine lokale Ausführung gibt es nicht als Ausweichlösung."),
+        locale("es-ES", summary = "Las herramientas que requieren modelo usan el de la sesión. Se necesita un modelo de Anthropic Claude compatible con la operación; de lo contrario, indica model explícitamente. Usa la conexión del proveedor de la sesión actual. Usa las funciones de búsqueda, obtención, cálculo y asesoramiento en la nube de Anthropic. Los datos salen de este equipo y no hay ejecución local alternativa."),
+        locale("hi-IN", summary = "मॉडल वाले टूल वर्तमान सत्र का मॉडल इस्तेमाल करते हैं। इस कार्य का समर्थन करने वाला Anthropic Claude मॉडल चाहिए; अन्यथा model स्पष्ट रूप से दें। वर्तमान सत्र के प्रदाता कनेक्शन का उपयोग करता है। Anthropic क्लाउड की खोज, फ़ेच, गणना और सलाहकार सुविधाएँ उपयोग करें। इनपुट इस कंप्यूटर से बाहर भेजे जाते हैं; स्थानीय विकल्प पर स्विच नहीं होता।"),
+        locale("ar-SA", summary = "تستخدم الأدوات التي تحتاج نموذجًا نموذج الجلسة الحالي. يجب استخدام نموذج من Anthropic Claude يدعم العملية؛ وإلا فحدّد model صراحةً. يستخدم اتصال المزوّد للجلسة الحالية. استخدم البحث والجلب والحوسبة ونموذج الاستشارة في سحابة Anthropic. تُرسل المدخلات خارج هذا الجهاز ولا يوجد تنفيذ محلي بديل."),
+        locale("pt-BR", summary = "Ferramentas que exigem modelo usam o da sessão. É necessário um modelo da Anthropic Claude compatível com a operação; caso contrário, informe model explicitamente. Usa a conexão do provedor da sessão atual. Use os recursos de busca, obtenção, computação e consultoria na nuvem da Anthropic. As entradas saem deste computador; não há execução local alternativa.")
     ),
     settings = ClaudeToolsConfig,
     settings_default = default
@@ -318,10 +309,171 @@ impl ClaudeToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_image_understanding",
+        name = "models",
+        tags(network, discovery, query),
+        summary = "List or inspect vendor models on the current provider.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.",
+        translations(locale(
+            "zh-CN",
+            summary = "列出或查看当前 provider 上的厂商模型。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get，get 需要 id；query 可传分页参数。模型出现在列表中，不代表网关或账号支持所有工具。"
+        ))
+    )]
+    async fn api_models(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Models,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "files",
+        tags(network, mutate),
+        summary = "Manage remote files and download cloud-generated artifacts.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理远程文件，下载厂商生成的文件。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get、wait、delete、download。OpenAI/Claude 还支持 upload：path 指定本地文件，parameters.purpose 按厂商要求填写。Gemini 使用 file_upload 上传。download 将实际字节保存为附件或新的 output_path；Claude 仅支持下载厂商生成的文件。id 属于当前 provider，列表与管理接口不需要模型。"
+        ))
+    )]
+    async fn api_files(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Files,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "inference",
+        tags(network, mutate),
+        summary = "Run a vendor inference request with official tool combinations and continuation.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.",
+        translations(locale(
+            "zh-CN",
+            summary = "使用厂商原生接口组合工具、推理并继续对话。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。默认 create；prompt 或 parameters 中填写厂商原生 input/messages，可组合托管工具、远程 MCP、工具搜索、编程式调用、云端 Skills 或客户端工具声明。返回的工具调用是数据，不会自动执行本机操作。需要本地执行时，使用正常 Agena 工具及其权限，再显式提交厂商格式的调用结果。顶层 stream=true 可接收限时 SSE，wait_seconds 为 1..50，保留完整事件与 SSE 游标。"
+        ))
+    )]
+    async fn api_inference(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Inference,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "batches",
+        tags(network, mutate),
+        summary = "Create, inspect, cancel and retrieve asynchronous batch jobs.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, cancel; Claude/Gemini also delete, Claude also results. parameters contains official batch input. OpenAI result output_file_id is downloaded with files.download; Gemini output file names use files.download. Claude results are saved as a JSONL attachment. A wait is bounded and never resubmits a job.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建、查询、取消异步批处理并获取结果。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。支持 create、list、get、wait、cancel；Claude/Gemini 支持 delete，Claude 支持 results 并保存 JSONL。parameters 使用官方批处理格式。Claude requests[].params 未指定 model 时沿用顶层 model 或当前模型；OpenAI 输入 JSONL 中的各行模型由文件内容决定。OpenAI output_file_id 和 Gemini 输出文件可用 files.download 下载。wait 有时限且不会重建任务。"
+        ))
+    )]
+    async fn api_batches(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Batches,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "count_tokens",
+        tags(network, mutate),
+        summary = "Count tokens using the vendor token-counting endpoint.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.",
+        translations(locale(
+            "zh-CN",
+            summary = "通过厂商接口计算输入 token 数量。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。默认 create；parameters 使用厂商的 input/messages/contents 格式。只计算输入 token，不生成文本。"
+        ))
+    )]
+    async fn api_count_tokens(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Tokens,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "agents",
+        tags(network, mutate),
+        summary = "Manage vendor-hosted agents, sessions and environments.",
+        help = "Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Anthropic Claude model or explicitly pass model for agent creation. Resource management needs no model. resource=agents (default): create/list/get/update/archive/list_versions/get_version; sessions: create/list/get/wait/update/delete/archive/events/create_event/stream_events; environments: create/list/get/update/delete/archive; deployments: create/list/get/update/archive/run/pause/unpause; deployment_runs: list/get. sessions/resources supports create/list/get/update/delete with id=session and item_id=resource. sessions/threads supports list/get/archive/events/stream_events with id=session and item_id=thread. Event streams retain id/event/retry and accept last_event_id; wait_seconds bounds receipt time. parameters/query/beta_headers follow official schemas. No local tools execute implicitly.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理厂商托管的智能体、会话与环境。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。resource=agents（默认）支持 create/list/get/update/archive/list_versions/get_version；sessions 支持 create/list/get/wait/update/delete/archive/events/create_event/stream_events；environments 支持 create/list/get/update/delete/archive；deployments 支持 create/list/get/update/archive/run/pause/unpause；deployment_runs 支持 list/get。sessions/resources 支持 create/list/get/update/delete，sessions/threads 支持 list/get/archive/events/stream_events；id 为会话，item_id 为资源或 thread。事件流保留 SSE 元信息，可用 last_event_id 续接，wait_seconds 限制等待。官方 beta 特性通过 beta_headers 指定。"
+        ))
+    )]
+    async fn api_agents(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Agents,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "skills",
+        tags(network, mutate),
+        summary = "Create, inspect and manage Claude cloud Skills and versions.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, delete, create_version, list_versions, get_version, delete_version. create/create_version use path or paths for multipart files; include SKILL.md and supporting files. id is skill ID; item_id is version. Run Skills using inference with parameters.container.skills and the official code_execution tool plus required beta_headers; then download generated file IDs with files.download. These are cloud Skills, separate from local Agena skills.",
+        translations(locale(
+            "zh-CN",
+            summary = "管理 Claude 云端 Skills 及其版本。",
+            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。支持 create/list/get/delete/create_version/list_versions/get_version/delete_version。创建使用 path 或 paths 上传 SKILL.md 及依赖文件，相对目录结构会保留。id 为 Skill，item_id 为版本。执行时使用 inference，传 parameters.container.skills、官方 code_execution 工具和需要的 beta_headers；生成的文件用 files.download 下载。这里管理的是 Claude 云端 Skill。"
+        ))
+    )]
+    async fn api_skills(
+        &self,
+        input: super::provider_api::ResourceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        super::provider_api::invoke(
+            self.media_service().await?,
+            super::provider_api::Family::Skills,
+            input,
+        )
+        .await
+    }
+
+    #[tool(
+        name = "image_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit images to Anthropic cloud for understanding; not local file viewing.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Send explicit images to Anthropic cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -370,17 +522,20 @@ impl ClaudeToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "claude.cloud_image_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, true)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "claude.image_understanding",
+        )?;
+        service.analyze(context, input, model, true).await
     }
 
     #[tool(
-        name = "cloud_document_understanding",
+        name = "document_understanding",
         tags(query, network, mutate),
-        summary = "Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.",
         translations(
             locale(
                 "ar-SA",
@@ -429,17 +584,20 @@ impl ClaudeToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &AnalyzeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let model = self.model(input.model.clone(), "claude.cloud_document_understanding")?;
-        self.media_service()?
-            .analyze(context, input, model, false)
-            .await
+        let service = self.media_service().await?;
+        let model = configured_model(
+            input.model.clone(),
+            service.connection.model.as_deref(),
+            "claude.document_understanding",
+        )?;
+        service.analyze(context, input, model, false).await
     }
 
     #[tool(
-        name = "cloud_file_upload",
+        name = "file_upload",
         tags(mutate, network),
         summary = "Upload one permitted local file to Anthropic cloud and return a session-owned handle.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.",
         translations(
             locale(
                 "ar-SA",
@@ -488,14 +646,14 @@ impl ClaudeToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &UploadInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?.upload(context, input).await
+        self.media_service().await?.upload(context, input).await
     }
 
     #[tool(
-        name = "cloud_file_status",
+        name = "file_status",
         tags(query, network, mutate),
         summary = "Query the remote status of an owned Anthropic cloud file, not a local path.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.",
         translations(
             locale(
                 "ar-SA",
@@ -544,16 +702,17 @@ impl ClaudeToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, false)
             .await
     }
 
     #[tool(
-        name = "cloud_file_delete",
+        name = "file_delete",
         tags(mutate, network),
         summary = "Request deletion of an owned file from Anthropic cloud; preserve the local original.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
+        help = "Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.",
         translations(
             locale(
                 "ar-SA",
@@ -602,16 +761,17 @@ impl ClaudeToolsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &FileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.media_service()?
+        self.media_service()
+            .await?
             .file_control(context, input, true)
             .await
     }
     #[tool(
-        name = "cloud_code_execution",
+        name = "code_execution",
         stream = code_execution_stream,
         tags(network, interactive, read_only),
-        summary = "Execute code in Anthropic cloud infrastructure, not on this computer.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Execute code in Anthropic cloud infrastructure, not on this computer.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
     translations(
         locale("ar-SA", summary = "نفّذ تعليمة برمجية في البنية السحابية لـ Anthropic، وليس على هذا الحاسوب."),
         locale("de-DE", summary = "Führt Code in der Anthropic-Cloud-Infrastruktur aus, nicht auf diesem Computer."),
@@ -648,10 +808,10 @@ impl ClaudeToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_web_search",
+        name = "web_search",
         tags(network, interactive, discovery, read_only),
-        summary = "Search the web in Anthropic cloud and return sources; not a local browser operation.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Search the web in Anthropic cloud and return sources; not a local browser operation.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
         translations(
             locale(
                 "ar-SA",
@@ -707,10 +867,10 @@ impl ClaudeToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_web_fetch",
+        name = "web_fetch",
         tags(network, interactive, discovery, read_only),
-        summary = "Fetch and process web content in Anthropic cloud, not through the local browser.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Fetch and process web content in Anthropic cloud, not through the local browser.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
         translations(
             locale(
                 "ar-SA",
@@ -766,11 +926,11 @@ impl ClaudeToolsPlugin {
     }
 
     #[tool(
-        name = "cloud_advisor",
+        name = "advisor",
         stream = advisor_stream,
         tags(network, interactive, read_only),
-        summary = "Consult an advisor model in Anthropic cloud using the supplied context.",
-        help = "Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
+        summary = "Requires an Anthropic Claude model; defaults to the current model or accepts model override. Consult an advisor model in Anthropic cloud using the supplied context.",
+        help = "Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
     translations(
         locale("ar-SA", summary = "استشر نموذجًا استشاريًا في سحابة Anthropic باستخدام السياق المقدَّم."),
         locale("de-DE", summary = "Zieht ein Beratermodell in der Anthropic-Cloud mit dem übergebenen Kontext zu Rate."),

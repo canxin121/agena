@@ -881,10 +881,10 @@ fn tool_result_fragment(
                 });
             }
         }
-        "chatgpt.cloud_image_generation"
-        | "chatgpt.cloud_image_edit"
-        | "gemini.cloud_image_generation"
-        | "gemini.cloud_image_edit" => {
+        "chatgpt.image_generation"
+        | "chatgpt.image_edit"
+        | "gemini.image_generation"
+        | "gemini.image_edit" => {
             if let Some(bytes) = object.get("size_bytes").and_then(value_as_u64) {
                 return Some(format!("image · {}", format_bytes(bytes)));
             }
@@ -892,7 +892,7 @@ fn tool_result_fragment(
                 return Some(normalize_tool_title(mime));
             }
         }
-        "web.fetch" | "web.read" | "web_fetch" | "claude.cloud_web_fetch" => {
+        "web.fetch" | "web.read" | "web_fetch" | "claude.web_fetch" => {
             if let Some(status) = object.get("status").and_then(value_as_u64) {
                 return Some(format!("HTTP {status}"));
             }
@@ -1103,7 +1103,7 @@ fn provider_operation_result_fragment(
     };
 
     match key {
-        "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => count(
+        "chatgpt.file_search" | "gemini.file_search" => count(
             &[
                 "file_results",
                 "file_search_results",
@@ -1126,7 +1126,7 @@ fn provider_operation_result_fragment(
             )
         })
         .or_else(|| count(&["sources"], "files")),
-        "gemini.cloud_google_maps" => count(
+        "gemini.google_maps" => count(
             &[
                 "places",
                 "map_results",
@@ -1138,7 +1138,7 @@ fn provider_operation_result_fragment(
         )
         .or_else(|| count(&["place_count", "result_count", "total"], "places"))
         .or_else(|| count(&["sources"], "places")),
-        "gemini.cloud_url_context" | "claude.cloud_web_fetch" => {
+        "gemini.url_context" | "claude.web_fetch" => {
             if let Some(status) = provider_find_value(
                 &serde_json::Value::Object(object.clone()),
                 &["status", "http_status", "status_code"],
@@ -1154,10 +1154,10 @@ fn provider_operation_result_fragment(
             .or_else(|| count(&["fetched_count", "loaded_count", "page_count"], "pages"))
             .or_else(|| count(&["sources"], "pages"))
         }
-        "chatgpt.cloud_code_interpreter"
-        | "claude.cloud_code_execution"
-        | "gemini.cloud_code_execution" => provider_execution_result_fragment(object),
-        "claude.cloud_advisor" => {
+        "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
+            provider_execution_result_fragment(object)
+        }
+        "claude.advisor" => {
             if provider_find_value(
                 &serde_json::Value::Object(object.clone()),
                 &["error", "errors"],
@@ -1169,11 +1169,11 @@ fn provider_operation_result_fragment(
                 Some("response received".to_owned())
             }
         }
-        "chatgpt.cloud_shell" => provider_execution_result_fragment(object),
-        "chatgpt.cloud_image_generation"
-        | "chatgpt.cloud_image_edit"
-        | "gemini.cloud_image_generation"
-        | "gemini.cloud_image_edit" => count(&["images", "outputs", "image_count"], "images"),
+        "chatgpt.shell" => provider_execution_result_fragment(object),
+        "chatgpt.image_generation"
+        | "chatgpt.image_edit"
+        | "gemini.image_generation"
+        | "gemini.image_edit" => count(&["images", "outputs", "image_count"], "images"),
         _ => None,
     }
 }
@@ -2342,26 +2342,21 @@ fn tool_action_label(tool_name: &str) -> String {
         "web.fetch_many" => "Read pages".to_owned(),
         "web.read" => "Continue reading page".to_owned(),
         "web.query" => "Search crawled pages".to_owned(),
-        "web.search"
-        | "web_search"
-        | "chatgpt.cloud_web_search"
-        | "claude.cloud_web_search"
+        "web.search" | "web_search" | "chatgpt.web_search" | "claude.web_search"
         | "gemini.web_search" => "Search web".to_owned(),
-        "claude.cloud_web_fetch" => "Fetch page".to_owned(),
-        "gemini.cloud_google_search" => "Search web".to_owned(),
-        "gemini.cloud_google_maps" => "Search maps".to_owned(),
-        "gemini.cloud_url_context" => "Read web context".to_owned(),
-        "chatgpt.cloud_code_interpreter"
-        | "claude.cloud_code_execution"
-        | "gemini.cloud_code_execution" => "Run code".to_owned(),
-        "bash" | "local_shell" => "Run process".to_owned(),
-        "chatgpt.cloud_shell" => "Run hosted shell".to_owned(),
-        "claude.cloud_advisor" => "Consult advisor".to_owned(),
-        "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => "Search files".to_owned(),
-        "chatgpt.cloud_image_generation" | "gemini.cloud_image_generation" => {
-            "Generate image".to_owned()
+        "claude.web_fetch" => "Fetch page".to_owned(),
+        "gemini.google_search" => "Search web".to_owned(),
+        "gemini.google_maps" => "Search maps".to_owned(),
+        "gemini.url_context" => "Read web context".to_owned(),
+        "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
+            "Run code".to_owned()
         }
-        "chatgpt.cloud_image_edit" | "gemini.cloud_image_edit" => "Edit image".to_owned(),
+        "bash" | "local_shell" => "Run process".to_owned(),
+        "chatgpt.shell" => "Run hosted shell".to_owned(),
+        "claude.advisor" => "Consult advisor".to_owned(),
+        "chatgpt.file_search" | "gemini.file_search" => "Search files".to_owned(),
+        "chatgpt.image_generation" | "gemini.image_generation" => "Generate image".to_owned(),
+        "chatgpt.image_edit" | "gemini.image_edit" => "Edit image".to_owned(),
         "snapshot.enter" | "enter_snapshot" => "Enter snapshot".to_owned(),
         "snapshot.exit" | "exit_snapshot" => "Exit snapshot".to_owned(),
         "lsp.definition" | "lsp_definition" => "Find definition".to_owned(),

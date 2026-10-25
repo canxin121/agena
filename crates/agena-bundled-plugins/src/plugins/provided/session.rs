@@ -40,6 +40,14 @@ struct ExecutablesInput {
     refresh: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+struct ModelsInput {
+    /// Case-insensitive text filter over model IDs and catalog metadata.
+    #[serde(default)]
+    query: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct GitFacts {
     branch: Option<String>,
@@ -201,6 +209,51 @@ impl SessionPlugin {
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_get_session().await
+    }
+
+    #[tool(
+        name = "models",
+        tags(query, discovery, network),
+        summary = "Discover available models and capabilities on the current session provider.",
+        help = "Queries the active provider's model catalog using its existing connection, with configured-model fallback. Use this before explicitly selecting a model for chatgpt, claude or gemini tools. No API key or endpoint input. query optionally filters model IDs and metadata. Unknown/inferred capabilities do not guarantee hosted API support.",
+        translations(locale(
+            "zh-CN",
+            summary = "查看当前 provider 的可用模型及能力。",
+            help = "复用当前 provider 连接发现模型；远程发现失败时返回已配置模型。调用厂商工具前可先用本工具查找合适的 model。query 可过滤模型及元数据；未知或推断的能力不保证网关支持对应 API。"
+        ))
+    )]
+    async fn models(&self, input: ModelsInput) -> SdkResult<ToolInvokeOutput> {
+        let host = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("session host is not initialized"))?;
+        let mut catalog = host.builtin_provider_models().await?;
+        if let Some(query) = input
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
+            let query = query.to_lowercase();
+            if let Some(models) = catalog
+                .get_mut("models")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                models.retain(|model| model.to_string().to_lowercase().contains(&query));
+            }
+        }
+        let count = catalog
+            .get("models")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        Ok(ToolInvokeOutput::from_parts(
+            "Provider models",
+            format!("{count} models"),
+            serde_json::to_string_pretty(&catalog).map_err(|e| PluginError::internal_error(&e))?,
+            Some(catalog),
+            Default::default(),
+            Vec::new(),
+        ))
     }
 
     #[tool(

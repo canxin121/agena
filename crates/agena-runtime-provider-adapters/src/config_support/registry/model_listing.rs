@@ -9,6 +9,38 @@ use super::{
     provider_endpoint_root, resolve_http_adapter_base_url,
 };
 
+/// Origins that model discovery may contact, for tool permission checks before
+/// the registry performs any network I/O. Configured-only adapters need no grant.
+pub fn provider_model_discovery_targets(
+    provider_id: &str,
+    config: &ResolvedProviderConfig,
+) -> Result<Vec<String>, ConfigError> {
+    let mut targets = std::collections::BTreeSet::new();
+    for adapter in config.adapters.values().filter(|a| {
+        a.enabled
+            && !matches!(
+                a.model_discovery,
+                agena_provider::ProviderModelDiscoveryConfig::ConfiguredOnly
+            )
+    }) {
+        let custom_models_url = match &adapter.definition {
+            ProviderAdapterDefinition::OpenAiResponses(c) => c.options.models_url.as_ref(),
+            ProviderAdapterDefinition::OpenAiChatCompletions(c) => c.options.models_url.as_ref(),
+            ProviderAdapterDefinition::Anthropic(c) => c.options.models_url.as_ref(),
+            _ => None,
+        };
+        if let Some(url) = custom_models_url {
+            targets.insert(url.clone());
+        }
+        if let Some(base) =
+            resolved_adapter_models_base_url(provider_id, &config.auth, &adapter.definition)?
+        {
+            targets.insert(base);
+        }
+    }
+    Ok(targets.into_iter().collect())
+}
+
 pub async fn list_provider_adapter_models(
     provider_id: &str,
     auth: &ProviderAuthConfig,

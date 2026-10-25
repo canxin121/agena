@@ -20,7 +20,7 @@
         "image-generate",
         "image-edit"
       ],
-      "content_sha256": "8a7e8fa650ac34a9cda78a2b6338994fa827c2040000c1f6efdbd1054744da66",
+      "content_sha256": "515c543adf21cc0762a062985a9133847bd5f7168a50e487feb9273c2bf5506f",
       "name": "imagegen"
     },
     {
@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 135,
+    "execution_tools": 178,
     "gateway_tools": 3,
     "plugins": 22,
-    "tools": 138
+    "tools": 181
   },
   "plugins": [
     {
@@ -174,11 +174,46 @@
       "id": "agena.chatgpt",
       "tools": [
         {
-          "canonical_name": "agena.chatgpt.cloud_code_interpreter",
+          "canonical_name": "agena.chatgpt.agents",
           "conditional": null,
-          "definition_identity": "148ec3f6d4ebfff60db1badda34ea602b32a112c6c0e53c24acbbcec30dc69cb",
+          "definition_identity": "13e9737116e5206e06355e3a7c0aec5f65559e34846f1345ab22861dd32a3c00",
           "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.audio_understanding",
+          "conditional": null,
+          "definition_identity": "1901e0f7f5c43395c361c23ed4d41f734808c318158a39ff70087eca3dd35943",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.batches",
+          "conditional": null,
+          "definition_identity": "3c254fd84ac2bd4c6c8377a0103e809a4473b7c67291f6bc038d42c502dfe7cb",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.code_interpreter",
+          "conditional": null,
+          "definition_identity": "8036f63d5931b42b0473f17845a46372bf72a7b0c9f9ff182c60abdec8ba49d2",
+          "gateway": false,
+          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -187,11 +222,35 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_document_understanding",
+          "canonical_name": "agena.chatgpt.containers",
           "conditional": null,
-          "definition_identity": "a3288ca117f16807a8106fdefc210f96bb65802c4670edbf0074b0ec55243bef",
+          "definition_identity": "b899c0e908b2ab8327f69b33549317ee75a34f6420af7253a330190e924901df",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.count_tokens",
+          "conditional": null,
+          "definition_identity": "36a439352c9a006a53156643590c13d6f0e83c2a3a60ab111ef598efa10a762d",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.document_understanding",
+          "conditional": null,
+          "definition_identity": "00488ddda40a0b74743190c7b2862d4ce83b6bf1a066351dbbaf564c708b0a6d",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -200,9 +259,21 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_file_delete",
+          "canonical_name": "agena.chatgpt.embeddings",
           "conditional": null,
-          "definition_identity": "06ac70532bf3265e6025894c7e8c11ec8d279aaa673fda46c36b9b84139ba7e2",
+          "definition_identity": "94da4f6e2bf406158deca897d67a960ef7e90196e4727ffda82f59a3aa0df587",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.file_delete",
+          "conditional": null,
+          "definition_identity": "2bc1175cc0ec4cbc83dbe5e1a94d13b62b3238da20dc775059decfb1e7e944ff",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -212,11 +283,11 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_file_search",
+          "canonical_name": "agena.chatgpt.file_search",
           "conditional": null,
-          "definition_identity": "550ce235417490a032ca8fdcc31a626969e1ebc7d0267ce3ee0d7c73e17d6266",
+          "definition_identity": "07ba45fad8711fa35acbc67990e08359348c2659cae9e62194ab8e4abc57fc28",
           "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -226,9 +297,9 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_file_status",
+          "canonical_name": "agena.chatgpt.file_status",
           "conditional": null,
-          "definition_identity": "b0aeddbeae78478510ad83ca011a58456682ddeacb0fccd748c07ae2f2d6a39e",
+          "definition_identity": "e3ba3b7b4781b66dcdeb92df0986c0f72844d54199b3d7f637852503191b9cbe",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -239,9 +310,9 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_file_upload",
+          "canonical_name": "agena.chatgpt.file_upload",
           "conditional": null,
-          "definition_identity": "f27dba432aa3c30ffcf88f3d67e0066f7679a8299ca1531d594191fd6306b586",
+          "definition_identity": "da8f7f777606914d71b71be140672330e7577c7cd25c9ae6e72b587259001a4c",
           "gateway": false,
           "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -251,22 +322,46 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_image_edit",
+          "canonical_name": "agena.chatgpt.files",
           "conditional": null,
-          "definition_identity": "d539d96d5ffe6320cbac2742638fd08963be8110c9af256749a11e862d382084",
+          "definition_identity": "3067676cfccea0d29c1d1f4c97b83754ea5ae4c482ed16b26bf736878eca37d0",
           "gateway": false,
-          "input_schema_sha256": "8243bf48504a3ef3f425d2c04f186f154029e516fee2df15d436de2f23cc147f",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.image_edit",
+          "conditional": null,
+          "definition_identity": "3e10d2ffdae11356d3bafdfddaed45471323049b0fd741418f42398c1c863fed",
+          "gateway": false,
+          "input_schema_sha256": "4266280707e5f9d8cac3e78a4ef1ebf2816f323308e6d14e0554a2b0cb8df425",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_image_generation",
+          "canonical_name": "agena.chatgpt.image_generate",
           "conditional": null,
-          "definition_identity": "6561c72b3cf9755051eae89bdfe9c0f63ba47a4a75e6e17e8f8b6b6545b75527",
+          "definition_identity": "15bb29aa89d6d57ab2da2458205e3a96b7106e8868b5ad57e7975bd1e9af683b",
           "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.image_generation",
+          "conditional": null,
+          "definition_identity": "3eb61a6f62e46930a099f839e40ce6bfbd13a12dac856eeb5f83c34d2889376c",
+          "gateway": false,
+          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -275,11 +370,11 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_image_understanding",
+          "canonical_name": "agena.chatgpt.image_understanding",
           "conditional": null,
-          "definition_identity": "45c362a78c742180f8a8b163ffb3bb6d85ddda87544bc6c79137e4880b15bc4e",
+          "definition_identity": "68c63c53111f1e11deff58628ad3a36a4013119620dd34c80263dd05c5869901",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -288,11 +383,96 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_shell",
+          "canonical_name": "agena.chatgpt.inference",
           "conditional": null,
-          "definition_identity": "8735cf5b3e01744c5810c1e1b20abc1063a7b008439543378d18e642a94764d6",
+          "definition_identity": "1e32c1fb03c961ccbca460ab4753ecbcd2c04c22141a95ec104318d50ed98dc1",
           "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.knowledge",
+          "conditional": null,
+          "definition_identity": "1c9efa50c5865cdf10eda7490886f8582cdb1cdf2b9844be5ef9d01b60092b38",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.models",
+          "conditional": null,
+          "definition_identity": "269fd4492763106851625d78421068a0397e988b59b4906f25e6c3179bf4aade",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "discovery",
+            "query"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.moderation",
+          "conditional": null,
+          "definition_identity": "2d77af8e3c8d535e02b5390840b81d7277195742c6501926486d13dfcc704ff7",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.platform",
+          "conditional": null,
+          "definition_identity": "069605d83e4458f19946b813e126cb1010c651f0422063fc9e3379b8dd38419c",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.realtime",
+          "conditional": null,
+          "definition_identity": "c3677d8d3ea1c5e640f145874a1f61cb922fae3b0dd28cfe4eb05036fe348498",
+          "gateway": false,
+          "input_schema_sha256": "a2c272a9e20033624439c58a260d0a8ce2544507ca748491927645c7f0f8323e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.responses",
+          "conditional": null,
+          "definition_identity": "1426b944118dccf69ba6ba23db34d90cc0c4346531cab7955d7d22b308f5484b",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.shell",
+          "conditional": null,
+          "definition_identity": "1512868d8cc88f2159d24b746ce7e55cc8f9dc0e3dcc4eda93162018e1a2c767",
+          "gateway": false,
+          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -301,11 +481,35 @@
           ]
         },
         {
-          "canonical_name": "agena.chatgpt.cloud_web_search",
+          "canonical_name": "agena.chatgpt.speech",
           "conditional": null,
-          "definition_identity": "c2a78490e9839fd815dfa73eaaa6da14c76fb596b7fb6d1b21aaef77499fb693",
+          "definition_identity": "e534bbf4fa93719e19bdebb9d42b2847565a8c7a354ed17c7272ab47977c5aeb",
           "gateway": false,
-          "input_schema_sha256": "bd558acd9740feacfa4833c615b85f9afd3d79b38f8ae36ecf8984221da72004",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.transcription",
+          "conditional": null,
+          "definition_identity": "794c0cd50a75a253ed642f1d23cb91812384d113ee7b86a2643bb47b591ada2b",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.web_search",
+          "conditional": null,
+          "definition_identity": "a0d79583d4f0a2b4a1bb7ed5576258725a88206a12cf7547246532c7bb5a4cc6",
+          "gateway": false,
+          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -327,11 +531,11 @@
       "id": "agena.claude",
       "tools": [
         {
-          "canonical_name": "agena.claude.cloud_advisor",
+          "canonical_name": "agena.claude.advisor",
           "conditional": null,
-          "definition_identity": "b39530d24f0436b994c9fa8c497589cc5b5dba2fe4366f9a4dccba4d506d2352",
+          "definition_identity": "a3c6d515e3ce6f368381a10cd2d4e5e01d9f36c01277e7b56161ff63e4cd366a",
           "gateway": false,
-          "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
+          "input_schema_sha256": "3ff9bd7e962cc930b4d03c8c4668dfbc2d33b17abef4f8de61821cb881fd6534",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -340,11 +544,35 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_code_execution",
+          "canonical_name": "agena.claude.agents",
           "conditional": null,
-          "definition_identity": "aa33bad4f775ba039bed39bbd24df68dc844b2d7917cf29b6ba0399462fd0225",
+          "definition_identity": "76e5d79611a956c0e78072598bade9b40b3461e6c07f6a7341c3ffa582dd4481",
           "gateway": false,
-          "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.batches",
+          "conditional": null,
+          "definition_identity": "5bf0da643514ccaa06ced2834dea239622c8473b1e315c865c0a4b157a0a3a52",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.code_execution",
+          "conditional": null,
+          "definition_identity": "46087ab08d41c7242b865b0c0288d57dc9d9083d1babed14cc772599e75722bb",
+          "gateway": false,
+          "input_schema_sha256": "3ff9bd7e962cc930b4d03c8c4668dfbc2d33b17abef4f8de61821cb881fd6534",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -353,11 +581,23 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_document_understanding",
+          "canonical_name": "agena.claude.count_tokens",
           "conditional": null,
-          "definition_identity": "61e14414ea16f46d07ced95be7da475d87160fc3f7b9ac98d1f950b63315145e",
+          "definition_identity": "ce5906c37739f428525cfb7d33ffda2f77707ffc3085bc76b1715a42e2162656",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.document_understanding",
+          "conditional": null,
+          "definition_identity": "756a8d7d537bf38968f25db56b4ce636474f16542c9b5deb1deac68edc2eb191",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -366,9 +606,9 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_file_delete",
+          "canonical_name": "agena.claude.file_delete",
           "conditional": null,
-          "definition_identity": "ee86fd4466340e411b805f92715b16136f7d11e9c55e528fd8f1aefe8ef77638",
+          "definition_identity": "104949a382eded5fc0cfefd8e90844eb65e316bf6e2621ec386e2e814b2d9b8c",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -378,9 +618,9 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_file_status",
+          "canonical_name": "agena.claude.file_status",
           "conditional": null,
-          "definition_identity": "cadd09e59d5d40c51caeb01bb56ef6e838c4ee47866c17f58e660df0a7c0745e",
+          "definition_identity": "1710cde3ad7621f2af3f0c566174ce3a47bca7cf8cd73361394179e0f7f015f3",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -391,9 +631,9 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_file_upload",
+          "canonical_name": "agena.claude.file_upload",
           "conditional": null,
-          "definition_identity": "91d511838b0c7fca7e71ceb0a0309cbd91e8186322f2b4fd685cd62a75b0bb99",
+          "definition_identity": "84dc54c26f412607ba0056c724d456bbb7cb9e003d46d02ce8c46df19378a1e3",
           "gateway": false,
           "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -403,11 +643,23 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_image_understanding",
+          "canonical_name": "agena.claude.files",
           "conditional": null,
-          "definition_identity": "c72117c4fdf2cc79b22d6b5736a4f6874e0590cfbfa9b4417be598900dffe991",
+          "definition_identity": "a6f288fa6bd893f97a9a86180f7bebfa40b4a8cd368e17670919384d6160ff7e",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.image_understanding",
+          "conditional": null,
+          "definition_identity": "854abf16ab3e85f4207a9ef3d97800207a58fd14853ae27c93ef65fcb09da2e3",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -416,11 +668,48 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_web_fetch",
+          "canonical_name": "agena.claude.inference",
           "conditional": null,
-          "definition_identity": "84839398c96f5ee3f5626104a16f5a9c380a1ba22062d54820769662a463c6b1",
+          "definition_identity": "f69ca3ee1ed64effa67acc01dd309a91f431fa9d252f663fdc2f475b49c3da31",
           "gateway": false,
-          "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.models",
+          "conditional": null,
+          "definition_identity": "2c91e452b916b9981a188dae0e657ab6b5b9f46bb44d1f21b861c8c0b08e6326",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "discovery",
+            "query"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.skills",
+          "conditional": null,
+          "definition_identity": "12447bf1c36d633f8cb64346d38675d674837521ffd1056068d1e90647f3ea4d",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.claude.web_fetch",
+          "conditional": null,
+          "definition_identity": "ad2586a0ea1f753994f36b22e223e4c96fcbc00921c7e22c0b24bbd570648888",
+          "gateway": false,
+          "input_schema_sha256": "3ff9bd7e962cc930b4d03c8c4668dfbc2d33b17abef4f8de61821cb881fd6534",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -430,11 +719,11 @@
           ]
         },
         {
-          "canonical_name": "agena.claude.cloud_web_search",
+          "canonical_name": "agena.claude.web_search",
           "conditional": null,
-          "definition_identity": "edfc11a6b932a9995ca83718a55bcf3c403d96e54a48dc9bebb9f4d72b24ec31",
+          "definition_identity": "c439012ec68413146d165b7fb95c68ae679c0c8e7c35612c46f50e7889d0206d",
           "gateway": false,
-          "input_schema_sha256": "5b07e4498679161c556b18dd998d628de6530a88e632946e580628cde3f52348",
+          "input_schema_sha256": "3ff9bd7e962cc930b4d03c8c4668dfbc2d33b17abef4f8de61821cb881fd6534",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -449,6 +738,7 @@
     {
       "conditional": null,
       "hooks": [
+        "init",
         "tool.invoke"
       ],
       "id": "agena.code",
@@ -508,9 +798,9 @@
         {
           "canonical_name": "agena.commands.get",
           "conditional": null,
-          "definition_identity": "66b1538f1eb6fa178fd0d4c1ac397f54881d0aff88290f96e33bd20cbda909b6",
+          "definition_identity": "21a2b6b0d92d53c4be1c76febdeef62d37aefedcfccea227d6f980b733cfbb21",
           "gateway": false,
-          "input_schema_sha256": "0a9e22c5a02990dd9837cac05f086478c9fc877f862fe5fb6a758448d0d1cc0e",
+          "input_schema_sha256": "10e05c711c0fbd0f1d8c8c9af7219d1fac86435d13f16883426336f255b87f7d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -521,7 +811,7 @@
         {
           "canonical_name": "agena.commands.install",
           "conditional": null,
-          "definition_identity": "51c8c91673cb1ea88b13a21709b8cb5515f13cc2e2999edbc348cb09a0c6a778",
+          "definition_identity": "d4d1eff8f3f937f08781704454db10eaee47d3cb484681ad158cfba41903040d",
           "gateway": false,
           "input_schema_sha256": "f6e813fe72ff1110c7518875762a2a46b4542a2a4f58fa01208408b9cf9dae69",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -533,7 +823,7 @@
         {
           "canonical_name": "agena.commands.list",
           "conditional": null,
-          "definition_identity": "665e182c201ac901cd1b820bbf9bb26e75b6cde0129b3fbca78449f21068fe72",
+          "definition_identity": "7e30ca3465fb6b30b301c36c6c21c9ce6ca2b363089863bcf1973908d3cc2e26",
           "gateway": false,
           "input_schema_sha256": "661e091bb3fdb5fb9658ba150f40f8316121519bac81ce918e47751d06992aa4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -572,7 +862,7 @@
         {
           "canonical_name": "agena.commands.remove",
           "conditional": null,
-          "definition_identity": "73a4a3ee359da2ca30454953c464f6f4e511099b8a15b7379f6293a3bc5a2f0a",
+          "definition_identity": "7eeac41a06c8d68c9c10131d2fafd2200ffa463a2a7e4a6a808bd206467bbfa8",
           "gateway": false,
           "input_schema_sha256": "6caef358952d818bb3a551d906d76f3130b09bfd9e9a5f6bf9c4073e57506986",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -707,6 +997,7 @@
     {
       "conditional": null,
       "hooks": [
+        "init",
         "tool.invoke",
         "tool.invoke.stream"
       ],
@@ -854,11 +1145,58 @@
       "id": "agena.gemini",
       "tools": [
         {
-          "canonical_name": "agena.gemini.cloud_code_execution",
+          "canonical_name": "agena.gemini.agents",
           "conditional": null,
-          "definition_identity": "84b29b5c17ba1bdc6b7294020df11bcbdb7ff49ea1dce60bfdd1da848115e3f0",
+          "definition_identity": "239ed32b0cad972d4cff2f41022c1c7b92f16e25f5acb5ce4999dc930ec4ba8d",
           "gateway": false,
-          "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.audio_understanding",
+          "conditional": null,
+          "definition_identity": "7afc0ea730f93ef113f2fff271a0ac2d7b09bd89ee606b0f5390d445b03a2893",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.batches",
+          "conditional": null,
+          "definition_identity": "5d4f7f6249d373d84ec9e76a7a1ab87f0b935d48127c4ff6e65bb59c0c74d1a2",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.caches",
+          "conditional": null,
+          "definition_identity": "718d39e5734cb9cd9ffcef564c5b47284c462f22d3e98ca7f85e942831781728",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.code_execution",
+          "conditional": null,
+          "definition_identity": "ae9c3ca9b176d3c1497b7eb05d45eeee51d08b5ade940ad9518bf6ab426b04bd",
+          "gateway": false,
+          "input_schema_sha256": "f3d2e8deacdd3657ec683650309bed0f45e5577415b907c153b48bb643b75ede",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -867,11 +1205,23 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_document_understanding",
+          "canonical_name": "agena.gemini.count_tokens",
           "conditional": null,
-          "definition_identity": "538967139cc2baad74037a71dee9b8ba3c3625f59348b2a3c14344f6cbbb8afd",
+          "definition_identity": "ce1453522d594eff9f5e4000e359e92165ac45aae23202f5e90abdc0672915ef",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.document_understanding",
+          "conditional": null,
+          "definition_identity": "551cba884f0274f86018770b50103a0c7962d5c206cc7308eb4c25748747a644",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -880,9 +1230,21 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_file_delete",
+          "canonical_name": "agena.gemini.embeddings",
           "conditional": null,
-          "definition_identity": "3e0c552063a83e9e5d676f7cda85eab047b5f3b95d4bd52e056918e11c5044ae",
+          "definition_identity": "133631f6e700d601324ab35c9ac86920e1fc106fe4b406f1e8c08084a056fa96",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.file_delete",
+          "conditional": null,
+          "definition_identity": "38ebe1376e761483d66100cb77755fdf69de47353c248cfd627785d385e0344c",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -892,11 +1254,11 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_file_search",
+          "canonical_name": "agena.gemini.file_search",
           "conditional": null,
-          "definition_identity": "2401b22029808edb7434b939c185f27d6666b0d81bfc8201e1fad9e8f3f3630c",
+          "definition_identity": "384d74343852891b8aa4622c7437bb67f76100e0c46f72e87b2ff12c386d99b2",
           "gateway": false,
-          "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
+          "input_schema_sha256": "f3d2e8deacdd3657ec683650309bed0f45e5577415b907c153b48bb643b75ede",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -906,9 +1268,9 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_file_status",
+          "canonical_name": "agena.gemini.file_status",
           "conditional": null,
-          "definition_identity": "f2cbae734cbc4b87490b813d6682e6c8d644ff05aa368ad00288807c8fe6d360",
+          "definition_identity": "7087bc76f2dc4f324c3919a886474ec8b0454e9582f0ec5b826458d372bb7059",
           "gateway": false,
           "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -919,9 +1281,9 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_file_upload",
+          "canonical_name": "agena.gemini.file_upload",
           "conditional": null,
-          "definition_identity": "4317e00cd499d82783f71984b9b6fc9fb70e447ca88b375671be07fba8ff58f4",
+          "definition_identity": "357ccf10c429fa65881ba11666c765ff1596cd89873d03802958460349b7e530",
           "gateway": false,
           "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
@@ -931,11 +1293,23 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_google_maps",
+          "canonical_name": "agena.gemini.files",
           "conditional": null,
-          "definition_identity": "4d0f84700a4f89c4955ad933574e3274969b0354187a88cbfa7436c16c86a34e",
+          "definition_identity": "9f17ccc205996cdd6eedb4ec29f7880e8899aadb182846fc5b9767bde4caaaa0",
           "gateway": false,
-          "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.google_maps",
+          "conditional": null,
+          "definition_identity": "477c08cb84abe7bf717ead5990a4d070382a11a7e1e1a723dc76d5e9a0da3aa6",
+          "gateway": false,
+          "input_schema_sha256": "f3d2e8deacdd3657ec683650309bed0f45e5577415b907c153b48bb643b75ede",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -945,11 +1319,11 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_google_search",
+          "canonical_name": "agena.gemini.google_search",
           "conditional": null,
-          "definition_identity": "31856608db4ab0fa56ba73f71a8744fda1246d0ba4f13eecf881d931acbca1a9",
+          "definition_identity": "41d904476ad488f508cf7e8adaabed968eef0d4e768ad9f69547f0c71ea7a1ce",
           "gateway": false,
-          "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
+          "input_schema_sha256": "f3d2e8deacdd3657ec683650309bed0f45e5577415b907c153b48bb643b75ede",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -959,22 +1333,22 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_image_edit",
+          "canonical_name": "agena.gemini.image_edit",
           "conditional": null,
-          "definition_identity": "225cf5c96c7f02caa67e4cefddf6fa2355d801295da0b8d42d92acc053d667e5",
+          "definition_identity": "c6ae0fcb88a0637f7ec03687d3b6e6c543114b73a485f4a068009ab9689c31ca",
           "gateway": false,
-          "input_schema_sha256": "fec6470323277fd28c497dbf6162eee6e5dd9c4a2f47462b7c4323fd0f73c9bc",
+          "input_schema_sha256": "36073a4919500c03c3f8fc42a671ff011babb70fe2e8feb5afd783d23517902e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_image_generation",
+          "canonical_name": "agena.gemini.image_generation",
           "conditional": null,
-          "definition_identity": "7981b7fd1a10e59b303d20a4319411db1daf46e41e8cc83764657cdc29b67c2d",
+          "definition_identity": "9c664e26c98dd1690730b395a98e4734cf71a07ff84c41c4b07061fecf536f16",
           "gateway": false,
-          "input_schema_sha256": "31e09ca2bc4e9357f22ead7c96fa074aeee01b81299d716e867717c7659334bb",
+          "input_schema_sha256": "c26cb9649543c0114365d6c4f7e752a06364fe51bb536f569555bb49402355a1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -983,11 +1357,11 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_image_understanding",
+          "canonical_name": "agena.gemini.image_understanding",
           "conditional": null,
-          "definition_identity": "7b2f862293f05687d0e5202cb796f1f6ab00e9622ae97959997c61aa12b32403",
+          "definition_identity": "ba39a85905485425de3839bdd74cec8f0ac2b804c1b53fec09920e54ee671bab",
           "gateway": false,
-          "input_schema_sha256": "7ea6aae81dfd7b1a4e44645943498d4ead0d507be175304d473b916558deee36",
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -996,17 +1370,149 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.cloud_url_context",
+          "canonical_name": "agena.gemini.inference",
           "conditional": null,
-          "definition_identity": "2c6406ee7cc5a05815fcae3c847a81fdc81cf3c52a33fa24ad7578341665d8d0",
+          "definition_identity": "b8345878c9080b5fc3b768bd2a456a9c65ef6dd2e852adc6a10c747322de27ac",
           "gateway": false,
-          "input_schema_sha256": "899641714805819985f6d1b96dd177dd09a8991949cea221f2299098781b45b3",
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.interactions",
+          "conditional": null,
+          "definition_identity": "ff60570b97d745a1b222781c1a7b6ca43d0c1e3f141ff247c8f6c88fa7867802",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.knowledge",
+          "conditional": null,
+          "definition_identity": "307afa6fad7a9b05388d873284ab926446096b2103bbd721820c65d6ec5f3bb4",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.models",
+          "conditional": null,
+          "definition_identity": "9e3e734860ebea4a80e3a80dc57dc5e970f6efefc20823e808f0635b6178abdd",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "discovery",
+            "query"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.music_generation",
+          "conditional": null,
+          "definition_identity": "1ad1a7cc5fb51d6182e141ede2914d6f639fa0e406fe7c05f8e241e0b91d43e7",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.operations",
+          "conditional": null,
+          "definition_identity": "1a940fb1096167ff97de2bc54661c8553701732cc3960113b6e59a400dab03c6",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.realtime",
+          "conditional": null,
+          "definition_identity": "6dec0c40a114bf201c1c025eea26aeb4882ab915803c3f1874769aa56acddf83",
+          "gateway": false,
+          "input_schema_sha256": "a2c272a9e20033624439c58a260d0a8ce2544507ca748491927645c7f0f8323e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.speech",
+          "conditional": null,
+          "definition_identity": "2bf83bbed10ce5ad0a7db5a56c3fccbe73470c56d691e2093c723e7a251a56ed",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.url_context",
+          "conditional": null,
+          "definition_identity": "4007181713037e1dae8bc78a413d4b1042a5f76cee653bdc3bc62b370861d182",
+          "gateway": false,
+          "input_schema_sha256": "f3d2e8deacdd3657ec683650309bed0f45e5577415b907c153b48bb643b75ede",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
             "interactive",
             "discovery",
             "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.video_edit",
+          "conditional": null,
+          "definition_identity": "b26ac69f46e8daa3157c2bf6e4822873affe60776429ba143ae37c0187e67f8a",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.video_generation",
+          "conditional": null,
+          "definition_identity": "353a5296b19933dc606065ae2bc732832c229bf1bcfefb04ed96121cd1d18368",
+          "gateway": false,
+          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.gemini.video_understanding",
+          "conditional": null,
+          "definition_identity": "843c7f17347516e797fe99c43d3f89ee4a3df7a78b45d6d3f73572efd5e0035e",
+          "gateway": false,
+          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network"
           ]
         }
       ],
@@ -1374,6 +1880,7 @@
     {
       "conditional": null,
       "hooks": [
+        "init",
         "tool.invoke"
       ],
       "id": "agena.notebook",
@@ -1564,6 +2071,19 @@
             "query",
             "discovery",
             "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.session.models",
+          "conditional": null,
+          "definition_identity": "6a98e7db92658a3c9392682c51890861fddf36b3e310e1398bd36cee986c89f1",
+          "gateway": false,
+          "input_schema_sha256": "1ae41e9621f94da4adb5c410058ed18a2b4099a82afdf68fa2e67d765324c46c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "network"
           ]
         },
         {

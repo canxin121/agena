@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 138 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 181 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -15,14 +15,14 @@ This document is deterministically generated from the real `agena-bundled-plugin
 ## Table of Contents
 
 - [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
-- [`agena.chatgpt`](#agenachatgpt) — OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (11 tools)
-- [`agena.claude`](#agenaclaude) — Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback. (9 tools)
+- [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (28 tools)
+- [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (16 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
 - [`agena.content`](#agenacontent) — Read canonical resource-backed text and tool output with resumable byte-bounded pages. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
-- [`agena.gemini`](#agenagemini) — Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback. (12 tools)
+- [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (30 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
@@ -31,7 +31,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
-- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
+- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (7 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (3 tools)
@@ -338,115 +338,260 @@ Agent communication and delegation.
 
 ## agena.chatgpt
 
-**Version** `0.1.0` · **Tools** 11
+**Version** `0.1.0` · **Tools** 28
 
-OpenAI cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
+Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback.
 
-### cloud_code_interpreter
+### agents
 
-`agena.chatgpt.cloud_code_interpreter` · **Summary**: Run Python in an OpenAI cloud container, not the Agena local workspace.
+`agena.chatgpt.agents` · **Summary**: Manage vendor-hosted agents, sessions and environments.
 
-**Tags**: `network` `interactive` `read_only`
+**Tags**: `network` `mutate`
 
-**Runtime**: streaming `streaming`
+**Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model for agent creation. Resource management needs no model. resource=agents: create/list/get/update/delete; sessions (default): create/list/get/wait/update/delete/events/create_event/items; environments: create/list/get/add_file/list_files. Additional resources: sessions/artifacts list/get/download/delete; sessions/turns list/get/items; sessions/subagents list/get/items; sessions/subagents/turns list/get/items; sessions/traces list. Nested resources use id=session, item_id=artifact/turn/subagent; subagent turns also use sub_item_id=turn. download saves actual artifact bytes. Event streams are bounded by wait_seconds and accept last_event_id for resumption. parameters/query use official schemas. Hosted agents do not automatically receive local files or tools.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `include` | `array<string>` | — | — | Optional Responses include selectors. |
-| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
-| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
-| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
-| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
-| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
-| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
       "items": {
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000007"
+      "x-agena-order": "000015"
     },
-    "input_items": {
-      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+    "expected_sha256": {
+      "default": null,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000012"
     },
-    "previous_response_id": {
-      "description": "Responses API continuation token from an earlier call.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
     },
-    "tool_options": {
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
       "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
       "properties": {},
       "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
       "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
     }
   },
   "type": "object"
 }
 ```
 
-### cloud_document_understanding
+### audio_understanding
 
-`agena.chatgpt.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.
+`agena.chatgpt.audio_understanding` · **Summary**: Analyze audio with a selected OpenAI model.
 
-**Tags**: `query` `network` `mutate`
+**Tags**: `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use an OpenAI model supporting audio input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -454,7 +599,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -540,6 +685,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -561,57 +707,263 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_delete
+### batches
 
-`agena.chatgpt.cloud_file_delete` · **Summary**: Request deletion of an owned file from OpenAI cloud; preserve the local original.
+`agena.chatgpt.batches` · **Summary**: Create, inspect, cancel and retrieve asynchronous batch jobs.
 
-**Tags**: `mutate` `network`
+**Tags**: `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, cancel; Claude/Gemini also delete, Claude also results. parameters contains official batch input. OpenAI result output_file_id is downloaded with files.download; Gemini output file names use files.download. Claude results are saved as a JSONL attachment. A wait is bounded and never resubmits a job.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `handle` | `string` | ✓ | — |  |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
 
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "handle": {
-      "minLength": 1,
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
       "type": "string",
       "x-agena-order": "000000"
     }
   },
-  "required": [
-    "handle"
-  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
   "type": "object"
 }
 ```
 
-### cloud_file_search
+### code_interpreter
 
-`agena.chatgpt.cloud_file_search` · **Summary**: Search configured OpenAI cloud file stores, not files on this computer.
+`agena.chatgpt.code_interpreter` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Run Python in an OpenAI cloud container, not the Agena local workspace.
 
-**Tags**: `network` `interactive` `discovery` `read_only`
+**Tags**: `network` `interactive` `read_only`
 
-**Runtime**: streaming `buffered`
+**Runtime**: streaming `streaming`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
 | `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
 | `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
@@ -638,7 +990,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -690,16 +1042,861 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_status
+### containers
 
-`agena.chatgpt.cloud_file_status` · **Summary**: Query the remote status of an owned OpenAI cloud file, not a local path.
+`agena.chatgpt.containers` · **Summary**: Manage OpenAI cloud containers and their input/output files.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, delete, upload/add_file, list_files, get_file, delete_file, download_file. id is container ID; item_id is container-file ID. Add an existing file with parameters.file_id, or upload path. download_file saves actual bytes locally. Container execution is remote.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### count_tokens
+
+`agena.chatgpt.count_tokens` · **Summary**: Count tokens using the vendor token-counting endpoint.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### document_understanding
+
+`agena.chatgpt.document_understanding` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Send explicit PDF/text documents to OpenAI cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
+| `prompt` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### embeddings
+
+`agena.chatgpt.embeddings` · **Summary**: Create OpenAI embeddings for supplied inputs.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. parameters.input contains text or token inputs; parameters supports dimensions and encoding_format. Requires an embedding model. Large vectors are saved in the response receipt.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### file_delete
+
+`agena.chatgpt.file_delete` · **Summary**: Request deletion of an owned file from OpenAI cloud; preserve the local original.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -724,16 +1921,145 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_upload
+### file_search
 
-`agena.chatgpt.cloud_file_upload` · **Summary**: Upload one permitted local file to OpenAI cloud and return a session-owned handle.
+`agena.chatgpt.file_search` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Search configured OpenAI cloud file stores, not files on this computer.
+
+**Tags**: `network` `interactive` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `include` | `array<string>` | — | — | Optional Responses include selectors. |
+| `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
+| `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
+| `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
+| `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
+| `stable_instructions` | `string / null` | — | — | Stable developer prefix eligible for an explicit OpenAI cache breakpoint. |
+| `tool_options` | `object` | — | — | Official fields merged into this tool's declaration. `type` is protected. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000007"
+    },
+    "input_items": {
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
+      "items": true,
+      "type": "array",
+      "x-agena-order": "000006"
+    },
+    "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "previous_response_id": {
+      "description": "Responses API continuation token from an earlier call.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
+      "maxLength": 64000,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
+    "request_options": {
+      "additionalProperties": true,
+      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000004"
+    },
+    "stable_instructions": {
+      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
+      "maxLength": 256000,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "tool_options": {
+      "additionalProperties": true,
+      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000003"
+    }
+  },
+  "type": "object"
+}
+```
+
+### file_status
+
+`agena.chatgpt.file_status` · **Summary**: Query the remote status of an owned OpenAI cloud file, not a local path.
+
+**Tags**: `query` `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `handle` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "handle": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### file_upload
+
+`agena.chatgpt.file_upload` · **Summary**: Upload one permitted local file to OpenAI cloud and return a session-owned handle.
 
 **Tags**: `mutate` `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Uploads accept arbitrary explicit data files up to 512 MiB and optional SHA256 revision checks; analysis has separate format/size limits. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -779,22 +2105,262 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_edit
+### files
 
-`agena.chatgpt.cloud_image_edit` · **Summary**: Upload permitted images for editing in OpenAI cloud; save the returned image separately.
+`agena.chatgpt.files` · **Summary**: Manage remote files and download cloud-generated artifacts.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### image_edit
+
+`agena.chatgpt.image_edit` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Upload permitted images for editing in OpenAI cloud; save the returned image separately.
 
 **Tags**: `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `images` | `array<string>` | ✓ | — |  |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `options` | `object` | — | — |  |
 | `prompt` | `string` | ✓ | — |  |
 
@@ -814,6 +2380,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000001"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -840,23 +2407,263 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_generation
+### image_generate
 
-`agena.chatgpt.cloud_image_generation` · **Summary**: Generate images in OpenAI cloud; save returned images as local attachments.
+`agena.chatgpt.image_generate` · **Summary**: Generate images directly through the OpenAI Images API.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the image description; model is the IMAGE model, unlike the existing Responses-based image_generation tool whose outer model orchestrates the image tool. parameters supports size, quality, n, output_format, background and other official image fields. Base64 results become local attachments.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### image_generation
+
+`agena.chatgpt.image_generation` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Generate images in OpenAI cloud; save returned images as local attachments.
 
 **Tags**: `network` `interactive` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
 | `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
 | `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
@@ -883,7 +2690,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -935,16 +2742,16 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_understanding
+### image_understanding
 
-`agena.chatgpt.cloud_image_understanding` · **Summary**: Send explicit images to OpenAI cloud for understanding; not local file viewing.
+`agena.chatgpt.image_understanding` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Send explicit images to OpenAI cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to OpenAI. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -952,7 +2759,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -1038,6 +2845,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1059,23 +2867,1562 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_shell
+### inference
 
-`agena.chatgpt.cloud_shell` · **Summary**: Run shell commands in an OpenAI cloud container, never in the local terminal.
+`agena.chatgpt.inference` · **Summary**: Run a vendor inference request with official tool combinations and continuation.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### knowledge
+
+`agena.chatgpt.knowledge` · **Summary**: Create, populate, search and manage OpenAI vector stores.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, update, delete, search, add_file, list_files, get_file, update_file, delete_file, download_file, create_batch, get_batch, cancel_batch, list_batch_files. id is the vector store ID; item_id identifies a nested file or file batch. Upload with files.upload purpose=assistants, then add_file with parameters.file_id. Poll get_file until indexing completes; file_upload alone does not index. File batch creation uses parameters.file_ids. search returns chunks directly without a generation model.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### models
+
+`agena.chatgpt.models` · **Summary**: List or inspect vendor models on the current provider.
+
+**Tags**: `network` `discovery` `query`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### moderation
+
+`agena.chatgpt.moderation` · **Summary**: Classify supplied content with the OpenAI Moderations API.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. parameters.input contains supported text/image inputs. Requires a moderation model, not an ordinary chat model. Returns provider categories and scores.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### platform
+
+`agena.chatgpt.platform` · **Summary**: Manage OpenAI conversations, fine-tuning jobs, evaluations and uploads.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model for fine-tuning. Resource operations need no model. resource=conversations: create/get/update/delete/items/add_items/get_item/delete_item; fine_tuning/jobs: create/list/get/wait/cancel/events/pause/unpause; fine_tuning/jobs/checkpoints: list (id=job); fine_tuning/checkpoints/permissions: create/list/delete (id=checkpoint, item_id=permission); fine_tuning/alpha/graders: run/validate; evals: create/list/get/update/delete/create_run/list_runs/get_run/cancel_run/delete_run; evals/runs/output_items: list/get (id=eval, item_id=run, sub_item_id=output for get); uploads: create/add_part/complete/cancel (add_part path, complete parameters.part_ids); audio/voice_consents: create/list/get/update/delete (create path is the consent recording, parameters.name/language); audio/voices: create/delete (audio-sample creation uses path and parameters.name/consent, prompt creation uses parameters.type=prompt/name/prompt without a file). Voice recordings have a 10 MiB limit and supported audio MIME types. Nested grader model fields remain in parameters. No API key, billing or membership administration.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### realtime
+
+`agena.chatgpt.realtime` · **Summary**: Run one bounded OpenAI realtime voice turn and save audio.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Defaults to the current session model. Use an OpenAI realtime voice model; otherwise explicitly pass model. Reuses the current provider endpoint and credentials. Supply text or an explicit raw 16-bit mono PCM audio_path. Returns transcript, actual WAV audio, completion state and provider events. Does not open a microphone or execute tool calls. duration_seconds is 1..50; partial output is retained on a receive deadline. Requires the gateway to expose the vendor WebSocket API.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `audio_path` | `string / null` | — | `null` | Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3. |
+| `duration_seconds` | `integer` | — | `20` | Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `input_sample_rate` | `integer` | — | `24000` | Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000. |
+| `model` | `string / null` | — | `null` | Defaults to current session model; explicitly pass a compatible OpenAI<br>Realtime or Google Gemini Live model when the current model is unsuitable. |
+| `output_path` | `string / null` | — | `null` |  |
+| `session` | `object` | — | `{}` | Official session/setup fields. model and output audio format are managed. |
+| `text` | `string / null` | — | `null` |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "audio_path": {
+      "default": null,
+      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "duration_seconds": {
+      "default": 20,
+      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000007"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "input_sample_rate": {
+      "default": 24000,
+      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to current session model; explicitly pass a compatible OpenAI\nRealtime or Google Gemini Live model when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
+    "output_path": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "session": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official session/setup fields. model and output audio format are managed.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000005"
+    },
+    "text": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
+  "type": "object"
+}
+```
+
+### responses
+
+`agena.chatgpt.responses` · **Summary**: Retrieve, wait for, cancel or delete OpenAI background responses.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible OpenAI model or explicitly pass model. Actions: create/get/wait/cancel/delete/items/compact. Create accepts prompt or parameters.input, optional background/tools, and top-level stream=true for bounded SSE. compact calls responses/compact with parameters.input and optional instructions. Other actions use id. wait_seconds is 1..50; get/wait never recreate a task. SSE returns events, sse_events with id/event/retry, and last_event_id; pass last_event_id to resume supported event resources. Continuation via previous_response_id creates a new response. Never retry create automatically.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### shell
+
+`agena.chatgpt.shell` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Run shell commands in an OpenAI cloud container, never in the local terminal.
 
 **Tags**: `network` `interactive` `mutate`
 
 **Runtime**: streaming `streaming`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Defaults to container_auto. Only container_auto or container_reference with container_id is accepted. Local/custom environments and client callbacks are rejected. Uploaded provider files are separate from Agena local files; there is no local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
 | `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
 | `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
@@ -1102,7 +4449,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1154,23 +4501,503 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_web_search
+### speech
 
-`agena.chatgpt.cloud_web_search` · **Summary**: Search the web in OpenAI cloud and return sources; not a local browser operation.
+`agena.chatgpt.speech` · **Summary**: Generate speech and save the resulting audio.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the exact text to speak; parameters.voice and other official speech fields control voice, format and style. Select an OpenAI TTS model. Saves actual audio bytes as an attachment; output_path optionally selects a new workspace file.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### transcription
+
+`agena.chatgpt.transcription` · **Summary**: Transcribe or translate an audio file using OpenAI Audio APIs.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. path selects one authorized audio file; model defaults to the current session model, so explicitly pass an appropriate transcription model when necessary. resource=translations selects audio translation; otherwise transcription. parameters supports language, prompt, response_format and timestamp/diarization fields according to model compatibility. Text, JSON and subtitle outputs are retained as artifacts.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### web_search
+
+`agena.chatgpt.web_search` · **Summary**: Requires an OpenAI model; defaults to the current model or accepts model override. Search the web in OpenAI cloud and return sources; not a local browser operation.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Hosted results and response_id are returned for follow-up; this plugin never executes client tool callbacks.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `array<string>` | — | — | Optional Responses include selectors. |
 | `input_items` | `array<any>` | — | — | Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation. |
-| `model` | `string / null` | — | — | Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_response_id` | `string / null` | — | — | Responses API continuation token from an earlier call. |
 | `prompt` | `string / null` | — | — | Instruction for a new hosted request. May be omitted when message history is supplied. |
 | `request_options` | `object` | — | — | Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected. |
@@ -1197,7 +5024,7 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
-      "description": "Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.",
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1251,20 +5078,20 @@ OpenAI cloud search, computation and image capabilities. Inputs leave this compu
 
 ## agena.claude
 
-**Version** `0.1.0` · **Tools** 9
+**Version** `0.1.0` · **Tools** 16
 
-Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leave this computer; no local execution fallback.
+Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback.
 
-### cloud_advisor
+### advisor
 
-`agena.claude.cloud_advisor` · **Summary**: Consult an advisor model in Anthropic cloud using the supplied context.
+`agena.claude.advisor` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Consult an advisor model in Anthropic cloud using the supplied context.
 
 **Tags**: `network` `interactive` `read_only`
 
 **Runtime**: streaming `streaming`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Only supplied context is available; the local repository and session transcript are not automatically uploaded. Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1273,7 +5100,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
 | `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
@@ -1329,6 +5156,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
       "x-agena-order": "000007"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1370,16 +5198,496 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_code_execution
+### agents
 
-`agena.claude.cloud_code_execution` · **Summary**: Execute code in Anthropic cloud infrastructure, not on this computer.
+`agena.claude.agents` · **Summary**: Manage vendor-hosted agents, sessions and environments.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Anthropic Claude model or explicitly pass model for agent creation. Resource management needs no model. resource=agents (default): create/list/get/update/archive/list_versions/get_version; sessions: create/list/get/wait/update/delete/archive/events/create_event/stream_events; environments: create/list/get/update/delete/archive; deployments: create/list/get/update/archive/run/pause/unpause; deployment_runs: list/get. sessions/resources supports create/list/get/update/delete with id=session and item_id=resource. sessions/threads supports list/get/archive/events/stream_events with id=session and item_id=thread. Event streams retain id/event/retry and accept last_event_id; wait_seconds bounds receipt time. parameters/query/beta_headers follow official schemas. No local tools execute implicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### batches
+
+`agena.claude.batches` · **Summary**: Create, inspect, cancel and retrieve asynchronous batch jobs.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, wait, cancel; Claude/Gemini also delete, Claude also results. parameters contains official batch input. OpenAI result output_file_id is downloaded with files.download; Gemini output file names use files.download. Claude results are saved as a JSONL attachment. A wait is bounded and never resubmits a job.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### code_execution
+
+`agena.claude.code_execution` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Execute code in Anthropic cloud infrastructure, not on this computer.
 
 **Tags**: `network` `interactive` `read_only`
 
 **Runtime**: streaming `streaming`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1388,7 +5696,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
 | `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
@@ -1444,6 +5752,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
       "x-agena-order": "000007"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1485,16 +5794,256 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_document_understanding
+### count_tokens
 
-`agena.claude.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.
+`agena.claude.count_tokens` · **Summary**: Count tokens using the vendor token-counting endpoint.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### document_understanding
+
+`agena.claude.document_understanding` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Send explicit PDF/text documents to Anthropic cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1502,7 +6051,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -1588,6 +6137,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1609,16 +6159,16 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_file_delete
+### file_delete
 
-`agena.claude.cloud_file_delete` · **Summary**: Request deletion of an owned file from Anthropic cloud; preserve the local original.
+`agena.claude.file_delete` · **Summary**: Request deletion of an owned file from Anthropic cloud; preserve the local original.
 
 **Tags**: `mutate` `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1643,16 +6193,16 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_file_status
+### file_status
 
-`agena.claude.cloud_file_status` · **Summary**: Query the remote status of an owned Anthropic cloud file, not a local path.
+`agena.claude.file_status` · **Summary**: Query the remote status of an owned Anthropic cloud file, not a local path.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1677,16 +6227,16 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_file_upload
+### file_upload
 
-`agena.claude.cloud_file_upload` · **Summary**: Upload one permitted local file to Anthropic cloud and return a session-owned handle.
+`agena.claude.file_upload` · **Summary**: Upload one permitted local file to Anthropic cloud and return a session-owned handle.
 
 **Tags**: `mutate` `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1732,16 +6282,256 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_image_understanding
+### files
 
-`agena.claude.cloud_image_understanding` · **Summary**: Send explicit images to Anthropic cloud for understanding; not local file viewing.
+`agena.claude.files` · **Summary**: Manage remote files and download cloud-generated artifacts.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### image_understanding
+
+`agena.claude.image_understanding` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Send explicit images to Anthropic cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Anthropic. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1749,7 +6539,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -1835,6 +6625,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1856,16 +6647,736 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_web_fetch
+### inference
 
-`agena.claude.cloud_web_fetch` · **Summary**: Fetch and process web content in Anthropic cloud, not through the local browser.
+`agena.claude.inference` · **Summary**: Run a vendor inference request with official tool combinations and continuation.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### models
+
+`agena.claude.models` · **Summary**: List or inspect vendor models on the current provider.
+
+**Tags**: `network` `discovery` `query`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### skills
+
+`agena.claude.skills` · **Summary**: Create, inspect and manage Claude cloud Skills and versions.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, delete, create_version, list_versions, get_version, delete_version. create/create_version use path or paths for multipart files; include SKILL.md and supporting files. id is skill ID; item_id is version. Run Skills using inference with parameters.container.skills and the official code_execution tool plus required beta_headers; then download generated file IDs with files.download. These are cloud Skills, separate from local Agena skills.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### web_fetch
+
+`agena.claude.web_fetch` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Fetch and process web content in Anthropic cloud, not through the local browser.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1874,7 +7385,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
 | `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
@@ -1930,6 +7441,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
       "x-agena-order": "000007"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -1971,16 +7483,16 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 }
 ```
 
-### cloud_web_search
+### web_search
 
-`agena.claude.cloud_web_search` · **Summary**: Search the web in Anthropic cloud and return sources; not a local browser operation.
+`agena.claude.web_search` · **Summary**: Requires an Anthropic Claude model; defaults to the current model or accepts model override. Search the web in Anthropic cloud and return sources; not a local browser operation.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Anthropic cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -1989,7 +7501,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
 | `cache_ttl` | `ClaudeCacheTtl / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — |  |
 | `messages` | `array<any>` | — | — | Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string / null` | — | — | New user instruction. Optional when messages continue hosted server execution. |
 | `request_options` | `object` | — | — |  |
 | `stable_system` | `string / null` | — | — | Stable system prefix placed before dynamic messages for cache reuse. |
@@ -2045,6 +7557,7 @@ Anthropic cloud search, fetch, computation and advisor capabilities. Inputs leav
       "x-agena-order": "000007"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -2426,19 +7939,19 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 ### get
 
-`agena.commands.get` · **Summary**: Read one discovered command package.
+`agena.commands.get` · **Summary**: Read one discovered skill.
 
 **Tags**: `query` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read one package's instructions in full and apply them to the current task.
+> Read one skill's instructions in full and apply them to the current task.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `name` | `string` | ✓ | — | Canonical name, or an alias, of the command package to read. |
+| `name` | `string` | ✓ | — | Canonical name, or an alias, of the skill to read. |
 
 **Input schema**:
 ```json
@@ -2446,7 +7959,7 @@ Declare the built-in commands every Agena client renders locally, and project sk
   "additionalProperties": false,
   "properties": {
     "name": {
-      "description": "Canonical name, or an alias, of the command package to read.",
+      "description": "Canonical name, or an alias, of the skill to read.",
       "type": "string"
     }
   },
@@ -2459,7 +7972,7 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 ### install
 
-`agena.commands.install` · **Summary**: Install a workspace-managed command package document.
+`agena.commands.install` · **Summary**: Install a workspace-managed skill document.
 
 **Tags**: `mutate` `filesystem`
 
@@ -2492,14 +8005,14 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 ### list
 
-`agena.commands.list` · **Summary**: List discovered command packages.
+`agena.commands.list` · **Summary**: List discovered skills.
 
 **Tags**: `query` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> List discovered command packages, with paging. Each entry names the package, its source, and whether it can be edited in this workspace.
+> List discovered skills, with paging. Each entry names the skill, its source, and whether it can be edited in this workspace.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -2610,7 +8123,7 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 ### remove
 
-`agena.commands.remove` · **Summary**: Remove a workspace-managed command package document.
+`agena.commands.remove` · **Summary**: Remove a workspace-managed skill document.
 
 **Tags**: `mutate` `filesystem`
 
@@ -3924,101 +9437,260 @@ Filesystem command tools for read/search and explicit edits.
 
 ## agena.gemini
 
-**Version** `0.1.0` · **Tools** 12
+**Version** `0.1.0` · **Tools** 30
 
-Google cloud search, computation and image capabilities. Inputs leave this computer; no local execution fallback.
+Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback.
 
-### cloud_code_execution
+### agents
 
-`agena.gemini.cloud_code_execution` · **Summary**: Execute code in Google cloud infrastructure, not on this computer.
+`agena.gemini.agents` · **Summary**: Manage vendor-hosted agents, sessions and environments.
 
-**Tags**: `network` `interactive` `read_only`
+**Tags**: `network` `mutate`
 
-**Runtime**: streaming `streaming`
+**Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions depend on the vendor resource: create, list, get, update, delete, wait, archive, events, create_event, items, list_versions, get_version, run, pause, unpause. Unsupported actions are rejected per collection. resource selects the documented collection. OpenAI: agents, sessions (default), environments. Claude: agents (default), sessions, environments, deployments. Gemini: agents. parameters/query carry official fields, including nested agent.model when required. Runs on vendor infrastructure; local files and tools are not automatically available. Inference on a Gemini agent uses inference with parameters.agent and no model override. Provider support and access are required.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
-| `previous_interaction_id` | `string / null` | — | — |  |
-| `prompt` | `string / null` | — | — |  |
-| `request_options` | `object` | — | — |  |
-| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
-| `tool_options` | `object` | — | — |  |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
       "type": "array",
-      "x-agena-order": "000006"
+      "x-agena-order": "000015"
     },
-    "model": {
+    "expected_sha256": {
+      "default": null,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000012"
     },
-    "previous_interaction_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000001"
     },
-    "tool_options": {
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
       "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
       "properties": {},
       "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
       "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
     }
   },
   "type": "object"
 }
 ```
 
-### cloud_document_understanding
+### audio_understanding
 
-`agena.gemini.cloud_document_understanding` · **Summary**: Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.
+`agena.gemini.audio_understanding` · **Summary**: Analyze audio with a selected Google Gemini model.
 
-**Tags**: `query` `network` `mutate`
+**Tags**: `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use a Google Gemini model supporting audio input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4026,7 +9698,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -4112,6 +9784,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4133,56 +9806,502 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_delete
+### batches
 
-`agena.gemini.cloud_file_delete` · **Summary**: Request deletion of an owned file from Google cloud; preserve the local original.
+`agena.gemini.batches` · **Summary**: Create, inspect, cancel and retrieve asynchronous batch jobs.
 
-**Tags**: `mutate` `network`
+**Tags**: `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Google Gemini model supporting generation or embedding batches, or explicitly pass model. Actions: create/list/get/wait/cancel/delete/update. resource=generate_content (default) creates batchGenerateContent; resource=embeddings creates asyncBatchEmbedContent. parameters uses the official batch body. update calls updateGenerateContentBatch or updateEmbedContentBatch, with id=batches/ID, top-level model and the official update fields; query.updateMask selects fields. Get/wait/cancel/delete need only id. Results may be inline or downloaded using files.download. wait_seconds is 1..50; waits never resubmit jobs.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `handle` | `string` | ✓ | — |  |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
 
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "handle": {
-      "minLength": 1,
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
       "type": "string",
       "x-agena-order": "000000"
     }
   },
-  "required": [
-    "handle"
-  ],
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
   "type": "object"
 }
 ```
 
-### cloud_file_search
+### caches
 
-`agena.gemini.cloud_file_search` · **Summary**: Search configured Google cloud file stores, not files on this computer.
+`agena.gemini.caches` · **Summary**: Manage explicit Gemini context caches for compatible models.
 
-**Tags**: `network` `interactive` `discovery` `read_only`
+**Tags**: `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, list, get, update, delete. create uses the current session model unless model is supplied; parameters contains contents, ttl/expireTime and other official fields. update changes supported lifecycle fields using query.updateMask. id accepts cachedContents/ID. Explicit caching is model-dependent; models with implicit caching only reject this API.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### code_execution
+
+`agena.gemini.code_execution` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Execute code in Google cloud infrastructure, not on this computer.
+
+**Tags**: `network` `interactive` `read_only`
+
+**Runtime**: streaming `streaming`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Cloud filesystem and runtime are separate from the Agena workspace; provide needed input files explicitly. Uses the official Interactions code_execution declaration. Computation executes on Google infrastructure; no returned function call is executed by Agena.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `request_options` | `object` | — | — |  |
@@ -4201,6 +10320,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4248,16 +10368,621 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_status
+### count_tokens
 
-`agena.gemini.cloud_file_status` · **Summary**: Query the remote status of an owned Google cloud file, not a local path.
+`agena.gemini.count_tokens` · **Summary**: Count tokens using the vendor token-counting endpoint.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply official input/messages/contents in parameters. This performs token counting, not text generation. Use a compatible model from the invoked vendor.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### document_understanding
+
+`agena.gemini.document_understanding` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Send explicit PDF/text documents to Google cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only cloud_file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
+| `prompt` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object"
+}
+```
+
+### embeddings
+
+`agena.gemini.embeddings` · **Summary**: Create Gemini text or multimodal embeddings.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current provider connection; no separate credentials or endpoint settings. Model-based requests default to the current session model; use a compatible Google Gemini embedding model or explicitly pass model. create uses models/{model}:embedContent with prompt or parameters.content and optional taskType/title/outputDimensionality. create_batch uses models/{model}:batchEmbedContents with parameters.requests array; each request inherits the selected model if absent, and an explicit top-level model overrides entry models. Async embedding batches use batches with resource=embeddings. Large vectors are retained in the receipt.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### file_delete
+
+`agena.gemini.file_delete` · **Summary**: Request deletion of an owned file from Google cloud; preserve the local original.
+
+**Tags**: `mutate` `network`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only session-owned cloud file handles. Deletes the remote resource and records the provider acknowledgement; it does not promise erasure of provider logs/backups. No arbitrary remote IDs or cross-provider deletion. A failed request is not reported as successful cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4282,16 +11007,132 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_file_upload
+### file_search
 
-`agena.gemini.cloud_file_upload` · **Summary**: Upload one permitted local file to Google cloud and return a session-owned handle.
+`agena.gemini.file_search` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Search configured Google cloud file stores, not files on this computer.
+
+**Tags**: `network` `interactive` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Provider file-store identifiers refer to remote resources, not local filesystem paths. tool_options supports file_search_store_names, metadata_filter, and top_k.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
+| `previous_interaction_id` | `string / null` | — | — |  |
+| `prompt` | `string / null` | — | — |  |
+| `request_options` | `object` | — | — |  |
+| `stable_system_instruction` | `string / null` | — | — | Stable prefix used to improve Gemini implicit cache reuse. |
+| `tool_options` | `object` | — | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "items": true,
+      "type": "array",
+      "x-agena-order": "000006"
+    },
+    "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "previous_interaction_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
+    "request_options": {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000004"
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "maxLength": 256000,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "tool_options": {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000003"
+    }
+  },
+  "type": "object"
+}
+```
+
+### file_status
+
+`agena.gemini.file_status` · **Summary**: Query the remote status of an owned Google cloud file, not a local path.
+
+**Tags**: `query` `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Accepts only file_upload handles from the same workspace, session and provider connection. Reports provider readiness/expiry and refreshes the signed local receipt. Does not download file contents or resubmit an unknown upload.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `handle` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "handle": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "handle"
+  ],
+  "type": "object"
+}
+```
+
+### file_upload
+
+`agena.gemini.file_upload` · **Summary**: Upload one permitted local file to Google cloud and return a session-owned handle.
 
 **Tags**: `mutate` `network`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Inputs up to 20 MiB are content-checked and optionally revision-checked. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
+> Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Creates a remote file; does not analyze it. Uploads accept arbitrary explicit data files up to 512 MiB and optional SHA256 revision checks; analysis has separate format/size limits. The handle is bound to this workspace/session/provider connection; arbitrary vendor file IDs cannot be substituted. Local files remain unchanged. A timeout may leave remote acceptance unknown: inspect the returned handle, do not automatically repeat. Query status before using processing files and delete unneeded files explicitly.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4337,22 +11178,262 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_google_maps
+### files
 
-`agena.gemini.cloud_google_maps` · **Summary**: Query Google Maps data in Google cloud and return grounding sources.
+`agena.gemini.files` · **Summary**: Manage remote files and download cloud-generated artifacts.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get, wait, delete, download; OpenAI/Claude also upload using path and parameters.purpose where required. For Gemini uploads use file_upload, then import its remote file name into a knowledge store. download saves a managed attachment or a new output_path. Claude only downloads provider-generated files. IDs refer to resources on the current provider.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### google_maps
+
+`agena.gemini.google_maps` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Query Google Maps data in Google cloud and return grounding sources.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports enable_widget, latitude, and longitude.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `request_options` | `object` | — | — |  |
@@ -4371,6 +11452,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4418,22 +11500,22 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_google_search
+### google_search
 
-`agena.gemini.cloud_google_search` · **Summary**: Search Google and ground answers in Google cloud, not the local browser.
+`agena.gemini.google_search` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Search Google and ground answers in Google cloud, not the local browser.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options.search_types accepts web_search, image_search, and enterprise_web_search.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `request_options` | `object` | — | — |  |
@@ -4452,6 +11534,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4499,16 +11582,16 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_edit
+### image_edit
 
-`agena.gemini.cloud_image_edit` · **Summary**: Upload permitted images for editing in Google cloud; save the returned image separately.
+`agena.gemini.image_edit` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Upload permitted images for editing in Google cloud; save the returned image separately.
 
 **Tags**: `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to Google; returned images are saved as separate local artifacts. Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4516,7 +11599,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 | `cached_content` | `string / null` | — | — |  |
 | `generation_config` | `object` | — | — |  |
 | `images` | `array<string>` | ✓ | — |  |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 | `request_options` | `object` | — | — |  |
 
@@ -4549,6 +11632,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000001"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4575,23 +11659,23 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_generation
+### image_generation
 
-`agena.gemini.cloud_image_generation` · **Summary**: Generate images in Google cloud; save returned images as local attachments.
+`agena.gemini.image_generation` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Generate images in Google cloud; save returned images as local attachments.
 
 **Tags**: `network` `interactive` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses generateContent with responseModalities TEXT and IMAGE. Use the current session model or specify input.model. Inline image data is persisted as managed attachments.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `cached_content` | `string / null` | — | — | Existing Gemini cachedContents resource name. |
 | `generation_config` | `object` | — | — |  |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 | `request_options` | `object` | — | — |  |
 
@@ -4615,6 +11699,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000002"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4641,16 +11726,16 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_image_understanding
+### image_understanding
 
-`agena.gemini.cloud_image_understanding` · **Summary**: Send explicit images to Google cloud for understanding; not local file viewing.
+`agena.gemini.image_understanding` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Send explicit images to Google cloud for understanding; not local file viewing.
 
 **Tags**: `query` `network` `mutate`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends authorized inputs only to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned cloud_file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends authorized inputs only to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Sends only the specified, permission-checked inputs and prompt to Google. Accepts local paths with expected_sha256 or owned file_upload handles. Local preparation is bounded; no automatic whole-workspace or conversation upload. Cloud inference may be billed. Input sent inline is not a separate remote file. Results return input hashes, provider/model and usage. No local execution fallback.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4658,7 +11743,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 | `detail` | `ImageDetail` | — | `auto` |  |
 | `inputs` | `array<MediaSource>` | ✓ | — |  |
 | `max_output_tokens` | `integer` | — | `4096` |  |
-| `model` | `string / null` | — | `null` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
 | `prompt` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -4744,6 +11829,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
     },
     "model": {
       "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4765,22 +11851,1801 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
 }
 ```
 
-### cloud_url_context
+### inference
 
-`agena.gemini.cloud_url_context` · **Summary**: Retrieve and ground URL content in Google cloud; no local-file access.
+`agena.gemini.inference` · **Summary**: Run a vendor inference request with official tool combinations and continuation.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Supply prompt and/or official input/messages in parameters. Supports multiple hosted tools, remote MCP, tool search, programmatic calling, cloud Skills and native client-tool declarations using the vendor schema. Returns provider tool calls and continuation state as DATA; never executes local computer, browser, shell, editor, functions or tool callbacks. Use appropriate Agena tools through their normal permissions, then explicitly submit official tool results in another inference request. Cloud resources and local resources are separate. Do not run provider-returned commands implicitly. Top-level stream=true opts into bounded SSE; wait_seconds is 1..50. Complete events and SSE cursors are retained.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### interactions
+
+`agena.gemini.interactions` · **Summary**: Retrieve, wait for, cancel or delete Gemini background interactions.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: create, get, wait, cancel, delete. create accepts prompt or parameters.input and background=true. For Deep Research/managed agents use parameters.agent instead of a model; supplying both is rejected. id is an existing interaction ID for get/wait/cancel/delete. Polling does not create a new interaction.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### knowledge
+
+`agena.gemini.knowledge` · **Summary**: Create, populate and manage Gemini File Search Stores.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Uses the current provider connection. Model-based tools default to the current session model; use a compatible Google Gemini model or explicitly pass model. Resource management needs no model. Actions: create/list/get/delete/import_file/upload/list_files/get_file/delete_file. id is store ID or fileSearchStores/ID; item_id is document ID. upload directly sends one authorized path into the store using resumable upload; parameters supports displayName/mimeType/customMetadata/chunkingConfig. Alternatively file_upload then import_file with parameters.fileName=files/ID. Poll returned operations with operations.get/wait, including fileSearchStores/ID/upload/operations/ID. Upload readiness is different from indexing completion. Use file_search with the resulting store name. Delete query.force=true explicitly deletes a nonempty store.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### models
+
+`agena.gemini.models` · **Summary**: List or inspect vendor models on the current provider.
+
+**Tags**: `network` `discovery` `query`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### music_generation
+
+`agena.gemini.music_generation` · **Summary**: Generate music using Gemini Lyria and save audio attachments.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Select an available Lyria music model. prompt or parameters.input describes the music and optional image inputs; parameters.response_format contains supported audio settings. Returned lyrics and metadata remain in the receipt; inline audio becomes a local attachment. This is not a speech or ordinary chat model operation.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### operations
+
+`agena.gemini.operations` · **Summary**: Inspect or wait for Gemini file-import operations.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: get, wait. id is operations/ID or fileSearchStores/ID/operations/ID. wait_seconds is 1..50. Returns done/error/response without creating another import.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### realtime
+
+`agena.gemini.realtime` · **Summary**: Run one bounded Google Gemini realtime voice turn and save audio.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Defaults to the current session model. Use a Google Gemini realtime voice model; otherwise explicitly pass model. Reuses the current provider endpoint and credentials. Supply text or an explicit raw 16-bit mono PCM audio_path. Returns transcript, actual WAV audio, completion state and provider events. Does not open a microphone or execute tool calls. duration_seconds is 1..50; partial output is retained on a receive deadline. Requires the gateway to expose the vendor WebSocket API.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `audio_path` | `string / null` | — | `null` | Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3. |
+| `duration_seconds` | `integer` | — | `20` | Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `input_sample_rate` | `integer` | — | `24000` | Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000. |
+| `model` | `string / null` | — | `null` | Defaults to current session model; explicitly pass a compatible OpenAI<br>Realtime or Google Gemini Live model when the current model is unsuitable. |
+| `output_path` | `string / null` | — | `null` |  |
+| `session` | `object` | — | `{}` | Official session/setup fields. model and output audio format are managed. |
+| `text` | `string / null` | — | `null` |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "audio_path": {
+      "default": null,
+      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "duration_seconds": {
+      "default": 20,
+      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000007"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "input_sample_rate": {
+      "default": 24000,
+      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to current session model; explicitly pass a compatible OpenAI\nRealtime or Google Gemini Live model when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
+    "output_path": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "session": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official session/setup fields. model and output audio format are managed.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000005"
+    },
+    "text": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
+  "type": "object"
+}
+```
+
+### speech
+
+`agena.gemini.speech` · **Summary**: Generate Gemini text-to-speech audio as local attachments.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the text to speak. Use a Gemini TTS model and parameters.generation_config.speech_config for single/multiple speakers and voices. Advanced input with speech_metadata belongs in parameters.input. Agena sets response_format.type=audio. Audio-only output is saved; output_path optionally selects a new local file.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### url_context
+
+`agena.gemini.url_context` · **Summary**: Requires a Google Gemini model; defaults to the current model or accepts model override. Retrieve and ground URL content in Google cloud; no local-file access.
 
 **Tags**: `network` `interactive` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the configured provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in Google cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Uses the official url_context tool. Put URLs in the prompt or official request fields.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `input_steps` | `array<any>` | — | — | Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted. |
-| `model` | `string / null` | — | — |  |
+| `model` | `string / null` | — | — | Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable. |
 | `previous_interaction_id` | `string / null` | — | — |  |
 | `prompt` | `string / null` | — | — |  |
 | `request_options` | `object` | — | — |  |
@@ -4799,6 +13664,7 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000006"
     },
     "model": {
+      "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
         "string",
         "null"
@@ -4842,6 +13708,611 @@ Google cloud search, computation and image capabilities. Inputs leave this compu
       "x-agena-order": "000003"
     }
   },
+  "type": "object"
+}
+```
+
+### video_edit
+
+`agena.gemini.video_edit` · **Summary**: Edit or extend a video using Gemini multimodal interactions.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Select a supported video editing model. parameters.input contains the explicit video/media inputs and instructions, or use prompt with parameters.previous_interaction_id for conversational editing. parameters.response_format contains official video settings. Use interactions.get/wait for background work. Inline video becomes an attachment.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### video_generation
+
+`agena.gemini.video_generation` · **Summary**: Generate a video using the Gemini Interactions API.
+
+**Tags**: `network` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. Use a supported Gemini video generation model, such as the current Omni family, not a chat-only model. prompt or parameters.input supplies text/images/audio/video. parameters.response_format supplies official video settings such as aspect_ratio and resolution. Supports background execution; inspect the returned interaction ID with interactions.get/wait. Inline video becomes an attachment; remote file references can be retrieved using files.download. Do not use retired Veo preview aliases.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | — | `list` | Operation. Each tool documents its supported actions. No automatic retries. |
+| `beta_headers` | `array<string>` | — | `[]` | Official beta feature names only; cannot override authentication headers. |
+| `expected_sha256` | `string / null` | — | `null` |  |
+| `id` | `string / null` | — | `null` | Vendor resource ID, or its documented resource name (not an HTTP URL). |
+| `item_id` | `string / null` | — | `null` | Nested resource ID, such as a vector-store file, skill version or event. |
+| `last_event_id` | `string / null` | — | `null` | Resume an event stream from the provider's last SSE event ID. |
+| `model` | `string / null` | — | `null` | Defaults to the current session model for model-based requests. Use a<br>model from this tool's vendor with the required capability; otherwise<br>explicitly pass model. Resource list/get/delete operations need no model. |
+| `output_path` | `string / null` | — | `null` | Optional workspace output path. Existing files are never overwritten.<br>Omit to save downloads as managed attachments. |
+| `parameters` | `object` | — | `{}` | Official API request fields. model/stream are controlled by Agena.<br>This is request JSON, never local commands or connection configuration. |
+| `path` | `string / null` | — | `null` | Explicit local input file for multipart uploads/transcription. |
+| `paths` | `array<string>` | — | `[]` | Additional local paths, e.g. the files of a custom Claude Skill. |
+| `prompt` | `string / null` | — | `null` |  |
+| `query` | `object` | — | `{}` | Pagination, filters and other official query parameters. |
+| `resource` | `string / null` | — | `null` | Optional collection for platform/managed-agent operations; see tool help. |
+| `stream` | `boolean` | — | `false` | Opt in to a bounded inference event stream. Returns complete received<br>events and a cursor; does not keep a background connection open. |
+| `sub_item_id` | `string / null` | — | `null` | Third-level resource ID, e.g. an eval output item or a subagent turn. |
+| `wait_seconds` | `integer` | — | `20` | Bound a wait call to 1..50 seconds. An unfinished task is returned as<br>pending with its ID; call wait again rather than creating another task. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "enum": [
+        "list",
+        "create",
+        "get",
+        "update",
+        "delete",
+        "download",
+        "upload",
+        "cancel",
+        "wait",
+        "search",
+        "add_file",
+        "list_files",
+        "get_file",
+        "update_file",
+        "delete_file",
+        "download_file",
+        "import_file",
+        "create_batch",
+        "get_batch",
+        "cancel_batch",
+        "list_batch_files",
+        "results",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "delete_version",
+        "events",
+        "items",
+        "archive",
+        "add_part",
+        "complete",
+        "add_items",
+        "get_item",
+        "delete_item",
+        "create_run",
+        "list_runs",
+        "get_run",
+        "cancel_run",
+        "create_event",
+        "pause",
+        "unpause",
+        "run",
+        "compact",
+        "stream_events",
+        "delete_run",
+        "validate"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/Action",
+      "default": "list",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
+    },
+    "beta_headers": {
+      "default": [],
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000015"
+    },
+    "expected_sha256": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000012"
+    },
+    "id": {
+      "default": null,
+      "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "item_id": {
+      "default": null,
+      "description": "Nested resource ID, such as a vector-store file, skill version or event.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "last_event_id": {
+      "default": null,
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000016"
+    },
+    "model": {
+      "default": null,
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "output_path": {
+      "default": null,
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000013"
+    },
+    "parameters": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000008"
+    },
+    "path": {
+      "default": null,
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "default": [],
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000011"
+    },
+    "prompt": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "query": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Pagination, filters and other official query parameters.",
+      "properties": {},
+      "type": "object",
+      "x-agena-order": "000009"
+    },
+    "resource": {
+      "default": null,
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "stream": {
+      "default": false,
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "x-agena-order": "000007"
+    },
+    "sub_item_id": {
+      "default": null,
+      "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "wait_seconds": {
+      "default": 20,
+      "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000014"
+    }
+  },
+  "type": "object"
+}
+```
+
+### video_understanding
+
+`agena.gemini.video_understanding` · **Summary**: Analyze video with a selected Google Gemini model.
+
+**Tags**: `network`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Model-based tools default to the current session model. Use a Google Gemini model supporting video input; otherwise explicitly pass model. Uses only the current provider connection. inputs accepts explicit permission-checked local files or same-session file_upload handles. OpenAI audio requires local WAV/MP3. Gemini also accepts its uploaded audio/video files. Does not transcribe through a local service or upload the workspace implicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `detail` | `ImageDetail` | — | `auto` |  |
+| `inputs` | `array<MediaSource>` | ✓ | — |  |
+| `max_output_tokens` | `integer` | — | `4096` |  |
+| `model` | `string / null` | — | `null` | Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable. |
+| `prompt` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "type": "string",
+      "x-agena-order": "000003"
+    },
+    "MediaSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "source": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "handle": {
+              "type": "string"
+            },
+            "source": {
+              "const": "cloud",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "handle"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "inputs": {
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
+    },
+    "max_output_tokens": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "default": null,
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "prompt": {
+      "maxLength": 64000,
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
   "type": "object"
 }
 ```
@@ -6578,7 +16049,7 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 6
+**Version** `0.1.0` · **Tools** 7
 
 Inspect and manage the current runtime session and its environment, model, and token state.
 
@@ -6680,6 +16151,41 @@ Inspect and manage the current runtime session and its environment, model, and t
 {
   "additionalProperties": false,
   "properties": {},
+  "type": "object"
+}
+```
+
+### models
+
+`agena.session.models` · **Summary**: Discover available models and capabilities on the current session provider.
+
+**Tags**: `query` `discovery` `network`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Queries the active provider's model catalog using its existing connection, with configured-model fallback. Use this before explicitly selecting a model for chatgpt, claude or gemini tools. No API key or endpoint input. query optionally filters model IDs and metadata. Unknown/inferred capabilities do not guarantee hosted API support.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `query` | `string / null` | — | `null` | Case-insensitive text filter over model IDs and catalog metadata. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "query": {
+      "default": null,
+      "description": "Case-insensitive text filter over model IDs and catalog metadata.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    }
+  },
   "type": "object"
 }
 ```

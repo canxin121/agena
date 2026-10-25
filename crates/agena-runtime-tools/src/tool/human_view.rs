@@ -1931,7 +1931,7 @@ impl BuiltinHumanRenderer {
     }
 
     fn provider_call_operation_label(tool_name: &str) -> &'static str {
-        if tool_name == "chatgpt.cloud_shell" {
+        if tool_name == "chatgpt.shell" {
             "Shell call"
         } else {
             "Tool call"
@@ -2073,7 +2073,7 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => {
+            "chatgpt.file_search" | "gemini.file_search" => {
                 let fields = [
                     ("Query", Self::object_text(object, "query")),
                     ("Store", Self::object_text(object, "vector_store_id")),
@@ -2152,7 +2152,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "gemini.cloud_google_maps" => {
+            "gemini.google_maps" => {
                 let fields = [
                     ("Query", Self::object_text(object, "query")),
                     (
@@ -2210,7 +2210,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "gemini.cloud_url_context" | "claude.cloud_web_fetch" => {
+            "gemini.url_context" | "claude.web_fetch" => {
                 let fields = [
                     ("URL", Self::object_text(object, "url")),
                     (
@@ -2260,9 +2260,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.cloud_code_interpreter"
-            | "claude.cloud_code_execution"
-            | "gemini.cloud_code_execution" => {
+            "chatgpt.code_interpreter" | "claude.code_execution" | "gemini.code_execution" => {
                 let fields = [
                     ("Status", Self::object_text(object, "status")),
                     ("Exit code", Self::object_text(object, "exit_code")),
@@ -2285,7 +2283,7 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.cloud_shell" => {
+            "chatgpt.shell" => {
                 let pending_command = Self::object_array(object, "pending_calls")
                     .and_then(|calls| calls.first())
                     .and_then(Value::as_object)
@@ -2315,7 +2313,7 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "claude.cloud_advisor" => {
+            "claude.advisor" => {
                 if let Some(error) = object.get("error") {
                     blocks.extend(Self::generic_value_blocks(
                         "provider-advisor-error",
@@ -2330,10 +2328,10 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.cloud_image_generation"
-            | "chatgpt.cloud_image_edit"
-            | "gemini.cloud_image_generation"
-            | "gemini.cloud_image_edit" => {
+            "chatgpt.image_generation"
+            | "chatgpt.image_edit"
+            | "gemini.image_generation"
+            | "gemini.image_edit" => {
                 let fields = [
                     ("Path", Self::object_text(object, "path")),
                     ("MIME", Self::object_text(object, "mime")),
@@ -2493,9 +2491,9 @@ impl BuiltinHumanRenderer {
         }
         if let Some(sources) = Self::object_array(object, "sources") {
             let source_title = match tool_name {
-                "gemini.cloud_google_maps" => "Places",
-                "gemini.cloud_url_context" | "claude.cloud_web_fetch" => "Fetched sources",
-                "chatgpt.cloud_file_search" | "gemini.cloud_file_search" => "File citations",
+                "gemini.google_maps" => "Places",
+                "gemini.url_context" | "claude.web_fetch" => "Fetched sources",
+                "chatgpt.file_search" | "gemini.file_search" => "File citations",
                 _ => "Sources",
             };
             if !sources.is_empty()

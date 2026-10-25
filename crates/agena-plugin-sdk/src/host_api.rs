@@ -204,6 +204,20 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Resolve an ephemeral connection for the bundled ChatGPT, Claude and
+    /// Gemini tools against the active session's provider. This native-only
+    /// callback is deliberately not exposed over plugin RPC: its result can
+    /// contain credentials and must never become tool output or persisted settings.
+    async fn builtin_provider_connection(&self) -> Result<BuiltinProviderConnection> {
+        Err(unavailable())
+    }
+
+    /// Discover the active session provider's models and capabilities. Native
+    /// bundled tools only; the returned catalog never contains credentials.
+    async fn builtin_provider_models(&self) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
     /// Execute a terminal image generate/edit request against the current
     /// session's selected provider/model route. The host validates inputs and
     /// persists provider output before returning any attachment.
@@ -971,6 +985,31 @@ pub struct HostSetSessionModelResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
     pub model_id: String,
+}
+
+/// Sensitive, native-only connection for the three bundled provider plugins.
+/// It is intentionally neither serializable nor printable with credentials.
+#[derive(Clone)]
+pub struct BuiltinProviderConnection {
+    pub provider_id: String,
+    pub base_url: String,
+    pub messages_url: Option<String>,
+    pub realtime_ws_url: Option<String>,
+    pub headers: std::collections::BTreeMap<String, String>,
+    pub model: Option<String>,
+    pub timeout_secs: u64,
+    pub connect_timeout_secs: u64,
+    /// Used only to authenticate local provider-file receipts.
+    pub receipt_key: String,
+}
+
+impl std::fmt::Debug for BuiltinProviderConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuiltinProviderConnection")
+            .field("provider_id", &self.provider_id)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 // ---------------- direct provider image execution ----------------

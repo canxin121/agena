@@ -316,7 +316,17 @@ async fn provider_requests_preserve_declines_without_sending_or_exposing_query_s
         "http://127.0.0.1:1/request?key=secret",
         &Default::default(),
         json!({}),
-        1,
+        &BuiltinProviderConnection {
+            provider_id: "test".into(),
+            base_url: "https://provider.example".into(),
+            messages_url: None,
+            realtime_ws_url: None,
+            headers: Default::default(),
+            model: None,
+            timeout_secs: 1,
+            connect_timeout_secs: 1,
+            receipt_key: String::new(),
+        },
         "test",
         "test",
     )

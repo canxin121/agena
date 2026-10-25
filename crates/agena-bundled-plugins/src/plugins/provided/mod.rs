@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod monitor;
 pub mod notebook;
 pub mod planning;
+pub(crate) mod provider_api;
 pub(crate) mod provider_tool_docs;
 pub mod report;
 pub mod session;
@@ -24,3 +25,5 @@ pub(crate) mod chatgpt;
 pub(crate) mod claude;
 pub(crate) mod gemini;
 pub(crate) mod official_service;
+#[cfg(test)]
+mod provider_connection_tests;

@@ -236,45 +236,8 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
                     literal: literal.clone(),
                     display: true,
                 })
-            } else if let [
-                MarkdownInline::Image {
-                    url,
-                    title,
-                    alt,
-                    dimensions,
-                },
-            ] = content.as_slice()
-            {
-                Some(MarkdownNode::Image {
-                    url: url.clone(),
-                    title: title.clone(),
-                    alt: alt.clone(),
-                    dimensions: *dimensions,
-                    link_url: None,
-                })
-            } else if let [
-                MarkdownInline::Link {
-                    url: link_url,
-                    label,
-                    ..
-                },
-            ] = content.as_slice()
-                && let [
-                    MarkdownInline::Image {
-                        url,
-                        title,
-                        alt,
-                        dimensions,
-                    },
-                ] = label.as_slice()
-            {
-                Some(MarkdownNode::Image {
-                    url: url.clone(),
-                    title: title.clone(),
-                    alt: alt.clone(),
-                    dimensions: *dimensions,
-                    link_url: Some(link_url.clone()),
-                })
+            } else if let Some(image) = standalone_inline_image(&content) {
+                Some(image)
             } else {
                 Some(MarkdownNode::Paragraph(content))
             }
@@ -457,6 +420,37 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
         _ if node.first_child().is_some() => Some(MarkdownNode::Paragraph(convert_inlines(node))),
         _ => None,
     }
+}
+
+/// An image occupying its own source line keeps block sizing even when
+/// CommonMark groups it with adjacent lines into a single paragraph.
+fn standalone_inline_image(inlines: &[MarkdownInline]) -> Option<MarkdownNode> {
+    let (image, link_url) = match inlines {
+        [image @ MarkdownInline::Image { .. }] => (image, None),
+        [MarkdownInline::Link { url, label, .. }] => {
+            let [image @ MarkdownInline::Image { .. }] = label.as_slice() else {
+                return None;
+            };
+            (image, Some(url.clone()))
+        }
+        _ => return None,
+    };
+    let MarkdownInline::Image {
+        url,
+        title,
+        alt,
+        dimensions,
+    } = image
+    else {
+        return None;
+    };
+    Some(MarkdownNode::Image {
+        url: url.clone(),
+        title: title.clone(),
+        alt: alt.clone(),
+        dimensions: *dimensions,
+        link_url,
+    })
 }
 
 fn convert_blocks<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownNode> {

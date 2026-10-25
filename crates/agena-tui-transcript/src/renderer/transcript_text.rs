@@ -1,5 +1,6 @@
 use super::transcript_ast::{
-    markdown_inline_line, parse_markdown_document, render_parsed_markdown_block,
+    MarkdownBlockLayout, MarkdownNode, markdown_inline_line, parse_markdown_document,
+    push_markdown_block_spacing, render_parsed_markdown_block,
 };
 use super::{
     I18n, Line, MarkdownBlock, Modifier, RenderedLine, Span, Style, TranscriptEntry,
@@ -183,6 +184,12 @@ pub(crate) fn tool_text_looks_like_markdown(text: &str, i18n: &I18n) -> bool {
         let source = line.trim();
         if source.is_empty() {
             return false;
+        }
+        if parse_markdown_document(source)
+            .iter()
+            .any(|block| matches!(block.parsed, MarkdownNode::Image { .. }))
+        {
+            return true;
         }
         markdown_inline_line(source, Style::default(), i18n).is_some_and(|rendered| {
             rendered
@@ -401,14 +408,16 @@ pub(crate) fn push_markdown_document(
     i18n: &I18n,
 ) {
     let blocks = markdown_blocks(text);
+    let mut previous = None;
+    let mut layout = MarkdownBlockLayout::default();
     for (index, block) in blocks.iter().enumerate() {
         if should_suppress_markdown_block(blocks.as_slice(), index) {
             continue;
         }
-        // Paragraph boundaries remain in the parsed/copy model. A terminal
-        // row is a full line of space, so do not add layout-only blank rows
-        // between blocks; literal blank lines inside code/output still render.
-        render_markdown_block(out, prefix, block, width, i18n);
+        push_markdown_block_spacing(out, prefix, previous, &block.parsed);
+        let block_prefix = layout.prefix(prefix, &block.parsed, width);
+        render_markdown_block(out, &block_prefix, block, width, i18n);
+        previous = Some(&block.parsed);
     }
 }
 
@@ -432,17 +441,6 @@ pub fn render_markdown_document_with_i18n(
     let mut out = Vec::new();
     push_markdown_document(&mut out, "", text, width, i18n);
     out
-}
-
-pub(crate) fn markdown_heading(line: &str) -> Option<(usize, &str)> {
-    let trimmed = line.trim_start();
-    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
-    if !(1..=6).contains(&level) {
-        return None;
-    }
-    let text = trimmed.get(level..)?.strip_prefix(' ')?.trim();
-    let text = text.trim_end_matches('#').trim_end();
-    (!text.is_empty()).then_some((level, text))
 }
 
 pub(crate) fn is_markdown_thematic_break(line: &str) -> bool {
@@ -475,11 +473,11 @@ pub(crate) fn should_suppress_markdown_block(blocks: &[MarkdownBlock], index: us
     let Some(previous) = index.checked_sub(1).and_then(|index| blocks.get(index)) else {
         return false;
     };
-    // A heading already carries its own visual rule.  Markdown examples often
-    // place `---` right after every heading, which otherwise produces two
-    // adjacent separators with no semantic value in the transcript.
-    markdown_heading(previous.source.as_str()).is_some()
-        && is_markdown_thematic_break(block.source.as_str())
+    // Heading markers already separate a section. Use the parsed kinds so
+    // Setext headings and repeated decorative rules behave like ATX headings.
+    is_markdown_thematic_break(block.source.as_str())
+        && (previous.kind == crate::TranscriptNodeKind::MarkdownHeading
+            || is_markdown_thematic_break(previous.source.as_str()))
 }
 
 pub(crate) fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &str, width: u16) {
@@ -521,7 +519,7 @@ pub(crate) fn push_markdown_code_block(
 
     let available = width.max(1) as usize;
     let prefix_width = UnicodeWidthStr::width(prefix);
-    let card_width = available.saturating_sub(prefix_width);
+    let mut card_width = available.saturating_sub(prefix_width);
     let palette = agena_tui_components::theme::active_palette();
     let code_uses_terminal_defaults = palette.code_bg == ratatui::style::Color::Reset;
     let code_muted = if code_uses_terminal_defaults {
@@ -560,6 +558,77 @@ pub(crate) fn push_markdown_code_block(
         return;
     }
 
+    let highlighted_lines = syntax_highlight_lines(&language, code_lines, palette);
+    let compact_label = truncate_display_width(&language, card_width.saturating_sub(8).min(12));
+    let compact_label_width = UnicodeWidthStr::width(compact_label.as_str());
+    let compact_gutter_width = compact_label_width.saturating_add(3);
+    let single_line_width = code_lines.first().map_or(0, |line| {
+        UnicodeWidthStr::width(line.replace('\t', "    ").as_str())
+    });
+    let compact_rows = single_line_width
+        .div_ceil(card_width - compact_gutter_width)
+        .max(1);
+    let framed_rows = single_line_width
+        .div_ceil(card_width - 4)
+        .max(1)
+        .saturating_add(2);
+    if let [code] = code_lines
+        && compact_rows <= framed_rows
+    {
+        // A command or one-line snippet does not need two rows of box chrome
+        // and a line-number gutter. Retain a frame when a long language label
+        // would make a wrapped snippet taller than the regular presentation.
+        let navigation_unit = out.len();
+        let highlighted = highlighted_lines.into_iter().next().unwrap_or_default();
+        for (index, body) in wrap_styled_spans(highlighted, card_width - compact_gutter_width)
+            .into_iter()
+            .enumerate()
+        {
+            let body_copy_text = body
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            let mut spans = vec![
+                Span::raw(prefix.to_string()),
+                Span::styled(
+                    if index == 0 {
+                        compact_label.clone()
+                    } else {
+                        " ".repeat(compact_label_width)
+                    },
+                    Style::default().fg(code_accent).bg(palette.code_bg),
+                ),
+                Span::styled(" │ ", Style::default().fg(code_muted).bg(palette.code_bg)),
+            ];
+            spans.extend(body);
+            out.push(
+                RenderedLine::rich(Line::from(spans))
+                    .with_copy_projection(
+                        body_copy_text,
+                        prefix_width.saturating_add(compact_gutter_width),
+                    )
+                    .with_navigation_unit(navigation_unit, *code),
+            );
+        }
+        return;
+    }
+
+    let line_count_width = code_lines.len().max(1).to_string().len();
+    let gutter_width = line_count_width.saturating_add(1);
+    // Short snippets should not draw a terminal-wide frame. Measuring the
+    // expanded source also keeps literal indentation and blank rows intact.
+    let natural_body_width = code_lines
+        .iter()
+        .map(|line| UnicodeWidthStr::width(line.replace('\t', "    ").as_str()))
+        .max()
+        .unwrap_or(0);
+    card_width = card_width.min(
+        natural_body_width
+            .saturating_add(gutter_width)
+            .saturating_add(2)
+            .max(UnicodeWidthStr::width(language.as_str()).saturating_add(5))
+            .max(16),
+    );
     let label = truncate_display_width(language.as_str(), card_width.saturating_sub(7).max(1));
     let top_start = format!("┌─ {label} ");
     let top_fill = "─".repeat(
@@ -586,10 +655,7 @@ pub(crate) fn push_markdown_code_block(
         .with_copy_projection(String::new(), prefix_width),
     );
 
-    let line_count_width = code_lines.len().max(1).to_string().len();
-    let gutter_width = line_count_width.saturating_add(1);
     let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
-    let highlighted_lines = syntax_highlight_lines(&language, code_lines, palette);
     for (index, line) in highlighted_lines.into_iter().enumerate() {
         let navigation_unit = out.len();
         let navigation_copy_text = code_lines.get(index).copied().unwrap_or_default();
@@ -841,4 +907,32 @@ pub(crate) fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_image_lines_are_recognized_and_rendered_as_markdown() {
+        for image in [
+            "![preview](https://example.com/image.png)",
+            "[![preview](https://example.com/image.png)](https://example.com/page)",
+            "<img src=\"https://example.com/image.png\" alt=\"preview\">",
+        ] {
+            for source in [image.to_string(), format!("Image preview:\n{image}")] {
+                assert!(
+                    tool_text_looks_like_markdown(&source, &I18n::english()),
+                    "{source}"
+                );
+                let mut lines = Vec::new();
+                render_expanded_tool_text_block(&mut lines, "  ", &source, 80, &I18n::english());
+                assert!(
+                    lines.iter().any(|line| line.text == "  🖼  preview"),
+                    "{lines:?}"
+                );
+                assert!(lines.iter().all(|line| !line.text.contains("![preview]")));
+            }
+        }
+    }
 }

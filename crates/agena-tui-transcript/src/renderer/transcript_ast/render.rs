@@ -9,6 +9,45 @@ struct MarkdownRenderContext<'a> {
     i18n: &'a I18n,
 }
 
+/// Headings own the margin; their body aligns with the heading text. Only
+/// actual sections add an inset, capped by the space left for terminal text.
+#[derive(Default)]
+pub(crate) struct MarkdownBlockLayout {
+    body_indent: usize,
+}
+
+impl MarkdownBlockLayout {
+    pub(crate) fn prefix<'a>(
+        &mut self,
+        prefix: &'a str,
+        node: &MarkdownNode,
+        width: u16,
+    ) -> Cow<'a, str> {
+        let available = usize::from(width).saturating_sub(UnicodeWidthStr::width(prefix));
+        let max_indent: usize = match available {
+            60.. => 6,
+            32.. => 4,
+            28.. => 2,
+            _ => 0,
+        };
+        let indent = if let MarkdownNode::Heading { level, .. } = node {
+            let heading_indent = usize::from(*level)
+                .saturating_sub(2)
+                .saturating_mul(2)
+                .min(max_indent.saturating_sub(2));
+            self.body_indent = heading_indent.saturating_add(2).min(max_indent);
+            heading_indent
+        } else {
+            self.body_indent.min(max_indent)
+        };
+        if indent == 0 {
+            Cow::Borrowed(prefix)
+        } else {
+            Cow::Owned(format!("{prefix}{}", " ".repeat(indent)))
+        }
+    }
+}
+
 pub fn render_parsed_markdown_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
@@ -17,6 +56,81 @@ pub fn render_parsed_markdown_block(
     i18n: &I18n,
 ) {
     render_markdown_node(out, prefix, &block.parsed, width, i18n);
+}
+
+/// Spend a row only where adjacent text would otherwise lose its boundary.
+/// Headings attach to their body, lists attach to their introduction, and
+/// framed content already provides a visible boundary of its own.
+pub(crate) fn push_markdown_block_spacing(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    previous: Option<&MarkdownNode>,
+    current: &MarkdownNode,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let previous_is_prose = matches!(
+        previous,
+        MarkdownNode::Paragraph(_) | MarkdownNode::Subtext(_)
+    );
+    let previous_is_unframed = previous_is_prose
+        || matches!(
+            previous,
+            MarkdownNode::List { .. }
+                | MarkdownNode::Quote(_)
+                | MarkdownNode::DescriptionList(_)
+                | MarkdownNode::FootnoteDefinition { .. }
+        );
+    let needs_gap = match current {
+        MarkdownNode::Heading { .. } => previous_is_unframed,
+        MarkdownNode::Paragraph(_) | MarkdownNode::Subtext(_) => previous_is_unframed,
+        _ => false,
+    };
+    if needs_gap {
+        push_markdown_gap(out, prefix);
+    }
+}
+
+fn push_markdown_gap(out: &mut Vec<RenderedLine>, prefix: &str) {
+    if out
+        .last()
+        .is_some_and(|line| line.text.trim_end() != prefix.trim_end())
+    {
+        out.push(
+            RenderedLine::rich(Line::from(prefix.to_owned()))
+                .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
+        );
+    }
+}
+
+fn render_markdown_children(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    blocks: &[MarkdownNode],
+    width: u16,
+    i18n: &I18n,
+) {
+    let mut previous = None;
+    let mut layout = MarkdownBlockLayout::default();
+    for block in blocks {
+        push_markdown_block_spacing(out, prefix, previous, block);
+        let block_prefix = layout.prefix(prefix, block, width);
+        render_markdown_node(out, &block_prefix, block, width, i18n);
+        previous = Some(block);
+    }
+}
+
+/// Prefix spans contain presentation gutters only. Tint container rails
+/// without dimming the body or changing its copy projection.
+fn style_container_rails(lines: &mut [RenderedLine], color: ratatui::style::Color) {
+    for line in lines {
+        if let Some(rich) = line.rich_line.as_mut()
+            && let Some(prefix) = rich.spans.first_mut()
+        {
+            prefix.style = prefix.style.fg(color);
+        }
+    }
 }
 
 fn render_markdown_node(
@@ -32,10 +146,13 @@ fn render_markdown_node(
             render_heading(out, prefix, usize::from(*level), content, width, i18n);
         }
         MarkdownNode::Quote(blocks) => {
-            let quote_prefix = format!("{prefix}│ ");
-            for block in blocks {
-                render_markdown_node(out, &quote_prefix, block, width, i18n);
-            }
+            let quote_prefix = format!("{prefix}┃ ");
+            let start = out.len();
+            render_markdown_children(out, &quote_prefix, blocks, width, i18n);
+            style_container_rails(
+                &mut out[start..],
+                agena_tui_components::theme::muted_color(),
+            );
         }
         MarkdownNode::Alert {
             kind,
@@ -64,22 +181,9 @@ fn render_markdown_node(
                 format!("```{language}\n{}\n```", literal.trim_end_matches('\n')),
             );
         }
-        MarkdownNode::List {
-            ordered,
-            start,
-            delimiter,
-            items,
-            ..
-        } => render_list(
-            out,
-            prefix,
-            *ordered,
-            *start,
-            *delimiter,
-            items,
-            0,
-            MarkdownRenderContext { width, i18n },
-        ),
+        MarkdownNode::List { .. } => {
+            render_list(out, prefix, node, 0, MarkdownRenderContext { width, i18n })
+        }
         MarkdownNode::DescriptionList(items) => {
             for item in items {
                 let term = inline_plain_text(&item.term);
@@ -93,9 +197,7 @@ fn render_markdown_node(
                     width,
                 );
                 let detail_prefix = format!("{prefix}  │ ");
-                for detail in &item.details {
-                    render_markdown_node(out, &detail_prefix, detail, width, i18n);
-                }
+                render_markdown_children(out, &detail_prefix, &item.details, width, i18n);
             }
         }
         MarkdownNode::Table { alignments, rows } => {
@@ -153,9 +255,7 @@ fn render_markdown_node(
                 width,
             );
             let footnote_prefix = format!("{prefix}  ");
-            for block in blocks {
-                render_markdown_node(out, &footnote_prefix, block, width, i18n);
-            }
+            render_markdown_children(out, &footnote_prefix, blocks, width, i18n);
         }
         MarkdownNode::FrontMatter(front_matter) => {
             let source = format!("```yaml\n{}\n```", front_matter_body(front_matter));
@@ -184,9 +284,7 @@ fn render_markdown_node(
                 width,
             );
             let body_prefix = format!("{prefix}│ ");
-            for block in blocks {
-                render_markdown_node(out, &body_prefix, block, width, i18n);
-            }
+            render_markdown_children(out, &body_prefix, blocks, width, i18n);
             push_single_line(
                 out,
                 prefix,
@@ -241,6 +339,17 @@ fn render_inline_flow(
     width: u16,
     i18n: &I18n,
 ) {
+    if render_standalone_image_lines(
+        out,
+        initial_prefix,
+        continuation_prefix,
+        inlines,
+        style,
+        width,
+        i18n,
+    ) {
+        return;
+    }
     let rich_start = out.len();
     let sources = if layout_config().native_graphics && inlines_contain_rich_graphics(inlines) {
         let mut atoms = Vec::new();
@@ -291,6 +400,71 @@ fn render_inline_flow(
     }
 }
 
+fn render_standalone_image_lines(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    inlines: &[MarkdownInline],
+    style: Style,
+    width: u16,
+    i18n: &I18n,
+) -> bool {
+    let is_break = |inline: &MarkdownInline| {
+        matches!(
+            inline,
+            MarkdownInline::SoftBreak | MarkdownInline::HardBreak
+        )
+    };
+    let mut cursor = 0;
+    let mut pending = 0;
+    let start = out.len();
+    for line in inlines.split(is_break) {
+        let end = cursor + line.len();
+        if let Some(image) = standalone_inline_image(line) {
+            let text_end = cursor.saturating_sub(1).max(pending);
+            if pending < text_end {
+                let first_prefix = if out.len() == start {
+                    initial_prefix
+                } else {
+                    continuation_prefix
+                };
+                render_inline_flow(
+                    out,
+                    first_prefix,
+                    continuation_prefix,
+                    &inlines[pending..text_end],
+                    style,
+                    width,
+                    i18n,
+                );
+            }
+            let first_prefix = if out.len() == start {
+                initial_prefix
+            } else {
+                continuation_prefix
+            };
+            render_first_list_block(out, first_prefix, continuation_prefix, &image, width, i18n);
+            pending = (end + 1).min(inlines.len());
+        }
+        cursor = end + 1;
+    }
+    if pending == 0 {
+        return false;
+    }
+    if pending < inlines.len() {
+        render_inline_flow(
+            out,
+            continuation_prefix,
+            continuation_prefix,
+            &inlines[pending..],
+            style,
+            width,
+            i18n,
+        );
+    }
+    true
+}
+
 fn mark_rendered_semantic_unit(
     out: &mut [RenderedLine],
     start: usize,
@@ -313,19 +487,21 @@ fn render_heading(
     i18n: &I18n,
 ) {
     let marker = match level {
-        1 => "══",
-        2 => "──",
-        _ => "›",
+        1 => "▌",
+        2 => "▎",
+        3 => "▸",
+        4 => "▹",
+        5 => "◇",
+        _ => "·",
     };
-    let style = Style::default()
-        .fg(if level <= 2 {
-            agena_tui_components::theme::accent_color()
-        } else {
-            agena_tui_components::theme::info_color()
-        })
-        .add_modifier(Modifier::BOLD);
+    let accent = agena_tui_components::theme::accent_color();
+    let mut style = Style::default().add_modifier(Modifier::BOLD);
+    if level == 1 {
+        style = style.fg(accent);
+    }
     let first_prefix = format!("{prefix}{marker} ");
     let continuation = format!("{prefix}{}", " ".repeat(UnicodeWidthStr::width(marker) + 1));
+    let start = out.len();
     render_inline_flow(
         out,
         &first_prefix,
@@ -335,6 +511,28 @@ fn render_heading(
         width,
         i18n,
     );
+    style_container_rails(&mut out[start..], accent);
+    // A short rule uses spare horizontal space on the title row, never a
+    // second row or clipboard text. Wrapped/graphical headings stay intact.
+    if level <= 2 && out.len() == start + 1 {
+        let line = &mut out[start];
+        let remaining =
+            usize::from(width).saturating_sub(UnicodeWidthStr::width(line.text.as_str()));
+        if remaining >= 6
+            && line.math.is_empty()
+            && let Some(rich) = line.rich_line.as_mut()
+        {
+            let rule = format!(
+                "  {}",
+                if level == 1 { "━" } else { "─" }.repeat((remaining - 2).min(12))
+            );
+            line.text.push_str(&rule);
+            rich.spans.push(Span::styled(
+                rule,
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ));
+        }
+    }
 }
 
 /// Caption label for one inline image: the alt text when the author supplied
@@ -564,9 +762,7 @@ fn append_rich_inline_atoms(
             }
             MarkdownInline::Code(code) => atoms.push(RichInlineAtom::Text(Span::styled(
                 code.clone(),
-                style
-                    .fg(agena_tui_components::theme::warning_color())
-                    .add_modifier(Modifier::BOLD),
+                inline_code_style(style, agena_tui_components::theme::active_palette()),
             ))),
             MarkdownInline::Emphasis(children) => {
                 if !append_rich_inline_atoms(atoms, children, style.add_modifier(Modifier::ITALIC))
@@ -652,7 +848,7 @@ fn append_rich_inline_atoms(
                     return false;
                 }
                 atoms.push(RichInlineAtom::Text(Span::styled(
-                    link_suffix(url, title),
+                    link_suffix(url, title, label),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                 )));
             }
@@ -667,7 +863,7 @@ fn append_rich_inline_atoms(
                     return false;
                 }
                 atoms.push(RichInlineAtom::Text(Span::styled(
-                    format!(" ({url})"),
+                    link_suffix(url, "", label),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                 )));
             }
@@ -709,35 +905,64 @@ fn append_rich_inline_atoms(
 fn render_list(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
-    ordered: bool,
-    start: usize,
-    delimiter: char,
-    items: &[MarkdownListItem],
+    node: &MarkdownNode,
     depth: usize,
     context: MarkdownRenderContext<'_>,
 ) {
+    let MarkdownNode::List {
+        ordered,
+        start,
+        delimiter,
+        tight,
+        items,
+    } = node
+    else {
+        return;
+    };
     let MarkdownRenderContext { width, i18n } = context;
-    for (offset, item) in items.iter().enumerate() {
-        let marker = if let Some(checked) = item.checked {
-            if checked {
-                "●".to_string()
+    // A loose list with multi-block items needs an item boundary. Simple
+    // bullet lists remain dense even when their source includes blank lines.
+    let separate_items = !tight && items.iter().any(|item| item.blocks.len() > 1);
+    let markers = items
+        .iter()
+        .enumerate()
+        .map(|(offset, item)| {
+            if let Some(checked) = item.checked {
+                if checked {
+                    "●".to_string()
+                } else {
+                    "○".to_string()
+                }
+            } else if *ordered {
+                format!("{}{delimiter}", start.saturating_add(offset))
             } else {
-                "○".to_string()
+                ["•", "◦", "▪"][depth.min(2)].to_string()
             }
-        } else if ordered {
-            format!("{}{delimiter}", start.saturating_add(offset))
-        } else {
-            ["•", "◦", "▪"][depth.min(2)].to_string()
-        };
-        let first_prefix = format!("{prefix}{marker} ");
-        let continuation = format!(
-            "{prefix}{}",
-            " ".repeat(UnicodeWidthStr::width(marker.as_str()) + 1)
-        );
+        })
+        .collect::<Vec<_>>();
+    let marker_width = markers
+        .iter()
+        .map(|marker| UnicodeWidthStr::width(marker.as_str()))
+        .max()
+        .unwrap_or(1);
+    let continuation = format!("{prefix}{}", " ".repeat(marker_width + 1));
+    // Reuse the parent's hanging-indent columns for a visible nesting rail.
+    // This makes levels readable without taking columns away from children.
+    let nested_prefix = format!("{prefix}{}│ ", " ".repeat(marker_width.saturating_sub(1)));
+    for (offset, (item, marker)) in items.iter().zip(&markers).enumerate() {
+        if offset > 0 && separate_items {
+            push_markdown_gap(out, prefix);
+        }
+        let padding =
+            " ".repeat(marker_width.saturating_sub(UnicodeWidthStr::width(marker.as_str())));
+        let first_prefix = format!("{prefix}{padding}{marker} ");
         let mut first = true;
+        let mut previous = None;
         for block in &item.blocks {
+            push_markdown_block_spacing(out, &continuation, previous, block);
             match block {
                 MarkdownNode::Paragraph(inlines) if first => {
+                    let start = out.len();
                     render_inline_flow(
                         out,
                         &first_prefix,
@@ -747,29 +972,21 @@ fn render_list(
                         width,
                         i18n,
                     );
+                    style_container_rails(
+                        &mut out[start..],
+                        agena_tui_components::theme::muted_color(),
+                    );
                 }
-                MarkdownNode::List {
-                    ordered,
-                    start,
-                    delimiter,
-                    items,
-                    ..
-                } => render_list(
-                    out,
-                    &continuation,
-                    *ordered,
-                    *start,
-                    *delimiter,
-                    items,
-                    depth.saturating_add(1),
-                    context,
-                ),
+                MarkdownNode::List { .. } => {
+                    render_list(out, &nested_prefix, block, depth.saturating_add(1), context)
+                }
                 _ if first => {
                     render_first_list_block(out, &first_prefix, &continuation, block, width, i18n)
                 }
                 _ => render_markdown_node(out, &continuation, block, width, i18n),
             }
             first = false;
+            previous = Some(block);
         }
         if item.blocks.is_empty() {
             push_single_line(out, &first_prefix, "", Style::default(), width);
@@ -892,9 +1109,9 @@ fn render_alert(
         width,
     );
     let body_prefix = format!("{prefix}│ ");
-    for block in blocks {
-        render_markdown_node(out, &body_prefix, block, width, i18n);
-    }
+    let start = out.len();
+    render_markdown_children(out, &body_prefix, blocks, width, i18n);
+    style_container_rails(&mut out[start..], color);
     push_single_line(out, prefix, "╰─", Style::default().fg(color), width);
 }
 
@@ -1576,11 +1793,18 @@ fn front_matter_body(front_matter: &str) -> String {
     lines.join("\n")
 }
 
-fn link_suffix(url: &str, title: &str) -> String {
-    if title.trim().is_empty() {
+fn link_suffix(url: &str, title: &str, label: &[MarkdownInline]) -> String {
+    let title = title.trim();
+    if inline_plain_text(label).trim() == url.trim() {
+        if title.is_empty() {
+            String::new()
+        } else {
+            format!(" ({title})")
+        }
+    } else if title.is_empty() {
         format!(" ({url})")
     } else {
-        format!(" ({url} — {})", title.trim())
+        format!(" ({url} — {title})")
     }
 }
 
@@ -1592,6 +1816,16 @@ fn rich_inline_lines(
     let mut rows = vec![Vec::new()];
     append_inline_spans(&mut rows, inlines, base_style, i18n);
     rows.into_iter().map(Line::from).collect()
+}
+
+fn inline_code_style(style: Style, palette: agena_tui_components::ThemePalette) -> Style {
+    let style = style.fg(palette.code_fg).bg(palette.code_bg);
+    if palette.code_bg == ratatui::style::Color::Reset {
+        // Without a detected background, keep a code cue in terminal colors.
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
 }
 
 fn append_inline_spans(
@@ -1612,9 +1846,7 @@ fn append_inline_spans(
                 .expect("inline rows are never empty")
                 .push(Span::styled(
                     code.clone(),
-                    style
-                        .fg(agena_tui_components::theme::warning_color())
-                        .add_modifier(Modifier::BOLD),
+                    inline_code_style(style, agena_tui_components::theme::active_palette()),
                 )),
             MarkdownInline::Emphasis(children) => {
                 append_inline_spans(rows, children, style.add_modifier(Modifier::ITALIC), i18n)
@@ -1682,7 +1914,7 @@ fn append_inline_spans(
                 rows.last_mut()
                     .expect("inline rows are never empty")
                     .push(Span::styled(
-                        link_suffix(url, title),
+                        link_suffix(url, title, label),
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                     ));
             }
@@ -1698,7 +1930,7 @@ fn append_inline_spans(
                 rows.last_mut()
                     .expect("inline rows are never empty")
                     .push(Span::styled(
-                        format!(" ({url})"),
+                        link_suffix(url, "", label),
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                     ));
             }
@@ -1773,4 +2005,28 @@ fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool {
         } => inlines_contain_rich_graphics(children),
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_code_style;
+    use agena_tui_components::{ColorScheme, ThemePalette};
+    use ratatui::style::{Color, Modifier, Style};
+
+    #[test]
+    fn inline_code_stays_visible_on_light_dark_and_unknown_backgrounds() {
+        for scheme in [ColorScheme::Dark, ColorScheme::Light] {
+            let palette = ThemePalette::for_scheme(scheme);
+            let style = inline_code_style(Style::default(), palette);
+            assert_eq!(style.fg, Some(palette.code_fg));
+            assert_eq!(style.bg, Some(palette.code_bg));
+            assert!(!style.add_modifier.contains(Modifier::BOLD));
+            let strong = inline_code_style(Style::default().add_modifier(Modifier::BOLD), palette);
+            assert!(strong.add_modifier.contains(Modifier::BOLD));
+        }
+        let style = inline_code_style(Style::default(), ThemePalette::for_unknown_background());
+        assert_eq!(style.fg, Some(Color::Reset));
+        assert_eq!(style.bg, Some(Color::Reset));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
 }

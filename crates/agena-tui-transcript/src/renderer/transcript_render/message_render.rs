@@ -1,4 +1,7 @@
-use super::super::transcript_ast::{MarkdownNode, markdown_inline_line, render_attachment_image};
+use super::super::transcript_ast::{
+    MarkdownBlockLayout, MarkdownNode, markdown_inline_line, push_markdown_block_spacing,
+    render_attachment_image,
+};
 use super::super::{
     I18n, Local, Modifier, RenderedLine, RenderedTranscriptNode, RunStatus,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
@@ -826,11 +829,10 @@ fn rendered_activity_section_node(
     })
 }
 
-/// Render the expanded answer body as one [`TranscriptNodeKey::MarkdownBlock`]
-/// node per Markdown block — the exact projection plain message text uses — so
-/// block/line selection, text objects (`vim`/`yam`/`gq`) and copy all operate
-/// on the answer identically to body text.
-fn append_answer_markdown_blocks(
+/// Plain message text and expanded answers share block layout and selection.
+/// Spacing stays outside navigation nodes so a selected block never captures
+/// a neighboring separator or the message header.
+pub(crate) fn append_message_markdown_blocks(
     message: &TranscriptEntry,
     part: &TranscriptEntryPart,
     text: &str,
@@ -840,12 +842,16 @@ fn append_answer_markdown_blocks(
     i18n: &I18n,
 ) {
     let blocks = markdown_blocks(text);
+    let mut previous = None;
+    let mut layout = MarkdownBlockLayout::default();
     for (block_index, block) in blocks.iter().enumerate() {
         if should_suppress_markdown_block(blocks.as_slice(), block_index) {
             continue;
         }
+        push_markdown_block_spacing(out, BODY_PREFIX, previous, &block.parsed);
+        let block_prefix = layout.prefix(BODY_PREFIX, &block.parsed, width);
         let start_line = out.len();
-        render_markdown_block(out, BODY_PREFIX, block, width, i18n);
+        render_markdown_block(out, &block_prefix, block, width, i18n);
         if out.len() > start_line {
             let semantic_unit_count = out[start_line..]
                 .iter()
@@ -877,6 +883,7 @@ fn append_answer_markdown_blocks(
                 expanded: true,
             });
         }
+        previous = Some(&block.parsed);
     }
 }
 
@@ -1304,7 +1311,7 @@ pub(crate) fn render_part_node(
             let headline_end = out.len();
             let mut children = Vec::new();
             if expanded {
-                append_answer_markdown_blocks(
+                append_message_markdown_blocks(
                     message,
                     part,
                     answer.text.as_str(),

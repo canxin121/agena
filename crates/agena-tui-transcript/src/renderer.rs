@@ -261,48 +261,15 @@ pub fn render_entry_detailed_with_progressive_expansion(
 
             let part = &parts[part_index];
             if let TranscriptPartContent::Text(text) = transcript_part_content(part) {
-                let blocks = markdown_blocks(text.text.as_str());
-                for (block_index, block) in blocks.iter().enumerate() {
-                    if should_suppress_markdown_block(blocks.as_slice(), block_index) {
-                        continue;
-                    }
-                    // Keep the message header outside Markdown selections.  A selected code
-                    // block or list should be exactly that block, both visually and on copy.
-                    let start_line = lines.len();
-                    render_markdown_block(&mut lines, BODY_PREFIX, block, width, i18n);
-                    if lines.len() > start_line {
-                        let rendered_block = &lines[start_line..];
-                        let semantic_unit_count = rendered_block
-                            .iter()
-                            .filter_map(|line| line.navigation_unit)
-                            .fold((None, 0_usize), |(previous, count), unit| {
-                                (
-                                    Some(unit),
-                                    count.saturating_add(usize::from(previous != Some(unit))),
-                                )
-                            })
-                            .1;
-                        let atomic = if block.kind == TranscriptNodeKind::MarkdownMath {
-                            semantic_unit_count <= 1
-                        } else {
-                            block.kind.uses_atomic_navigation()
-                        };
-                        nodes.push(RenderedTranscriptNode {
-                            key: TranscriptNodeKey::MarkdownBlock {
-                                entry_id: message.id,
-                                content_id: part.id,
-                                block_index,
-                            },
-                            kind: block.kind,
-                            start_line,
-                            end_line: lines.len(),
-                            copy_text: block.copy_text.clone().into(),
-                            atomic,
-                            toggleable: false,
-                            expanded: true,
-                        });
-                    }
-                }
+                append_message_markdown_blocks(
+                    message,
+                    part,
+                    text.text.as_str(),
+                    width,
+                    &mut lines,
+                    &mut nodes,
+                    i18n,
+                );
                 part_index += 1;
                 continue;
             }

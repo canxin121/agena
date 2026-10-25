@@ -1,3 +1,4 @@
+use agena_api::part::TextPartResource;
 use agena_api::resource::{RunRole, RunStatus};
 use agena_domain::{
     PartDocument, TextSegmentActivity, ToolInvocation, UserInputRequest, ViewBlock,
@@ -7,8 +8,9 @@ use agena_tui::i18n::I18n;
 use agena_tui_transcript::{
     InteractionLineKind, PartExecutionStatusResource, PendingInteractionView, ToolCallView,
     TranscriptActivityContent, TranscriptContentId, TranscriptDetailDefaults, TranscriptEntry,
-    TranscriptEntryId, TranscriptEntryPart, TranscriptPartContent, TranscriptUserDocument,
-    TranscriptUserDocumentNode, render_entry_detailed, render_entry_detailed_with_interactions,
+    TranscriptEntryId, TranscriptEntryPart, TranscriptNodeKey, TranscriptPartContent,
+    TranscriptUserDocument, TranscriptUserDocumentNode, render_entry_detailed,
+    render_entry_detailed_with_interactions, render_markdown_document,
 };
 use serde_json::json;
 use unicode_width::UnicodeWidthStr;
@@ -94,6 +96,76 @@ fn user_and_answer_share_one_body_inset_without_removing_source_indentation() {
             .find(|line| line.text.contains("内层列表"))
             .unwrap();
         assert!(inner.copy_column > outer.copy_column);
+    }
+}
+
+#[test]
+fn message_text_and_answer_match_document_spacing_without_selecting_separator_rows() {
+    let source = "首段说明。\n\n第二段说明。\n\n## 步骤\n\n- 检查配置\n- 运行测试\n\n执行完成。\n\n```sh\ncargo test --locked\n```\n\n> 引用首段。\n>\n> 引用次段。";
+    let entries = [
+        entry(
+            RunRole::Assistant,
+            TranscriptPartContent::Text(TextPartResource {
+                text: source.into(),
+                synthetic: false,
+            }),
+        ),
+        entry(
+            RunRole::Assistant,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(Box::new(
+                TextSegmentActivity {
+                    text: source.into(),
+                },
+            ))),
+        ),
+    ];
+    for width in [20, 40, 80] {
+        let document = render_markdown_document(source, width - 2);
+        for entry in &entries {
+            let rendered = render_entry_detailed(
+                entry,
+                width,
+                &I18n::english(),
+                &Default::default(),
+                &Default::default(),
+            );
+            let blocks = rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+                .collect::<Vec<_>>();
+            assert_eq!(blocks.len(), 7);
+            let body_start = blocks[0].start_line;
+            assert_eq!(
+                rendered.lines[body_start..]
+                    .iter()
+                    .map(|line| line.text.strip_prefix("  ").unwrap())
+                    .collect::<Vec<_>>(),
+                document
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>(),
+                "{width}"
+            );
+            for block in blocks {
+                assert!(!rendered.lines[block.start_line].text.trim().is_empty());
+                assert!(!rendered.lines[block.end_line - 1].text.trim().is_empty());
+            }
+            for (index, line) in rendered
+                .lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.text.trim().is_empty())
+            {
+                assert!(line.copy_text.is_empty());
+                assert!(
+                    rendered
+                        .nodes
+                        .iter()
+                        .all(|node| index < node.start_line || index >= node.end_line)
+                );
+            }
+        }
     }
 }
 

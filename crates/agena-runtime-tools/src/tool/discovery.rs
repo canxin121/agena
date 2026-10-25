@@ -17,22 +17,28 @@ const COMMON_IGNORED_DIRECTORIES: &[&str] = &[
     "build",
 ];
 
-pub(super) fn walk_builder(base_path: &Path, include_ignored: bool) -> WalkBuilder {
+pub(super) fn walk_builder_with_filter(
+    base_path: &Path,
+    include_ignored: bool,
+    access: Option<agena_tool::path_filter::PathPredicate>,
+) -> WalkBuilder {
     let mut builder = WalkBuilder::new(base_path);
     builder
         .follow_links(false)
         .standard_filters(!include_ignored)
         .sort_by_file_path(|left, right| left.cmp(right));
-    if !include_ignored {
-        builder.filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry.file_type().is_some_and(|kind| kind.is_dir())
-                || !entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(is_common_ignored_directory)
-        });
-    }
+    builder.filter_entry(move |entry| {
+        (include_ignored
+            || entry.depth() == 0
+            || !entry.file_type().is_some_and(|kind| kind.is_dir())
+            || !entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_common_ignored_directory))
+            && access.as_ref().is_none_or(|check| {
+                !entry.file_type().is_some_and(|kind| kind.is_dir()) || check.allows(entry.path())
+            })
+    });
     builder
 }
 
@@ -60,4 +66,37 @@ fn explicitly_targets_ignored_directory(base_path: &Path, workspace_root: &Path)
 
 fn is_common_ignored_directory(name: &str) -> bool {
     COMMON_IGNORED_DIRECTORIES.contains(&name)
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    #[test]
+    fn denied_directories_are_pruned_before_descendant_discovery() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::write(private.join("secret.txt"), "private").unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let visited = seen.clone();
+        let filter = agena_tool::path_filter::PathFilter::new(move |path| {
+            visited.lock().unwrap().push(path.to_owned());
+            if path == private {
+                Err("child denied")
+            } else {
+                Ok(())
+            }
+        });
+        let paths = walk_builder_with_filter(root.path(), true, Some(filter.predicate()))
+            .build()
+            .collect::<Vec<_>>();
+        assert_eq!(filter.finish(Ok(paths)).unwrap_err(), "child denied");
+        assert!(
+            !seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.file_name().is_some_and(|name| name == "secret.txt"))
+        );
+    }
 }

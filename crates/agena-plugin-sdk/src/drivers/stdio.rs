@@ -716,7 +716,7 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<crate::host_api::PermissionQuery> {
         self.call(
             method::HOST_PERMISSION_CHECK_PATH,
-            serde_json::json!({ "request": request }),
+            serde_json::json!({ "request": request, "context": crate::host_api::current_host_callback_context() }),
         )
         .await
     }
@@ -727,9 +727,20 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<crate::host_api::PermissionQuery> {
         self.call(
             method::HOST_PERMISSION_CHECK_NETWORK,
-            serde_json::json!({ "target": target }),
+            serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() }),
         )
         .await
+    }
+
+    async fn require_path_permission(
+        &self,
+        request: crate::host_api::PathPermissionQuery,
+    ) -> crate::error::Result<()> {
+        crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_PATH, serde_json::json!({ "request": request, "context": crate::host_api::current_host_callback_context() }))).await
+    }
+
+    async fn require_network_permission(&self, target: String) -> crate::error::Result<()> {
+        crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_NETWORK, serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() }))).await
     }
 
     async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
@@ -1384,5 +1395,115 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         code,
         message: e.to_string(),
         data: e.rpc_error_data(),
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    use crate::host_api::{
+        HostCallbackContext, PathPermissionQuery, PermissionQuery,
+        run_in_isolated_host_callback_context,
+    };
+
+    #[tokio::test]
+    async fn permission_callbacks_send_authority_and_preserve_typed_results() {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(4);
+        let pending = Arc::new(StdMutex::new(
+            HashMap::<RequestId, oneshot::Sender<Response>>::new(),
+        ));
+        let client = StdioHostClient {
+            tx,
+            pending: pending.clone(),
+            next_id: Arc::new(AtomicI64::new(1)),
+        };
+        let context = HostCallbackContext {
+            session_id: Some(31),
+            call_id: Some(47),
+            authority_token: Some("opaque-test-authority".into()),
+            ..Default::default()
+        };
+        let expected = serde_json::to_value(&context).unwrap();
+        let echo = tokio::spawn(async move {
+            let mut methods = Vec::new();
+            while let Some(body) = rx.recv().await {
+                let request: Request = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request.params.as_ref().unwrap()["context"], expected);
+                let payload = if request.method.contains(".check_") {
+                    ResponsePayload::Ok {
+                        result: serde_json::to_value(PermissionQuery::Ask {
+                            reason: "needs approval".into(),
+                        })
+                        .unwrap(),
+                    }
+                } else {
+                    let error =
+                        PluginError::from_kind(PluginErrorKind::UserDeclined, "wire decline");
+                    ResponsePayload::Err {
+                        error: crate::rpc::ErrorObject {
+                            code: crate::rpc::codes::USER_DECLINED,
+                            message: error.to_string(),
+                            data: error.rpc_error_data(),
+                        },
+                    }
+                };
+                methods.push(request.method);
+                pending
+                    .lock()
+                    .unwrap()
+                    .remove(&request.id)
+                    .unwrap()
+                    .send(Response {
+                        jsonrpc: JsonRpcVersion,
+                        id: request.id,
+                        payload,
+                    })
+                    .unwrap();
+            }
+            methods
+        });
+        run_in_isolated_host_callback_context(context, async {
+            assert!(matches!(
+                client
+                    .check_path_permission(PathPermissionQuery::read("file"))
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
+            assert!(matches!(
+                client
+                    .check_network_permission("https://example.org".into())
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
+            assert_eq!(
+                client
+                    .require_path_permission(PathPermissionQuery::read("file"))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                PluginErrorKind::UserDeclined
+            );
+            assert_eq!(
+                client
+                    .require_network_permission("https://example.org".into())
+                    .await
+                    .unwrap_err()
+                    .kind,
+                PluginErrorKind::UserDeclined
+            );
+        })
+        .await;
+        drop(client);
+        assert_eq!(
+            echo.await.unwrap(),
+            [
+                method::HOST_PERMISSION_CHECK_PATH,
+                method::HOST_PERMISSION_CHECK_NETWORK,
+                method::HOST_PERMISSION_REQUIRE_PATH,
+                method::HOST_PERMISSION_REQUIRE_NETWORK
+            ]
+        );
     }
 }

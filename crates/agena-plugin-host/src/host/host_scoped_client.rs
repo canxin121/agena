@@ -174,6 +174,33 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn require_path_permission(
+        &self,
+        request: crate::sdk::host_api::PathPermissionQuery,
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                crate::sdk::permission_wait::waiting(inner.require_path_permission(request)),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn require_network_permission(&self, target: String) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                crate::sdk::permission_wait::waiting(inner.require_network_permission(target)),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn request_config_reload(&self) -> crate::sdk::Result<HostConfigReloadRequestResponse> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();

@@ -70,6 +70,9 @@ struct LiveTool {
     tool: ToolHandle,
     control: Arc<RunControl>,
     permit: ToolPermitSlot,
+    /// One tool owns one interaction slot. Concurrent plugin callbacks must
+    /// serialize approval and may reuse a grant only within this live call.
+    permissions: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
 }
 type ActiveToolMap = HashMap<(i64, i64), LiveTool>;
 #[derive(Default)]

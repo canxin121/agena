@@ -257,6 +257,14 @@ pub fn search_ast(
     workspace_root: &Path,
     request: StructuralSearchRequest,
 ) -> Result<StructuralSearchResult, CodeSearchError> {
+    search_ast_with_filter(workspace_root, request, None)
+}
+
+pub fn search_ast_with_filter(
+    workspace_root: &Path,
+    request: StructuralSearchRequest,
+    access: Option<crate::path_filter::PathPredicate>,
+) -> Result<StructuralSearchResult, CodeSearchError> {
     let root = resolve_input_path(workspace_root, request.path.as_path());
     let language = resolve_code_language(&root, request.language, "search_ast")?;
     let config = compile_rule(language, &request.pattern, request.rule.as_ref(), None)?;
@@ -268,7 +276,7 @@ pub fn search_ast(
     }
     let limit = limit as usize;
     let started_at = Instant::now();
-    let discovery = collect_language_files(&root, language, started_at);
+    let discovery = collect_language_files(&root, language, started_at, access.clone());
     let mut scanned_files = 0;
     let mut skipped_files = discovery.skipped_entries;
     let mut remaining_bytes = MAX_STRUCTURAL_TOTAL_BYTES;
@@ -283,7 +291,13 @@ pub fn search_ast(
     let mut matches = Vec::new();
 
     'files: for path in discovery.files {
-        if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+        if started_at.elapsed().saturating_sub(
+            access
+                .as_ref()
+                .map(|check| check.waited())
+                .unwrap_or_default(),
+        ) >= MAX_STRUCTURAL_DURATION
+        {
             truncation_reason = Some(format!(
                 "structural search reached the {} second time limit",
                 MAX_STRUCTURAL_DURATION.as_secs()
@@ -318,7 +332,13 @@ pub fn search_ast(
                 truncation_reason = Some(format!("additional AST matches exceed limit {limit}"));
                 break 'files;
             }
-            if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+            if started_at.elapsed().saturating_sub(
+                access
+                    .as_ref()
+                    .map(|check| check.waited())
+                    .unwrap_or_default(),
+            ) >= MAX_STRUCTURAL_DURATION
+            {
                 truncation_reason = Some("structural search reached its time limit".into());
                 break 'files;
             }
@@ -552,10 +572,15 @@ fn collect_language_files(
     path: &Path,
     language: SupportLang,
     started_at: Instant,
+    access: Option<crate::path_filter::PathPredicate>,
 ) -> FileDiscovery {
     if !path.is_dir() {
         return FileDiscovery {
-            files: vec![path.to_path_buf()],
+            files: if access.as_ref().is_none_or(|check| check.allows(path)) {
+                vec![path.to_path_buf()]
+            } else {
+                Vec::new()
+            },
             skipped_entries: 0,
             first_skipped_error: None,
             truncation_reason: None,
@@ -567,23 +592,30 @@ fn collect_language_files(
         .standard_filters(true)
         .sort_by_file_path(|left, right| left.cmp(right))
         .threads(1)
-        .filter_entry(|entry| {
-            entry.depth() == 0
-                || !entry.file_type().is_some_and(|kind| kind.is_dir())
-                || !matches!(
-                    entry.file_name().to_str(),
-                    Some(
-                        ".git"
-                            | ".hg"
-                            | ".svn"
-                            | ".agena"
-                            | ".cache"
-                            | "node_modules"
-                            | "target"
-                            | "dist"
-                            | "build"
-                    )
-                )
+        .filter_entry({
+            let access = access.clone();
+            move |entry| {
+                (entry.depth() == 0
+                    || !entry.file_type().is_some_and(|kind| kind.is_dir())
+                    || !matches!(
+                        entry.file_name().to_str(),
+                        Some(
+                            ".git"
+                                | ".hg"
+                                | ".svn"
+                                | ".agena"
+                                | ".cache"
+                                | "node_modules"
+                                | "target"
+                                | "dist"
+                                | "build"
+                        )
+                    ))
+                    && access.as_ref().is_none_or(|check| {
+                        !entry.file_type().is_some_and(|kind| kind.is_dir())
+                            || check.allows(entry.path())
+                    })
+            }
         });
     let mut files = Vec::new();
     let mut skipped_entries = 0;
@@ -596,7 +628,13 @@ fn collect_language_files(
             ));
             break;
         }
-        if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+        if started_at.elapsed().saturating_sub(
+            access
+                .as_ref()
+                .map(|check| check.waited())
+                .unwrap_or_default(),
+        ) >= MAX_STRUCTURAL_DURATION
+        {
             truncation_reason = Some(format!(
                 "structural discovery reached the {} second time limit",
                 MAX_STRUCTURAL_DURATION.as_secs()
@@ -621,6 +659,12 @@ fn collect_language_files(
             continue;
         }
         if infer_support_lang(entry.path()).is_some_and(|detected| detected == language) {
+            if access
+                .as_ref()
+                .is_some_and(|check| !check.allows(entry.path()))
+            {
+                continue;
+            }
             if files.len() >= MAX_STRUCTURAL_FILES {
                 truncation_reason = Some(format!(
                     "structural discovery reached the {MAX_STRUCTURAL_FILES} file limit"

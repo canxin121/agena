@@ -537,9 +537,30 @@ impl SessionManager {
                 tool: tool.tool.clone(),
                 control: control.clone(),
                 permit: permit_slot.clone(),
+                permissions: Default::default(),
             },
         );
         let mut applied_invocation = tool.invocation.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let manager = self.clone();
+        let authorizer = executor.clone();
+        let authority_tool = tool.tool.clone();
+        let authority_control = control.clone();
+        let authority_state = state.clone();
+        let executor = executor.with_read_path_authorizer(Arc::new(move |path| {
+            let check = authorizer
+                .path_permission_check(agena_domain::AccessKind::Read, &path.to_string_lossy());
+            runtime.block_on(agena_async::permission_wait::scope(
+                Some(key),
+                agena_async::permission_wait::waiting(manager.authorize_checks(
+                    &authority_tool,
+                    vec![check],
+                    &authorizer,
+                    &authority_control,
+                    &authority_state,
+                )),
+            ))
+        }));
         let effect=async {
             let prepared=executor.prepare_invocation(&tool.invocation,key.0,key.1).await?;
             let (invocation,shell)=executor.prepare_shell_invocation(&prepared.invocation,key.0,key.1).await?;
@@ -644,11 +665,37 @@ impl SessionManager {
                 Some(control.session.get()),
             )
             .await?;
+        self.authorize_checks(tool, checks, executor, control, state)
+            .await
+    }
+
+    pub(super) async fn authorize_checks(
+        &self,
+        tool: &ToolHandle,
+        checks: Vec<agena_tool::ToolPermissionCheck>,
+        executor: &ToolExecutor,
+        control: &Arc<RunControl>,
+        state: &ExecutionState,
+    ) -> Result<(), ToolError> {
+        let permissions = self
+            .tools
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&(control.session.get(), tool.id().get()))
+            .map(|live| live.permissions.clone())
+            .ok_or(ToolError::Cancelled)?;
+        let mut granted = tokio::select! {
+            _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+            granted = permissions.lock() => granted,
+        };
         let workspace = self
             .current_workspace_id()
             .await
             .map_err(|e| ToolError::invalid_input(e.to_string()))?;
         for check in checks {
+            if control.cancel.is_cancelled() {
+                return Err(ToolError::Cancelled);
+            }
             let action_key = permission_key(&check.action)
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?;
             let rules = self
@@ -671,12 +718,25 @@ impl SessionManager {
                 .collect::<Vec<_>>();
             let resolution = agena_permission::apply_rules(&check.decision, &rules);
             let decision = resolution.decision.clone();
+            let grant_key = match &check.action {
+                PermissionAction::NetworkAccess { host, port, .. } => {
+                    serde_json::to_string(&("network", host, port))
+                        .map_err(|e| ToolError::invalid_input(e.to_string()))?
+                }
+                _ => action_key.clone(),
+            };
+            // Re-read policy/rules even for a grant made earlier in this call:
+            // a newly effective deny always wins over a remembered grant.
+            if !matches!(decision, PermissionDecision::Deny { .. }) && granted.contains(&grant_key)
+            {
+                continue;
+            }
             let automatic = matches!(decision, PermissionDecision::Auto { .. });
             let decision = if matches!(decision, PermissionDecision::Auto { .. }) {
-                match self
-                    .classify_permission(&check.action, &decision, control.session, state, executor)
-                    .await
-                {
+                match tokio::select! {
+                    _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+                    verdict = self.classify_permission(&check.action, &decision, control.session, state, executor) => verdict,
+                } {
                     Some(true) => PermissionDecision::Allow,
                     Some(false) => PermissionDecision::Deny {
                         reason: "automatic review rejected this action".into(),
@@ -741,7 +801,7 @@ impl SessionManager {
                 PermissionDecision::Ask { reason } | PermissionDecision::Auto { reason } => {
                     let command = RequestId::new();
                     let request = InteractionRequest::Permission {
-                        action_key,
+                        action_key: action_key.clone(),
                         description: reason,
                     };
                     let interaction =
@@ -790,6 +850,7 @@ impl SessionManager {
                     }
                 }
             }
+            granted.insert(grant_key);
         }
         Ok(())
     }
@@ -1029,7 +1090,7 @@ fn completion_request(
         request_override: options.request_override.clone(),
     }
 }
-fn permission_key(action: &PermissionAction) -> Result<String, serde_json::Error> {
+pub(super) fn permission_key(action: &PermissionAction) -> Result<String, serde_json::Error> {
     let mut action = action.clone();
     if let PermissionAction::Tool { tool_name, .. } = &mut action
         && let Some(name) =

@@ -136,13 +136,22 @@ impl MemoryStore {
     }
 
     pub fn list(&self) -> MemoryResult<Vec<MemoryRecord>> {
+        self.list_filtered(|_| true)
+    }
+
+    /// Check each concrete record before reading it; approving the memory
+    /// directory must not bypass a rule for one record.
+    pub fn list_filtered(
+        &self,
+        allowed: impl Fn(&Path) -> bool,
+    ) -> MemoryResult<Vec<MemoryRecord>> {
         if !self.dir.exists() {
             return Ok(Vec::new());
         }
         let mut entries = Vec::new();
         for dirent in fs::read_dir(&self.dir)? {
             let path = dirent?.path();
-            if !is_memory_file(&path) {
+            if !is_memory_file(&path) || !allowed(&path) {
                 continue;
             }
             match read_entry(&path) {

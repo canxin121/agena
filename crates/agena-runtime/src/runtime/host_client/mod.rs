@@ -243,6 +243,53 @@ impl RuntimeHostClient {
         Ok((executor, session_context))
     }
 
+    fn callback_monitor_owner(
+        &self,
+        executor: &crate::tool::ToolExecutor,
+    ) -> Result<agena_runtime_tools::TerminalOwner, PluginError> {
+        let session = self
+            .callback_context()?
+            .session_id
+            .ok_or_else(|| host_unavailable("monitor access requires a session"))?;
+        Ok(agena_runtime_tools::TerminalOwner {
+            workspace: executor.workspace_root().to_owned(),
+            session_id: Some(session),
+        })
+    }
+
+    fn require_monitor_owner(
+        &self,
+        executor: &crate::tool::ToolExecutor,
+        registry: &dyn agena_runtime_tools::MonitorService,
+        id: &str,
+    ) -> Result<(), PluginError> {
+        if registry.is_owned(id, &self.callback_monitor_owner(executor)?) {
+            return Ok(());
+        }
+        Err(PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+            "monitor belongs to another session or is unavailable",
+        ))
+    }
+
+    async fn require_callback_invocation(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<(), PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        let input = StructuredObject::try_from(input).map_err(PluginError::invalid_params)?;
+        agena_plugin_host::sdk::permission_wait::waiting(
+            self.session_manager()?.require_host_invocation_permission(
+                session,
+                call,
+                ToolInvocation::new(name, input),
+            ),
+        )
+        .await
+        .map_err(plugin_error_from_app)
+    }
+
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
         current_host_callback_context()
             .ok_or_else(|| host_unavailable("host callback context is not available"))
@@ -450,37 +497,63 @@ impl HostClient for RuntimeHostClient {
         &self,
         request: PathPermissionQuery,
     ) -> Result<PermissionQuery, PluginError> {
-        let executor = self.callback_scoped_tool_executor().await?.0;
-        let workspace_root = self
-            .callback_context()?
-            .workspace_root
-            .filter(|root| !root.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| executor.workspace_root().to_path_buf());
+        let (executor, context) = self.callback_scoped_tool_executor().await?;
         let access = match request.kind {
             PathKind::Read => AccessKind::Read,
             PathKind::Write => AccessKind::Write,
         };
-        let target = executor.resolve_target_path(request.path.as_str());
-        let decision = executor.principal().authorize_path_access(
-            access,
-            workspace_root.as_path(),
-            target.as_path(),
-        );
+        let check = executor.path_permission_check(access, &request.path);
+        let decision = self
+            .session_manager()?
+            .query_host_permission(
+                context
+                    .as_ref()
+                    .and_then(|context| context.scope_session_id),
+                check,
+            )
+            .await
+            .map_err(plugin_error_from_app)?;
         Ok(permission_query(decision))
     }
 
-    /// Answer one outbound-network question from the effective policy.
     async fn check_network_permission(
         &self,
         target: String,
     ) -> Result<PermissionQuery, PluginError> {
-        let executor = self.callback_scoped_tool_executor().await?.0;
-        let target: agena_domain::NetworkTarget = target
-            .parse()
-            .map_err(|err| PluginError::invalid_params(format!("invalid network target: {err}")))?;
-        let decision = executor.principal().authorize_network_connect(&target);
+        let (executor, context) = self.callback_scoped_tool_executor().await?;
+        let check = executor
+            .network_permission_check(&target)
+            .map_err(|error| error.into_plugin_error())?;
+        let decision = self
+            .session_manager()?
+            .query_host_permission(
+                context
+                    .as_ref()
+                    .and_then(|context| context.scope_session_id),
+                check,
+            )
+            .await
+            .map_err(plugin_error_from_app)?;
         Ok(permission_query(decision))
+    }
+
+    async fn require_path_permission(
+        &self,
+        request: PathPermissionQuery,
+    ) -> Result<(), PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .require_host_path_permission(session, call, request.kind, request.path)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn require_network_permission(&self, target: String) -> Result<(), PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .require_host_network_permission(session, call, target)
+            .await
+            .map_err(plugin_error_from_app)
     }
 
     async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse, PluginError> {
@@ -868,6 +941,25 @@ impl HostClient for RuntimeHostClient {
             _ => {}
         }
         let (executor, _) = self.callback_scoped_tool_executor().await?;
+        for input in &req.inputs {
+            let path = match input {
+                agena_plugin_host::sdk::host_api::HostImageInput::Path { path } => {
+                    Some(path.as_str())
+                }
+                agena_plugin_host::sdk::host_api::HostImageInput::Attachment { attachment } => {
+                    match &attachment.source {
+                        agena_plugin_host::sdk::attachment::AttachmentSource::LocalPath {
+                            path,
+                        } => Some(path.as_str()),
+                        _ => None,
+                    }
+                }
+            };
+            if let Some(path) = path {
+                self.require_path_permission(PathPermissionQuery::read(path))
+                    .await?;
+            }
+        }
         let inputs =
             prepare_provider_image_inputs(&executor, req.inputs.as_slice(), &capabilities).await?;
         let provider_request = agena_provider::ProviderImageRequest {
@@ -913,16 +1005,19 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
-        let (executor, registry) = self.executor_feature(
-            |executor| executor.monitor_registry().cloned(),
-            "background process registry is not enabled in this runtime",
-        )?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
+            host_unavailable("background process registry is not enabled in this runtime")
+        })?;
+        let command = join_monitor_command(&req.command)?;
+        self.require_callback_invocation("agena.shell.spawn", serde_json::json!({
+            "command": command, "workdir": req.cwd, "reads": req.reads, "writes": req.writes, "network": req.network,
+        })).await?;
         let cwd = req
             .cwd
             .as_deref()
             .map(|path| executor.resolve_target_path(path))
             .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-        let command = join_monitor_command(&req.command)?;
         let env = if req.env.is_empty() {
             std::env::vars().collect()
         } else {
@@ -932,7 +1027,10 @@ impl HostClient for RuntimeHostClient {
             .start(MonitorStartParams {
                 argv: None,
                 output: None,
-                owner: None,
+                owner: Some(agena_runtime_tools::TerminalOwner {
+                    workspace: executor.workspace_root().to_owned(),
+                    session_id: self.callback_context()?.session_id,
+                }),
                 process_id: None,
                 description: req.label.unwrap_or_else(|| command.clone()),
                 command,
@@ -956,13 +1054,15 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn monitor_list(&self) -> Result<Vec<MonitorHandle>, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.monitor_registry().cloned(),
-            "background process registry is not enabled in this runtime",
-        )?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
+            host_unavailable("background process registry is not enabled in this runtime")
+        })?;
+        let owner = self.callback_monitor_owner(&executor)?;
         Ok(registry
             .list()
             .into_iter()
+            .filter(|monitor| registry.is_owned(&monitor.process_id, &owner))
             .map(render_monitor_handle)
             .collect())
     }
@@ -971,10 +1071,11 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: MonitorReadRequest,
     ) -> Result<MonitorReadResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.monitor_registry().cloned(),
-            "background process registry is not enabled in this runtime",
-        )?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
+            host_unavailable("background process registry is not enabled in this runtime")
+        })?;
+        self.require_monitor_owner(&executor, registry.as_ref(), &req.id)?;
         let read = crate::blocking::PROCESS_LOG_READS
             .run(move || {
                 registry.read(MonitorReadParams {
@@ -995,10 +1096,16 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn monitor_stop(&self, req: MonitorStopRequest) -> Result<MonitorHandle, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.monitor_registry().cloned(),
-            "background process registry is not enabled in this runtime",
-        )?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
+            host_unavailable("background process registry is not enabled in this runtime")
+        })?;
+        self.require_monitor_owner(&executor, registry.as_ref(), &req.id)?;
+        self.require_callback_invocation(
+            "agena.shell.stop",
+            serde_json::json!({"process_id":req.id}),
+        )
+        .await?;
         let stop = registry.stop(req.id.as_str()).map_err(map_monitor_error)?;
         Ok(render_monitor_handle(stop.summary))
     }
@@ -1152,6 +1259,14 @@ impl HostClient for RuntimeHostClient {
             {
                 continue;
             }
+            let path = url::Url::parse(&uri)
+                .ok()
+                .and_then(|uri| uri.to_file_path().ok())
+                .ok_or_else(|| {
+                    PluginError::invalid_params("LSP diagnostics must reference a local file URI")
+                })?;
+            self.require_path_permission(PathPermissionQuery::read(path.to_string_lossy()))
+                .await?;
             for diagnostic in diagnostics {
                 diagnostics_out.push(HostLspDiagnostic {
                     uri: uri.clone(),
@@ -1179,8 +1294,17 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.scheduler().cloned(),
             "scheduler is not enabled in this runtime",
         )?;
+        self.require_callback_invocation("agena.cron.list", serde_json::json!({}))
+            .await?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let workspace = tokio::fs::canonicalize(executor.workspace_root())
+            .await
+            .map_err(plugin_error)?
+            .display()
+            .to_string();
+        let session = self.callback_context()?.session_id;
         let jobs = scheduler
-            .list()
+            .list_owned(&workspace, session)
             .await
             .map_err(|error| PluginError::internal_error(&error))?;
         let entries = jobs.into_iter().map(scheduler_job_to_sdk).collect();
@@ -1195,7 +1319,32 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.scheduler().cloned(),
             "scheduler is not enabled in this runtime",
         )?;
-        let job = match req {
+        let (session, _) = self.callback_session_and_call()?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let (owner, prompt, expression) = match &req {
+            HostSchedulerCreateRequest::Cron {
+                owner_session_id,
+                prompt,
+                expression,
+                ..
+            } => (*owner_session_id, prompt.clone(), expression.clone()),
+            HostSchedulerCreateRequest::Once {
+                owner_session_id,
+                prompt,
+                ..
+            } => (*owner_session_id, prompt.clone(), "0 * * * * *".to_owned()),
+        };
+        if owner.is_some_and(|owner| owner != session) {
+            return Err(PluginError::invalid_params(
+                "schedules must belong to the callback session",
+            ));
+        }
+        self.require_callback_invocation(
+            "agena.cron.create",
+            serde_json::json!({"expression":expression,"prompt":prompt,"timezone":"UTC"}),
+        )
+        .await?;
+        let mut job = match req {
             HostSchedulerCreateRequest::Cron {
                 expression,
                 prompt,
@@ -1227,6 +1376,14 @@ impl HostClient for RuntimeHostClient {
                 job
             }
         };
+        job.set_owner(session);
+        job.owner_workspace = Some(
+            tokio::fs::canonicalize(executor.workspace_root())
+                .await
+                .map_err(plugin_error)?
+                .display()
+                .to_string(),
+        );
         let id = job.id;
         scheduler
             .add(job)
@@ -1245,8 +1402,16 @@ impl HostClient for RuntimeHostClient {
         )?;
         let id = uuid::Uuid::parse_str(&req.id)
             .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
+        self.require_callback_invocation("agena.cron.delete", serde_json::json!({"id":req.id}))
+            .await?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let workspace = tokio::fs::canonicalize(executor.workspace_root())
+            .await
+            .map_err(plugin_error)?
+            .display()
+            .to_string();
         let removed = scheduler
-            .remove(id)
+            .remove_owned(&workspace, self.callback_context()?.session_id, id)
             .await
             .map_err(|error| PluginError::internal_error(&error))?;
         Ok(HostSchedulerDeleteResponse { removed })
@@ -1272,18 +1437,27 @@ impl HostClient for RuntimeHostClient {
                 args,
                 env,
                 cwd,
-            } => agena_mcp_client::ServerSpec::Stdio {
-                command,
-                args,
-                env: env.into_iter().collect(),
-                cwd: cwd.map(std::path::PathBuf::from),
-                tool_policy: Default::default(),
-            },
+            } => {
+                let shell_command = join_monitor_command(
+                    &std::iter::once(command.clone())
+                        .chain(args.iter().cloned())
+                        .collect::<Vec<_>>(),
+                )?;
+                self.require_callback_invocation("agena.shell.spawn", serde_json::json!({"command":shell_command,"workdir":cwd,"reads":[],"writes":[],"network":[]})).await?;
+                agena_mcp_client::ServerSpec::Stdio {
+                    command,
+                    args,
+                    env: env.into_iter().collect(),
+                    cwd: cwd.map(std::path::PathBuf::from),
+                    tool_policy: Default::default(),
+                }
+            }
             HostMcpServerSpec::Http {
                 url,
                 bearer,
                 headers,
             } => {
+                self.require_network_permission(url.clone()).await?;
                 let url = url::Url::parse(&url)
                     .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
                 let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);

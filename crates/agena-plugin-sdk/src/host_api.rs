@@ -64,7 +64,7 @@ pub trait HostClient: Send + Sync + 'static {
     // These are read-only policy lookups. They answer what the effective
     // permission configuration says about a target; they do not gate anything
     // and they do not change policy state. A plugin that performs its own I/O
-    // is expected to ask before touching something outside the workspace, and
+    // must call `require_*_permission` before touching user paths or network targets, and
     // to honour the answer — but the host cannot enforce that for a plugin
     // that runs its own process or syscalls.
 
@@ -81,25 +81,25 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Convenience wrapper over [`HostClient::check_path_permission`]:
-    /// `Allow` passes, anything else is a [`PluginErrorKind::PolicyDenied`]
-    /// carrying the policy's own reason.
+    /// Authorize an access before performing I/O. Runtime hosts resolve remembered
+    /// rules, automatically review `auto`, and wait for approval for `ask`.
+    /// The default supports explicit allow/deny only; hosts without an approval
+    /// implementation fail closed with `HostUnavailable` for `Ask`.
     async fn require_path_permission(&self, request: PathPermissionQuery) -> Result<()> {
         match self.check_path_permission(request.clone()).await? {
             PermissionQuery::Allow {} => Ok(()),
-            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
-                Err(policy_denied_path(&request, &reason))
-            }
+            PermissionQuery::Deny { reason } => Err(policy_denied_path(&request, &reason)),
+            PermissionQuery::Ask { .. } => Err(unavailable()),
         }
     }
 
-    /// Convenience wrapper over [`HostClient::check_network_permission`].
+    /// Authorize an outbound connection through the same approval flow as host
+    /// tools. Unlike `check_network_permission`, this may wait for the user.
     async fn require_network_permission(&self, target: String) -> Result<()> {
         match self.check_network_permission(target.clone()).await? {
             PermissionQuery::Allow {} => Ok(()),
-            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
-                Err(policy_denied_network(&target, &reason))
-            }
+            PermissionQuery::Deny { reason } => Err(policy_denied_network(&target, &reason)),
+            PermissionQuery::Ask { .. } => Err(unavailable()),
         }
     }
 
@@ -568,7 +568,7 @@ where
     if let Some(authority_token) = patch.authority_token {
         current.authority_token = Some(authority_token);
     }
-    HOST_CALLBACK_CONTEXT.scope(current, fut).await
+    run_in_isolated_host_callback_context(current, fut).await
 }
 
 /// Run with exactly the supplied callback context. Unspecified fields remain
@@ -581,7 +581,8 @@ pub async fn run_in_isolated_host_callback_context<F>(
 where
     F: Future,
 {
-    HOST_CALLBACK_CONTEXT.scope(context, fut).await
+    let key = context.session_id.zip(context.call_id);
+    agena_async::permission_wait::scope(key, HOST_CALLBACK_CONTEXT.scope(context, fut)).await
 }
 
 pub fn current_host_callback_context() -> Option<HostCallbackContext> {
@@ -623,8 +624,8 @@ impl PathPermissionQuery {
 /// A query never waits for a human, so `Ask` cannot mean "a prompt is
 /// pending". It means the policy did not approve on its own: the user would
 /// have to be asked, and a query cannot ask. Treat it as not approved, or
-/// reach the same target through a host tool, whose call runs the full
-/// approval flow.
+/// call `HostClient::require_path_permission` / `require_network_permission`,
+/// whose runtime implementations run the full approval flow.
 pub enum PermissionQuery {
     /// The effective policy approves this outright.
     Allow {},
@@ -1034,6 +1035,13 @@ pub struct HostImageExecuteResponse {
 /// Request to start a process monitor.
 pub struct MonitorStartRequest {
     pub command: Vec<String>,
+    /// Filesystem and network effects, authorized like shell.spawn.
+    #[serde(default)]
+    pub reads: Vec<String>,
+    #[serde(default)]
+    pub writes: Vec<String>,
+    #[serde(default)]
+    pub network: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

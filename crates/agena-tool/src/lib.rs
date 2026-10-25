@@ -3048,6 +3048,7 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
 pub mod cli_catalog;
 pub mod code_search;
 pub mod file_io;
+pub mod path_filter;
 pub mod provider_tools;
 pub mod shell;
 pub mod shell_analysis;

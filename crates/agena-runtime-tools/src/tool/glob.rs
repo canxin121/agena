@@ -6,7 +6,7 @@ use crate::part::{GlobKind, GlobToolInput};
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    discovery::{effective_include_ignored, walk_builder},
+    discovery::{effective_include_ignored, walk_builder_with_filter},
     normalize_path_for_display,
 };
 
@@ -18,6 +18,7 @@ const MAX_RESULT_BYTES: usize = 256 * 1024;
 
 #[derive(Default)]
 struct ScanOptions<'a> {
+    access: Option<agena_tool::path_filter::PathPredicate>,
     kind: GlobKind,
     exclude: GlobSet,
     cancel: Option<&'a tokio_util::sync::CancellationToken>,
@@ -81,19 +82,21 @@ pub(super) fn execute(
         }
         exclude.add(Glob::new(pattern)?);
     }
+    let access = executor.read_path_filter();
     let options = ScanOptions {
+        access: Some(access.predicate()),
         kind: input.kind,
         exclude: exclude.build()?,
         cancel: executor.cancellation_token(),
     };
-    let (matched_paths, stop_reason) = collect_matches(
+    let (matched_paths, stop_reason) = access.finish(collect_matches(
         &base_path,
         &matcher,
         offset,
         limit,
         include_ignored,
         &options,
-    )?;
+    ))?;
     let truncated = stop_reason.is_some();
     let mut matches = matched_paths
         .iter()
@@ -160,7 +163,11 @@ fn collect_matches(
     let mut first_skipped_error = None;
     let mut result_bytes = 0;
 
-    for (entry_index, entry) in walk_builder(base_path, include_ignored).build().enumerate() {
+    for (entry_index, entry) in
+        walk_builder_with_filter(base_path, include_ignored, options.access.clone())
+            .build()
+            .enumerate()
+    {
         if options.cancel.is_some_and(|token| token.is_cancelled()) {
             return Err(ToolError::Cancelled);
         }
@@ -174,7 +181,14 @@ fn collect_matches(
                 )),
             ));
         }
-        if started.elapsed() >= MAX_SCAN_DURATION {
+        if started.elapsed().saturating_sub(
+            options
+                .access
+                .as_ref()
+                .map(|check| check.waited())
+                .unwrap_or_default(),
+        ) >= MAX_SCAN_DURATION
+        {
             return Ok((
                 matches,
                 Some(glob_stop_reason(
@@ -217,6 +231,13 @@ fn collect_matches(
 
         let relative_norm = normalize_path_for_display(relative);
         if matcher.is_match(&relative_norm) && !options.exclude.is_match(&relative_norm) {
+            if options
+                .access
+                .as_ref()
+                .is_some_and(|check| !check.allows(entry.path()))
+            {
+                continue;
+            }
             if skipped_matches < offset {
                 skipped_matches += 1;
                 continue;

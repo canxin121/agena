@@ -3,6 +3,7 @@
 use tokio::sync::Semaphore;
 use tokio::task::{AbortHandle, JoinError};
 
+pub mod permission_wait;
 mod write_queue;
 pub use write_queue::{WritePermit, WriteQueue, WriteQueueError};
 

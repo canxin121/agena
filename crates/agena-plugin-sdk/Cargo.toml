@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 description = "Agena plugin SDK: write plugins as async traits, ship them as in-process / cdylib / stdio / http."
 [dependencies]
+agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
@@ -22,7 +23,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tokio-util = { workspace = true, features = ["codec"], optional = true }
 tracing = { workspace = true }
 url = { workspace = true }

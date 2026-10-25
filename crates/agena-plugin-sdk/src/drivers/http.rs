@@ -153,6 +153,7 @@ impl HttpCallbackHostClient {
     fn from_binding(binding: HttpCallbackBinding) -> crate::Result<Self> {
         binding.validate()?;
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|error| {
@@ -190,6 +191,12 @@ impl HttpCallbackHostClient {
             )
         })?;
         let mut builder = self.client.post(url).json(&req);
+        if matches!(
+            method_name,
+            method::HOST_PERMISSION_REQUIRE_PATH | method::HOST_PERMISSION_REQUIRE_NETWORK
+        ) {
+            builder = builder.timeout(Duration::from_secs(86_400));
+        }
         if let Some(token) = binding.token {
             builder = builder.bearer_auth(token);
         }
@@ -346,6 +353,17 @@ impl HostClient for HttpCallbackHostClient {
             params_with_current_context(serde_json::json!({ "target": target })),
         )
         .await
+    }
+
+    async fn require_path_permission(
+        &self,
+        request: crate::host_api::PathPermissionQuery,
+    ) -> crate::error::Result<()> {
+        crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_PATH, params_with_current_context(serde_json::json!({ "request": request, "context": crate::host_api::current_host_callback_context() })))).await
+    }
+
+    async fn require_network_permission(&self, target: String) -> crate::error::Result<()> {
+        crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_NETWORK, params_with_current_context(serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() })))).await
     }
 
     async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
@@ -853,4 +871,110 @@ macro_rules! export_http {
             })
         }
     };
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    use crate::host_api::{
+        HostCallbackContext, PathPermissionQuery, PermissionQuery,
+        run_in_isolated_host_callback_context,
+    };
+
+    #[tokio::test]
+    async fn http_callback_proxy_forwards_enforcement_and_context() {
+        use axum::{Json, Router, routing::post};
+        async fn callback(
+            headers: axum::http::HeaderMap,
+            Json(request): Json<Request>,
+        ) -> Json<Response> {
+            assert_eq!(headers["authorization"], "Bearer callback-secret");
+            let context = &request.params.as_ref().unwrap()["context"];
+            assert_eq!(context["session_id"], 31);
+            assert_eq!(context["call_id"], 47);
+            assert_eq!(context["authority_token"], "opaque-test-authority");
+            let payload = if request.method.contains(".check_") {
+                ResponsePayload::Ok {
+                    result: serde_json::to_value(PermissionQuery::Ask {
+                        reason: "needs approval".into(),
+                    })
+                    .unwrap(),
+                }
+            } else {
+                assert!(matches!(
+                    request.method.as_str(),
+                    method::HOST_PERMISSION_REQUIRE_PATH | method::HOST_PERMISSION_REQUIRE_NETWORK
+                ));
+                let error = PluginError::from_kind(PluginErrorKind::PolicyDenied, "wire denial");
+                ResponsePayload::Err {
+                    error: crate::rpc::ErrorObject {
+                        code: crate::rpc::codes::POLICY_DENIED,
+                        message: error.to_string(),
+                        data: error.rpc_error_data(),
+                    },
+                }
+            };
+            Json(Response {
+                jsonrpc: JsonRpcVersion,
+                id: request.id,
+                payload,
+            })
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/", post(callback)))
+                .await
+                .unwrap()
+        });
+        let client = HttpCallbackHostClient::from_binding(HttpCallbackBinding {
+            url: Some(format!("http://{address}/")),
+            token: Some("callback-secret".into()),
+        })
+        .unwrap();
+        let proxy = host_proxy::HostClientProxy::with_cancellation(
+            std::sync::Arc::new(client),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let context = HostCallbackContext {
+            session_id: Some(31),
+            call_id: Some(47),
+            authority_token: Some("opaque-test-authority".into()),
+            ..Default::default()
+        };
+        run_in_isolated_host_callback_context(context, async {
+            assert!(matches!(
+                proxy
+                    .check_path_permission(PathPermissionQuery::read("file"))
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
+            assert!(matches!(
+                proxy
+                    .check_network_permission("https://example.org".into())
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
+            assert_eq!(
+                proxy
+                    .require_path_permission(PathPermissionQuery::read("file"))
+                    .await
+                    .unwrap_err()
+                    .kind,
+                PluginErrorKind::PolicyDenied
+            );
+            assert_eq!(
+                proxy
+                    .require_network_permission("https://example.org".into())
+                    .await
+                    .unwrap_err()
+                    .kind,
+                PluginErrorKind::PolicyDenied
+            );
+        })
+        .await;
+        server.abort();
+    }
 }

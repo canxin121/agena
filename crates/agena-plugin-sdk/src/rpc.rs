@@ -183,6 +183,8 @@ pub mod method {
     pub const HOST_CONFIG_READ: &str = "host/config.read";
     pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
     pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
+    pub const HOST_PERMISSION_REQUIRE_PATH: &str = "host/permission.require_path";
+    pub const HOST_PERMISSION_REQUIRE_NETWORK: &str = "host/permission.require_network";
     pub const HOST_CONFIG_RELOAD_REQUEST: &str = "host/config.reload.request";
     pub const HOST_CONFIG_RELOAD_STATUS: &str = "host/config.reload.status";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";

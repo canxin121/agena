@@ -542,7 +542,7 @@ impl HostHandle {
             context,
             transport.dispatch(method::SERVICE_INVOKE, params),
         );
-        let value = tokio::time::timeout(std::time::Duration::from_secs(30), call)
+        let value = crate::sdk::permission_wait::timeout(std::time::Duration::from_secs(30), call)
             .await
             .map_err(|_| {
                 PluginError::internal(format!(
@@ -981,6 +981,28 @@ impl HostHandle {
                         )
                         .await?;
                         serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_PERMISSION_REQUIRE_PATH => {
+                        let p: HostPermissionCheckPathParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            crate::sdk::permission_wait::waiting(
+                                inner.require_path_permission(p.request),
+                            ),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Null)
+                    }
+                    method::HOST_PERMISSION_REQUIRE_NETWORK => {
+                        let p: HostPermissionCheckNetworkParams = parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            crate::sdk::permission_wait::waiting(
+                                inner.require_network_permission(p.target),
+                            ),
+                        )
+                        .await?;
+                        Ok(serde_json::Value::Null)
                     }
                     method::HOST_CONFIG_RELOAD_REQUEST => {
                         let _p: HostConfigReloadParams = parse(params)?;

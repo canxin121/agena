@@ -235,6 +235,55 @@ impl AppError {
             RetryDirective as Retry,
         };
 
+        // These are expected access/availability outcomes, not internal faults.
+        // Preserve SDK failures already rebuilt at the trusted executor boundary.
+        if let Self::Tool(error) = self {
+            if let crate::tool::ToolError::Plugin(problem) = error.as_ref() {
+                return problem.public.clone();
+            }
+        }
+        let access_failure = match self {
+            Self::PolicyDenied(denial) => Some((
+                "permission.denied",
+                Responsibility::Policy,
+                Retry::Never,
+                Recovery::None,
+                "The operation was blocked by permission policy.",
+                agena_failure::ModelFeedback::permission_denied(),
+                Some(denial.reason.as_str()),
+            )),
+            Self::UserDeclined(decline) => Some((
+                "permission.user_declined",
+                Responsibility::Caller,
+                Retry::AfterUserAction,
+                Recovery::None,
+                "The user declined the permission request.",
+                agena_failure::ModelFeedback::user_declined(),
+                decline.reason.as_deref(),
+            )),
+            _ => None,
+        };
+        if let Some((code, responsibility, retry, recovery, fallback, feedback, reason)) =
+            access_failure
+        {
+            let presentation = match reason.filter(|reason| !reason.trim().is_empty()) {
+                Some(reason) => {
+                    agena_failure::UserPresentation::validated(code, format!("{fallback} {reason}"))
+                }
+                None => agena_failure::UserPresentation::new(code, fallback),
+            };
+            return Failure::new(
+                FailureCode::new(code),
+                Category::PermissionDenied,
+                responsibility,
+                retry,
+                recovery,
+                FailureImpact::RequestRejected,
+                presentation,
+            )
+            .with_model_feedback(feedback);
+        }
+
         let (code, category, responsibility, retry, recovery) = match self {
             Self::Config(_) | Self::ConfigErr(_) => (
                 "configuration.invalid",
@@ -682,5 +731,69 @@ impl From<agena_runtime_provider::ProviderJsonStreamError> for AppError {
 impl From<agena_runtime_config::ConfigError> for AppError {
     fn from(value: agena_runtime_config::ConfigError) -> Self {
         Self::ConfigErr(Box::new(value))
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    #[test]
+    fn rejected_permissions_are_not_internal_faults_or_retry_instructions() {
+        let action = agena_domain::PermissionAction::NetworkAccess {
+            target: "https://example.org/".into(),
+            host: "example.org".into(),
+            port: Some(443),
+        };
+        let declined = AppError::UserDeclined(Box::new(agena_domain::UserDeclinedResult {
+            request_id: "12".into(),
+            action: action.clone(),
+            related_actions: vec![],
+            reason: Some("cancelled by user".into()),
+            persisted_scope: None,
+        }))
+        .failure();
+        assert_eq!(declined.code.as_str(), "permission.user_declined");
+        assert_eq!(
+            declined.category,
+            agena_failure::FailureCategory::PermissionDenied
+        );
+        assert_eq!(
+            declined.retry,
+            agena_failure::RetryDirective::AfterUserAction
+        );
+        let denied = AppError::PolicyDenied(Box::new(agena_domain::PolicyDeniedResult {
+            action: action.clone(),
+            related_actions: vec![],
+            denied_actions: vec![action],
+            reason: "automatic review rejected this action".into(),
+            explanation: String::new(),
+            source: None,
+            scope: None,
+            operator: None,
+            authority: agena_domain::PermissionAuthorityKind::AutoApprovalModel,
+            rule_id: None,
+            rule_revision_ms: None,
+            trace: vec![],
+        }))
+        .failure();
+        assert_eq!(denied.code.as_str(), "permission.denied");
+        assert_eq!(denied.retry, agena_failure::RetryDirective::Never);
+        assert!(denied.user.fallback.contains("automatic review"));
+    }
+    #[test]
+    fn executor_validated_plugin_failure_keeps_its_classification() {
+        let error = crate::tool::ToolError::from_plugin_error(
+            agena_plugin_host::sdk::PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                "plugin policy",
+            ),
+        );
+        let failure = AppError::Tool(Box::new(error)).failure();
+        assert_eq!(failure.code.as_str(), "plugin.policy_denied");
+        assert_eq!(
+            failure.category,
+            agena_failure::FailureCategory::PermissionDenied
+        );
+        assert_eq!(failure.retry, agena_failure::RetryDirective::Never);
     }
 }

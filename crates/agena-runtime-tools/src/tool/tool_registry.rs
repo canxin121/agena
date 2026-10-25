@@ -639,6 +639,7 @@ pub(super) struct CloudToolAdapterGate {
 #[derive(Clone)]
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
+    pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
     pub(super) content_reader: Option<agena_storage::kernel::KernelReader>,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
@@ -668,6 +669,8 @@ pub struct ToolExecutor {
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
 }
+
+pub type ReadPathAuthorizer = dyn Fn(&std::path::Path) -> Result<(), ToolError> + Send + Sync;
 
 pub type MediaInputBinder = dyn Fn(agena_domain::AttachmentItem) -> Result<agena_domain::AttachmentItem, ToolError>
     + Send

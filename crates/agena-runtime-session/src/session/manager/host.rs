@@ -50,6 +50,106 @@ impl SessionManager {
         }
         Ok((live.tool, live.control))
     }
+    pub async fn require_host_invocation_permission(
+        &self,
+        session: i64,
+        call: i64,
+        invocation: ToolInvocation,
+    ) -> Result<(), AppError> {
+        let (tool, control) = self.live_tool(session, call)?;
+        let state = control.state.clone();
+        let context = self.execution_context_value(session_id(session)?).await?;
+        let executor = state
+            .executor
+            .for_session_context_async(&context)
+            .await
+            .with_cancellation_token(Some(control.cancel.clone()));
+        self.authorize_tool(&tool, &invocation, &executor, &control, &state)
+            .await
+            .map_err(tool_error)
+    }
+
+    /// Read-only resolution of remembered rules. This never classifies an
+    /// automatic action, creates an interaction, or turns `Ask` into a grant.
+    pub async fn query_host_permission(
+        &self,
+        session: Option<i64>,
+        check: agena_tool::ToolPermissionCheck,
+    ) -> Result<agena_domain::PermissionDecision, AppError> {
+        let key = super::execution::permission_key(&check.action)?;
+        let workspace = self.current_workspace_id().await?;
+        let rules = self
+            .kernel_runtime
+            .permissions
+            .resolve(&key, session, Some(workspace))
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let rules = rules
+            .into_iter()
+            .map(|rule| agena_permission::RuleEntry {
+                id: rule.id,
+                revision_ms: rule.updated_at_ms.or(rule.created_at_ms),
+                scope: rule.scope,
+                source: rule.source,
+                reason: rule.reason,
+                operator: rule.operator,
+                mode: rule.mode,
+            })
+            .collect::<Vec<_>>();
+        Ok(agena_permission::apply_rules(&check.decision, &rules).decision)
+    }
+
+    /// Authorize plugin-owned I/O under the current live tool capability.
+    /// Integer IDs alone cannot create an approval authority.
+    pub async fn require_host_path_permission(
+        &self,
+        session: i64,
+        call: i64,
+        kind: agena_domain::PathKind,
+        path: String,
+    ) -> Result<(), AppError> {
+        self.require_host_permission(session, call, move |executor| {
+            let access = match kind {
+                agena_domain::PathKind::Read => agena_domain::AccessKind::Read,
+                agena_domain::PathKind::Write => agena_domain::AccessKind::Write,
+            };
+            Ok(executor.path_permission_check(access, &path))
+        })
+        .await
+    }
+
+    pub async fn require_host_network_permission(
+        &self,
+        session: i64,
+        call: i64,
+        target: String,
+    ) -> Result<(), AppError> {
+        self.require_host_permission(session, call, move |executor| {
+            executor.network_permission_check(&target)
+        })
+        .await
+    }
+
+    async fn require_host_permission(
+        &self,
+        session: i64,
+        call: i64,
+        check: impl FnOnce(&ToolExecutor) -> Result<agena_tool::ToolPermissionCheck, ToolError>,
+    ) -> Result<(), AppError> {
+        let (tool, control) = self.live_tool(session, call)?;
+        let state = control.state.clone();
+        let context = self.execution_context_value(session_id(session)?).await?;
+        let executor = state
+            .executor
+            .for_session_context_async(&context)
+            .await
+            .with_cancellation_token(Some(control.cancel.clone()));
+        let check = check(&executor).map_err(tool_error)?;
+        self.authorize_checks(&tool, vec![check], &executor, &control, &state)
+            .await
+            .map_err(tool_error)
+    }
+
     pub async fn request_host_user_input(
         &self,
         session: i64,

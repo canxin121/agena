@@ -75,6 +75,8 @@ mod contribution_registry;
 pub use callback_rpc::{PluginCallbackDispatcher, PluginCallbackRpcError};
 mod host_handle;
 mod host_scoped_client;
+#[cfg(test)]
+mod permission_tests;
 mod plugin_host_build;
 mod plugin_host_core;
 mod process_scope;

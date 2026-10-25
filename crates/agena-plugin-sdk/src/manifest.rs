@@ -352,7 +352,7 @@ pub struct ToolDefinition {
     /// an executor, decide whether the tool may run concurrently, filter the
     /// builtin profiles, and pick the shell command-class rules. A tool that
     /// performs its own I/O is responsible for asking the host
-    /// (`HostClient::check_path_permission` and friends) before it touches
+    /// (`HostClient::require_path_permission` and friends) before it touches
     /// anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,

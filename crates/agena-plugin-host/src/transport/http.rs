@@ -70,7 +70,8 @@ impl HttpTransport {
         };
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(60))
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(60))
                 .build()
                 .expect("plugin HTTP client with static configuration should build"),
             url,
@@ -101,7 +102,6 @@ impl HttpTransport {
             let mut builder = self
                 .client
                 .post(self.url.clone())
-                .timeout(Duration::from_secs(60))
                 .header(
                     crate::sdk::drivers::http::INSTANCE_HEADER,
                     &self.instance_id,
@@ -170,7 +170,7 @@ impl HttpTransport {
             biased;
             _ = self.shutdown.cancelled() => Err(TransportError::disconnected(
                 "HTTP plugin transport was shut down while a request was active")),
-            result = request => result,
+            result = crate::sdk::permission_wait::timeout(Duration::from_secs(60), request) => result.map_err(|error| TransportError::timeout_error("HTTP plugin request exceeded 60 seconds of active time", &error))?,
         }
     }
 

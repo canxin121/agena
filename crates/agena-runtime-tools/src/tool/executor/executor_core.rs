@@ -7,6 +7,7 @@ impl ToolExecutor {
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     ) -> Self {
         Self {
+            read_path_authorizer: None,
             content_reader: None,
             conversation: None,
             workspace_root: workspace_root.into(),
@@ -24,6 +25,16 @@ impl ToolExecutor {
             cancellation_token: None,
             permission_inspector: None,
         }
+    }
+
+    /// Called from blocking discovery workers before descending or opening a
+    /// concrete child; directory preflight does not override child rules.
+    pub fn with_read_path_authorizer(
+        mut self,
+        check: Arc<super::super::ReadPathAuthorizer>,
+    ) -> Self {
+        self.read_path_authorizer = Some(check);
+        self
     }
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {

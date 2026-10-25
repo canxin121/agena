@@ -182,7 +182,7 @@ pub async fn call_with_timeout(
         method = method_name,
     );
     let fut = plugin.transport.dispatch(method_name, params);
-    match tokio::time::timeout(timeout, fut)
+    match crate::sdk::permission_wait::timeout(timeout, fut)
         .instrument(hook_span)
         .await
     {

@@ -24,6 +24,7 @@ fn workers() -> Result<&'static rayon::ThreadPool, ToolError> {
 }
 
 pub(super) struct Plan<'a> {
+    pub access: Option<agena_tool::path_filter::PathPredicate>,
     pub base: &'a Path,
     pub workspace: &'a Path,
     pub base_is_file: bool,
@@ -61,7 +62,14 @@ impl Plan<'_> {
             if self.cancel.is_some_and(CancellationToken::is_cancelled) {
                 return Err(ToolError::Cancelled);
             }
-            if Instant::now() >= deadline {
+            if Instant::now()
+                >= deadline
+                    + self
+                        .access
+                        .as_ref()
+                        .map(|check| check.waited())
+                        .unwrap_or_default()
+            {
                 stats.stop_reason = Some(StopReason::Deadline);
                 return Ok(None);
             }
@@ -96,6 +104,13 @@ impl Plan<'_> {
             let relative = normalize_path_for_display(relative);
             if (!self.include.is_empty() && !self.include.is_match(&relative))
                 || self.exclude.is_match(&relative)
+            {
+                continue;
+            }
+            if self
+                .access
+                .as_ref()
+                .is_some_and(|check| !check.allows(entry.path()))
             {
                 continue;
             }
@@ -239,7 +254,8 @@ impl Collected {
 
 pub(super) fn collect(plan: Plan<'_>) -> Result<SearchResult, ToolError> {
     let deadline = Instant::now() + plan.limits.max_duration;
-    let mut walker = walk_builder(plan.base, plan.include_ignored).build();
+    let mut walker =
+        walk_builder_with_filter(plan.base, plan.include_ignored, plan.access.clone()).build();
     let mut collected = Collected {
         records: Vec::new(),
         stats: SearchStats::default(),
@@ -282,7 +298,12 @@ pub(super) fn collect(plan: Plan<'_>) -> Result<SearchResult, ToolError> {
             &jobs,
             plan.limits.max_results - collected.returned,
             plan.limits.max_output_bytes - collected.bytes,
-            deadline,
+            deadline
+                + plan
+                    .access
+                    .as_ref()
+                    .map(|check| check.waited())
+                    .unwrap_or_default(),
         )?;
         // Include speculative work in the resource accounting, even if earlier
         // results fill the output limit. All jobs reserved disjoint byte budgets.

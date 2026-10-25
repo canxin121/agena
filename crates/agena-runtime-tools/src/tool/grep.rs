@@ -3,7 +3,7 @@ mod scan;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    discovery::{effective_include_ignored, walk_builder},
+    discovery::{effective_include_ignored, walk_builder_with_filter},
     normalize_path_for_display,
     payload::GrepRecord,
 };
@@ -155,17 +155,20 @@ pub(super) fn execute(
         max_results: input.max_results.unwrap_or(MAX_MATCHES as u32) as usize,
         ..SearchLimits::default()
     };
+    let access = executor.read_path_filter();
+    let predicate = access.predicate();
     let SearchResult {
         records,
         stats,
         returned_matches,
-    } = collect_matches(
+    } = access.finish(collect_matches(
         &base_path,
         executor.workspace_root(),
         input,
         executor.cancellation_token(),
         &limits,
-    )?;
+        Some(predicate),
+    ))?;
     let truncated = stats.truncated();
     let scan_complete = stats.scan_complete();
     let note = stats.truncation_note();
@@ -254,6 +257,7 @@ fn collect_matches(
     input: &GrepToolInput,
     cancel: Option<&CancellationToken>,
     limits: &SearchLimits,
+    access: Option<agena_tool::path_filter::PathPredicate>,
 ) -> Result<SearchResult, ToolError> {
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return Err(ToolError::Cancelled);
@@ -321,6 +325,7 @@ fn collect_matches(
     let exclude = compile_globs(input.exclude.iter().map(String::as_str))?;
     let include_ignored = effective_include_ignored(input.include_ignored, base_path, workspace);
     parallel::collect(parallel::Plan {
+        access,
         base: base_path,
         workspace,
         base_is_file: metadata.is_file(),

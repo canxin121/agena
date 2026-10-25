@@ -1,4 +1,49 @@
 impl ToolExecutor {
+    pub(crate) fn read_path_filter(&self) -> agena_tool::path_filter::PathFilter<ToolError> {
+        let executor = self.clone();
+        agena_tool::path_filter::PathFilter::new(move |path| {
+            executor.ensure_not_cancelled()?;
+            if let Some(check) = executor.read_path_authorizer.as_ref() {
+                return check(path);
+            }
+            let check = executor.path_permission_check(AccessKind::Read, &path.to_string_lossy());
+            match check.decision {
+                agena_domain::PermissionDecision::Allow => Ok(()),
+                agena_domain::PermissionDecision::Deny { reason }
+                | agena_domain::PermissionDecision::Ask { reason }
+                | agena_domain::PermissionDecision::Auto { reason } => Err(
+                    ToolError::PolicyDenied(Box::new(agena_domain::PolicyDeniedResult {
+                        action: check.action.clone(),
+                        related_actions: vec![],
+                        denied_actions: vec![check.action],
+                        explanation: reason.clone(),
+                        reason,
+                        source: Some("static_policy".into()),
+                        scope: None,
+                        operator: None,
+                        authority: agena_domain::PermissionAuthorityKind::StaticPolicy,
+                        rule_id: None,
+                        rule_revision_ms: None,
+                        trace: vec![],
+                    })),
+                ),
+            }
+        })
+    }
+    /// Resolve a plugin's concrete access using the same canonical paths and
+    /// session principal as executor-owned tools. This does not grant access.
+    pub fn path_permission_check(&self, access: AccessKind, path: &str) -> ToolPermissionCheck {
+        let mut checks = Vec::with_capacity(1);
+        self.push_resolved_path_check(&mut checks, access, path);
+        checks.remove(0)
+    }
+
+    pub fn network_permission_check(&self, target: &str) -> Result<ToolPermissionCheck, ToolError> {
+        let mut checks = Vec::with_capacity(1);
+        self.push_network_check(&mut checks, target)?;
+        Ok(checks.remove(0))
+    }
+
     pub fn resolve_target_path(&self, raw_path: &str) -> PathBuf {
         self.resolve_target_path_with_context(raw_path, None)
     }
@@ -90,7 +135,7 @@ impl ToolExecutor {
     /// `ask` rule under `permission.path` still reaches the approval flow for
     /// `read`, `glob`, `apply_patch`, `shell.exec` and friends. A plugin that
     /// performs its own I/O is not described here and is not preflighted; it
-    /// asks the host itself through `HostClient::check_path_permission`.
+    /// asks the host itself through `HostClient::require_path_permission`.
     pub(super) fn push_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,

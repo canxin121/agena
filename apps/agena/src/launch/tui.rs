@@ -165,6 +165,10 @@ pub fn init_tui_tracing(
 pub async fn run_remote(mut args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
     // Resolve credentials at the launch boundary too: callers constructing a
     // TuiLaunchArgs directly must get the same environment as the CLI parser.
+    args.server_token = args.server_token.filter(|value| !value.trim().is_empty());
+    args.server_password = args
+        .server_password
+        .filter(|value| !value.trim().is_empty());
     if args.server_token.is_none() && args.server_password.is_none() {
         args.server_password = nonempty_env("AGENA_SERVER_PASSWORD");
         if args.server_password.is_none() {
@@ -189,19 +193,26 @@ pub async fn run_remote(mut args: TuiLaunchArgs) -> Result<(), AgenaProcessError
                 && args.server_password.is_none()
                 && requires_server_password(&error) =>
         {
-            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-                return Err(AgenaProcessError::Configuration(format!(
-                    "server {} requires a password; set AGENA_SERVER_PASSWORD or run agena in an interactive terminal to enter it",
-                    args.server_url
-                )));
+            // Existing shells (especially long-lived tmux sessions) may not
+            // have sourced the installer's client environment yet. Reuse its
+            // saved password only for the verified local instance.
+            args.server_password =
+                super::tui_credentials::local_server_password(&args.server_url).await;
+            if args.server_password.is_none() {
+                if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                    return Err(AgenaProcessError::Configuration(format!(
+                        "server {} requires a password; set AGENA_SERVER_PASSWORD or run agena in an interactive terminal to enter it",
+                        args.server_url
+                    )));
+                }
+                args.server_password = Some(
+                    tokio::task::spawn_blocking(terminal::read_server_password)
+                        .await
+                        .context("server password prompt failed")
+                        .and_then(|result| result)
+                        .map_err(AgenaProcessError::from_anyhow)?,
+                );
             }
-            args.server_password = Some(
-                tokio::task::spawn_blocking(terminal::read_server_password)
-                    .await
-                    .context("server password prompt failed")
-                    .and_then(|result| result)
-                    .map_err(AgenaProcessError::from_anyhow)?,
-            );
             TuiBackend::connect_remote_authenticated(
                 args.server_url.as_str(),
                 Some(workspace_root),

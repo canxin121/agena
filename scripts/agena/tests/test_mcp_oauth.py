@@ -324,6 +324,89 @@ class McpOAuthTests(unittest.TestCase):
         self.assertIn('requires both stdin and stdout', result.stderr)
         self.assertNotIn(token, result.stdout + result.stderr)
 
+    def write_client_environment(self, data_dir=None, password=None):
+        installation = self.root / 'application files'
+        installation.mkdir(exist_ok=True)
+        client_env = installation / 'client-env.sh'
+        result = subprocess.run(
+            ['bash', '--noprofile', '--norc', '-c',
+             'printf "export AGENA_DATA_DIR=%q\\nexport AGENA_SERVER_PASSWORD=%q\\n" "$1" "$2"',
+             'client-env-fixture', str(data_dir or self.root / 'data'),
+             self.password if password is None else password],
+            capture_output=True, check=True,
+        )
+        client_env.write_bytes(result.stdout)
+        client_env.chmod(0o600)
+        return client_env, self.tui_environment() | {'AGENA_INSTALL_DIR': str(installation)}
+
+    def test_tui_uses_saved_local_password_without_shell_environment(self):
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        # Exercise both printf %q forms, including literals that would be
+        # dangerous to evaluate as shell code and ANSI-C quoted control bytes.
+        marker = self.root / 'must-not-execute'
+        passwords = [self.password, f'local $pass `touch {marker}` quotes\'" \\ 密码',
+                     'local\tpassword\nwith\x1bcontrol']
+        for password in passwords:
+            if password != self.password:
+                self.stop()
+                self.start(password=password)
+            client_env, environment = self.write_client_environment()
+            with client_env.open('a') as stream:
+                stream.write(f'\ntouch "{marker}"\n')
+            for command in ([], ['tui']):
+                with self.subTest(command=command, ansi_quoted="$'" in client_env.read_text()):
+                    result = subprocess.run(
+                        [binary, *command], cwd=self.workspace, env=environment,
+                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertIn('requires both stdin and stdout', result.stderr)
+                    self.assertNotIn('requires a password', result.stderr)
+                    self.assertNotIn('Server password:', result.stdout + result.stderr)
+                    self.assertNotIn(password, result.stdout + result.stderr)
+                    self.assertFalse(marker.exists(), 'client environment was executed as shell code')
+
+    def test_tui_saved_password_is_scoped_to_private_matching_local_instance(self):
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        client_env, environment = self.write_client_environment()
+        record_path = self.root / 'data/run/server.json'
+        original_record = record_path.read_bytes()
+        original_env = client_env.read_bytes()
+        for invalid in ('different-data-dir', 'different-server-id', 'different-port',
+                        'public-file', 'symlink-file', 'explicit-password'):
+            with self.subTest(invalid=invalid):
+                record_path.write_bytes(original_record)
+                client_env.unlink()
+                client_env.write_bytes(original_env)
+                client_env.chmod(0o600)
+                selected_environment = dict(environment)
+                if invalid == 'different-data-dir':
+                    self.write_client_environment(data_dir=self.root / 'other-instance')
+                elif invalid in ('different-server-id', 'different-port'):
+                    record = json.loads(original_record)
+                    if invalid == 'different-server-id':
+                        record['server_id'] = '00000000-0000-0000-0000-000000000000'
+                    else:
+                        record['url'] = 'http://127.0.0.1:1'
+                    record_path.write_text(json.dumps(record))
+                elif invalid == 'public-file':
+                    client_env.chmod(0o644)
+                elif invalid == 'symlink-file':
+                    target = client_env.with_suffix('.target')
+                    target.write_bytes(original_env)
+                    target.chmod(0o600)
+                    client_env.unlink()
+                    client_env.symlink_to(target)
+                else:
+                    selected_environment['AGENA_SERVER_PASSWORD'] = 'explicit-incorrect-password'
+                result = subprocess.run(
+                    [binary, 'tui'], cwd=self.workspace, env=selected_environment,
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+                )
+                expected = 'password is incorrect' if invalid == 'explicit-password' else 'requires a password'
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn(self.password, result.stdout + result.stderr)
+        record_path.write_bytes(original_record)
+
     def test_tui_reports_missing_or_incorrect_server_password_as_configuration(self):
         binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
         for password, expected in ((None, 'requires a password'), ('incorrect-do-not-echo', 'password is incorrect')):

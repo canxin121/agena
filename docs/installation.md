@@ -488,11 +488,16 @@ installer state and in the native service definition because the service needs
 it at startup; these files are restricted to the current user.
 
 Web, TUI, CLI, and MCP OAuth use this same server password. Both `agena` and
-`agena tui` read `AGENA_SERVER_PASSWORD` automatically. When the server requires
-a password and the TUI has no configured credential, it prompts for the server
-password with input hidden. The entered password stays in memory for that TUI
-process, including reauthentication after a server restart. For non-interactive
-commands, set the environment variable before launching the client.
+`agena tui` read `AGENA_SERVER_PASSWORD` automatically. For the local installed
+instance, they also read the installer's private `client-env.sh` when the current
+shell has no credential, including shells or tmux sessions opened before
+installation. The saved data directory and the running server's identity must
+match, and this fallback only applies to loopback connections. An explicit
+password or token takes precedence. When no applicable credential is available,
+the TUI prompts for the server password with input hidden. The entered password
+stays in memory for that TUI process, including reauthentication after a server
+restart. For non-interactive commands, set the environment variable before
+launching the client.
 
 A native user service does **not** read `.zshrc`. Exporting a variable in an
 interactive shell configures new commands in that shell, but does not update an

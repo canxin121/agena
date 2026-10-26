@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:notifications": "bun test ./tests/browserNotifications.test.ts",
     "dev": "bun run vite",
     "typecheck": "bun ./node_modules/vue-tsc/bin/vue-tsc.js -b",
     "vue-tsc": "bun ./node_modules/vue-tsc/bin/vue-tsc.js",

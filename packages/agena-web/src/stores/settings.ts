@@ -11,6 +11,10 @@ import { getLocalJson, setLocalJson } from '@/lib/persist'
  * are per-browser and persist in localStorage.
  */
 export type Settings = {
+  // Browser notifications are local to this browser, independent of TUI settings.
+  browserNotificationsEnabled?: boolean
+  browserNotificationsPrompted?: boolean
+
   // Appearance
   useSystemTheme?: boolean
   themeVariant?: 'light' | 'dark'

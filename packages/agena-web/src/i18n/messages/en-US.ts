@@ -1,4 +1,30 @@
 export default {
+  browserNotifications: {
+    "title": "Browser notifications",
+    "description": "Get a system notification when AI finishes, asks a question, needs approval, or stops with an error. Saved in this browser.",
+    "enable": "Enable notifications",
+    "enabled": "Browser notifications are enabled.",
+    "offer": "Enable browser notifications for AI replies, questions, and approval requests.",
+    "test": "Send a test notification",
+    "testBody": "Notifications are working. Agena will notify you when your attention is needed.",
+    "deliveryFailed": "Could not show a notification. Check browser support, site permissions, and system notification settings.",
+    "keepOpen": "Keep Agena open in a browser tab to receive notifications. Your browser and operating system must allow notifications.",
+    "status": {
+      "default": "Allow notifications in your browser to receive alerts.",
+      "granted": "Enabled. Notifications also work while this tab is in the background.",
+      "denied": "Notifications are blocked. Allow notifications in your browser’s site settings, then return here.",
+      "unsupported": "This browser does not support system notifications.",
+      "insecure": "Browser notifications require HTTPS or localhost. Open Agena using a secure address.",
+      "disabled": "Notifications are turned off for this browser."
+    },
+    "events": {
+      "completed": "AI has finished replying.",
+      "failed": "AI stopped with an error. Open the conversation to review it.",
+      "cancelled": "AI execution was interrupted.",
+      "permission": "AI needs your approval to continue.",
+      "question": "AI is waiting for your answer."
+    }
+  },
   keyboard: {
     workspaceTabs: "Workspace tabs",
     tabActions: "Actions for {title}",

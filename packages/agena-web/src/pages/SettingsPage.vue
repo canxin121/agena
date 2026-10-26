@@ -24,6 +24,7 @@ import type { AppLocale } from '@/i18n/locale'
 import SettingsCard from '@/components/settings/SettingsCard.vue'
 import SettingsRow from '@/components/settings/SettingsRow.vue'
 import SettingsToggle from '@/components/settings/SettingsToggle.vue'
+import BrowserNotificationsPanel from '@/components/settings/BrowserNotificationsPanel.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -624,6 +625,7 @@ const dirtyHint = computed(
           >
             <InterfaceSettingsPanel v-if="activePage === 'tui'" ref="interfacePanel" />
             <div v-else-if="activePage === 'web-appearance'" class="space-y-4">
+              <BrowserNotificationsPanel />
               <div class="grid gap-4 xl:grid-cols-2">
                 <SettingsCard
                   :title="t('settings.appearance.language.label')"

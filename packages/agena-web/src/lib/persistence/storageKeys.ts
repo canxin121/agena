@@ -70,6 +70,9 @@ export const localStorageKeys = {
   settings: {
     lastRoute: namespacedKey('settings.last-route'),
   },
+  notifications: {
+    delivered: namespacedKey('notifications.delivered'),
+  },
   auth: {
     // Keep the persisted key compatible with existing server login sessions.
     serverTokenByBaseUrl: namespacedKey('auth.ui-token-by-base-url'),

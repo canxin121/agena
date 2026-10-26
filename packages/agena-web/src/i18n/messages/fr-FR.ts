@@ -1,4 +1,30 @@
 export default {
+  browserNotifications: {
+    "title": "Notifications du navigateur",
+    "description": "Recevez une notification lorsque l’IA termine, pose une question, demande une autorisation ou échoue. Enregistré dans ce navigateur.",
+    "enable": "Activer les notifications",
+    "enabled": "Les notifications du navigateur sont activées.",
+    "offer": "Activez les notifications pour les réponses, questions et demandes d’autorisation de l’IA.",
+    "test": "Envoyer une notification de test",
+    "testBody": "Les notifications fonctionnent. Agena vous avertira lorsque votre attention sera nécessaire.",
+    "deliveryFailed": "Impossible d’afficher la notification. Vérifiez la compatibilité du navigateur, les autorisations du site et les paramètres système.",
+    "keepOpen": "Gardez Agena ouvert dans un onglet pour recevoir les notifications. Le navigateur et le système doivent les autoriser.",
+    "status": {
+      "default": "Autorisez les notifications du navigateur pour recevoir des alertes.",
+      "granted": "Activées. Elles fonctionnent aussi lorsque cet onglet est en arrière-plan.",
+      "denied": "Les notifications sont bloquées. Autorisez-les dans les paramètres du site du navigateur, puis revenez ici.",
+      "unsupported": "Ce navigateur ne prend pas en charge les notifications système.",
+      "insecure": "Les notifications nécessitent HTTPS ou localhost. Ouvrez Agena avec une adresse sécurisée.",
+      "disabled": "Les notifications sont désactivées dans ce navigateur."
+    },
+    "events": {
+      "completed": "L’IA a terminé sa réponse.",
+      "failed": "L’IA s’est arrêtée sur une erreur. Ouvrez la conversation pour la consulter.",
+      "cancelled": "L’exécution de l’IA a été interrompue.",
+      "permission": "L’IA a besoin de votre autorisation pour continuer.",
+      "question": "L’IA attend votre réponse."
+    }
+  },
   keyboard: {
     workspaceTabs: "Onglets de l’espace de travail",
     tabActions: "Actions pour {title}",

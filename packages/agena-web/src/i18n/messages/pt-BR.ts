@@ -1,4 +1,30 @@
 export default {
+  browserNotifications: {
+    "title": "Notificações do navegador",
+    "description": "Receba uma notificação quando a IA terminar, fizer uma pergunta, precisar de aprovação ou falhar. Salvo neste navegador.",
+    "enable": "Ativar notificações",
+    "enabled": "As notificações do navegador estão ativadas.",
+    "offer": "Ative notificações para respostas, perguntas e solicitações de aprovação da IA.",
+    "test": "Enviar notificação de teste",
+    "testBody": "As notificações estão funcionando. O Agena avisará quando precisar da sua atenção.",
+    "deliveryFailed": "Não foi possível mostrar a notificação. Verifique o suporte do navegador, as permissões do site e as configurações do sistema.",
+    "keepOpen": "Mantenha o Agena aberto em uma aba para receber notificações. O navegador e o sistema operacional devem permiti-las.",
+    "status": {
+      "default": "Permita notificações no navegador para receber alertas.",
+      "granted": "Ativadas. Também funcionam com esta aba em segundo plano.",
+      "denied": "As notificações estão bloqueadas. Permita-as nas configurações do site no navegador e volte aqui.",
+      "unsupported": "Este navegador não oferece suporte a notificações do sistema.",
+      "insecure": "As notificações exigem HTTPS ou localhost. Abra o Agena usando um endereço seguro.",
+      "disabled": "As notificações estão desativadas neste navegador."
+    },
+    "events": {
+      "completed": "A IA terminou de responder.",
+      "failed": "A IA parou com um erro. Abra a conversa para verificar.",
+      "cancelled": "A execução da IA foi interrompida.",
+      "permission": "A IA precisa da sua aprovação para continuar.",
+      "question": "A IA está esperando sua resposta."
+    }
+  },
   keyboard: {
     workspaceTabs: "Abas do espaço de trabalho",
     tabActions: "Ações de {title}",

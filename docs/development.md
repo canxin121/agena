@@ -58,8 +58,9 @@ bun --version
 
 Focused Rust tests cover automatic session naming, title persistence, and
 auxiliary-model configuration (see [session titles](session-titles.md#verification)).
-There are no automated frontend tests. The quality gate compiles all targets, runs lint and
-contract checks, and builds the frontend. The Python refactor tooling and
+Focused frontend tests cover browser notification delivery and recovery. The
+quality gate compiles all targets, runs lint and contract checks, and builds
+the frontend. The Python refactor tooling and
 installer contracts still have their own tests. Vendored packages under
 `third_party/` retain upstream tests, but those tests are not part of this
 repository's quality gate. Run focused first-party tests for the behavior you
@@ -242,6 +243,31 @@ bun run build:rust-debug
 
 That build writes `packages/agena-web/dist-rust-debug/`; pass it explicitly
 with `--ui-dir`.
+
+### Browser notifications
+
+Open **Settings → Interface → Web appearance → Browser notifications** and
+enable notifications. The first visit also offers an **Enable notifications**
+action. Permission is requested only when you click that action or the setting;
+the browser retains control over whether to allow it. Use **Send a test
+notification** to check delivery.
+
+Notifications cover completed AI replies, questions (including review requests),
+permission requests, execution failures, and interruptions. Clicking a
+notification focuses Agena and opens the owning session. Repeated events and
+multiple tabs share delivery deduplication. When notifications are enabled, the
+global event stream stays connected in background tabs; reconnect and resync
+signals also reread pending interactions and known active replies.
+
+Keep a tab open to receive notifications. HTTPS or localhost is required, along
+with browser support and permission in both the browser and operating system.
+An ordinary HTTP address on a LAN does not qualify as a secure context.
+
+Run the focused notification tests from `packages/agena-web`:
+
+```sh
+bun run test:notifications
+```
 
 ### Frontend build gates
 

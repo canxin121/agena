@@ -1,4 +1,30 @@
 export default {
+  browserNotifications: {
+    "title": "浏览器通知",
+    "description": "AI 完成回复、提问、请求审批或执行失败时，通过系统通知提醒你。设置保存在当前浏览器。",
+    "enable": "开启通知",
+    "enabled": "已开启浏览器通知。",
+    "offer": "开启浏览器通知，在 AI 完成回复、提问或请求审批时收到提醒。",
+    "test": "发送测试通知",
+    "testBody": "通知已就绪。Agena 会在需要你关注时发送提醒。",
+    "deliveryFailed": "无法显示通知，请检查浏览器支持情况、网站权限和系统通知设置。",
+    "keepOpen": "接收通知时，请保持 Agena 标签页打开，并允许浏览器和操作系统显示通知。",
+    "status": {
+      "default": "请允许浏览器通知，以便接收提醒。",
+      "granted": "已开启，标签页在后台时也会发送通知。",
+      "denied": "通知已被浏览器阻止。请在浏览器的网站设置中允许通知，然后返回此页面。",
+      "unsupported": "当前浏览器不支持系统通知。",
+      "insecure": "浏览器通知需要 HTTPS 或 localhost，请使用安全地址打开 Agena。",
+      "disabled": "已关闭当前浏览器的通知。"
+    },
+    "events": {
+      "completed": "AI 已完成回复。",
+      "failed": "AI 执行失败，请打开会话查看详情。",
+      "cancelled": "AI 执行已中断。",
+      "permission": "AI 需要你的审批才能继续。",
+      "question": "AI 正在等待你的回答。"
+    }
+  },
   keyboard: {
     workspaceTabs: "工作区标签",
     tabActions: "{title} 的标签操作",

@@ -82,6 +82,7 @@ fn workspace_git_reads_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
 
 fn server_api_router() -> Router<Arc<AppState>> {
     fs_router()
+        .merge(crate::server::web_push::router())
         .merge(workspace_git_reads_router())
         .merge(crate::server::preview::apps::router())
         .route(
@@ -718,7 +719,11 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     );
     mcp_state.log_startup_status();
 
+    let web_push =
+        Arc::new(crate::server::web_push::WebPushService::load(server_state_db.clone()).await?);
+    let _web_push_tasks = web_push.start(application.clone())?;
     let shared_state = Arc::new(AppState {
+        web_push,
         server_auth: server_auth.clone(),
         mcp_server: mcp_state.clone(),
         terminal,

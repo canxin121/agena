@@ -72,9 +72,13 @@ urlencoding = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
+web-push = { version = "0.11.0", default-features = false }
 
 [build-dependencies]
 cc = "1.4.3"
+
+[dev-dependencies]
+agena-storage-sqlite = { workspace = true }
 
 [lints]
 workspace = true

@@ -9,11 +9,13 @@ import {
   type BrowserNotificationSnapshot,
 } from '../src/lib/browserNotifications'
 import type { SseEvent } from '../src/lib/sse'
+import { browserNotificationPlatformHint, supportsBrowserPush } from '../src/lib/browserPush'
 
 class FakeNotification {
   static permission: NotificationPermission = 'granted'
   static requested = 0
   static fail = false
+  static asyncFail = false
   static async requestPermission() {
     this.requested++
     this.permission = 'granted'
@@ -21,6 +23,8 @@ class FakeNotification {
   }
   onclick?: () => void
   onclose?: () => void
+  onshow?: (() => void) | null
+  onerror?: (() => void) | null
   closed = false
   constructor(
     readonly title: string,
@@ -28,6 +32,7 @@ class FakeNotification {
   ) {
     if (FakeNotification.fail) throw new TypeError('Notification constructor is unavailable')
     shown.push(this)
+    queueMicrotask(() => (FakeNotification.asyncFail ? this.onerror?.() : this.onshow?.()))
   }
   close() {
     this.closed = true
@@ -61,6 +66,7 @@ beforeEach(() => {
   FakeNotification.permission = 'granted'
   FakeNotification.requested = 0
   FakeNotification.fail = false
+  FakeNotification.asyncFail = false
   setGlobal('window', { isSecureContext: true, Notification: FakeNotification, focus: () => focused++ })
   setGlobal('document', { hidden: true, visibilityState: 'hidden' })
   setGlobal('localStorage', {
@@ -136,7 +142,7 @@ function requestEvent(kind: 'permission' | 'user_input', requestId = 'request-1'
 test('permission prompts run only on explicit request and respect browser restrictions', async () => {
   FakeNotification.permission = 'default'
   assert.equal(browserNotificationPermission(), 'default')
-  assert.equal(showBrowserNotification('test', {}), null)
+  assert.equal(await showBrowserNotification('test', {}), null)
   assert.equal(FakeNotification.requested, 0)
   assert.equal(await requestBrowserNotificationPermission(), 'granted')
   assert.equal(FakeNotification.requested, 1)
@@ -147,6 +153,55 @@ test('permission prompts run only on explicit request and respect browser restri
   assert.equal(await requestBrowserNotificationPermission(), 'insecure')
   setGlobal('window', { isSecureContext: true })
   assert.equal(await requestBrowserNotificationPermission(), 'unsupported')
+})
+
+test('desktop Chrome, Edge, Firefox, and Safari use capability checks instead of browser exclusions', () => {
+  setGlobal('PushManager', class {})
+  for (const userAgent of ['Chrome/144.0', 'Chrome/144.0 Edg/144.0', 'Firefox/144.0', 'Version/18.0 Safari/605.1.15']) {
+    setGlobal('navigator', { userAgent, platform: 'MacIntel', maxTouchPoints: 0, serviceWorker: {} })
+    assert.equal(browserNotificationPlatformHint(), '')
+    assert.equal(browserNotificationPermission(), 'granted')
+    assert.equal(supportsBrowserPush(), true)
+  }
+  setGlobal(
+    'navigator',
+    Object.defineProperty({}, 'serviceWorker', {
+      get: () => {
+        throw new Error('Blocked by browser')
+      },
+    }),
+  )
+  assert.equal(supportsBrowserPush(), false)
+})
+
+test('iPhone and desktop-mode iPad require a Home Screen app before offering notification permission', () => {
+  setGlobal('navigator', { userAgent: 'iPhone', platform: 'iPhone', maxTouchPoints: 5 })
+  assert.equal(browserNotificationPlatformHint(), 'iosInstall')
+  assert.equal(browserNotificationPermission(), 'unsupported')
+  setGlobal('navigator', { userAgent: 'Macintosh Safari', platform: 'MacIntel', maxTouchPoints: 5 })
+  assert.equal(browserNotificationPlatformHint(), 'iosInstall')
+  setGlobal('navigator', { userAgent: 'iPad', platform: 'MacIntel', maxTouchPoints: 5, standalone: true })
+  assert.equal(browserNotificationPlatformHint(), '')
+  assert.equal(browserNotificationPermission(), 'granted')
+  setGlobal('navigator', { userAgent: 'iPhone', platform: 'iPhone', maxTouchPoints: 5 })
+  setGlobal('window', { isSecureContext: true, Notification: FakeNotification, matchMedia: () => ({ matches: true }) })
+  assert.equal(browserNotificationPlatformHint(), '')
+  assert.equal(browserNotificationPermission(), 'granted')
+})
+
+test('browser restrictions on service workers still allow a desktop page notification', async () => {
+  setGlobal(
+    'navigator',
+    Object.defineProperty({}, 'serviceWorker', {
+      get: () => {
+        throw new DOMException('Service workers are blocked', 'SecurityError')
+      },
+    }),
+  )
+  const notification = await showBrowserNotification('Page fallback', { body: 'AI finished' })
+  assert.ok(notification)
+  assert.equal(shown.length, 1)
+  assert.equal(shown[0]!.options.body, 'AI finished')
 })
 
 test('a finished reply notifies in a background tab and clicking focuses its session', async () => {
@@ -261,14 +316,48 @@ test('blocked storage and unavailable locks do not prevent delivery or in-memory
   assert.equal(shown.length, 1)
 })
 
-test('denied permissions and unsupported constructors never interrupt the event consumer', async () => {
+test('unavailable delivery is retryable and never claims that a notification was delivered', async () => {
   const client = notifier()
   FakeNotification.permission = 'denied'
-  await client.applyEvent(partEvent())
+  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
   FakeNotification.permission = 'granted'
   FakeNotification.fail = true
-  await client.applyEvent(partEvent({ part_id: 11 }))
+  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
   assert.equal(shown.length, 0)
+  assert.equal(storage.size, 0)
+  FakeNotification.fail = false
+  await client.applyEvent(partEvent())
+  assert.equal(shown.length, 1)
+})
+
+test('asynchronous notification errors do not poison deduplication and recovery retries the reply', async () => {
+  const client = notifier(async () => ({ parts: [partEvent().properties!.part] }))
+  FakeNotification.asyncFail = true
+  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
+  assert.equal(storage.size, 0)
+  assert.equal(shown[0]!.closed, true)
+  FakeNotification.asyncFail = false
+  await client.reconcile()
+  assert.equal(shown.length, 2)
+  assert.equal(storage.size, 1)
+  await client.applyEvent(partEvent())
+  assert.equal(shown.length, 2)
+})
+
+test('enabling notifications allows a still-pending request to notify after previously disabled events', async () => {
+  const client = notifier()
+  enabled = false
+  await client.applyEvent(requestEvent('user_input'))
+  enabled = true
+  await client.applyEvent(requestEvent('user_input'))
+  assert.equal(shown.length, 1)
+})
+
+test('retry generations of the same assistant boundary produce separate notifications', async () => {
+  const client = notifier()
+  await client.applyEvent(partEvent({ content: { generation: 1 } }))
+  await client.applyEvent(partEvent({ content: { generation: 2 }, revision: 20 }))
+  assert.equal(shown.length, 2)
 })
 
 test('malformed data, non-session events, and deleted sessions do not produce alerts', async () => {
@@ -346,4 +435,25 @@ test('recovery retires an active session that was deleted while disconnected', a
   await client.reconcile()
   assert.equal(reads, 1)
   assert.equal(shown.length, 0)
+})
+
+test('replacing a service-worker notification closes only the old handle, leaving the new alert visible', async () => {
+  const registration = {
+    active: { state: 'activated' },
+    showNotification: async (title: string, options: NotificationOptions) => {
+      for (const item of shown) if (item.options.tag === options.tag) item.close()
+      new FakeNotification(title, options)
+    },
+    getNotifications: async ({ tag }: { tag: string }) =>
+      shown.filter((item) => !item.closed && item.options.tag === tag),
+  }
+  setGlobal('navigator', { serviceWorker: { register: async () => registration } })
+  const client = notifier()
+  await client.applyEvent(partEvent())
+  await client.applyEvent(partEvent({ part_id: 11 }))
+  assert.equal(shown.length, 2)
+  assert.equal(shown[0]!.closed, true)
+  assert.equal(shown[1]!.closed, false)
+  client.dispose()
+  assert.equal(shown[1]!.closed, true)
 })

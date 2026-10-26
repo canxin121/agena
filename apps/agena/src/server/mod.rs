@@ -18,6 +18,7 @@ mod state;
 mod terminal;
 mod user_service;
 mod web_ui;
+mod web_push;
 
 pub(crate) use error::{ApiResult, AppError};
 

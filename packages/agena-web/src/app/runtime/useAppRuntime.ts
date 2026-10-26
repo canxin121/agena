@@ -41,7 +41,7 @@ export function useAppRuntime() {
   const notifications = useBrowserNotificationsStore()
   const navigation = useWorkspaceNavigation()
   const notifier = createBrowserNotifier({
-    enabled: () => notifications.enabled,
+    enabled: () => notifications.enabled && !notifications.pushReady,
     scope: () => apiUrl('/'),
     sessionTitle: (sid) => chat.getSessionById(sid)?.title || '',
     message: (kind) => String(i18n.global.t(`browserNotifications.events.${kind}`)),
@@ -269,7 +269,9 @@ export function useAppRuntime() {
             notificationRecovery.invalidate(0)
             return
           }
-          void notifier.applyEvent(evt).catch(() => {})
+          void notifier.applyEvent(evt).catch(() => notificationRecovery.invalidate())
+          if (evt.type === 'session_changed' && evt.properties?.kind === 'session_meta_updated')
+            notificationRecovery.invalidate()
           activity.applyEvent(evt)
           applyResourceEvent(evt)
           chat.applyEvent(evt)
@@ -340,6 +342,7 @@ export function useAppRuntime() {
 
     if (disposed) return
     notifications.offerPermission()
+    void notifications.syncPush()
     // Keep sessions available for all views.
     await chat.refreshSessions().catch(() => {})
     if (disposed) return
@@ -448,7 +451,9 @@ export function useAppRuntime() {
   watch(
     () => notifications.enabled,
     () => {
-      if (disposed || isDocumentVisible()) return
+      if (disposed) return
+      if (notifications.enabled) notificationRecovery.invalidate(0)
+      if (isDocumentVisible()) return
       if (notifications.enabled) {
         if (!sse) connectActivity()
       } else {

@@ -249,25 +249,67 @@ with `--ui-dir`.
 Open **Settings → Interface → Web appearance → Browser notifications** and
 enable notifications. The first visit also offers an **Enable notifications**
 action. Permission is requested only when you click that action or the setting;
-the browser retains control over whether to allow it. Use **Send a test
-notification** to check delivery.
+the browser retains control over whether to allow it. Wait for the status to
+say **Background push is connected**. **Send a test notification** sends through
+the real server/push-service/worker path and waits for the browser's receipt;
+it reports a connection error or receipt timeout instead of treating construction
+of a notification object as proof of delivery.
 
 Notifications cover completed AI replies, questions (including review requests),
 permission requests, execution failures, and interruptions. Clicking a
-notification focuses Agena and opens the owning session. Repeated events and
-multiple tabs share delivery deduplication. When notifications are enabled, the
-global event stream stays connected in background tabs; reconnect and resync
-signals also reread pending interactions and known active replies.
+notification focuses Agena and opens the owning session. The server observes
+canonical kernel execution and interaction changes, independently of page SSE.
+VAPID-signed, encrypted Web Push wakes `/agena-notifications-sw.js`, which calls
+`ServiceWorkerRegistration.showNotification()`. There is no app-shell caching.
+This continues when Chrome suspends or discards a tab, or the tab is closed.
+Repeated events and retries have stable notification identities.
 
-Keep a tab open to receive notifications. HTTPS or localhost is required, along
-with browser support and permission in both the browser and operating system.
-An ordinary HTTP address on a LAN does not qualify as a secure context.
+Subscriptions and a bounded retry outbox survive server restarts in the instance
+database. The stable VAPID identity lives in the encrypted secret store. Keep the
+data directory and secrets when upgrading. Temporary push-service failures are
+retried with backoff for up to 24 hours; HTTP 404/410 retires an expired browser
+subscription. Disabling notifications removes the server subscription and
+unsubscribes the browser. Opening/focusing the app restores and synchronizes
+subscriptions, including their localized messages.
+
+Modern desktop Chrome/Chromium, Edge, Firefox, and Safari use the same standard
+Push API and Service Worker path; Android browsers with Web Push do too. Support
+is detected from browser capabilities. On iOS/iPadOS 16.4+, add Agena to the
+Home Screen and enable notifications from that installed app; an ordinary iOS
+browser tab cannot subscribe. The settings show this installation guidance.
+Push subscription failures are visible and transient errors retry automatically.
+
+Both the backend binary and the web build must be updated. A reverse proxy must
+serve the worker as JavaScript at its original root path and forward
+`/api/v1/browser-notifications/*`. The server needs outbound HTTPS access to the
+browser's push service (Chrome uses `fcm.googleapis.com`). HTTPS or localhost is
+required; ordinary LAN HTTP is not a secure context. Browser and operating-system
+notification permissions are both required. On macOS, check **System Settings →
+Notifications → Google Chrome**, and Focus / Do Not Disturb if the browser receipt
+succeeds but no banner appears. Fully quitting the browser, disconnecting the
+device, or OS background restrictions can delay delivery until it is available.
+Page notifications remain a fallback when background push is unavailable; the
+settings explicitly show that this fallback cannot notify a suspended tab.
 
 Run the focused notification tests from `packages/agena-web`:
 
 ```sh
 bun run test:notifications
 ```
+
+Run server regressions from the repository root:
+
+```sh
+cargo test -p agena --bin agena server::web_push::tests
+```
+
+With Playwright and Chrome/Chromium installed, run `bun run
+test:notifications:browser` after building the web app. Set `PLAYWRIGHT_MODULE`
+to an external Playwright module path and `CHROME_BIN` to a browser executable
+when needed. The probe freezes a real Chromium page, then closes it and stops
+its worker, injects push events with CDP, and checks native registered
+notifications and worker restart. It does not mock Notification APIs or claim
+to verify an operating-system banner or Google's external delivery service.
 
 ### Frontend build gates
 

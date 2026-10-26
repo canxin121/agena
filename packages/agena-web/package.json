@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:notifications": "bun test ./tests/browserNotifications.test.ts",
+    "test:notifications:browser": "node ./scripts/probe-browser-push.cjs",
     "dev": "bun run vite",
     "typecheck": "bun ./node_modules/vue-tsc/bin/vue-tsc.js -b",
     "vue-tsc": "bun ./node_modules/vue-tsc/bin/vue-tsc.js",

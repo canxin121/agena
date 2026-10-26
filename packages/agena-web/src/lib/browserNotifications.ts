@@ -2,6 +2,7 @@ import { isRunCancelled, isRunFailureState, isRunInFlight, normalizeRunState } f
 import { interactiveRequests, pendingPartInteractions, type InteractiveRequest } from './interactiveRequests'
 import { localStorageKeys } from './persistence/storageKeys'
 import type { SseEvent } from './sse'
+import { browserNotificationPlatformHint, notificationWorker } from './browserPush'
 
 export type BrowserNotificationPermission = NotificationPermission | 'unsupported' | 'insecure'
 export type BrowserNotificationKind = 'completed' | 'failed' | 'cancelled' | 'permission' | 'question'
@@ -10,6 +11,7 @@ export type BrowserNotificationSnapshot = { parts: unknown[]; requests?: unknown
 export function browserNotificationPermission(): BrowserNotificationPermission {
   if (typeof window === 'undefined') return 'unsupported'
   if (!window.isSecureContext) return 'insecure'
+  if (browserNotificationPlatformHint() === 'iosInstall') return 'unsupported'
   if (typeof window.Notification !== 'function') return 'unsupported'
   return window.Notification.permission
 }
@@ -25,13 +27,30 @@ export async function requestBrowserNotificationPermission(): Promise<BrowserNot
   }
 }
 
-export function showBrowserNotification(title: string, options: NotificationOptions, onClick?: () => unknown) {
+export type BrowserNotificationHandle = { close: () => void }
+
+export async function showBrowserNotification(
+  title: string,
+  options: NotificationOptions,
+  onClick?: () => unknown,
+): Promise<BrowserNotificationHandle | null> {
   if (browserNotificationPermission() !== 'granted') return null
+  const notificationOptions = { icon: '/android-chrome-192x192.png?v=shift', requireInteraction: true, ...options }
   try {
-    const notification = new window.Notification(title, {
-      icon: '/android-chrome-192x192.png?v=shift',
-      ...options,
-    })
+    if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+      const worker = await notificationWorker()
+      await worker.showNotification(title, notificationOptions)
+      const shown = await worker.getNotifications({ tag: options.tag })
+      return {
+        close: () => shown.forEach((item) => item.close()),
+      }
+    }
+  } catch {
+    // The worker can be unavailable on older servers or blocked by browser
+    // settings. Desktop browsers can still use the constructor below.
+  }
+  try {
+    const notification = new window.Notification(title, notificationOptions)
     notification.onclick = () => {
       notification.close()
       window.focus()
@@ -41,7 +60,18 @@ export function showBrowserNotification(title: string, options: NotificationOpti
         // Navigation may be unavailable after the app has been disposed.
       }
     }
-    return notification
+    return await new Promise<BrowserNotificationHandle | null>((resolve) => {
+      const timeout = setTimeout(() => finish(false), 8000)
+      function finish(shown: boolean) {
+        clearTimeout(timeout)
+        notification.onshow = null
+        notification.onerror = null
+        if (!shown) notification.close()
+        resolve(shown ? notification : null)
+      }
+      notification.onshow = () => finish(true)
+      notification.onerror = () => finish(false)
+    })
   } catch {
     // Permissions can change at any time; some browsers expose the API but
     // do not support the constructor. Notification delivery must not break SSE.
@@ -85,7 +115,7 @@ function notificationIntents(evt: SseEvent): NotificationIntent[] {
             : null
     if (kind) {
       intents.push({
-        key: `reply:${sid}:${part.part_id}:${part.created_at_ms ?? ''}`,
+        key: `reply:${sid}:${part.part_id}:${part.created_at_ms ?? ''}:${record(part.content).generation ?? ''}`,
         sessionId: sid,
         kind,
       })
@@ -134,7 +164,7 @@ export function createBrowserNotifier(options: {
 }) {
   const seen = new Set<string>()
   const revisions = new Map<string, number>()
-  const active = new Map<string, Notification>()
+  const active = new Map<string, BrowserNotificationHandle>()
   const pendingReplies = new Map<string, Set<number>>()
   const changedSessions = new Set<string>()
   const generations = new Map<string, number>()
@@ -148,25 +178,27 @@ export function createBrowserNotifier(options: {
 
   async function deliver(intent: NotificationIntent, scope: string) {
     const key = JSON.stringify([scope, intent.key])
-    const send = () => {
-      if (disposed || !options.enabled() || options.scope() !== scope) return
+    const send = async () => {
+      if (disposed || !options.enabled() || options.scope() !== scope) return false
       const delivered = deliveredNotifications()
-      if (delivered.some(([existing]) => existing === key)) return
-      const notification = showBrowserNotification(
+      if (delivered.some(([existing]) => existing === key)) return true
+      const notification = await showBrowserNotification(
         options.sessionTitle(intent.sessionId) || 'Agena',
         {
           body: options.message(intent.kind),
           tag: `agena:${scope}:session:${intent.sessionId}`,
+          data: { url: `/chat?sessionId=${encodeURIComponent(intent.sessionId)}` },
         },
         () => !disposed && options.openSession(intent.sessionId),
       )
-      if (!notification) return
+      if (!notification) return false
+      if (disposed || !options.enabled() || options.scope() !== scope) {
+        notification.close()
+        return false
+      }
       active.get(intent.sessionId)?.close()
       active.delete(intent.sessionId)
       active.set(intent.sessionId, notification)
-      notification.onclose = () => {
-        if (active.get(intent.sessionId) === notification) active.delete(intent.sessionId)
-      }
       if (active.size > 32) {
         const oldest = active.keys().next().value!
         active.get(oldest)?.close()
@@ -177,27 +209,28 @@ export function createBrowserNotifier(options: {
       } catch {
         // In-memory deduplication and the stable tag still work without storage.
       }
+      return true
     }
     // Share delivery claims across tabs. The stable notification tag also
     // replaces duplicates on browsers without Web Locks or localStorage.
     if (typeof navigator !== 'undefined' && navigator.locks) {
       try {
-        await navigator.locks.request(DELIVERY_KEY, send)
-        return
+        return await navigator.locks.request(DELIVERY_KEY, send)
       } catch {
         // Private browsing and embedded contexts may disallow Web Locks.
       }
     }
-    send()
+    return send()
   }
 
   async function notify(intents: NotificationIntent[], scope: string) {
     for (const intent of intents) {
       if (disposed || options.scope() !== scope) return
       if (seen.has(intent.key)) continue
+      if (!options.enabled()) continue
+      if (!(await deliver(intent, scope))) throw new Error('Browser notification delivery failed')
       seen.add(intent.key)
       if (seen.size > 512) seen.delete(seen.values().next().value!)
-      if (options.enabled()) await deliver(intent, scope)
     }
   }
 
@@ -243,18 +276,17 @@ export function createBrowserNotifier(options: {
       typeof part.part_id === 'number' &&
       (part.origin_session_id == null || String(part.origin_session_id) === sid)
     ) {
-      if (isRunInFlight(part.run_state || part.state)) {
-        let ids = pendingReplies.get(sid)
-        if (!ids) pendingReplies.set(sid, (ids = new Set()))
-        ids.add(part.part_id)
-      } else if (pendingReplies.has(sid)) {
-        const ids = pendingReplies.get(sid)!
-        ids.delete(part.part_id)
-        if (!ids.size) pendingReplies.delete(sid)
-      }
+      let ids = pendingReplies.get(sid)
+      if (!ids) pendingReplies.set(sid, (ids = new Set()))
+      ids.add(part.part_id)
       if (pendingReplies.size > 256) pendingReplies.delete(pendingReplies.keys().next().value!)
     }
     await notify(notificationIntents(evt), scope)
+    if (sid && part.message_boundary === true && !isRunInFlight(part.run_state || part.state)) {
+      const ids = pendingReplies.get(sid)
+      ids?.delete(part.part_id as number)
+      if (!ids?.size) pendingReplies.delete(sid)
+    }
   }
 
   return {

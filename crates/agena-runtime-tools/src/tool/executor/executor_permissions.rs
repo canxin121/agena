@@ -1,16 +1,4 @@
 impl ToolExecutor {
-    /// Whether this registered invocation is safe to share a local execution
-    /// wave with other calls. Unknown tools fail closed. This is deliberately
-    /// independent of the provider's `parallel_tool_calls` request capability.
-    pub fn invocation_supports_parallel_execution(&self, invocation: &ToolInvocation) -> bool {
-        self.invocation_definition(invocation)
-            .is_some_and(|definition| {
-                agena_plugin_host::sdk::ToolTag::is_parallel_safe(
-                    &super::invocation_effective_tags(&definition, invocation),
-                )
-            })
-    }
-
     pub(crate) fn invocation_definition(
         &self,
         invocation: &ToolInvocation,

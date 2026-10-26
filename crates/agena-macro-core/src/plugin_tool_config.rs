@@ -406,9 +406,6 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         "shell" => quote! { ::agena_plugin_sdk::ToolTag::Shell },
         "agent" => quote! { ::agena_plugin_sdk::ToolTag::Agent },
         "read_only" => quote! { ::agena_plugin_sdk::ToolTag::ReadOnly },
-        "parallel_safe" | "parallel-safe" => {
-            quote! { ::agena_plugin_sdk::ToolTag::ParallelSafe }
-        }
         "mutate" => quote! { ::agena_plugin_sdk::ToolTag::Mutate },
         "execute" => quote! { ::agena_plugin_sdk::ToolTag::Execute },
         "filesystem" => quote! { ::agena_plugin_sdk::ToolTag::Filesystem },

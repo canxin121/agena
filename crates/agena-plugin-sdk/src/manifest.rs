@@ -164,10 +164,6 @@ pub enum ToolTag {
     /// Declared read-only: the tool only reads. Used for the read-only builtin
     /// profile, the `tools.rules."*".read-only` class default, and discovery.
     ReadOnly,
-    /// The tool explicitly promises that separate invocations are safe to
-    /// execute concurrently. This is a scheduler hint only; it grants no
-    /// permission and never affects provider protocol request fields.
-    ParallelSafe,
     /// Operates on files/paths in the workspace.
     Filesystem,
     /// Talks to remote services (web, APIs, network targets).
@@ -229,18 +225,6 @@ impl ToolTag {
             && !Self::is_mutating(tags)
             && !Self::is_agent(tags)
     }
-
-    /// Whether independent invocations may share a local scheduler wave.
-    /// Read-only tools are safe by default; stateful tools must explicitly
-    /// declare `parallel_safe`. Interactive and agent tools stay serial even
-    /// when that tag is present because they own external lifecycles. Shell
-    /// tools may opt in explicitly when their command contract is safe.
-    pub fn is_parallel_safe(tags: &[Self]) -> bool {
-        if Self::is_interactive(tags) || Self::is_agent(tags) {
-            return false;
-        }
-        Self::is_read_only(tags) || tags.contains(&Self::ParallelSafe)
-    }
 }
 
 impl ToolTag {
@@ -258,7 +242,6 @@ impl ToolTag {
             "shell" => Self::Shell,
             "agent" => Self::Agent,
             "read_only" | "read-only" | "readonly" => Self::ReadOnly,
-            "parallel_safe" | "parallel-safe" => Self::ParallelSafe,
             "filesystem" => Self::Filesystem,
             "network" => Self::Network,
             "fetch" => Self::Fetch,
@@ -281,7 +264,6 @@ impl ToolTag {
             Self::Shell => "shell",
             Self::Agent => "agent",
             Self::ReadOnly => "read_only",
-            Self::ParallelSafe => "parallel_safe",
             Self::Filesystem => "filesystem",
             Self::Network => "network",
             Self::Fetch => "fetch",
@@ -393,10 +375,9 @@ pub struct ToolDocs {
 #[serde(deny_unknown_fields)]
 /// Runtime behavior policy of a tool.
 ///
-/// Nothing about a tool's output belongs here. Local parallel-safety is
-/// declared separately with the `read_only` or `parallel_safe` tool tag; a
-/// provider's ability to return multiple calls does not make a tool safe to
-/// execute concurrently. Output length is bounded by the session layer.
+/// Tools own synchronization of their state and external effects. The host
+/// bounds total concurrency independently of provider protocol capabilities.
+/// Output length is bounded by the session layer.
 pub struct ToolRuntimePolicy {
     #[serde(default)]
     pub streaming: ToolStreamingMode,

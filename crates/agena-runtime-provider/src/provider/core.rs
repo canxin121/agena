@@ -368,6 +368,14 @@ pub trait ModelRuntime: Send + Sync {
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError>;
 
+    async fn discover_models(
+        &self,
+    ) -> Result<agena_provider::ProviderModelDiscovery, ProviderError> {
+        self.list_models()
+            .await
+            .map(agena_provider::ProviderModelDiscovery::from_models)
+    }
+
     async fn complete(
         &self,
         request: CompletionRequest,

@@ -81,35 +81,50 @@ impl OpenAiTransport {
         &self,
         adapter_kind: &'static str,
     ) -> Result<Vec<Model>, ProviderError> {
-        let endpoint = self.list_models_endpoint()?;
-        let response =
-            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
-                let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
-                utils::adapter_log_http_request_prepared(
-                    self.id.as_str(),
-                    adapter_kind,
-                    "list_models",
-                    "GET",
-                    endpoint.as_str(),
-                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                    None,
-                );
-                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-            })
-            .await?;
+        let mut endpoint = self.list_models_endpoint()?;
+        let mut pagination = crate::provider::model_pagination::ModelPagination::new(&endpoint)?;
+        let mut models = Vec::new();
+        loop {
+            let response =
+                utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                    let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
+                    utils::adapter_log_http_request_prepared(
+                        self.id.as_str(),
+                        adapter_kind,
+                        "list_models",
+                        "GET",
+                        endpoint.as_str(),
+                        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        None,
+                    );
+                    utils::apply_resolved_request_headers(
+                        self.client.get(endpoint.as_str()),
+                        &headers,
+                    )
+                })
+                .await?;
 
-        let payload: OpenAiModelListResponse = utils::parse_json_response_logged(
-            self.id.as_str(),
-            adapter_kind,
-            "list_models",
-            response,
-        )
-        .await?;
-        Ok(payload
-            .into_items(self.id.as_str(), self.models_url.as_deref())
-            .into_iter()
-            .filter_map(|model| self.provider_model_from_listed_model(model))
-            .collect())
+            let page: serde_json::Value = utils::parse_json_response_logged(
+                self.id.as_str(),
+                adapter_kind,
+                "list_models",
+                response,
+            )
+            .await?;
+            let next = pagination.next(&page)?;
+            let payload: OpenAiModelListResponse = serde_json::from_value(page)
+                .map_err(|_| ProviderError::Provider("invalid model list response".into()))?;
+            models.extend(
+                payload
+                    .into_items(self.id.as_str(), self.models_url.as_deref())
+                    .into_iter()
+                    .filter_map(|model| self.provider_model_from_listed_model(model))
+                    .collect::<Vec<_>>(),
+            );
+            let Some(next) = next else { break };
+            endpoint = next;
+        }
+        Ok(models)
     }
 }
 

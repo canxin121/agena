@@ -457,6 +457,17 @@ pub trait ProviderCatalog: Send + Sync {
         provider_id: &ProviderId,
     ) -> Result<Vec<Model>, ProviderCatalogError>;
 
+    /// Discover provider routes without treating catalog-only additions as
+    /// remotely listed models. Implementations may retain partial results.
+    async fn discover_models(
+        &self,
+        provider_id: &ProviderId,
+    ) -> Result<crate::ProviderModelDiscovery, ProviderCatalogError> {
+        self.list_models(provider_id)
+            .await
+            .map(crate::ProviderModelDiscovery::from_models)
+    }
+
     async fn list_draft_adapter_models(
         &self,
         request: DraftProviderAdapterModelsRequest,

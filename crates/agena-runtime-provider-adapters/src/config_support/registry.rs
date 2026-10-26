@@ -206,6 +206,8 @@ impl ModelRuntime for GitlabRoutedAdapter {
 }
 
 mod auth_resolution;
+#[cfg(test)]
+mod discovery_tests;
 mod model_listing;
 mod provider_registry;
 mod tool_connection;

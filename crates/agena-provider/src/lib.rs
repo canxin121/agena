@@ -38,6 +38,8 @@ use serde::{Deserialize, Serialize};
 mod auth_values;
 mod catalog_contract;
 pub use catalog_contract::*;
+mod model_discovery;
+pub use model_discovery::*;
 mod contract;
 pub use auth_values::{
     AuthData, CopilotDeployment, CredentialIssuer, OAuthTokenResponse, OAuthUserInfo,

@@ -24,6 +24,7 @@ pub mod amazon_bedrock;
 pub mod anthropic;
 pub mod gemini;
 pub mod gitlab;
+mod model_pagination;
 pub mod ollama;
 pub mod openai;
 

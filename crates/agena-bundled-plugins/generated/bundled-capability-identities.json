@@ -20,7 +20,7 @@
         "image-generate",
         "image-edit"
       ],
-      "content_sha256": "515c543adf21cc0762a062985a9133847bd5f7168a50e487feb9273c2bf5506f",
+      "content_sha256": "324c4a35a7518d5498ea2e0ef95eee4a23b13238c892f364a8e11b75e3bf1009",
       "name": "imagegen"
     },
     {
@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 178,
+    "execution_tools": 175,
     "gateway_tools": 3,
-    "plugins": 22,
-    "tools": 181
+    "plugins": 23,
+    "tools": 178
   },
   "plugins": [
     {
@@ -336,9 +336,9 @@
         {
           "canonical_name": "agena.chatgpt.image_edit",
           "conditional": null,
-          "definition_identity": "3e10d2ffdae11356d3bafdfddaed45471323049b0fd741418f42398c1c863fed",
+          "definition_identity": "d9c723fdca1e11052312c248cb900d40d6afc6eb2a6fdfa5543dfce31cc846b1",
           "gateway": false,
-          "input_schema_sha256": "4266280707e5f9d8cac3e78a4ef1ebf2816f323308e6d14e0554a2b0cb8df425",
+          "input_schema_sha256": "5fa5b032e92d1d5764c608041509733b80bca6a0834d67aee7716ceebea21875",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
@@ -347,25 +347,12 @@
         {
           "canonical_name": "agena.chatgpt.image_generate",
           "conditional": null,
-          "definition_identity": "15bb29aa89d6d57ab2da2458205e3a96b7106e8868b5ad57e7975bd1e9af683b",
+          "definition_identity": "0c9eb19928e74ea336a82d28146eb062780fb7774ac3313a39d840e0be8a40fd",
           "gateway": false,
           "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
-            "mutate"
-          ]
-        },
-        {
-          "canonical_name": "agena.chatgpt.image_generation",
-          "conditional": null,
-          "definition_identity": "3eb61a6f62e46930a099f839e40ce6bfbd13a12dac856eeb5f83c34d2889376c",
-          "gateway": false,
-          "input_schema_sha256": "b0fc63a49aad96e389c45908c6f4163a72bdaff5ff2910187af3a9e3607365f9",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "interactive",
             "mutate"
           ]
         },
@@ -404,19 +391,6 @@
           "tags": [
             "network",
             "mutate"
-          ]
-        },
-        {
-          "canonical_name": "agena.chatgpt.models",
-          "conditional": null,
-          "definition_identity": "269fd4492763106851625d78421068a0397e988b59b4906f25e6c3179bf4aade",
-          "gateway": false,
-          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "discovery",
-            "query"
           ]
         },
         {
@@ -464,6 +438,19 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.chatgpt.responses_image_generation",
+          "conditional": null,
+          "definition_identity": "63137c2cc397cf60783d67ba26d813583f7899fbcb8d19f447ee6d60b261e02e",
+          "gateway": false,
+          "input_schema_sha256": "f2b0110ffaa3a365aa82aa1b009f9d58671da995de056c4875f81d1e04fbc187",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "network",
+            "interactive",
             "mutate"
           ]
         },
@@ -677,19 +664,6 @@
           "tags": [
             "network",
             "mutate"
-          ]
-        },
-        {
-          "canonical_name": "agena.claude.models",
-          "conditional": null,
-          "definition_identity": "2c91e452b916b9981a188dae0e657ab6b5b9f46bb44d1f21b861c8c0b08e6326",
-          "gateway": false,
-          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "discovery",
-            "query"
           ]
         },
         {
@@ -1406,19 +1380,6 @@
           ]
         },
         {
-          "canonical_name": "agena.gemini.models",
-          "conditional": null,
-          "definition_identity": "9e3e734860ebea4a80e3a80dc57dc5e970f6efefc20823e808f0635b6178abdd",
-          "gateway": false,
-          "input_schema_sha256": "8aae534e4751e5f7a120909a7afba22f74cd039f43201f04e6a94b30e9115024",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "network",
-            "discovery",
-            "query"
-          ]
-        },
-        {
           "canonical_name": "agena.gemini.music_generation",
           "conditional": null,
           "definition_identity": "1ad1a7cc5fb51d6182e141ede2914d6f639fa0e406fe7c05f8e241e0b91d43e7",
@@ -1993,6 +1954,30 @@
     {
       "conditional": null,
       "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.provider",
+      "tools": [
+        {
+          "canonical_name": "agena.provider.models",
+          "conditional": null,
+          "definition_identity": "6597a05030bc381c280ac539c12b0bb5dbdc5d1b15afa4b1299daf693348014a",
+          "gateway": false,
+          "input_schema_sha256": "ddccbf86e717b7ac48a8bdc4feb25f7d6938eee84f128ccae4db0853bd839ec4",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "network"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
         "tool.invoke"
       ],
       "id": "agena.report",
@@ -2071,19 +2056,6 @@
             "query",
             "discovery",
             "read_only"
-          ]
-        },
-        {
-          "canonical_name": "agena.session.models",
-          "conditional": null,
-          "definition_identity": "6a98e7db92658a3c9392682c51890861fddf36b3e310e1398bd36cee986c89f1",
-          "gateway": false,
-          "input_schema_sha256": "1ae41e9621f94da4adb5c410058ed18a2b4099a82afdf68fa2e67d765324c46c",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "discovery",
-            "network"
           ]
         },
         {

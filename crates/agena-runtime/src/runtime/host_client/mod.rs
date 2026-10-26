@@ -879,9 +879,9 @@ impl HostClient for RuntimeHostClient {
     async fn builtin_provider_models(&self) -> Result<serde_json::Value, PluginError> {
         let context = current_host_callback_context()
             .ok_or_else(|| host_unavailable("model discovery requires an active tool callback"))?;
-        if context.plugin_id.as_deref() != Some("agena.session") {
+        if context.plugin_id.as_deref() != Some("agena.provider") {
             return Err(host_unavailable(
-                "provider model discovery is restricted to the bundled session plugin",
+                "provider model discovery is restricted to the bundled provider plugin",
             ));
         }
         let (session_id, _) = self.callback_session_and_call()?;
@@ -910,24 +910,18 @@ impl HostClient for RuntimeHostClient {
         for target in targets {
             self.require_network_permission(target).await?;
         }
-        let catalog = snapshot.provider_registry();
-        let (models, source, warning) = match catalog.list_models(&provider_id).await {
-            Ok(models) if !models.is_empty() => (models, "provider_discovery", None),
-            result => {
-                let warning = result
-                    .err()
-                    .map(|_| "Remote discovery failed; showing configured models only.");
-                let models = snapshot
-                    .configured_local_models(&provider_id)
-                    .map_err(plugin_error)?;
-                (models, "configured", warning)
-            }
-        };
-        Ok(
-            serde_json::json!({"provider_id":provider_id,"current_model":selected.model_id,
-            "source":source,"warning":warning,"models":models,
-            "capability_notice":"Catalog capability metadata may be unknown or inferred. A listed model does not guarantee support for Files, hosted tools or other platform APIs."}),
-        )
+        let discovery = snapshot
+            .discover_provider_models(&provider_id)
+            .await
+            .map_err(plugin_error)?;
+        let mut result = serde_json::to_value(discovery).map_err(plugin_error)?;
+        result["provider_id"] = serde_json::json!(provider_id);
+        result["current_model"] = serde_json::json!(selected.model_id);
+        result["current_adapter"] = serde_json::json!(selected.adapter_id);
+        result["capability_notice"] = serde_json::json!(
+            "All enabled adapters of this provider are queried, subject to configured-only discovery policies. Model presence and catalog metadata do not guarantee operation or account access."
+        );
+        Ok(result)
     }
 
     async fn builtin_provider_connection(

@@ -1,4 +1,11 @@
-Create or edit the requested image through the provider cloud tools `chatgpt.image_generation`, `chatgpt.image_edit`, `gemini.image_generation`, or `gemini.image_edit`.
+Create or edit the requested image through the provider cloud tools. First use `provider.models` with `action=list` to discover models across the current provider's enabled adapters, optionally searching for `gpt-image`. Follow `next_cursor` when needed, inspect adapter discovery status and model sources, and use `action=get` with `id` and optional `adapter_id` for full metadata. Choose the tool by the task and the current provider's supported APIs:
+
+- For ordinary OpenAI text-to-image tasks, prefer `chatgpt.image_generate`. It calls the Images API directly. Pass `action=create`, a plain-text `prompt`, and an explicit GPT Image drawing `model` supported by the current provider, for example `gpt-image-2` or `gpt-image-2.5-sunburst`.
+- For OpenAI local-image edits or reference-image composition, prefer `chatgpt.image_edit`. Pass the edit `prompt`, local image paths in `images`, and the drawing `model`. Continue editing by passing the previous output's local image path into the next call.
+- Use `chatgpt.responses_image_generation` when you need Responses server-side conversation context. It makes an additional request: current Agena AI -> Responses chat model -> hosted GPT Image tool -> image. Top-level `model` selects the Responses chat model; `tool_options.model` selects the GPT Image drawing model. The chat model may rewrite the drawing prompt. Pass `previous_response_id` to reference retained OpenAI response context, or explicit `input_items` for history and image references. Agena history is not automatically included. Local reference images must first be uploaded or encoded for this tool.
+- For Google image generation or editing, use `gemini.image_generation` or `gemini.image_edit` according to their schemas.
+
+All tools reuse the current provider connection. Selecting a model does not switch providers. Model IDs above are examples; use models and image options supported by the actual provider or gateway. Explicitly choose a drawing model for the direct OpenAI tools when the current session uses a chat model.
 
 Treat these provider-backed tools exactly like every other Agena tool: discover or inspect them through the Tool API, obey the active agent/Skill allowlist and permission policy, and invoke them through `tools_call`.
 

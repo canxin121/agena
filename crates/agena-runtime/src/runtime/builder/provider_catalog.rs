@@ -237,6 +237,16 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
     }
 
+    async fn discover_models(
+        &self,
+        provider_id: &agena_domain::ProviderId,
+    ) -> Result<agena_provider::ProviderModelDiscovery, agena_provider::ProviderCatalogError> {
+        self.current_snapshot()
+            .discover_provider_models(provider_id.as_ref())
+            .await
+            .map_err(|error| agena_provider::ProviderCatalogError::operation_error(&error))
+    }
+
     async fn list_draft_adapter_models(
         &self,
         request: agena_provider::DraftProviderAdapterModelsRequest,

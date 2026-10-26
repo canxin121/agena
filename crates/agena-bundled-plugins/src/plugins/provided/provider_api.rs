@@ -142,7 +142,6 @@ fn default_wait() -> u32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
-    Models,
     Files,
     Knowledge,
     Containers,

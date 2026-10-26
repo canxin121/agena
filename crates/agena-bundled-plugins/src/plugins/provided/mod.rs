@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod monitor;
 pub mod notebook;
 pub mod planning;
+pub(crate) mod provider;
 pub(crate) mod provider_api;
 pub(crate) mod provider_tool_docs;
 pub mod report;

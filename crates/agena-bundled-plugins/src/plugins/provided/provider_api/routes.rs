@@ -39,11 +39,6 @@ pub(super) fn resolve(provider: &str, family: F, input: &ResourceInput) -> Resul
         binary: false,
     };
     let (method, path) = match family {
-        F::Models => match a {
-            A::List => (Method::GET, "models".into()),
-            A::Get => (Method::GET, format!("models/{}", id("models/")?)),
-            _ => return Err(unsupported(family, a)),
-        },
         F::Files => match a {
             A::List => (Method::GET, "files".into()),
             A::Get | A::Wait => (Method::GET, format!("files/{}", id("files/")?)),

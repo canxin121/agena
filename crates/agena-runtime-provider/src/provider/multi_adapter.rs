@@ -562,68 +562,96 @@ impl ModelRuntime for MultiAdapterProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-        let mut visible = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut errors = Vec::new();
+        let discovery = self.discover_models().await?;
+        if discovery.models.is_empty() && !discovery.complete {
+            return Err(ProviderError::Provider(
+                "adapter model discovery failed".into(),
+            ));
+        }
+        Ok(discovery
+            .models
+            .into_iter()
+            .map(|entry| entry.model)
+            .collect())
+    }
 
+    async fn discover_models(
+        &self,
+    ) -> Result<agena_provider::ProviderModelDiscovery, ProviderError> {
+        use agena_provider::{
+            AdapterDiscoveryStatus, AdapterModelDiscovery, DiscoveredProviderModel,
+            ModelDiscoverySource, ProviderModelDiscovery,
+        };
+        let mut discovery = ProviderModelDiscovery {
+            models: Vec::new(),
+            adapters: Vec::new(),
+            complete: true,
+        };
+        let mut seen = BTreeSet::new();
         for (adapter_id, adapter) in &self.adapters {
             let adapter_id = AdapterId::new(adapter_id.clone());
-            let listed = if self.configured_only_adapters.contains(adapter_id.as_ref()) {
-                Vec::new()
+            let (listed, status, warning) = if self
+                .configured_only_adapters
+                .contains(adapter_id.as_ref())
+            {
+                (Vec::new(), AdapterDiscoveryStatus::ConfiguredOnly, None)
             } else {
                 match adapter.list_models().await {
-                    Ok(models) => models,
+                    Ok(models) => (models, AdapterDiscoveryStatus::Discovered, None),
                     Err(error) => {
-                        errors.push(format!("{adapter_id}: {error}"));
-                        Vec::new()
+                        discovery.complete = false;
+                        tracing::warn!(provider = %self.id, adapter = %adapter_id, error = %error,
+                            "provider adapter model discovery failed");
+                        (Vec::new(), AdapterDiscoveryStatus::Failed,
+                            Some("Remote model discovery failed for this adapter; configured routes are included when available.".to_owned()))
                     }
                 }
             };
+            discovery.adapters.push(AdapterModelDiscovery {
+                adapter_id: Some(adapter_id.clone()),
+                status,
+                warning,
+            });
             for model in listed {
                 let target_model = model.id.clone();
                 let route_key = (adapter_id.to_string(), target_model.to_string());
                 let route = self.routes.get(&route_key);
-                if matches!(route, Some(route) if !route.enabled) {
+                if matches!(route, Some(route) if !route.enabled) || !seen.insert(route_key) {
                     continue;
                 }
                 let definition = route
                     .map(|route| route.definition.clone())
                     .unwrap_or_default();
-                seen.insert(route_key);
-                visible.push(self.rewrite_model(
-                    &target_model,
-                    model,
-                    &adapter_id,
-                    adapter.as_ref(),
-                    &definition,
-                ));
+                discovery.models.push(DiscoveredProviderModel {
+                    model: self.rewrite_model(
+                        &target_model,
+                        model,
+                        &adapter_id,
+                        adapter.as_ref(),
+                        &definition,
+                    ),
+                    source: ModelDiscoverySource::ProviderDiscovery,
+                });
             }
         }
-
         for ((adapter_id, target_model), route) in &self.routes {
             if !route.enabled || seen.contains(&(adapter_id.clone(), target_model.clone())) {
                 continue;
             }
-
             let adapter_id = AdapterId::new(adapter_id.clone());
             let target_model = ModelId::new(target_model.clone());
             let adapter = self.adapter(adapter_id.as_ref())?;
-            visible.push(self.synthesize_model(
-                &target_model,
-                &adapter_id,
-                adapter.as_ref(),
-                &route.definition,
-            ));
+            discovery.models.push(DiscoveredProviderModel {
+                model: self.synthesize_model(
+                    &target_model,
+                    &adapter_id,
+                    adapter.as_ref(),
+                    &route.definition,
+                ),
+                source: ModelDiscoverySource::Configured,
+            });
         }
-
-        if visible.is_empty() && !errors.is_empty() {
-            return Err(ProviderError::Provider(format!(
-                "adapter model discovery failed: {}",
-                errors.join("; ")
-            )));
-        }
-
-        Ok(visible)
+        Ok(discovery)
     }
 
     async fn execute_image_for_adapter(

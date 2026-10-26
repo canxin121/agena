@@ -5,6 +5,24 @@ use super::{
 use agena_provider::{AgenaToolMode, ProviderModelSource};
 
 impl ProviderRegistry {
+    pub async fn discover_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<agena_provider::ProviderModelDiscovery, ProviderError> {
+        let provider = self.require_provider(provider_id)?;
+        let mut discovery = provider.discover_models().await?;
+        for entry in &mut discovery.models {
+            prepare_listed_model(provider.as_ref(), provider_id, &mut entry.model, true);
+        }
+        discovery.models.sort_by(|a, b| {
+            (&a.model.adapter_id, &a.model.id).cmp(&(&b.model.adapter_id, &b.model.id))
+        });
+        discovery
+            .models
+            .dedup_by(|a, b| a.model.adapter_id == b.model.adapter_id && a.model.id == b.model.id);
+        Ok(discovery)
+    }
+
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, ProviderError> {
         let provider = self.require_provider(provider_id)?;
         let provider_id = provider_id.to_owned();

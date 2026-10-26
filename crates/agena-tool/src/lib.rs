@@ -881,7 +881,8 @@ fn tool_result_fragment(
                 });
             }
         }
-        "chatgpt.image_generation"
+        "chatgpt.image_generate"
+        | "chatgpt.responses_image_generation"
         | "chatgpt.image_edit"
         | "gemini.image_generation"
         | "gemini.image_edit" => {
@@ -1170,7 +1171,8 @@ fn provider_operation_result_fragment(
             }
         }
         "chatgpt.shell" => provider_execution_result_fragment(object),
-        "chatgpt.image_generation"
+        "chatgpt.image_generate"
+        | "chatgpt.responses_image_generation"
         | "chatgpt.image_edit"
         | "gemini.image_generation"
         | "gemini.image_edit" => count(&["images", "outputs", "image_count"], "images"),
@@ -2355,7 +2357,8 @@ fn tool_action_label(tool_name: &str) -> String {
         "chatgpt.shell" => "Run hosted shell".to_owned(),
         "claude.advisor" => "Consult advisor".to_owned(),
         "chatgpt.file_search" | "gemini.file_search" => "Search files".to_owned(),
-        "chatgpt.image_generation" | "gemini.image_generation" => "Generate image".to_owned(),
+        "chatgpt.responses_image_generation" => "Generate image via OpenAI Responses".to_owned(),
+        "chatgpt.image_generate" | "gemini.image_generation" => "Generate image".to_owned(),
         "chatgpt.image_edit" | "gemini.image_edit" => "Edit image".to_owned(),
         "snapshot.enter" | "enter_snapshot" => "Enter snapshot".to_owned(),
         "snapshot.exit" | "exit_snapshot" => "Exit snapshot".to_owned(),
@@ -2713,7 +2716,10 @@ fn provider_invocation_title_subject(key: &str, input: &serde_json::Value) -> St
             .into_iter()
             .next()
             .unwrap_or_default();
-    } else if key.ends_with("image_generation") || key.ends_with("image_edit") {
+    } else if key.ends_with("image_generate")
+        || key.ends_with("image_generation")
+        || key.ends_with("image_edit")
+    {
         &["prompt", "description", "path"]
     } else if key.ends_with("function")
         || key.ends_with("custom")

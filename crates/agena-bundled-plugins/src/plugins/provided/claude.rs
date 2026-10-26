@@ -309,29 +309,6 @@ impl ClaudeToolsPlugin {
     }
 
     #[tool(
-        name = "models",
-        tags(network, discovery, query),
-        summary = "List or inspect vendor models on the current provider.",
-        help = "Model-based tools default to the current session model. Use an Anthropic Claude model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.",
-        translations(locale(
-            "zh-CN",
-            summary = "列出或查看当前 provider 上的厂商模型。",
-            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 Anthropic Claude 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get，get 需要 id；query 可传分页参数。模型出现在列表中，不代表网关或账号支持所有工具。"
-        ))
-    )]
-    async fn api_models(
-        &self,
-        input: super::provider_api::ResourceInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        super::provider_api::invoke(
-            self.media_service().await?,
-            super::provider_api::Family::Models,
-            input,
-        )
-        .await
-    }
-
-    #[tool(
         name = "files",
         tags(network, mutate),
         summary = "Manage remote files and download cloud-generated artifacts.",

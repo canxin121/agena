@@ -97,6 +97,14 @@ pub fn new_session_plugin() -> impl agena_plugin_host::sdk::Plugin {
     session::SessionPlugin::new()
 }
 
+pub fn provider_plugin_id() -> &'static str {
+    crate::plugins::provided::provider::PROVIDER_PLUGIN_ID
+}
+
+pub fn new_provider_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::provider::ProviderPlugin::new()
+}
+
 pub fn interaction_plugin_id() -> &'static str {
     interaction::INTERACTION_PLUGIN_ID
 }

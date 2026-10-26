@@ -141,7 +141,21 @@ pub async fn list_provider_models_response(
     }
 
     let catalog = state.provider_catalog();
-    let models = match catalog.list_models(&provider_id_value).await {
+    let models = match catalog
+        .discover_models(&provider_id_value)
+        .await
+        .and_then(|discovery| {
+            if discovery.models.is_empty() && !discovery.complete {
+                return Err(agena_provider::ProviderCatalogError::Operation(
+                    "Model discovery failed for the provider's adapters.".to_owned(),
+                ));
+            }
+            Ok(discovery
+                .models
+                .into_iter()
+                .map(|entry| entry.model)
+                .collect::<Vec<_>>())
+        }) {
         Ok(models) if !models.is_empty() => models,
         Ok(_) => catalog
             .configured_local_models(&provider_id_value)

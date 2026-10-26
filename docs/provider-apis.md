@@ -2,11 +2,11 @@
 
 The bundled `chatgpt`, `claude`, and `gemini` plugins use the **active session provider**. There are no plugin API-key, base-URL, timeout, or default-model settings. Credentials are resolved for each invocation through a native bundled-plugin host callback; they are not exposed over external plugin RPC or returned in tool output.
 
-These plugins currently expose 74 tools: 28 OpenAI, 16 Claude, and 30 Gemini. `session.models` is an additional discovery tool. The generated [tools reference](../crates/agena-bundled-plugins/generated/tools-reference.md) contains every action and input schema.
+These plugins currently expose 71 tools: 27 OpenAI, 15 Claude, and 29 Gemini. The separate `provider` plugin exposes one unified `provider.models` discovery tool. The generated [tools reference](../crates/agena-bundled-plugins/generated/tools-reference.md) contains every action and input schema.
 
 ## Connection and model selection
 
-1. Use `session.models` to discover the current provider's model catalog, current model, metadata, and capabilities. Discovery checks network permission first, and falls back to configured models when remote discovery fails. An unknown or inferred capability is not a guarantee that a gateway implements an API.
+1. Use `provider.models` to discover models across every enabled adapter of the current provider. The selected session model does not restrict the list. Discovery checks network permission first, retains configured routes and reports per-adapter failures. Catalog metadata is not a guarantee that a gateway implements an API.
 2. A model-based request defaults to the **actual current session model**. Pass `model` to select a model from the invoked vendor that supports the operation. Selecting `gemini.speech`, for example, does not implicitly switch a Claude session to a Google model.
 3. The vendor tool chooses the protocol and configured protocol path, while retaining the current provider connection. A compatible configured adapter supplies authentication/header options. Claude honors a configured `messages_url`; Gemini Live honors a configured `realtime_ws_url`.
 4. Model discovery and resource management operations such as list/get/delete/download do not need an inference model. Claude batch entries inherit the top-level/current model when their `params.model` is absent. OpenAI batch JSONL files retain their explicit per-request models. Existing managed agents retain their configuration; inline agent creation uses the current/explicit model if no nested model was provided.
@@ -17,7 +17,7 @@ No request silently falls back to an official endpoint or to local execution. Th
 
 | Capability | OpenAI (`chatgpt`) | Anthropic (`claude`) | Google (`gemini`) |
 | --- | --- | --- | --- |
-| Provider models | `models`, `session.models` | `models`, `session.models` | `models`, `session.models` |
+| Provider models | Unified `provider.models` | Unified `provider.models` | Unified `provider.models` |
 | Image/document understanding | `image_understanding`, `document_understanding` | Same | Same |
 | Audio/video understanding | `audio_understanding` (local WAV/MP3) | No separate native audio/video endpoint | `audio_understanding`, `video_understanding` |
 | Remote files and outputs | Signed `file_upload/status/delete`; `files` list/upload/get/wait/delete/download | Same; downloads require vendor-generated files | Signed uploads; `files` list/get/wait/delete/download |
@@ -26,7 +26,7 @@ No request silently falls back to an official endpoint or to local execution. Th
 | Native tool combinations and callbacks | `inference`: Responses, bounded SSE | `inference`: Messages, Skills/programmatic calling, bounded SSE | `inference`: Interactions, agents/Deep Research, bounded SSE |
 | Async lifecycle | `responses` create/get/wait/cancel/delete/input items/compact | `batches` lifecycle/results | `interactions`, `operations`, `batches` |
 | Batch inference | `batches`; result file through `files.download` | `batches`, including JSONL results | `batches`, generation/embedding create and update; result file through `files.download` |
-| Images | Existing Responses `image_generation`, `image_edit`; direct Images `image_generate` | No standalone image generation API | Existing `image_generation`, `image_edit` |
+| Images | Images API `image_generate`, `image_edit`; Responses-hosted `responses_image_generation` | No standalone image generation API | Existing `image_generation`, `image_edit` |
 | Audio | `transcription` (also translations), `speech`, `realtime` | No standalone audio generation API | `speech`, `realtime`, `music_generation` |
 | Video | No retired Sora API added | No standalone video generation API | `video_generation`, `video_edit` through current Interactions models |
 | Embeddings/moderation | `embeddings`, `moderation` | No corresponding standalone endpoints | `embeddings` single/synchronous batch; asynchronous batches through `batches` |
@@ -36,6 +36,26 @@ No request silently falls back to an official endpoint or to local execution. Th
 | Other platform workflows | `platform`: conversations/items, fine-tuning jobs/checkpoints/permissions/graders, evals/runs/outputs, multipart uploads, voice consents and voice creation/deletion | Official Messages fields through `inference` | Official Interactions fields through `inference` |
 
 “Native tool combinations” means the vendor request accepts its documented tool definitions and request fields. Provider-returned local computer/browser/shell/editor/function calls are returned as **data**. They do not execute automatically on the host. The calling AI can explicitly use Agena tools under normal permissions, then submit the vendor-formatted result in another inference request. Cloud MCP and hosted execution run under the vendor's own configuration.
+
+## Unified model discovery
+
+`agena.provider.models` replaces `agena.session.models`, `agena.chatgpt.models`, `agena.claude.models`, and `agena.gemini.models`. Update saved tool references and allowlists to the new name. Querying models requires no inference model, API key, or endpoint input; the current session identifies the provider and its existing adapter connections supply authentication and custom model-list endpoints.
+
+- `action=list` returns compact model routes, with optional case-insensitive `query`, `adapter_id`, `limit` (1–200, default 100), and `cursor`. Continue using `next_cursor` with the same filters. A changed model list invalidates the cursor and requires restarting.
+- `action=get` requires an exact `id` and returns the full metadata available from discovery and catalog enrichment. Specify `adapter_id` when the same ID has multiple routes. It does not make a separate vendor-specific model-detail request.
+- Discovery queries all enabled adapters, honors configured-only policies, follows supported vendor pagination (at most 100 pages per adapter), and retains configured models absent from remote results. Same-ID routes on different adapters remain distinct. No chat/image/audio type classifier is applied.
+- Each route has `source=provider_discovery` or `configured`. Catalog descriptions and capabilities enrich existing routes; catalog-only entries are not presented as discovered provider models.
+- `adapters` reports `discovered`, `configured_only`, or `failed`, with safe warnings. `complete=false` signals a failed remote discovery, including pagination errors; successful adapters and configured routes remain available. `has_more` and `next_cursor` refer to the tool's own output pages. A successful empty remote list is distinct from a failed discovery.
+
+AI tools and application provider-model queries share the runtime discovery report. Configured-only model selectors remain local and do not initiate network discovery.
+
+## OpenAI image tool selection
+
+Prefer `chatgpt.image_generate` for ordinary text-to-image requests and `chatgpt.image_edit` for local-image edits or reference-image composition. These call `POST images/generations` and `POST images/edits` directly. Their top-level `model` selects the GPT Image drawing model, for example `gpt-image-2` or `gpt-image-2.5-sunburst` when supported by the current provider. Set it explicitly when the session uses a chat model. To edit again, pass the previous output's local image path back to `image_edit`.
+
+`chatgpt.responses_image_generation` (previously `chatgpt.image_generation`) instead submits an additional `POST responses` request. The current Agena AI supplies a request to a Responses chat model, which may rewrite the drawing prompt and calls the hosted GPT Image tool to produce the image. Top-level `model` selects this additional **chat model**; `tool_options.model` selects the **drawing model**. The OpenAI protocol tool type remains `image_generation`.
+
+Use the Responses tool when you need provider-retained response context. `previous_response_id` refers to a prior OpenAI response, and `input_items` can explicitly provide history and image references. Agena conversation history and local project files are not automatically attached. Local images must first be uploaded or encoded for `input_items`; `image_edit` accepts their paths directly. All three tools retain the current provider connection, whose gateway and account must support the chosen API and models. Update stored tool references and allowlists to the renamed public tool where applicable.
 
 ## Common resource input
 
@@ -57,7 +77,7 @@ These are execution-tool names for `tools_help` / `tools_call`, not additional t
 Discover a suitable model:
 
 ```json
-{"tool":"session.models","input":{"query":"embedding"}}
+{"tool":"provider.models","input":{"action":"list","query":"embedding"}}
 ```
 
 Create an OpenAI vector store, then index an already uploaded file:

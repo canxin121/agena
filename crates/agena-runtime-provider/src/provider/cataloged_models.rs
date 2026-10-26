@@ -271,6 +271,17 @@ impl ModelRuntime for CatalogedModelsProvider {
             .image_capabilities_for_adapter(adapter_id, model)
     }
 
+    async fn discover_models(
+        &self,
+    ) -> Result<agena_provider::ProviderModelDiscovery, ProviderError> {
+        let mut discovery = self.target.discover_models().await?;
+        for entry in &mut discovery.models {
+            self.apply_catalog_model_id(&entry.model.id.clone(), &mut entry.model);
+            entry.model = self.apply_to_model(&entry.model.id.clone(), entry.model.clone());
+        }
+        Ok(discovery)
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let mut models = self.target.list_models().await?;
         let mut listed = std::collections::BTreeSet::new();

@@ -94,6 +94,55 @@ struct ChatGptToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[input(
+    trim("prompt", "model", "stable_instructions"),
+    max_chars("prompt", 64000),
+    max_chars("stable_instructions", 256000)
+)]
+#[serde(deny_unknown_fields)]
+struct ChatGptResponsesImageInput {
+    /// Drawing or editing request for an additional Responses chat model, which calls the hosted GPT Image tool. May be omitted when input_items supplies the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    /// Developer instructions for this additional Responses request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable_instructions: Option<String>,
+    /// Responses CHAT model that can call the hosted image_generation tool; defaults to the current session model. Select the GPT Image drawing model in tool_options.model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    /// Hosted image tool settings. model selects the DRAWING model, e.g. gpt-image-2 or gpt-image-2.5-sunburst. Other model-supported fields include action (auto/generate/edit), size, quality, and output_format. type is protected.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tool_options: BTreeMap<String, serde_json::Value>,
+    /// Additional outer Responses request fields. model, input, tools, stream, and previous_response_id are supplied separately.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    request_options: BTreeMap<String, serde_json::Value>,
+    /// OpenAI response ID from an earlier call to this tool, used to continue its server-side context. This is not an Agena session ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<String>,
+    /// Explicit Responses history and image references (supported URLs, base64 data URLs, or file IDs). Upload or encode local images first. Agena conversation history is not automatically included; client tool callbacks are rejected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    input_items: Vec<serde_json::Value>,
+    /// Optional Responses include selectors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<String>,
+}
+
+impl From<ChatGptResponsesImageInput> for ChatGptToolInput {
+    fn from(input: ChatGptResponsesImageInput) -> Self {
+        Self {
+            prompt: input.prompt,
+            stable_instructions: input.stable_instructions,
+            model: input.model,
+            tool_options: input.tool_options,
+            request_options: input.request_options,
+            previous_response_id: input.previous_response_id,
+            input_items: input.input_items,
+            include: input.include,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
     trim("prompt", "model", "images[]"),
     non_empty("prompt", "images[]"),
     min_items("images", 1),
@@ -101,11 +150,14 @@ struct ChatGptToolInput {
 )]
 #[serde(deny_unknown_fields)]
 struct ChatGptImageEditInput {
+    /// Natural-language edit instructions, including details to preserve from the supplied images.
     prompt: String,
+    /// One to sixteen permitted local image paths to upload as originals or references. URLs and remote file IDs are not accepted here.
     images: Vec<String>,
-    /// Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.
+    /// GPT Image model ID on the current provider, e.g. gpt-image-2 or gpt-image-2.5-sunburst. Defaults to the session model; explicitly select an image model when the session uses a chat model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
+    /// Additional Images edit fields supported by the chosen model, e.g. size, quality, n, and output_format. model, prompt, and image are supplied separately.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     options: BTreeMap<String, serde_json::Value>,
 }
@@ -165,11 +217,9 @@ impl ChatGptToolsPlugin {
             &serde_json::json!(&input.input_items),
         )?;
         let connection = self.host()?.builtin_provider_connection().await?;
-        let model = configured_model(
-            input.model,
-            connection.model.as_deref(),
-            &format!("chatgpt.{tool_name}"),
-        )?;
+        let public_tool_name = agena_tool::provider_tools::cloud_operation("chatgpt", tool_name)
+            .map_or(tool_name, |tool| tool.name);
+        let model = configured_model(input.model, connection.model.as_deref(), public_tool_name)?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
         super::official_service::hosted::validate_declaration("chatgpt", tool_name, &declaration)?;
@@ -343,29 +393,6 @@ impl ChatGptToolsPlugin {
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
-    }
-
-    #[tool(
-        name = "models",
-        tags(network, discovery, query),
-        summary = "List or inspect vendor models on the current provider.",
-        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Actions: list, get. Optional id for get. Query supports official pagination. Model presence does not prove hosted-tool support.",
-        translations(locale(
-            "zh-CN",
-            summary = "列出或查看当前 provider 上的厂商模型。",
-            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。支持 list、get，get 需要 id；query 可传分页参数。模型出现在列表中，不代表网关或账号支持所有工具。"
-        ))
-    )]
-    async fn api_models(
-        &self,
-        input: super::provider_api::ResourceInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        super::provider_api::invoke(
-            self.media_service().await?,
-            super::provider_api::Family::Models,
-            input,
-        )
-        .await
     }
 
     #[tool(
@@ -555,13 +582,20 @@ impl ChatGptToolsPlugin {
     #[tool(
         name = "image_generate",
         tags(network, mutate),
-        summary = "Generate images directly through the OpenAI Images API.",
-        help = "Model-based tools default to the current session model. Use an OpenAI model supporting this operation; otherwise explicitly pass model. Resource operations do not need a model. Uses the current provider endpoint, credentials and network settings; the gateway must support the API. Action: create. prompt is the image description; model is the IMAGE model, unlike the existing Responses-based image_generation tool whose outer model orchestrates the image tool. parameters supports size, quality, n, output_format, background and other official image fields. Base64 results become local attachments.",
-        translations(locale(
-            "zh-CN",
-            summary = "通过 OpenAI Images 接口直接生成图像。",
-            help = "复用当前 provider 连接，无需单独配置。需要模型的操作默认使用当前会话模型，须为支持该操作的 OpenAI 模型，否则显式传入 model。资源管理操作无需模型。默认 create；prompt 为绘图要求，parameters 可传 size、quality、n、output_format 等官方参数。需要图像生成模型；与 Responses 中的 image_generation 工具不同。结果保存为图像附件。"
-        ))
+        summary = "Generate images directly with the OpenAI Images API; set model to a GPT Image drawing model such as gpt-image-2.",
+        help = "Prefer this for ordinary text-to-image tasks. Sends POST images/generations directly to a GPT Image drawing model using the prompt supplied by the current Agena AI. A plain-text prompt is sufficient. To select an OpenAI GPT Image model supported by the current provider, explicitly pass model, for example gpt-image-2, gpt-image-2.5-sunburst, or gpt-image-2.5-flare. These are examples, not an exhaustive list. Here model is the drawing model. It defaults to the current session model when omitted, so explicitly select a drawing model when the session uses a chat model. Use action=create. Example: {\"action\":\"create\",\"model\":\"gpt-image-2\",\"prompt\":\"A watercolor gray cat wearing a yellow scarf\"}. parameters accepts model-supported size, quality, n, output_format, background, and other official image fields. Use chatgpt.image_edit for local-image edits or references. Use chatgpt.responses_image_generation when you need Responses server-side conversation context; that tool makes an additional chat-model request. Reuses the current provider endpoint, credentials and network settings; the provider or gateway must support the Images API and selected model. Prompts are sent to that endpoint; returned base64 images are persisted as managed local attachments.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "通过 OpenAI Images API 直接文生图；model 指定 gpt-image-2、gpt-image-2.5-sunburst 等 GPT Image 绘图模型。",
+                help = "普通文生图优先使用此工具。通过 POST images/generations 将当前 Agena AI 提供的绘图提示词直接交给 GPT Image 绘图模型，纯文本 prompt 即可。显式传入 model 选择当前 provider 支持的 OpenAI 绘图模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，也可使用 provider 支持的其他 GPT Image 模型 ID。这里的 model 是绘图模型；省略时默认使用当前会话模型，因此当前为聊天模型时应显式指定绘图模型。传 action=create，例如 {\"action\":\"create\",\"model\":\"gpt-image-2\",\"prompt\":\"一只戴黄色围巾的灰猫，水彩风格\"}。parameters 可传所选模型支持的 size、quality、n、output_format、background 等参数。已有本地图片的编辑或参考图生成使用 chatgpt.image_edit；需要 Responses 服务端保存的对话上下文时使用 chatgpt.responses_image_generation，后者会额外调用一个对话模型。复用当前 provider 的地址、认证和网络设置，该连接须支持 Images API 和所选模型。提示词发往该连接，返回图片保存为本地托管附件。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "透過 OpenAI Images API 直接由文字繪圖；model 指定 gpt-image-2、gpt-image-2.5-sunburst 等 GPT Image 繪圖模型。",
+                help = "一般文字繪圖優先使用此工具。透過 POST images/generations 將目前 Agena AI 提供的繪圖提示詞直接交給 GPT Image 繪圖模型，純文字 prompt 即可。明確傳入 model 選擇目前 provider 支援的繪圖模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，也可使用 provider 支援的其他 GPT Image 模型 ID。此處 model 是繪圖模型；省略時預設使用目前工作階段模型，因此目前為聊天模型時應明確指定繪圖模型。傳入 action=create；parameters 可傳所選模型支援的 size、quality、n、output_format、background 等參數。編輯本機圖片或使用參考圖時使用 chatgpt.image_edit；需要 Responses 伺服器儲存的對話上下文時使用 chatgpt.responses_image_generation，後者會額外呼叫一個對話模型。沿用目前 provider 的位址、認證及網路設定，該連線須支援 Images API 和所選模型。提示詞傳送至該連線，回傳圖片儲存為本機託管附件。"
+            )
+        )
     )]
     async fn api_image_generate(
         &self,
@@ -1189,59 +1223,73 @@ impl ChatGptToolsPlugin {
     }
 
     #[tool(
-        name = "image_generation",
+        name = "responses_image_generation",
         tags(network, interactive, mutate),
-        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Generate images in OpenAI cloud; save returned images as local attachments.",
-        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.",
+        summary = "Ask an additional OpenAI Responses chat model to call GPT Image; model selects chat, tool_options.model selects the drawing model.",
+        help = "Use when you need Responses server-side conversation context for drawing or editing. Submits an additional POST responses request: current Agena AI -> Responses chat model -> hosted image_generation tool / GPT Image drawing model -> image. The Responses chat model interprets the request, may rewrite the drawing prompt, and calls the drawing model to produce the image. Top-level model selects this additional Responses CHAT model; it defaults to the current session model, which must support the hosted image tool. If needed, explicitly pass model to select a compatible chat model. tool_options.model separately selects the DRAWING model, for example gpt-image-2, gpt-image-2.5-sunburst, or gpt-image-2.5-flare when supported by the current provider. Put GPT Image IDs in tool_options.model. prompt can be plain text. Supply reference images through input_items using supported image URLs, base64 data URLs, or file IDs; upload or encode local images first. previous_response_id references a prior OpenAI response whose context the provider retains; it is not an Agena session ID. tool_options accepts action (auto/generate/edit), model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size according to model support. Prefer chatgpt.image_generate for ordinary text-to-image and chatgpt.image_edit for local-image edits or references; repeated direct edits can pass the prior output path back to image_edit. Reuses the current provider endpoint, credentials and network settings; the provider or gateway must support Responses and its hosted image tool. Only explicitly supplied prompts, input_items and referenced response context are included; Agena history and local project files are not automatically attached. Returned base64 images are persisted as managed local attachments.",
         translations(
             locale(
                 "ar-SA",
-                summary = "أنشئ صورًا في سحابة OpenAI؛ واحفظ الصور المُعادة كمرفقات محلية."
+                summary = "اطلب من نموذج محادثة Responses إضافي استدعاء GPT Image؛ model للمحادثة وtool_options.model للرسم.",
+                help = "يرسل طلب POST responses إضافيًا: ذكاء Agena الحالي ثم نموذج محادثة Responses ثم أداة GPT Image المستضافة لإنتاج الصورة. يحدد model نموذج المحادثة، ويحدد tool_options.model نموذج الرسم مثل gpt-image-2. قد يعيد نموذج المحادثة صياغة وصف الرسم. استخدم previous_response_id لسياق استجابة سابقة محفوظة لدى المزود؛ سجل Agena لا يُرفق تلقائيًا. للرسم العادي استخدم chatgpt.image_generate، ولتعديل صورة محلية استخدم chatgpt.image_edit. يستخدم اتصال المزود الحالي؛ يجب أن يدعم Responses وأداة الصور."
             ),
             locale(
                 "de-DE",
-                summary = "Erzeugt Bilder in der OpenAI-Cloud; zurückgegebene Bilder werden als lokale Anhänge gespeichert."
+                summary = "Bilder über ein zusätzliches Responses-Chatmodell; model wählt den Chat, tool_options.model das GPT-Image-Zeichenmodell.",
+                help = "Sendet einen zusätzlichen POST-responses-Aufruf: aktuelle Agena-KI -> Responses-Chatmodell -> gehostetes GPT-Image-Werkzeug -> Bild. model wählt das Chatmodell, tool_options.model das Zeichenmodell, z. B. gpt-image-2. Das Chatmodell kann den Bildprompt umformulieren. previous_response_id verweist auf beim Anbieter gespeicherten Antwortkontext; der Agena-Verlauf wird nicht automatisch übertragen. Für normale Textbilder chatgpt.image_generate, für lokale Bildbearbeitung chatgpt.image_edit bevorzugen. Verwendet die aktuelle Anbieterverbindung, die Responses und das Bildwerkzeug unterstützen muss."
             ),
             locale(
                 "es-ES",
-                summary = "Genera imágenes en la nube de OpenAI; guarda las imágenes devueltas como adjuntos locales."
+                summary = "Un modelo de chat Responses adicional invoca GPT Image; model elige el chat y tool_options.model el modelo de dibujo.",
+                help = "Envía una solicitud POST responses adicional: IA actual de Agena -> modelo de chat Responses -> herramienta alojada GPT Image -> imagen. model selecciona el modelo de chat y tool_options.model el de dibujo, por ejemplo gpt-image-2. El chat puede reformular la descripción de la imagen. previous_response_id reutiliza el contexto de una respuesta guardada por el proveedor; el historial de Agena no se adjunta automáticamente. Prefiera chatgpt.image_generate para texto a imagen y chatgpt.image_edit para imágenes locales. Reutiliza la conexión actual, que debe admitir Responses y su herramienta de imágenes."
             ),
             locale(
                 "fr-FR",
-                summary = "Génère des images dans le cloud OpenAI ; les images reçues sont enregistrées comme pièces jointes locales."
+                summary = "Un modèle de chat Responses supplémentaire appelle GPT Image ; model choisit le chat, tool_options.model le modèle de dessin.",
+                help = "Envoie une requête POST responses supplémentaire : IA Agena actuelle -> modèle de chat Responses -> outil GPT Image hébergé -> image. model choisit le modèle de chat et tool_options.model le modèle de dessin, par exemple gpt-image-2. Le chat peut reformuler la consigne de dessin. previous_response_id reprend le contexte d’une réponse conservée par le fournisseur ; l’historique Agena n’est pas joint automatiquement. Préférer chatgpt.image_generate pour le texte vers image et chatgpt.image_edit pour les images locales. Utilise la connexion actuelle, qui doit prendre en charge Responses et son outil d’image."
             ),
             locale(
                 "hi-IN",
-                summary = "OpenAI क्लाउड में छवियाँ बनाता है; लौटाई गई छवियाँ स्थानीय अनुलग्नक के रूप में सहेजता है।"
+                summary = "एक अतिरिक्त Responses चैट मॉडल से GPT Image चलाएँ; model चैट मॉडल और tool_options.model चित्र मॉडल चुनता है।",
+                help = "अतिरिक्त POST responses अनुरोध भेजता है: वर्तमान Agena AI -> Responses चैट मॉडल -> होस्ट किया गया GPT Image टूल -> चित्र। model चैट मॉडल और tool_options.model चित्र मॉडल, जैसे gpt-image-2, चुनता है। चैट मॉडल चित्र का प्रॉम्प्ट दोबारा लिख सकता है। previous_response_id प्रदाता द्वारा रखे गए पिछले उत्तर का संदर्भ देता है; Agena का इतिहास अपने आप नहीं जुड़ता। सामान्य टेक्स्ट से चित्र के लिए chatgpt.image_generate और स्थानीय चित्र संपादन के लिए chatgpt.image_edit चुनें। वर्तमान प्रदाता कनेक्शन को Responses और उसके चित्र टूल का समर्थन करना चाहिए।"
             ),
             locale(
                 "ja-JP",
-                summary = "OpenAI クラウドで画像を生成します。返された画像はローカル添付として保存されます。"
+                summary = "追加の Responses 会話モデルから GPT Image を呼び出します。model は会話、tool_options.model は描画モデルを指定します。",
+                help = "追加の POST responses を送信します。現在の Agena AI -> Responses 会話モデル -> ホスト型 GPT Image ツール -> 画像の順に処理します。model は会話モデル、tool_options.model は gpt-image-2 などの描画モデルです。会話モデルは描画プロンプトを書き換える場合があります。previous_response_id でプロバイダーが保存した応答の文脈を参照できます。Agena の履歴は自動で付加されません。通常の文字からの生成は chatgpt.image_generate、ローカル画像の編集は chatgpt.image_edit を優先してください。現在の接続先は Responses と画像ツールに対応している必要があります。"
             ),
             locale(
                 "ko-KR",
-                summary = "OpenAI 클라우드에서 이미지를 생성합니다. 반환된 이미지는 로컬 첨부로 저장됩니다."
+                summary = "추가 Responses 대화 모델이 GPT Image를 호출합니다. model은 대화 모델, tool_options.model은 그림 모델을 지정합니다.",
+                help = "추가 POST responses 요청을 보냅니다. 현재 Agena AI -> Responses 대화 모델 -> 호스팅된 GPT Image 도구 -> 이미지 순서로 처리합니다. model은 대화 모델, tool_options.model은 gpt-image-2 같은 그림 모델을 선택합니다. 대화 모델이 그림 프롬프트를 다시 작성할 수 있습니다. previous_response_id는 제공자가 보관한 이전 응답의 문맥을 참조하며 Agena 대화 기록은 자동으로 첨부되지 않습니다. 일반 텍스트 이미지 생성에는 chatgpt.image_generate, 로컬 이미지 편집에는 chatgpt.image_edit를 우선 사용하세요. 현재 제공자 연결이 Responses와 이미지 도구를 지원해야 합니다."
             ),
             locale(
                 "pt-BR",
-                summary = "Gera imagens na nuvem da OpenAI; salva as imagens retornadas como anexos locais."
+                summary = "Um modelo de chat Responses adicional chama GPT Image; model escolhe o chat e tool_options.model o modelo de desenho.",
+                help = "Envia uma solicitação POST responses adicional: IA atual do Agena -> modelo de chat Responses -> ferramenta GPT Image hospedada -> imagem. model seleciona o modelo de chat e tool_options.model o de desenho, por exemplo gpt-image-2. O chat pode reformular o prompt da imagem. previous_response_id reutiliza o contexto de uma resposta mantida pelo provedor; o histórico do Agena não é anexado automaticamente. Prefira chatgpt.image_generate para texto para imagem e chatgpt.image_edit para imagens locais. Reutiliza a conexão atual, que deve oferecer Responses e sua ferramenta de imagem."
             ),
             locale(
                 "zh-CN",
-                summary = "在 OpenAI 云端生成图像；将返回的图像保存为本地附件。"
+                summary = "额外调用 OpenAI Responses 对话模型，再由它调用 GPT Image；model 选对话模型，tool_options.model 选绘图模型。",
+                help = "需要 Responses 服务端保存的绘图或编辑上下文时使用。此工具会额外提交 POST responses 请求，链路为：当前 Agena AI -> Responses 对话模型 -> 托管 image_generation 工具 / GPT Image 绘图模型 -> 图片。Responses 对话模型理解要求，可能改写绘图提示词，再调用绘图模型实际生成或编辑图片。顶层 model 指定这个额外的对话模型，省略时默认使用当前会话模型，须支持 Responses 绘图工具；不兼容时显式传入 model 选择合适的对话模型。tool_options.model 单独指定绘图模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，具体取决于当前 provider 支持。GPT Image 模型 ID 应填在 tool_options.model。prompt 可直接写纯文本。参考图通过 input_items 提供受支持的图片 URL、base64 data URL 或文件 ID，本地图片需先上传或编码。previous_response_id 引用 provider 保留的上一轮 OpenAI 响应上下文，它不是 Agena 会话 ID。tool_options 可传 action（auto/generate/edit）、size、quality、output_format、background 等所选模型支持的参数。普通文生图优先使用 chatgpt.image_generate；本地图片编辑或参考图生成优先使用 chatgpt.image_edit，继续修改可再次传入上次输出的本地图片路径。复用当前 provider 的地址、认证和网络设置，须支持 Responses 及其绘图工具。只发送显式提供的提示词、input_items 和引用的响应上下文，Agena 历史及本地项目文件不会自动附带。返回图片保存为本地托管附件。"
             ),
             locale(
                 "zh-TW",
-                summary = "在 OpenAI 雲端生成圖像；將傳回的圖像儲存為本機附件。"
+                summary = "額外呼叫 OpenAI Responses 對話模型，再由它呼叫 GPT Image；model 選對話模型，tool_options.model 選繪圖模型。",
+                help = "需要 Responses 伺服器儲存的繪圖或編輯上下文時使用。此工具會額外提交 POST responses 請求，流程為：目前 Agena AI -> Responses 對話模型 -> 託管 image_generation 工具 / GPT Image 繪圖模型 -> 圖片。Responses 對話模型理解要求，可能改寫繪圖提示詞，再呼叫繪圖模型實際產生或編輯圖片。頂層 model 指定這個額外的對話模型，省略時預設目前工作階段模型，須支援 Responses 繪圖工具；不相容時明確選擇合適的對話模型。tool_options.model 單獨指定繪圖模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，依目前 provider 支援情況而定。GPT Image 模型 ID 應填在 tool_options.model。prompt 可直接使用純文字。參考圖透過 input_items 提供支援的圖片 URL、base64 data URL 或檔案 ID，本機圖片須先上傳或編碼。previous_response_id 引用 provider 保留的上一輪 OpenAI 回應上下文，它不是 Agena 工作階段 ID。tool_options 可傳 action（auto/generate/edit）、size、quality、output_format、background 等所選模型支援的參數。一般文字繪圖優先使用 chatgpt.image_generate；本機圖片編輯或參考圖生成優先使用 chatgpt.image_edit，繼續修改時可再次傳入上次輸出的本機圖片路徑。沿用目前 provider 的位址、認證及網路設定，須支援 Responses 及其繪圖工具。僅傳送明確提供的提示詞、input_items 與引用的回應上下文，Agena 歷史及本機專案檔案不會自動附帶。回傳圖片儲存為本機託管附件。"
             )
         )
     )]
-    async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn responses_image_generation(
+        &self,
+        input: ChatGptResponsesImageInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
+            // The public tool name is separate from OpenAI's hosted operation.
             "image_generation",
-            "ChatGPT image generation",
+            "ChatGPT image generation via Responses",
             serde_json::json!({"type":"image_generation"}),
-            input,
+            input.into(),
         )
         .await
     }
@@ -1289,49 +1337,59 @@ impl ChatGptToolsPlugin {
 
     #[tool(
         name = "image_edit",
-        summary = "Requires an OpenAI model; defaults to the current model or accepts model override. Upload permitted images for editing in OpenAI cloud; save the returned image separately.",
-        help = "Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session provider’s endpoint, credentials and network settings; the provider or gateway must support this API. Runs in OpenAI cloud, not on this computer. Sends prompts and explicitly supplied inputs to the current session's provider endpoint; local project files are not automatically available. No local execution fallback. Permission-checked local images are uploaded to OpenAI; returned images are saved as separate local artifacts. This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.",
         tags(mutate),
+        summary = "Edit local images or compose from references directly with the OpenAI Images API; model selects a GPT Image drawing model.",
+        help = "Prefer this for editing local images or composing from reference images. Sends POST images/edits directly to a GPT Image drawing model. Supply prompt as natural-language edit instructions and images as one to sixteen permitted local image paths; this tool reads and uploads them directly. To select an OpenAI GPT Image model supported by the current provider, explicitly pass model, for example gpt-image-2, gpt-image-2.5-sunburst, or gpt-image-2.5-flare. These are examples, not an exhaustive list. Here model is the drawing model. It defaults to the current session model when omitted, so explicitly select a drawing model when the session uses a chat model. Example: {\"model\":\"gpt-image-2\",\"prompt\":\"Make the scarf red; preserve the cat's face and composition\",\"images\":[\"./cat.png\"]}. options accepts model-supported size, quality, n, output_format, and other Images edit fields. For another edit, pass the previous output's local image path back in images with the next prompt. Use chatgpt.image_generate for text-only generation; use chatgpt.responses_image_generation when you need Responses server-side response context. Reuses the current provider endpoint, credentials and network settings; the provider or gateway must support Images edits and the selected model. Only supplied images and prompt are uploaded; local paths are permission checked. Returned images are saved as separate managed local attachments, preserving the originals.",
         translations(
             locale(
                 "ar-SA",
-                summary = "ارفع صورًا مسموحًا بها للتحرير في سحابة OpenAI؛ واحفظ الصورة المُعادة على حدة."
+                summary = "عدّل صورًا محلية أو استخدم مراجع مباشرة عبر OpenAI Images API؛ model يحدد نموذج الرسم GPT Image.",
+                help = "يرسل POST images/edits مباشرة إلى نموذج الرسم. ضع تعليمات التعديل في prompt ومسارات من صورة إلى 16 صورة محلية في images. يحدد model نموذج GPT Image مثل gpt-image-2؛ حدده صراحةً إذا كان نموذج الجلسة للمحادثة. لمتابعة التعديل، أعد تمرير مسار الصورة الناتجة في images. تُستخدم وصلة المزود الحالية وتُحفظ النتائج كمرفقات محلية مستقلة."
             ),
             locale(
                 "de-DE",
-                summary = "Lädt zulässige Bilder zur Bearbeitung in die OpenAI-Cloud hoch; das zurückgegebene Bild wird separat gespeichert."
+                summary = "Lokale Bilder direkt über die OpenAI Images API bearbeiten oder als Vorlagen nutzen; model wählt das GPT-Image-Zeichenmodell.",
+                help = "Sendet POST images/edits direkt an das Zeichenmodell. prompt enthält die Bearbeitungsanweisung, images ein bis sechzehn erlaubte lokale Bildpfade. model wählt ein GPT-Image-Modell wie gpt-image-2; bei einem Chat-Sitzungsmodell ausdrücklich setzen. Für weitere Änderungen den lokalen Ausgabepfad erneut in images übergeben. Verwendet die aktuelle Anbieterverbindung und speichert Ergebnisse als separate lokale Anhänge."
             ),
             locale(
                 "es-ES",
-                summary = "Sube imágenes permitidas para editarlas en la nube de OpenAI; guarda la imagen devuelta por separado."
+                summary = "Edita imágenes locales o usa referencias directamente con OpenAI Images API; model selecciona el modelo de dibujo GPT Image.",
+                help = "Envía POST images/edits directamente al modelo de dibujo. prompt contiene las instrucciones e images de una a dieciséis rutas locales permitidas. model selecciona un modelo GPT Image como gpt-image-2; indíquelo explícitamente si la sesión usa un modelo de chat. Para otra edición, pase la ruta local del resultado anterior en images. Reutiliza la conexión actual y guarda los resultados como adjuntos locales separados."
             ),
             locale(
                 "fr-FR",
-                summary = "Téléverse des images autorisées pour édition dans le cloud OpenAI ; l’image renvoyée est enregistrée séparément."
+                summary = "Modifie des images locales ou utilise des références via OpenAI Images API ; model choisit le modèle de dessin GPT Image.",
+                help = "Envoie POST images/edits directement au modèle de dessin. prompt contient les consignes et images un à seize chemins locaux autorisés. model choisit un modèle GPT Image, par exemple gpt-image-2 ; le préciser si la session utilise un modèle de chat. Pour une nouvelle retouche, fournir dans images le chemin local du résultat précédent. Utilise la connexion actuelle et enregistre les résultats dans des pièces jointes locales distinctes."
             ),
             locale(
                 "hi-IN",
-                summary = "संपादन के लिए अनुमत छवियाँ OpenAI क्लाउड पर अपलोड करता है; लौटाई गई छवि अलग से सहेजता है।"
+                summary = "OpenAI Images API से स्थानीय चित्र सीधे संपादित करें या संदर्भ लें; model GPT Image चित्र मॉडल चुनता है।",
+                help = "POST images/edits सीधे चित्र मॉडल को भेजता है। prompt में संपादन निर्देश और images में एक से सोलह अनुमत स्थानीय चित्र पथ दें। model से gpt-image-2 जैसा GPT Image मॉडल चुनें; सत्र में चैट मॉडल होने पर इसे स्पष्ट रूप से दें। अगला संपादन करने के लिए पिछले परिणाम का स्थानीय पथ फिर images में दें। वर्तमान प्रदाता कनेक्शन का उपयोग होता है और परिणाम अलग स्थानीय अनुलग्नकों में सहेजे जाते हैं।"
             ),
             locale(
                 "ja-JP",
-                summary = "編集用に許可された画像を OpenAI クラウドへアップロードします。返された画像は別途保存されます。"
+                summary = "OpenAI Images API でローカル画像を直接編集したり参照画像から生成します。model は GPT Image 描画モデルです。",
+                help = "POST images/edits を描画モデルへ直接送信します。prompt に編集指示、images に読み取りを許可されたローカル画像のパスを 1〜16 個指定します。model は gpt-image-2 などの GPT Image モデルです。会話モデルを使うセッションでは明示してください。再編集では前回の出力画像のローカルパスを images に渡せます。現在の接続を使い、結果を別のローカル添付として保存します。"
             ),
             locale(
                 "ko-KR",
-                summary = "편집을 위해 허용된 이미지를 OpenAI 클라우드에 업로드합니다. 반환된 이미지는 따로 저장합니다."
+                summary = "OpenAI Images API로 로컬 이미지를 직접 편집하거나 참조 이미지를 사용합니다. model은 GPT Image 그림 모델입니다.",
+                help = "POST images/edits를 그림 모델에 직접 보냅니다. prompt에 편집 지시를, images에 읽기가 허용된 로컬 이미지 경로 1~16개를 넣으세요. model은 gpt-image-2 같은 GPT Image 모델이며 대화 모델을 쓰는 세션에서는 명시해야 합니다. 추가 편집 시 이전 결과의 로컬 경로를 images에 다시 전달할 수 있습니다. 현재 제공자 연결을 사용하며 결과는 별도의 로컬 첨부로 저장합니다."
             ),
             locale(
                 "pt-BR",
-                summary = "Envia imagens permitidas para edição na nuvem da OpenAI; salva a imagem retornada separadamente."
+                summary = "Edita imagens locais ou usa referências diretamente com OpenAI Images API; model seleciona o modelo de desenho GPT Image.",
+                help = "Envia POST images/edits diretamente ao modelo de desenho. prompt contém as instruções e images de um a dezesseis caminhos locais permitidos. model seleciona um modelo GPT Image, como gpt-image-2; informe-o explicitamente se a sessão usa um modelo de chat. Para outra edição, passe o caminho local do resultado anterior em images. Reutiliza a conexão atual e salva os resultados como anexos locais separados."
             ),
             locale(
                 "zh-CN",
-                summary = "将获准的图像上传到 OpenAI 云端进行编辑；返回的图像单独保存。"
+                summary = "通过 OpenAI Images API 直接编辑本地图片或使用参考图；model 指定 GPT Image 绘图模型。",
+                help = "本地图片编辑或参考图生成优先使用此工具。通过 POST images/edits 直接调用 GPT Image 绘图模型。prompt 写自然语言编辑要求及需要保留的细节，images 传 1 至 16 个获准读取的本地图片路径，工具会直接读取并上传。显式传入 model 选择当前 provider 支持的 OpenAI 绘图模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，也可使用该 provider 支持的其他 GPT Image 模型 ID。这里的 model 是绘图模型；省略时默认使用当前会话模型，因此当前为聊天模型时应显式指定绘图模型。例如 {\"model\":\"gpt-image-2\",\"prompt\":\"将围巾改成红色，保留猫的面部和构图\",\"images\":[\"./cat.png\"]}。options 可传所选模型支持的 size、quality、n、output_format 等编辑参数。继续修改时，将上次输出的本地图片路径再次传入 images 并提供新的 prompt。只有文字要求时使用 chatgpt.image_generate；需要引用 Responses 服务端保留的响应上下文时使用 chatgpt.responses_image_generation。复用当前 provider 的地址、认证和网络设置，须支持 Images edits 和所选模型。只上传显式指定的图片和提示词；路径经过权限检查，结果另存为本地托管附件，保留原图。"
             ),
             locale(
                 "zh-TW",
-                summary = "將獲准的圖像上傳至 OpenAI 雲端進行編輯；傳回的圖像另行儲存。"
+                summary = "透過 OpenAI Images API 直接編輯本機圖片或使用參考圖；model 指定 GPT Image 繪圖模型。",
+                help = "本機圖片編輯或參考圖生成優先使用此工具。透過 POST images/edits 直接呼叫 GPT Image 繪圖模型。prompt 填入自然語言編輯要求與需保留的細節，images 傳入 1 至 16 個獲准讀取的本機圖片路徑，工具會直接讀取並上傳。明確傳入 model 選擇目前 provider 支援的繪圖模型，例如 gpt-image-2、gpt-image-2.5-sunburst、gpt-image-2.5-flare，也可使用該 provider 支援的其他 GPT Image 模型 ID。此處 model 是繪圖模型；省略時預設使用目前工作階段模型，因此目前為聊天模型時應明確指定繪圖模型。options 可傳所選模型支援的 size、quality、n、output_format 等編輯參數。繼續修改時，將上次輸出的本機圖片路徑再次傳入 images 並提供新的 prompt。只有文字要求時使用 chatgpt.image_generate；需要引用 Responses 伺服器保留的回應上下文時使用 chatgpt.responses_image_generation。沿用目前 provider 的位址、認證及網路設定，須支援 Images edits 和所選模型。僅上傳明確指定的圖片與提示詞；路徑經過權限檢查，結果另存為本機託管附件，保留原圖。"
             )
         )
     )]

@@ -147,55 +147,71 @@ impl ModelRuntime for GeminiAdapter {
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-        let endpoint = self.list_models_endpoint();
-        let response = self
-            .send_request(|api_key| {
-                let endpoint = self.endpoint_with_auth(endpoint.clone(), api_key);
-                let mut headers = utils::configured_request_headers(&self.extra_headers);
-                if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
-                    headers.insert(
-                        name.clone(),
-                        utils::auth_header_value(scheme.as_deref(), api_key),
+        let mut endpoint = self.list_models_endpoint();
+        let mut pagination = crate::provider::model_pagination::ModelPagination::new(&endpoint)?;
+        let mut models = Vec::new();
+        loop {
+            let response = self
+                .send_request(|api_key| {
+                    let endpoint = self.endpoint_with_auth(endpoint.clone(), api_key);
+                    let mut headers = utils::configured_request_headers(&self.extra_headers);
+                    if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+                        headers.insert(
+                            name.clone(),
+                            utils::auth_header_value(scheme.as_deref(), api_key),
+                        );
+                    }
+                    utils::adapter_log_http_request_prepared(
+                        PROVIDER_ID,
+                        ADAPTER_KIND,
+                        "list_models",
+                        "GET",
+                        endpoint.as_str(),
+                        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        None,
                     );
-                }
-                utils::adapter_log_http_request_prepared(
-                    PROVIDER_ID,
-                    ADAPTER_KIND,
-                    "list_models",
-                    "GET",
-                    endpoint.as_str(),
-                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                    None,
-                );
-                utils::apply_resolved_request_headers(self.client.get(endpoint), &headers)
-            })
-            .await?;
-
-        let payload: GeminiModelListResponse =
-            utils::parse_json_response_logged(PROVIDER_ID, ADAPTER_KIND, "list_models", response)
+                    utils::apply_resolved_request_headers(self.client.get(endpoint), &headers)
+                })
                 .await?;
-        Ok(payload
-            .models
-            .into_iter()
-            .map(|m| {
-                let metadata = m.metadata();
-                let id = m.name.trim_start_matches("models/").to_owned();
-                let model_id = ModelId::new(id);
-                let capabilities = self.model_capabilities(&model_id);
-                Model {
-                    provider_id: ProviderId::new(PROVIDER_ID),
-                    adapter_id: None,
-                    id: model_id,
-                    catalog_model_id: None,
-                    display_name: m.display_name,
-                    native_compaction: true,
-                    capabilities,
-                    metadata,
-                    thinking_modes: Vec::new(),
-                    speed_modes: std::collections::BTreeMap::new(),
-                }
-            })
-            .collect())
+
+            let page: serde_json::Value = utils::parse_json_response_logged(
+                PROVIDER_ID,
+                ADAPTER_KIND,
+                "list_models",
+                response,
+            )
+            .await?;
+            let next = pagination.next(&page)?;
+            let payload: GeminiModelListResponse = serde_json::from_value(page)
+                .map_err(|_| ProviderError::Provider("invalid model list response".into()))?;
+            models.extend(
+                payload
+                    .models
+                    .into_iter()
+                    .map(|m| {
+                        let metadata = m.metadata();
+                        let id = m.name.trim_start_matches("models/").to_owned();
+                        let model_id = ModelId::new(id);
+                        let capabilities = self.model_capabilities(&model_id);
+                        Model {
+                            provider_id: ProviderId::new(PROVIDER_ID),
+                            adapter_id: None,
+                            id: model_id,
+                            catalog_model_id: None,
+                            display_name: m.display_name,
+                            native_compaction: true,
+                            capabilities,
+                            metadata,
+                            thinking_modes: Vec::new(),
+                            speed_modes: std::collections::BTreeMap::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let Some(next) = next else { break };
+            endpoint = next;
+        }
+        Ok(models)
     }
 
     #[tracing::instrument(skip_all, fields(provider = "gemini", model = %request.model))]

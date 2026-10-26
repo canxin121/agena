@@ -17,6 +17,20 @@ pub(crate) fn localize_provider_manifest(manifest: &mut PluginManifest) {
             continue;
         };
         for locale in LOCALES {
+            // Keep the image tools' explicit protocol and model-selection guidance.
+            if manifest.name == "chatgpt"
+                && matches!(
+                    tool.name.as_str(),
+                    "responses_image_generation" | "image_edit"
+                )
+                && tool
+                    .docs
+                    .translations
+                    .get(locale)
+                    .is_some_and(|translation| translation.help.is_some())
+            {
+                continue;
+            }
             let Some(summary) = summary(key, locale) else {
                 continue;
             };
@@ -121,6 +135,7 @@ fn tool_key(plugin: &str, tool: &str) -> Option<&'static str> {
         ("chatgpt", "file_search") | ("gemini", "file_search") => Some("file_search"),
         ("chatgpt", "code_interpreter") => Some("code_interpreter"),
         ("chatgpt", "shell") => Some("shell"),
+        ("chatgpt", "responses_image_generation") => Some("image_generation"),
         (_, "image_generation") => Some("image_generation"),
         (_, "image_edit") => Some("image_edit"),
         _ => None,

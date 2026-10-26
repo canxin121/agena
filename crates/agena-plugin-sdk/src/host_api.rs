@@ -212,8 +212,9 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Discover the active session provider's models and capabilities. Native
-    /// bundled tools only; the returned catalog never contains credentials.
+    /// Discover all enabled adapters of the active provider, retaining model
+    /// provenance and partial failures. Native bundled provider plugin only;
+    /// the returned catalog never contains credentials.
     async fn builtin_provider_models(&self) -> Result<serde_json::Value> {
         Err(unavailable())
     }

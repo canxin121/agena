@@ -469,6 +469,52 @@ impl RuntimeSnapshot {
         ))
     }
 
+    pub(crate) async fn discover_provider_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<agena_provider::ProviderModelDiscovery, AppError> {
+        let mut discovery = self
+            .state
+            .services()
+            .providers
+            .discover_models(provider_id)
+            .await?;
+        let adapter_ids = self
+            .provider_configs()
+            .get(provider_id)
+            .map(agena_runtime::configured_enabled_adapter_ids)
+            .unwrap_or_default();
+        if let Some(mut record) = self
+            .state
+            .services()
+            .model_catalog
+            .effective_provider_record(&adapter_ids)
+        {
+            // Catalog data enriches discovered/configured routes; it cannot
+            // assert that this account exposes an otherwise unlisted model.
+            record.appendable_model_ids.clear();
+            let provider = self
+                .state
+                .services()
+                .providers
+                .get(provider_id)
+                .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+            let source = catalog_decoration_source(provider.as_ref());
+            let overrides =
+                Self::manual_override_model_ids(self.provider_configs().get(provider_id));
+            for entry in &mut discovery.models {
+                let mut models = decorate_provider_models(
+                    &source,
+                    &record,
+                    &overrides,
+                    vec![entry.model.clone()],
+                );
+                entry.model = models.remove(0);
+            }
+        }
+        Ok(discovery)
+    }
+
     pub(crate) async fn list_provider_models(
         &self,
         provider_id: &str,

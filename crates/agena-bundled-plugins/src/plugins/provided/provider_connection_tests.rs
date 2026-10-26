@@ -58,6 +58,25 @@ impl HostClient for Host {
         *self.resolutions.lock().unwrap() += 1;
         Ok(self.connection.lock().unwrap().clone())
     }
+    async fn builtin_provider_models(&self) -> Result<Value> {
+        let connection = self.connection.lock().unwrap();
+        Ok(json!({
+            "provider_id": connection.provider_id,
+            "current_model": connection.model,
+            "complete": false,
+            "adapters": [
+                {"adapter_id":"openai","status":"discovered"},
+                {"adapter_id":"google","status":"failed","warning":"Remote model discovery failed."}
+            ],
+            "models": [
+                {"id":"shared-model","adapter_id":"openai","source":"provider_discovery"},
+                {"id":"gpt-image-2","adapter_id":"openai","source":"provider_discovery",
+                 "metadata":{"description":"Drawing model","output_modalities":["image"]}},
+                {"id":"shared-model","adapter_id":"google","source":"configured"},
+                {"id":"manual-model","adapter_id":"google","source":"configured"}
+            ]
+        }))
+    }
 }
 
 fn plugins() -> Vec<Box<dyn Plugin>> {
@@ -231,6 +250,210 @@ async fn provider_tools_follow_the_live_connection_and_model_override() {
 }
 
 #[tokio::test]
+async fn chatgpt_image_tools_keep_direct_and_responses_models_separate() {
+    let plugin = plugins().remove(0);
+    let root = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host {
+        connection: Mutex::new(connection(
+            "http://127.0.0.1:1/uninitialized".into(),
+            Some("session-chat-model"),
+        )),
+        resolutions: Mutex::new(0),
+        network: Mutex::new(Vec::new()),
+    });
+    initialize(plugin.as_ref(), root.path(), host.clone()).await;
+
+    for (tool, args, endpoint, expected_model) in [
+        (
+            "image_generate",
+            json!({"action":"create","model":"gpt-image-2","prompt":"Draw a cat"}),
+            "images/generations",
+            "gpt-image-2",
+        ),
+        (
+            "responses_image_generation",
+            json!({
+                "model":"responses-chat-model",
+                "prompt":"Draw a cat",
+                "tool_options":{"model":"gpt-image-2","action":"generate"},
+                "previous_response_id":"resp_previous"
+            }),
+            "responses",
+            "responses-chat-model",
+        ),
+    ] {
+        let (base, received) =
+            server(json!({"id":"resp_image","status":"completed","output_text":"ok"})).await;
+        *host.connection.lock().unwrap() =
+            connection(format!("{base}/v1"), Some("session-chat-model"));
+        let output = invoke(plugin.as_ref(), root.path(), tool, args)
+            .await
+            .unwrap();
+        let (header, body) = received.await.unwrap();
+        assert!(
+            header.starts_with(&format!("POST /v1/{endpoint} HTTP/1.1")),
+            "{header}"
+        );
+        assert!(
+            header
+                .to_ascii_lowercase()
+                .contains("x-gateway-token: provider-secret")
+        );
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["model"], expected_model);
+        if tool == "image_generate" {
+            assert_eq!(body["prompt"], "Draw a cat");
+            assert!(body.get("tools").is_none());
+        } else {
+            assert_eq!(body["tools"][0]["type"], "image_generation");
+            assert_eq!(body["tools"][0]["model"], "gpt-image-2");
+            assert_eq!(body["tools"][0]["action"], "generate");
+            assert_eq!(body["previous_response_id"], "resp_previous");
+            assert_eq!(
+                output.metadata.get("public_tool_name").map(String::as_str),
+                Some("chatgpt.responses_image_generation")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn unified_provider_models_support_paging_filters_and_unambiguous_details() {
+    let plugin = super::provider::ProviderPlugin::new();
+    let root = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host {
+        connection: Mutex::new(connection(
+            "http://127.0.0.1:1/unused".into(),
+            Some("session-chat-model"),
+        )),
+        resolutions: Mutex::new(0),
+        network: Mutex::new(Vec::new()),
+    });
+    initialize(&plugin, root.path(), host.clone()).await;
+    let first = invoke(
+        &plugin,
+        root.path(),
+        "models",
+        json!({"action":"list","limit":2}),
+    )
+    .await
+    .unwrap()
+    .payload
+    .unwrap();
+    assert_eq!(first["provider_id"], "gateway-a");
+    assert_eq!(first["current_model"], "session-chat-model");
+    assert_eq!(first["total"], 4);
+    assert_eq!(first["count"], 2);
+    assert_eq!(first["complete"], false);
+    assert_eq!(first["has_more"], true);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let next = invoke(
+        &plugin,
+        root.path(),
+        "models",
+        json!({"limit":2,"cursor":cursor}),
+    )
+    .await
+    .unwrap()
+    .payload
+    .unwrap();
+    assert_eq!(next["count"], 2);
+    assert_eq!(next["has_more"], false);
+    assert_ne!(first["models"][0], next["models"][0]);
+    let filtered = invoke(&plugin, root.path(), "models", json!({"query":"DRAWING"}))
+        .await
+        .unwrap()
+        .payload
+        .unwrap();
+    assert_eq!(filtered["models"][0]["id"], "gpt-image-2");
+    assert_eq!(filtered["total"], 1);
+    assert!(filtered["models"][0].get("metadata").is_none());
+    let details = invoke(
+        &plugin,
+        root.path(),
+        "models",
+        json!({"action":"get","id":"gpt-image-2"}),
+    )
+    .await
+    .unwrap()
+    .payload
+    .unwrap();
+    assert_eq!(
+        details["model"]["metadata"]["output_modalities"][0],
+        "image"
+    );
+    assert!(
+        invoke(
+            &plugin,
+            root.path(),
+            "models",
+            json!({"action":"get","id":"shared-model"})
+        )
+        .await
+        .is_err()
+    );
+    let routed = invoke(
+        &plugin,
+        root.path(),
+        "models",
+        json!({"action":"get","id":"shared-model","adapter_id":"google"}),
+    )
+    .await
+    .unwrap()
+    .payload
+    .unwrap();
+    assert_eq!(routed["model"]["source"], "configured");
+    for args in [
+        json!({"limit":0}),
+        json!({"limit":201}),
+        json!({"adapter_id":"unknown"}),
+        json!({"action":"get"}),
+        json!({"id":"unused"}),
+        json!({"query":"image","cursor":cursor}),
+    ] {
+        assert!(invoke(&plugin, root.path(), "models", args).await.is_err());
+    }
+    host.connection.lock().unwrap().provider_id = "gateway-b".into();
+    assert!(
+        invoke(&plugin, root.path(), "models", json!({"cursor":cursor}))
+            .await
+            .is_err()
+    );
+    assert_eq!(*host.resolutions.lock().unwrap(), 0);
+}
+
+#[test]
+fn model_discovery_has_one_public_tool_with_a_focused_schema() {
+    let catalog = crate::bundled_capability_manifest();
+    let names = catalog
+        .plugins
+        .iter()
+        .flat_map(|plugin| &plugin.tools)
+        .map(|tool| tool.canonical_name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"agena.provider.models"));
+    for removed in [
+        "agena.session.models",
+        "agena.chatgpt.models",
+        "agena.claude.models",
+        "agena.gemini.models",
+    ] {
+        assert!(!names.contains(&removed));
+    }
+    let plugin = super::provider::ProviderPlugin::new();
+    let manifest = plugin.manifest();
+    let properties = manifest.tools[0].contract.input_schema["properties"]
+        .as_object()
+        .unwrap();
+    assert_eq!(properties.len(), 6);
+    for unrelated in ["model", "prompt", "path", "api_key", "base_url"] {
+        assert!(!properties.contains_key(unrelated));
+    }
+    let entries = crate::plugins::sources::bundled_plugin_entries();
+    assert!(entries.contains_key("agena.provider"));
+}
+
+#[tokio::test]
 async fn uploads_need_no_model_and_handles_stay_bound_to_the_provider() {
     for plugin in plugins().into_iter().take(2) {
         let root = tempfile::tempdir().unwrap();
@@ -292,7 +515,7 @@ fn provider_plugin_contracts_remove_connection_settings_and_cloud_prefixes() {
             count += 1;
         }
     }
-    assert_eq!(count, 74);
+    assert_eq!(count, 71);
 }
 
 #[test]
@@ -334,7 +557,7 @@ fn model_tools_document_the_session_default_override_and_vendor_requirement() {
             model_tools += 1;
         }
     }
-    assert_eq!(model_tools, 65);
+    assert_eq!(model_tools, 62);
 }
 
 #[test]

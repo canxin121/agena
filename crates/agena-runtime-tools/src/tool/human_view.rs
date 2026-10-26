@@ -2328,7 +2328,8 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "chatgpt.image_generation"
+            "chatgpt.image_generate"
+            | "chatgpt.responses_image_generation"
             | "chatgpt.image_edit"
             | "gemini.image_generation"
             | "gemini.image_edit" => {

@@ -102,70 +102,85 @@ impl ModelRuntime for AnthropicAdapter {
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-        let endpoint = self.models_endpoint()?;
-        let response =
-            utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
-                let mut headers = self.auth_headers(api_key, None);
-                headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
-                utils::adapter_log_http_request_prepared(
-                    self.id.as_str(),
-                    ADAPTER_KIND,
-                    "list_models",
-                    "GET",
-                    endpoint.as_str(),
-                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                    None,
-                );
-                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-            })
-            .await?;
+        let mut endpoint = self.models_endpoint()?;
+        let mut pagination = crate::provider::model_pagination::ModelPagination::new(&endpoint)?;
+        let mut models = Vec::new();
+        loop {
+            let response =
+                utils::send_with_credential_refresh(self.id.as_str(), &self.api_key, |api_key| {
+                    let mut headers = self.auth_headers(api_key, None);
+                    headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+                    utils::adapter_log_http_request_prepared(
+                        self.id.as_str(),
+                        ADAPTER_KIND,
+                        "list_models",
+                        "GET",
+                        endpoint.as_str(),
+                        headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        None,
+                    );
+                    utils::apply_resolved_request_headers(
+                        self.client.get(endpoint.as_str()),
+                        &headers,
+                    )
+                })
+                .await?;
 
-        let payload: AnthropicModelListResponse = utils::parse_json_response_logged(
-            self.id.as_str(),
-            ADAPTER_KIND,
-            "list_models",
-            response,
-        )
-        .await?;
-        Ok(payload
-            .into_items()
-            .into_iter()
-            .filter(|m| {
-                self.profile != AnthropicProfile::GithubCopilot
-                    || (m.copilot.visible() && m.copilot.uses_messages_endpoint())
-            })
-            .map(|m| {
-                let raw_model_id = m.id;
-                // CPA uses an Anthropic-compatible alias for non-Anthropic
-                // models. Keep the raw id while deriving provider behavior
-                // so its Anthropic thinking/capability profile is retained,
-                // but expose the stable underlying id to every caller.
-                let behavior_model_id = ModelId::new(raw_model_id.clone());
-                let model_id = ModelId::new(agena_provider::normalize_anthropic_model_id(
-                    raw_model_id.as_str(),
-                ));
-                let metadata = m.copilot.metadata(raw_model_id.as_str());
-                let mut capabilities = self.model_capabilities(&behavior_model_id);
-                if self.profile == AnthropicProfile::GithubCopilot {
-                    capabilities = m
-                        .copilot
-                        .capabilities()
-                        .merged_with_fallbacks_from(&capabilities);
-                }
-                Model {
-                    provider_id: ProviderId::new(PROVIDER_ID),
-                    adapter_id: None,
-                    id: model_id,
-                    catalog_model_id: None,
-                    display_name: m.display_name.or(m.name),
-                    native_compaction: true,
-                    capabilities,
-                    metadata,
-                    thinking_modes: self.model_thinking_modes(&behavior_model_id),
-                    speed_modes: BTreeMap::new(),
-                }
-            })
-            .collect())
+            let page: serde_json::Value = utils::parse_json_response_logged(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "list_models",
+                response,
+            )
+            .await?;
+            let next = pagination.next(&page)?;
+            let payload: AnthropicModelListResponse = serde_json::from_value(page)
+                .map_err(|_| ProviderError::Provider("invalid model list response".into()))?;
+            models.extend(
+                payload
+                    .into_items()
+                    .into_iter()
+                    .filter(|m| {
+                        self.profile != AnthropicProfile::GithubCopilot
+                            || (m.copilot.visible() && m.copilot.uses_messages_endpoint())
+                    })
+                    .map(|m| {
+                        let raw_model_id = m.id;
+                        // CPA uses an Anthropic-compatible alias for non-Anthropic
+                        // models. Keep the raw id while deriving provider behavior
+                        // so its Anthropic thinking/capability profile is retained,
+                        // but expose the stable underlying id to every caller.
+                        let behavior_model_id = ModelId::new(raw_model_id.clone());
+                        let model_id = ModelId::new(agena_provider::normalize_anthropic_model_id(
+                            raw_model_id.as_str(),
+                        ));
+                        let metadata = m.copilot.metadata(raw_model_id.as_str());
+                        let mut capabilities = self.model_capabilities(&behavior_model_id);
+                        if self.profile == AnthropicProfile::GithubCopilot {
+                            capabilities = m
+                                .copilot
+                                .capabilities()
+                                .merged_with_fallbacks_from(&capabilities);
+                        }
+                        Model {
+                            provider_id: ProviderId::new(PROVIDER_ID),
+                            adapter_id: None,
+                            id: model_id,
+                            catalog_model_id: None,
+                            display_name: m.display_name.or(m.name),
+                            native_compaction: true,
+                            capabilities,
+                            metadata,
+                            thinking_modes: self.model_thinking_modes(&behavior_model_id),
+                            speed_modes: BTreeMap::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let Some(next) = next else { break };
+            endpoint = next;
+        }
+        Ok(models)
     }
 
     #[tracing::instrument(skip_all, fields(provider = tracing::field::Empty, model = %request.model))]

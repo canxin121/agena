@@ -685,7 +685,11 @@ fn disable_before_uninstall() -> Result<()> {
 #[cfg(target_os = "linux")]
 fn reload_and_start(_path: &Path) -> Result<()> {
     run_systemctl(["daemon-reload"])?;
-    run_systemctl(["enable", "--now", systemd_unit_name().as_str()])
+    run_systemctl(["enable", systemd_unit_name().as_str()])?;
+    // `enable --now` is only a start: an already running service keeps its old
+    // arguments/environment even after daemon-reload. Restart applies the new
+    // definition and also starts a freshly installed or stopped service.
+    run_systemctl(["restart", systemd_unit_name().as_str()])
 }
 
 #[cfg(target_os = "linux")]

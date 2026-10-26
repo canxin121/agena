@@ -52,19 +52,14 @@ fn read_optional_server_record() -> Result<Option<ServerEndpointRecord>> {
 pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     args.action = None;
     if super::user_service::is_installed() {
-        if !args.overrides.is_empty()
-            || args.workspace_root.is_some()
-            || args.password.is_some()
-            || args.mcp_enabled.is_some()
-            || args.mcp_public_url.is_some()
-            || args.mcp_server_url.is_some()
-            || args.mcp_oauth_issuer_url.is_some()
-            || args.ui_dir.is_some()
-        {
-            bail!(
-                "the Agena user service is already installed; run `agena server install` with the new options to update its definition"
-            );
-        }
+        // A native service owns its launch configuration. In particular, clap
+        // also fills these fields from the caller's environment, so their
+        // presence does not mean that `start` is trying to change the service.
+        // Keep start idempotent and leave definition updates to install; never
+        // rebuild a definition from the caller's defaults or drop its password.
+        println!(
+            "Using the installed Agena user service configuration; run `agena server install` to change launch settings."
+        );
         let record_path = server_record::record_path();
         match server_record::read_record(record_path.as_path()) {
             Ok(record) => match AgenaClient::new(record.url.as_str()) {

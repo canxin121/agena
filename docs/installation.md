@@ -448,6 +448,14 @@ agena server permissions
 `agena server install` and `agena server uninstall` manage the native per-user
 service. `agena server permissions` opens the macOS Full Disk Access setup.
 
+When a user service is installed, `agena server start` starts that service using
+its saved configuration, or reports that it is already running. Launch options
+and server-related environment variables in the calling shell do not replace
+the installed definition or prevent it from starting. Use `agena server install`
+with the desired options to update the definition and restart the service.
+Without an installed user service, `start` launches a detached server using the
+supplied options and environment variables.
+
 Running `agena server` without an action runs the server in the foreground for
 development. The installer's `restart` action is a stop followed by a start;
 `agena server` itself does not define a `restart` action.

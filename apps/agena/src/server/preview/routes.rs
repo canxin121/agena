@@ -920,6 +920,9 @@ fn preview_probe_candidates() -> Vec<Url> {
 
 fn preview_probe_client() -> ApiResult<reqwest::Client> {
     reqwest::Client::builder()
+        // Discovery probes only target this machine. A shell proxy must not
+        // intercept them when NO_PROXY is absent.
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(350))
         .timeout(Duration::from_millis(700))
@@ -941,6 +944,8 @@ async fn response_from_upstream(upstream: reqwest::Response) -> ApiResult<Respon
 
 fn preview_proxy_client() -> ApiResult<reqwest::Client> {
     reqwest::Client::builder()
+        // Registered preview upstreams are loopback services.
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| AppError::internal_error_with_context("build preview proxy client", &err))

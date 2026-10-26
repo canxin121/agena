@@ -1,11 +1,15 @@
 use portable_atomic::AtomicU64;
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::{Arc, LazyLock, Mutex, atomic::Ordering},
     time::{Duration, Instant},
 };
 
+use agena_web::{
+    WebHttpRoute,
+    network::{is_fake_ip, is_public_hostname, is_public_ip},
+};
 use reqwest::{StatusCode, header};
 use tokio::{runtime::Handle, sync::Semaphore};
 use url::{Host, Url};
@@ -246,22 +250,23 @@ fn canonical_remote_image_url(url: &Url) -> Result<Url, String> {
     Ok(normalized)
 }
 
-async fn fetch(mut url: Url) -> Result<Vec<u8>, String> {
+async fn fetch(url: Url) -> Result<Vec<u8>, String> {
+    fetch_with_proxy(url, None).await
+}
+
+async fn fetch_with_proxy(mut url: Url, proxy: Option<&str>) -> Result<Vec<u8>, String> {
     for redirects in 0..=MAX_REMOTE_IMAGE_REDIRECTS {
-        let target = resolve_public_target(&url).await?;
-        let host = url
-            .host_str()
-            .ok_or_else(|| "remote image URL has no host".to_string())?;
-        let mut builder = reqwest::Client::builder()
+        validate_remote_destination(&url)?;
+        let mut route = WebHttpRoute::for_url(&url, proxy).map_err(|error| error.to_string())?;
+        if !route.remote_dns() {
+            route = route.with_addresses(resolve_public_target(&url).await?);
+        }
+        let builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
             .connect_timeout(REMOTE_IMAGE_CONNECT_TIMEOUT)
             .timeout(REMOTE_IMAGE_REQUEST_TIMEOUT)
             .user_agent("Agena-TUI/remote-image");
-        if matches!(url.host(), Some(Host::Domain(_))) {
-            builder = builder.resolve_to_addrs(host, &target);
-        }
-        let client = builder.build().map_err(|error| {
+        let client = route.apply(builder, &url).build().map_err(|error| {
             agena_failure::diagnostic::format_error_chain_with_context(
                 "cannot configure remote image request",
                 &error,
@@ -377,7 +382,23 @@ fn validate_response_headers(response: &reqwest::Response) -> Result<(), String>
     }
 }
 
+fn validate_remote_destination(url: &Url) -> Result<(), String> {
+    let public = match url.host() {
+        Some(Host::Domain(host)) => is_public_hostname(host),
+        Some(Host::Ipv4(address)) => is_public_ip(address.into()),
+        Some(Host::Ipv6(address)) => is_public_ip(address.into()),
+        None => false,
+    };
+    if !public {
+        return Err(
+            "remote images require a public destination hostname or IP address".to_string(),
+        );
+    }
+    Ok(())
+}
+
 async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
+    validate_remote_destination(url)?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "remote image URL has no known port".to_string())?;
@@ -439,60 +460,7 @@ fn permitted_remote_targets(
 }
 
 fn is_permitted_remote_address(address: IpAddr, domain_routed: bool) -> bool {
-    is_public_address(address) || domain_routed && is_synthetic_proxy_address(address)
-}
-
-/// Clash, Surge, and similar transparent DNS proxies commonly reserve
-/// 198.18.0.0/15 as a synthetic address pool. The original hostname still
-/// supplies TLS SNI and the HTTP Host header, and reqwest remains pinned to the
-/// resolver result. Permit this range only for a hostname resolution; a URL
-/// that directly names a benchmark-range IP remains blocked.
-fn is_synthetic_proxy_address(address: IpAddr) -> bool {
-    let address = match address {
-        IpAddr::V4(address) => Some(address),
-        IpAddr::V6(address) => address.to_ipv4_mapped(),
-    };
-    address.is_some_and(|address| {
-        let [first, second, _, _] = address.octets();
-        first == 198 && matches!(second, 18 | 19)
-    })
-}
-
-fn is_public_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => is_public_ipv4(address),
-        IpAddr::V6(address) => address
-            .to_ipv4_mapped()
-            .map_or_else(|| is_public_ipv6(address), is_public_ipv4),
-    }
-}
-
-fn is_public_ipv4(address: Ipv4Addr) -> bool {
-    let [first, second, third, _] = address.octets();
-    !address.is_private()
-        && !address.is_loopback()
-        && !address.is_link_local()
-        && !address.is_broadcast()
-        && !address.is_documentation()
-        && !address.is_multicast()
-        && !address.is_unspecified()
-        && first != 0
-        && !(first == 100 && (64..=127).contains(&second))
-        && !(first == 192 && second == 0 && third == 0)
-        && !(first == 198 && matches!(second, 18 | 19))
-        && first < 240
-}
-
-fn is_public_ipv6(address: Ipv6Addr) -> bool {
-    let segments = address.segments();
-    !address.is_loopback()
-        && !address.is_unspecified()
-        && !address.is_unique_local()
-        && !address.is_unicast_link_local()
-        && !address.is_multicast()
-        && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
-        && !(segments[0] == 0x2001 && segments[1] == 0x0002)
-        && (segments[0] & 0xe000) == 0x2000
+    is_public_ip(address) || domain_routed && is_fake_ip(address)
 }
 
 #[cfg(test)]
@@ -507,7 +475,8 @@ mod tests {
     fn dual_stack_fake_ip_dns_keeps_the_permitted_pinned_route() {
         let v4 = addresses(&["198.18.7.28:443"]);
         let dual = addresses(&["198.18.7.28:443", "[fdfe:dcba:9876::92]:443"]);
-        assert_eq!(permitted_remote_targets(dual, true).unwrap(), v4);
+        assert_eq!(permitted_remote_targets(dual.clone(), true).unwrap(), dual);
+        assert!(permitted_remote_targets(addresses(&["[fc00::92]:443"]), true).is_ok());
         assert!(permitted_remote_targets(v4, false).is_err());
     }
 
@@ -528,8 +497,52 @@ mod tests {
             addresses(&["1.1.1.1:443", "[2606:4700:4700::1111]:443"])
         );
         assert!(permitted_remote_targets(Vec::new(), true).is_err());
-        for address in ["127.0.0.1:443", "[fdfe:dcba:9876::92]:443"] {
+        for address in ["127.0.0.1:443", "[fd00::92]:443"] {
             assert!(permitted_remote_targets(addresses(&[address]), true).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_images_use_proxy_dns_and_revalidate_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for location in [
+            None,
+            Some("http://127.0.0.1/private"),
+            Some("http://[fc00::1]/private"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy = format!("http://{}", listener.local_addr().unwrap());
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await.unwrap());
+                    assert!(request.len() < 8192);
+                }
+                assert!(String::from_utf8(request).unwrap().starts_with(
+                    "GET http://remote-image.does-not-resolve.invalid/image HTTP/1.1"
+                ));
+                let response = match location {
+                    Some(location) => format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+                    None => "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 5\r\nConnection: close\r\n\r\nimage".into(),
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+            };
+            let request = fetch_with_proxy(
+                Url::parse("http://remote-image.does-not-resolve.invalid/image").unwrap(),
+                Some(&proxy),
+            );
+            let (_, result) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(server, request)
+            })
+            .await
+            .unwrap();
+            if location.is_some() {
+                assert!(result.unwrap_err().contains("public destination"));
+            } else {
+                assert_eq!(result.unwrap(), b"image");
+            }
         }
     }
 }

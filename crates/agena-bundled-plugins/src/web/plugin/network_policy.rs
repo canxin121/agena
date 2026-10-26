@@ -1,7 +1,7 @@
-//! A Fake-IP answer is a routing token owned by a trusted local TUN proxy,
-//! not the destination's network address. Only the server operator can opt
-//! exact synthetic subnets into this exception; tool inputs cannot enable it.
+//! Public hostnames support common Fake-IP DNS pools automatically. Operators
+//! can add exact custom synthetic subnets; tool inputs cannot change policy.
 use super::*;
+use agena_web::network::{is_fake_ip, is_public_hostname, is_public_ip};
 use ipnet::IpNet;
 use std::net::SocketAddr;
 
@@ -11,8 +11,8 @@ pub struct WebNetworkConfig {
     /// None uses standard environment/OS proxies. Empty forces direct access.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
-    /// Synthetic DNS ranges managed by a trusted, active local TUN proxy.
-    /// Empty preserves strict public-address validation.
+    /// Additional synthetic DNS ranges managed by a local TUN proxy.
+    /// Common IPv4/IPv6 pools work even when this list is empty.
     pub fake_ip_ranges: Vec<String>,
 }
 
@@ -39,11 +39,17 @@ fn ranges(config: &WebNetworkConfig) -> SdkResult<Vec<IpNet>> {
             IpNet::V4(net) => net.prefix_len() >= 15
                 && net.addr().octets()[0] == 198
                 && matches!(net.addr().octets()[1], 18 | 19),
-            IpNet::V6(net) => net.prefix_len() >= 64 && net.addr().is_unique_local(),
+            IpNet::V6(net) => {
+                let segments = net.addr().segments();
+                (net.prefix_len() >= 64 && net.addr().is_unique_local())
+                    || (net.prefix_len() >= 18
+                        && segments[0] == 0xfc00
+                        && segments[1] & 0xc000 == 0)
+            },
         };
         if !valid || range.addr() != range.network() {
             return Err(PluginError::invalid_params(
-                "network.fake_ip_ranges requires canonical subnets of 198.18.0.0/15 or IPv6 ULA /64 or narrower; configure only the exact ranges owned by your local TUN proxy",
+                "network.fake_ip_ranges requires canonical subnets of 198.18.0.0/15, fc00::/18 or IPv6 ULA /64 or narrower; configure only the exact ranges owned by your local TUN proxy",
             ));
         }
         Ok(range)
@@ -79,8 +85,8 @@ pub(super) fn validate_config(config: &WebNetworkConfig) -> SdkResult<()> {
 /// literal private addresses and local hostnames still cannot enter this path.
 pub(super) fn validate_proxy_target(url: &url::Url) -> SdkResult<()> {
     let public = match url.host() {
-        Some(url::Host::Ipv4(ip)) => is_public_address(ip.into()),
-        Some(url::Host::Ipv6(ip)) => is_public_address(ip.into()),
+        Some(url::Host::Ipv4(ip)) => is_public_ip(ip.into()),
+        Some(url::Host::Ipv6(ip)) => is_public_ip(ip.into()),
         Some(url::Host::Domain(_)) => public_hostname(url),
         None => false,
     };
@@ -105,47 +111,68 @@ fn public_hostname(url: &url::Url) -> bool {
     let Some(url::Host::Domain(host)) = url.host() else {
         return false;
     };
-    let host = host.trim_end_matches('.');
-    host.contains('.')
-        && !["localhost", "local", "lan", "internal", "corp", "home.arpa"]
-            .iter()
-            .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+    is_public_hostname(host)
 }
 
+fn address_allowed(address: IpAddr, allow_fake: bool, ranges: &[IpNet]) -> bool {
+    let normalized = match address {
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip.into()),
+        ip => ip,
+    };
+    is_public_ip(address)
+        || (allow_fake
+            && (is_fake_ip(address) || ranges.iter().any(|range| range.contains(&normalized))))
+}
+
+fn denied_address(url: &url::Url, address: SocketAddr) -> PluginError {
+    PluginError::from_kind(
+        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+        format!(
+            "web URL host `{}` resolves to non-public address `{address}`; public hostnames support common TUN Fake-IP pools automatically; additional synthetic IPv6 ranges can be set in agena.web network.fake_ip_ranges",
+            url.host_str().unwrap_or_default(),
+        ),
+    )
+}
+
+/// Browsers resolve independently, so every answer must be acceptable.
 pub(super) fn validate_addresses(
     url: &url::Url,
     addresses: impl IntoIterator<Item = SocketAddr>,
     config: &WebNetworkConfig,
 ) -> SdkResult<()> {
+    validate_proxy_target(url)?;
     let ranges = ranges(config)?;
     let allow_fake = public_hostname(url);
     for address in addresses {
-        let normalized = match address.ip() {
-            IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip.into()),
-            ip => ip,
-        };
-        if !is_public_address(address.ip())
-            && !(allow_fake && ranges.iter().any(|range| range.contains(&normalized)))
-        {
-            let synthetic = match normalized {
-                IpAddr::V4(ip) => ip.octets()[0] == 198 && matches!(ip.octets()[1], 18 | 19),
-                IpAddr::V6(ip) => ip.is_unique_local(),
-            };
-            let hint = if allow_fake && synthetic {
-                "; if a trusted local TUN proxy supplies Fake-IP DNS, configure its exact synthetic CIDRs in agena.web network.fake_ip_ranges"
-            } else {
-                ""
-            };
-            return Err(PluginError::from_kind(
-                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-                format!(
-                    "web URL host `{}` resolves to non-public address `{address}`{hint}",
-                    url.host_str().unwrap_or_default(),
-                ),
-            ));
+        if !address_allowed(address.ip(), allow_fake, &ranges) {
+            return Err(denied_address(url, address));
         }
     }
     Ok(())
+}
+
+/// Ordinary HTTP clients pin this filtered list. A bad IPv6 answer must not
+/// suppress a working IPv4 route or reach the connector as a fallback.
+pub(super) fn permitted_addresses(
+    url: &url::Url,
+    addresses: Vec<SocketAddr>,
+    config: &WebNetworkConfig,
+) -> SdkResult<Vec<SocketAddr>> {
+    validate_proxy_target(url)?;
+    let ranges = ranges(config)?;
+    let allow_fake = public_hostname(url);
+    let first = addresses
+        .first()
+        .copied()
+        .ok_or_else(|| PluginError::internal("web URL DNS lookup returned no addresses"))?;
+    let permitted: Vec<_> = addresses
+        .into_iter()
+        .filter(|address| address_allowed(address.ip(), allow_fake, &ranges))
+        .collect();
+    if permitted.is_empty() {
+        return Err(denied_address(url, first));
+    }
+    Ok(permitted)
 }
 
 #[cfg(test)]
@@ -187,7 +214,7 @@ mod tests {
     fn configured() -> WebNetworkConfig {
         WebNetworkConfig {
             proxy: None,
-            fake_ip_ranges: vec!["198.18.0.0/16".into(), "fdfe:dcba:9876::/64".into()],
+            fake_ip_ranges: vec!["198.18.0.0/16".into(), "fdab:1234:5678::/64".into()],
         }
     }
 
@@ -201,19 +228,37 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_dns_requires_explicit_configuration_for_each_address_family() {
+    fn common_synthetic_dns_works_without_configuration_in_both_address_families() {
         let url = "https://html.duckduckgo.com/html/";
-        let fake = ["198.18.0.52", "fdfe:dcba:9876::59"];
-        assert!(check(url, &fake, &WebNetworkConfig::default()).is_err());
+        let fake = [
+            "198.18.0.52",
+            "198.19.0.52",
+            "fdfe:dcba:9876::59",
+            "fc00::59",
+        ];
+        assert!(check(url, &fake, &WebNetworkConfig::default()).is_ok());
         assert!(check(url, &fake, &configured()).is_ok());
-        assert!(check(url, &["::ffff:198.18.0.52"], &configured()).is_ok());
+        let explicit_defaults = WebNetworkConfig {
+            proxy: None,
+            fake_ip_ranges: vec![
+                "198.18.0.0/15".into(),
+                "fc00::/18".into(),
+                "fdfe:dcba:9876::/64".into(),
+            ],
+        };
+        assert!(validate_config(&explicit_defaults).is_ok());
+        assert!(check(url, &fake, &explicit_defaults).is_ok());
+        assert!(check(url, &["::ffff:198.18.0.52"], &WebNetworkConfig::default()).is_ok());
         let v4_only = WebNetworkConfig {
             proxy: None,
             fake_ip_ranges: vec!["198.18.0.0/16".into()],
         };
-        assert!(check(url, &fake, &v4_only).is_err());
-        assert!(check(url, &["198.19.0.52"], &configured()).is_err());
-        assert!(check(url, &["fdfe:dcba:9877::59"], &configured()).is_err());
+        // Old saved configurations add custom ranges, without disabling the
+        // automatic defaults when they list only one address family.
+        assert!(check(url, &fake, &v4_only).is_ok());
+        assert!(check(url, &["fdab:1234:5678::59"], &configured()).is_ok());
+        assert!(check(url, &["fdab:1234:5678::59"], &WebNetworkConfig::default()).is_err());
+        assert!(check(url, &["fdab:1234:5679::59"], &configured()).is_err());
         assert!(
             check(
                 url,
@@ -229,6 +274,8 @@ mod tests {
         for raw in [
             "http://198.18.0.52/",
             "http://[fdfe:dcba:9876::59]/",
+            "http://[fc00::59]/",
+            "http://[fdab:1234:5678::59]/",
             "http://[::ffff:198.18.0.52]/",
             "http://localhost/",
             "http://localhost./",
@@ -255,7 +302,7 @@ mod tests {
             "::1",
             "::",
             "fe80::1",
-            "fc00::1",
+            "fd00::1",
             "::ffff:127.0.0.1",
             "2001:db8::1",
         ] {
@@ -270,6 +317,47 @@ mod tests {
     }
 
     #[test]
+    fn http_routes_filter_unusable_answers_and_only_pin_permitted_destinations() {
+        let url = url::Url::parse("https://example.com/").unwrap();
+        let addresses = |ips: &[&str]| {
+            ips.iter()
+                .map(|ip| SocketAddr::new(ip.parse().unwrap(), 443))
+                .collect::<Vec<_>>()
+        };
+        let permitted = addresses(&["198.18.0.52", "fdfe:dcba:9876::59", "fc00::59", "1.1.1.1"]);
+        let mut mixed = addresses(&["127.0.0.1", "10.0.0.1", "fd00::1", "2001:db8::1", "::"]);
+        mixed.extend(permitted.iter().copied());
+        assert!(validate_addresses(&url, mixed.clone(), &WebNetworkConfig::default()).is_err());
+        assert_eq!(
+            permitted_addresses(&url, mixed, &WebNetworkConfig::default()).unwrap(),
+            permitted
+        );
+        assert!(
+            permitted_addresses(
+                &url,
+                addresses(&["fd00::1", "127.0.0.1"]),
+                &WebNetworkConfig::default()
+            )
+            .is_err()
+        );
+        assert!(permitted_addresses(&url, Vec::new(), &WebNetworkConfig::default()).is_err());
+        for raw in [
+            "http://host.local/",
+            "http://198.18.0.52/",
+            "http://[fc00::59]/",
+        ] {
+            assert!(
+                permitted_addresses(
+                    &url::Url::parse(raw).unwrap(),
+                    addresses(&["198.18.0.52"]),
+                    &configured()
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn synthetic_configuration_cannot_whitelist_real_private_or_broad_ranges() {
         for range in [
             "0.0.0.0/0",
@@ -279,6 +367,7 @@ mod tests {
             "127.0.0.0/8",
             "192.168.0.0/16",
             "fc00::/7",
+            "fc00::/17",
             "fdfe:dcba:9876::/48",
             "fdfe:dcba:9876::1/64",
             "::/0",

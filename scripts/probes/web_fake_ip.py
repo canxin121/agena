@@ -3,7 +3,8 @@
 
 Uses isolated Agena data/workspaces and a loopback mock model; search and fetch
 use the real internet. Does not change DNS, proxy settings or user sessions.
-Requires the caller to provide the exact synthetic CIDRs owned by their TUN.
+Common IPv4/IPv6 Fake-IP pools work without configuration. Optional CIDRs
+allow the same probe to run with custom TUN pools.
 """
 from __future__ import annotations
 
@@ -19,26 +20,29 @@ import http_experience as fixture
 from plugin_permissions import LocalServices, tool_parts
 
 
+DEFAULT_FAKE_IP_RANGES = ['198.18.0.0/15', 'fc00::/18', 'fdfe:dcba:9876::/64']
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--fake-ip-range', action='append', required=True)
+    parser.add_argument('--fake-ip-range', action='append', help='optional custom TUN pool; defaults to common IPv4/IPv6 pools')
     parser.add_argument('--browser', action='store_true', help='also verify rendering with installed Chrome/Chromium')
-    parser.add_argument('--proxy', help='also verify real HTTP search/fetch using this proxy without Fake-IP exceptions')
+    parser.add_argument('--proxy', help='also verify real search/fetch with explicit and environment proxy settings')
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    networks = [ipaddress.ip_network(value) for value in args.fake_ip_range]
+    fake_ip_ranges = args.fake_ip_range or DEFAULT_FAKE_IP_RANGES
+    networks = [ipaddress.ip_network(value) for value in fake_ip_ranges]
     dns = sorted({item[4][0] for item in socket.getaddrinfo('www.bing.com', 443, type=socket.SOCK_STREAM)})
     fixture.require(any(any(ipaddress.ip_address(value) in net for net in networks) for value in dns),
                     f'the current DNS does not use the supplied synthetic ranges: {dns}')
     result = {'status': 'failed', 'binary_sha256': fixture.file_digest(binary),
-              'dns': dns, 'fake_ip_ranges': args.fake_ip_range, 'cases': []}
+              'dns': dns, 'fake_ip_ranges': fake_ip_ranges, 'cases': []}
     try:
-        for label in ['strict', 'configured'] + (['proxy'] if args.proxy else []):
-            enabled = label != 'strict'
+        for label in ['default', 'configured'] + (['proxy', 'environment_proxy'] if args.proxy else []):
             phase = out / label
             phase.mkdir()
             services = LocalServices()
@@ -51,9 +55,9 @@ def main() -> None:
                 config = json.loads(path.read_text())
                 config['plugins'] = {'list': {'agena.web': {
                     'package': {'kind': 'static'},
-                    'settings': {'network': {'fake_ip_ranges': args.fake_ip_range if label == 'configured' else [],
+                    'settings': {'network': {'fake_ip_ranges': fake_ip_ranges if label == 'configured' else [],
                                              **({'proxy': args.proxy} if label == 'proxy' else {})},
-                                 'browser': {'enabled': args.browser and label == 'configured'}},
+                                 'browser': {'enabled': args.browser and label == 'default'}},
                 }}}
                 fixture.write_json(path, config)
                 with socket.socket() as sock:
@@ -61,6 +65,8 @@ def main() -> None:
                     port = sock.getsockname()[1]
                 env = fixture.clean_environment(phase)
                 env['AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES'] = '1'
+                if label == 'environment_proxy':
+                    env.update({'HTTP_PROXY': args.proxy, 'HTTPS_PROXY': args.proxy, 'ALL_PROXY': args.proxy})
                 process = subprocess.Popen(
                     [str(binary), '--data-dir', str(phase / 'data'), 'server', '--host', '127.0.0.1',
                      '--port', str(port), '--workspace', str(workspace)],
@@ -92,27 +98,26 @@ def main() -> None:
                         fixture.require(part['state'] == 'completed', f'{name}: {part}')
                         if needs_results:
                             blocks = part.get('presentation', {}).get('blocks', [])
-                            fixture.require(any(block.get('type') == 'table' and block.get('rows') for block in blocks),
-                                            f'{name}: search completed without real result rows')
+                            fixture.require(any(
+                                (block.get('type') == 'search_results' and block.get('items'))
+                                or (block.get('type') == 'table' and block.get('rows'))
+                                for block in blocks),
+                                f'{name}: search completed without real results')
                     result['cases'].append({'phase': label, 'name': name, 'passed': True, 'summary': part.get('summary', ''),
                                             'presentation': part.get('presentation')})
 
-                if not enabled:
-                    run('strict_fake_dns_denied', 'web.search', {'query': 'League of Legends 2026 schedule',
-                                                               'engine': 'bing'}, denied=True)
-                else:
-                    run('real_multi_engine_search', 'web.search',
-                        {'query': '英雄联盟 赛事 赛程 2026 LPL LCK 世界赛', 'max_results': 15}, needs_results=True)
-                    run('real_public_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': False})
-                    if args.browser and label == 'configured':
-                        run('real_browser_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': True})
-                    run('internet_deny_preserved', 'web.search', {'query': 'must be denied', 'engine': 'bing'},
-                        denied=True, internet='deny')
-                    for name, url in [('literal_fake_v4_denied', 'http://198.18.0.52/'),
-                                      ('literal_fake_v6_denied', 'http://[fdfe:dcba:9876::59]/'),
-                                      ('real_loopback_denied', services.url + '/page/private')]:
-                        run(name, 'web.fetch', {'url': url, 'render_js': False}, denied=True)
-                    fixture.require(services.page_requests == 0, 'the private endpoint received a request')
+                run('real_multi_engine_search', 'web.search',
+                    {'query': '英雄联盟 赛事 赛程 2026 LPL LCK 世界赛', 'max_results': 15}, needs_results=True)
+                run('real_public_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': False})
+                if args.browser and label == 'default':
+                    run('real_browser_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': True})
+                run('internet_deny_preserved', 'web.search', {'query': 'must be denied', 'engine': 'bing'},
+                    denied=True, internet='deny')
+                for name, url in [('literal_fake_v4_denied', 'http://198.18.0.52/'),
+                                  ('literal_fake_v6_denied', 'http://[fdfe:dcba:9876::59]/'),
+                                  ('real_loopback_denied', services.url + '/page/private')]:
+                    run(name, 'web.fetch', {'url': url, 'render_js': False}, denied=True)
+                fixture.require(services.page_requests == 0, 'the private endpoint received a request')
             finally:
                 if process is not None:
                     process.terminate()

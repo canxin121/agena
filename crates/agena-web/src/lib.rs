@@ -20,6 +20,7 @@ mod fetch_coordinator;
 mod index;
 mod metadata;
 mod model;
+pub mod network;
 mod paths;
 mod run;
 mod search;

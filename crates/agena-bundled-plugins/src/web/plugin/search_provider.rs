@@ -176,7 +176,7 @@ async fn resolve_endpoint(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| PluginError::invalid_params("search endpoint has no port"))?;
-    let addresses = tokio::time::timeout(
+    let mut addresses = tokio::time::timeout(
         timeout,
         tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
     )
@@ -192,7 +192,7 @@ async fn resolve_endpoint(
         ));
     }
     if !(config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint) {
-        network_policy::validate_addresses(url, addresses.iter().copied(), network)?;
+        addresses = network_policy::permitted_addresses(url, addresses, network)?;
     }
     Ok(route.with_addresses(addresses))
 }

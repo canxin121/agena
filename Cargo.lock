@@ -1289,6 +1289,7 @@ dependencies = [
  "agena-failure",
  "agena-tui",
  "agena-tui-components",
+ "agena-web",
  "base64 0.22.1",
  "image",
  "imagesize 0.15.0",

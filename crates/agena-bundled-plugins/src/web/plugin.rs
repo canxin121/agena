@@ -370,8 +370,8 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         ),
         (
             "/network/fake_ip_ranges",
-            "Trusted Fake-IP Ranges",
-            "Exact synthetic CIDRs routed by your local TUN proxy. Empty by default. Only subnets of 198.18.0.0/15 and IPv6 ULA /64 or narrower are accepted. Applies to DNS answers for public hostnames, never IP literals or local names.",
+            "Additional Fake-IP Ranges",
+            "Common TUN Fake-IP pools (198.18.0.0/15, fc00::/18 and fdfe:dcba:9876::/64) work automatically. Add exact custom synthetic CIDRs here if needed. Accepts subnets of 198.18.0.0/15, fc00::/18 and IPv6 ULA /64 or narrower. Applies to public hostname DNS answers.",
         ),
         (
             "/fetch/extractor",
@@ -3818,23 +3818,20 @@ async fn validate_public_network_target(
     url: &url::Url,
     network: &network_policy::WebNetworkConfig,
 ) -> SdkResult<()> {
-    resolve_public_network_target(url, network)
-        .await
-        .map(|_| ())
+    let addresses = resolve_network_addresses(url).await?;
+    network_policy::validate_addresses(url, addresses, network)
 }
 
 async fn resolve_public_network_target(
     url: &url::Url,
     network: &network_policy::WebNetworkConfig,
 ) -> SdkResult<Vec<std::net::SocketAddr>> {
-    if !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err(PluginError::invalid_params(
-            "web requests require HTTP(S) without URL credentials",
-        ));
-    }
+    let addresses = resolve_network_addresses(url).await?;
+    network_policy::permitted_addresses(url, addresses, network)
+}
+
+async fn resolve_network_addresses(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
+    network_policy::validate_proxy_target(url)?;
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
@@ -3861,7 +3858,6 @@ async fn resolve_public_network_target(
             "DNS resolution returned no addresses for {host}"
         )));
     }
-    network_policy::validate_addresses(url, addresses.iter().copied(), network)?;
     Ok(addresses.into_iter().collect())
 }
 
@@ -4875,35 +4871,6 @@ fn format_browser_snapshot(snapshot: &serde_json::Value) -> String {
     let remaining = 32000usize.saturating_sub(text.len());
     text.push_str(browser_text_prefix(value("text"), remaining));
     text
-}
-
-fn is_public_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            let [first, second, third, _] = address.octets();
-            !address.is_private()
-                && !address.is_loopback()
-                && !address.is_link_local()
-                && !address.is_documentation()
-                && first != 0
-                && !(first == 100 && (64..=127).contains(&second))
-                && !(first == 192 && second == 0 && third == 0)
-                && !(first == 198 && matches!(second, 18 | 19))
-                && first < 224
-        }
-        IpAddr::V6(address) => {
-            if let Some(mapped) = address.to_ipv4_mapped() {
-                return is_public_address(mapped.into());
-            }
-            !address.is_loopback()
-                && !address.is_unique_local()
-                && !address.is_unicast_link_local()
-                && !address.is_unspecified()
-                && !address.is_multicast()
-                && address.segments()[..2] != [0x2001, 0x0db8]
-                && address.segments()[..2] != [0x2001, 0x0002]
-        }
-    }
 }
 
 fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::Url> {

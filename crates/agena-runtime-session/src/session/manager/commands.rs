@@ -449,6 +449,28 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Stop retains pending input until explicit resume. With no pending
+    /// input there is nothing to retain: do not strand the next user send
+    /// behind an invisible pause. A pre-existing manual pause still wins.
+    async fn resume_empty_queue_after_stop(
+        &self,
+        session: SessionId,
+        was_paused: bool,
+    ) -> Result<(), AppError> {
+        if !was_paused {
+            let summary = self
+                .kernel()
+                .reader
+                .summary(session)
+                .await
+                .map_err(kernel_error)?;
+            if summary.queued_executions == 0 {
+                self.persist_message_queue_pause(session, false).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn cancel_session_tree(
         &self,
         id: i64,
@@ -471,6 +493,13 @@ impl SessionManager {
             // completion/cancellation can otherwise release the next input.
             let dispatch = self.session_dispatch(session);
             let _submission = dispatch.submission.lock().await;
+            let was_paused = self
+                .kernel()
+                .reader
+                .configuration(session)
+                .await
+                .map_err(kernel_error)?
+                .message_queue_paused;
             self.persist_message_queue_pause(session, true).await?;
             let mut after = None;
             loop {
@@ -492,6 +521,10 @@ impl SessionManager {
                     break;
                 }
                 after = page.next;
+            }
+            if preserve_queue {
+                self.resume_empty_queue_after_stop(session, was_paused)
+                    .await?;
             }
             if let Some(monitors) = self.tool_executor().monitor_registry() {
                 monitors.stop_session(session.get());
@@ -976,12 +1009,25 @@ impl crate::SessionExecutionControl for SessionManager {
         id: i64,
         e: ExecutionId,
     ) -> Result<CancellationOutcome, crate::SessionExecutionControlError> {
-        self.set_message_queue_paused(id, true)
-            .await
-            .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))?;
-        SessionManager::cancel_execution_with_outcome(self, id, e)
-            .await
-            .map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
+        let result = async {
+            let session = session_id(id)?;
+            let dispatch = self.session_dispatch(session);
+            let _submission = dispatch.submission.lock().await;
+            let was_paused = self
+                .kernel()
+                .reader
+                .configuration(session)
+                .await
+                .map_err(kernel_error)?
+                .message_queue_paused;
+            self.persist_message_queue_pause(session, true).await?;
+            let outcome = SessionManager::cancel_execution_with_outcome(self, id, e).await?;
+            self.resume_empty_queue_after_stop(session, was_paused)
+                .await?;
+            Ok::<_, AppError>(outcome)
+        }
+        .await;
+        result.map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
     }
     async fn cancel_session_with_outcome(
         &self,
@@ -1064,3 +1110,5 @@ pub(super) fn validate_answers(
     }
     Ok(())
 }
+#[cfg(test)]
+mod queue_tests;

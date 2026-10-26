@@ -107,6 +107,21 @@ impl App {
             return;
         }
 
+        // Fold hints stay visible while focus is in the Composer. Route their
+        // shortcuts back to the selected transcript reply before Composer
+        // input handling, while preserving Enter queueing and Ctrl+Enter
+        // submission whenever a draft is waiting.
+        if self.current_route_is_main()
+            && self.focus == Focus::Composer
+            && self.overlay.is_none()
+            && self.context_help.is_none()
+            && self.interaction_editing.is_none()
+            && !self.composer_item_selection.is_active()
+            && self.handle_composer_transcript_fold_shortcut(key)
+        {
+            return;
+        }
+
         if self.current_route_is_main()
             && resolve_tui_key(KeyContext::Main, key) == Some(KeyAction::ToggleSessionWork)
             && self.interaction_editing.is_none()

@@ -5,7 +5,9 @@ impl App {
         self.transcript.ensure_visual_focus(width, height);
         let action = resolve_tui_key(KeyContext::Transcript, key);
         match action {
-            Some(KeyAction::LoadOlderParts) => {
+            Some(KeyAction::LoadOlderParts)
+                if self.transcript.cursor_is_on_transcript_fold_marker(width) =>
+            {
                 self.clear_transcript_pending_command();
                 self.load_older_transcript_parts();
                 return;
@@ -30,6 +32,11 @@ impl App {
         }
 
         match action {
+            Some(KeyAction::LoadOlderParts) => {
+                let reveal_count = self.transcript_motion_count_if_present();
+                self.clear_transcript_pending_command();
+                self.toggle_transcript_cursor_node(reveal_count);
+            }
             Some(KeyAction::CountDigit(_)) => {}
             Some(KeyAction::LineStart)
                 if matches!(key.code, KeyCode::Char('0'))
@@ -98,11 +105,7 @@ impl App {
             }
             Some(KeyAction::ExpandAll) => {
                 self.clear_transcript_pending_command();
-                let folds = self.transcript.transcript_folds.clone();
-                self.transcript.expand_all_transcript_parts(width, height);
-                for fold in folds {
-                    self.request_transcript_fold_parts(fold, true, 50);
-                }
+                self.expand_all_transcript_parts_from_shortcut();
             }
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
                 self.cancel_pointer_selection_if_not_visual(width, height);

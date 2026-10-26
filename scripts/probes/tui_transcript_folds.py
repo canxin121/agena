@@ -106,7 +106,7 @@ def main() -> int:
 
         # The editor is reached directly from the final answer, not its marker.
         client.send(b'G', 'select-answer-before-count-editor')
-        client.send(b'\x1b[13;3u', 'alt-enter-edit-batch')
+        client.send(b'\x1b[13;5u', 'ctrl-enter-edit-batch')
         client.wait_text('Older-part batch size', 'batch-editor')
         enter_count(2, 'save-batch-two')
         fixture.poll(lambda: 'Older-part batch size' not in client.text(), 5, 'batch editor did not close')
@@ -115,20 +115,12 @@ def main() -> int:
         wait_files(list(range(36, 40)))
         checkpoint('shortcut-edits-batch-without-expanding')
 
-        client.send(b'G', 'select-answer-before-reveal')
-        client.send(b'\x1b[13;5u', 'ctrl-enter-reveal-two')
+        client.send(b'gg\x1b[B\x1b[B\r', 'enter-reveal-two')
         client.send(b'gg', 'show-revealed-parts')
         wait_files(list(range(34, 40)))
-        checkpoint('ctrl-enter-reveals-exact-batch-from-answer')
+        checkpoint('enter-reveals-exact-batch-from-fold-marker')
 
-        # Plain Enter on the informational marker neither edits nor reveals.
-        client.send(b'gg\x1b[B\x1b[B\r', 'plain-enter-on-fold-marker')
-        time.sleep(0.25)
-        fixture.require('Older-part batch size' not in client.text(), 'Enter opened the count editor')
-        wait_files(list(range(34, 40)))
-        checkpoint('fold-marker-enter-does-not-open-editor')
-
-        client.send(b'\x1b[13;3u', 'edit-invalid-count')
+        client.send(b'\x1b[13;5u', 'edit-invalid-count')
         client.wait_text('Older-part batch size', 'invalid-editor')
         enter_count(0, 'reject-zero-count')
         client.wait_text('Enter a whole number', 'invalid-count-error')
@@ -137,11 +129,11 @@ def main() -> int:
         client.wait_text('load 2', 'cancel-keeps-two')
         checkpoint('invalid-count-and-cancel-preserve-setting')
 
-        client.send(b'\x1b[13;3u', 'edit-large-batch')
+        client.send(b'\x1b[13;5u', 'edit-large-batch')
         client.wait_text('Older-part batch size', 'large-batch-editor')
         enter_count(50, 'save-batch-fifty')
         fixture.poll(lambda: 'Older-part batch size' not in client.text(), 5, 'large batch editor did not close')
-        client.send(b'G\x1b[13;5u', 'load-local-and-server-prefix')
+        client.send(b'gg\x1b[B\x1b[B\r', 'load-local-and-server-prefix')
         client.send(b'gg', 'show-explicitly-revealed-history')
         client.wait_text('EARLIEST_REASONING_SENTINEL', 'all-older-parts-revealed')
         fixture.poll(lambda: 'older parts hidden' not in client.text(), 15, 'fold did not exhaust after explicit reveal')

@@ -41,10 +41,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Transcript => match key.code {
-            K::Enter if only_ctrl(key) => Some(A::LoadOlderParts),
-            K::Enter if key.modifiers == crossterm::event::KeyModifiers::ALT => {
-                Some(A::EditFoldCount)
-            }
+            K::Enter if only_ctrl(key) => Some(A::EditFoldCount),
             K::Char('k') if only_ctrl(key) => Some(A::PreviousMessage),
             K::Char('j') if only_ctrl(key) => Some(A::NextMessage),
             K::Char(digit @ '1'..='9') if unmodified(key) => {
@@ -59,7 +56,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('y') if unmodified(key) => Some(A::Copy),
             K::Char('Y') if unmodified_or_shift(key) => Some(A::YankLine),
             K::Enter if only_ctrl_shift(key) => Some(A::ExpandAll),
-            K::Enter if unmodified(key) => Some(A::Toggle),
+            K::Enter if unmodified(key) => Some(A::LoadOlderParts),
             K::Left | K::Char('h') if unmodified(key) => Some(A::MoveLeft),
             K::Right | K::Char('l') if unmodified(key) => Some(A::MoveRight),
             K::Up | K::Char('k') if unmodified(key) => Some(A::MoveUp),
@@ -293,11 +290,10 @@ mod tests {
     use crossterm::event::KeyModifiers as M;
 
     #[test]
-    fn transcript_fold_shortcuts_keep_plain_enter_for_part_details() {
+    fn transcript_fold_shortcuts_use_enter_for_loading_and_ctrl_enter_for_count() {
         for (modifiers, action) in [
-            (M::NONE, A::Toggle),
-            (M::CONTROL, A::LoadOlderParts),
-            (M::ALT, A::EditFoldCount),
+            (M::NONE, A::LoadOlderParts),
+            (M::CONTROL, A::EditFoldCount),
             (M::CONTROL | M::SHIFT, A::ExpandAll),
         ] {
             assert_eq!(
@@ -305,6 +301,10 @@ mod tests {
                 Some(action)
             );
         }
+        assert_eq!(
+            resolve(KeyContext::Transcript, KeyEvent::new(K::Enter, M::ALT)),
+            None
+        );
     }
 
     #[test]

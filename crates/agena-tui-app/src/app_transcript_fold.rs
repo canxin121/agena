@@ -1,4 +1,6 @@
 use crate::{App, Editor, I18n, Overlay, TranscriptNodeKey, TranscriptState};
+use agena_tui::input::ComposerAction;
+use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::{InputDialogKeyResult, InputDialogState, drive_input_dialog_key};
 use agena_tui_transcript::{
     TranscriptActivityContent, TranscriptContentId, TranscriptEntryId, TranscriptFold,
@@ -65,6 +67,19 @@ fn reduce_count_key(dialog: &mut FoldLoadDialog, key: KeyEvent, i18n: &I18n) -> 
 }
 
 impl TranscriptState {
+    pub(crate) fn cursor_is_on_transcript_fold_marker(&mut self, width: u16) -> bool {
+        self.current_cursor_node_cloned(width).is_some_and(|node| {
+            matches!(
+                node.key,
+                TranscriptNodeKey::ActivitySummary { .. }
+                    | TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::TranscriptFold { .. },
+                        ..
+                    }
+            )
+        })
+    }
+
     pub(crate) fn fold_hidden_part_count(&mut self, width: u16, key: &TranscriptNodeKey) -> usize {
         self.rendered(width);
         self.projected_entries
@@ -189,6 +204,61 @@ impl TranscriptState {
 }
 
 impl App {
+    /// The transcript remains visible while the Composer has focus. Keep its
+    /// fold actions available there too, while preserving Enter queueing and
+    /// Ctrl+Enter submission whenever there is a draft to send.
+    pub(crate) fn handle_composer_transcript_fold_shortcut(&mut self, key: KeyEvent) -> bool {
+        let Some(action) = resolve_tui_key(KeyContext::Transcript, key) else {
+            return false;
+        };
+        let width = self.layout.transcript_body.width;
+        let hidden_parts_selected = self
+            .transcript
+            .current_cursor_node_cloned(width)
+            .is_some_and(|node| self.transcript.fold_hidden_part_count(width, &node.key) > 0);
+        let composer_action = self.keybindings.match_action(&key);
+        let composer_is_empty = self.composer.text().is_empty() && self.composer_items.is_empty();
+
+        match action {
+            KeyAction::LoadOlderParts
+                if hidden_parts_selected
+                    && self.transcript.cursor_is_on_transcript_fold_marker(width)
+                    && composer_action == Some(ComposerAction::Queue)
+                    && composer_is_empty =>
+            {
+                self.clear_transcript_pending_command();
+                self.load_older_transcript_parts();
+                true
+            }
+            KeyAction::EditFoldCount
+                if hidden_parts_selected
+                    && (composer_action.is_none()
+                        || (composer_action == Some(ComposerAction::Submit)
+                            && composer_is_empty)) =>
+            {
+                self.clear_transcript_pending_command();
+                self.open_transcript_fold_load();
+                true
+            }
+            KeyAction::ExpandAll if composer_action.is_none() => {
+                self.clear_transcript_pending_command();
+                self.expand_all_transcript_parts_from_shortcut();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn expand_all_transcript_parts_from_shortcut(&mut self) {
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        let folds = self.transcript.transcript_folds.clone();
+        self.transcript.expand_all_transcript_parts(width, height);
+        for fold in folds {
+            self.request_transcript_fold_parts(fold, true, 50);
+        }
+    }
+
     pub(crate) fn open_transcript_fold_load(&mut self) {
         self.overlay = Some(Overlay::TranscriptFoldLoad(count_dialog(
             self.transcript.fold_load_count,
@@ -368,7 +438,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            text.contains("Ctrl+Enter: load") && text.contains("Alt+Enter: count"),
+            text.contains("Enter: load")
+                && text.contains("Ctrl+Enter: count")
+                && text.contains("Ctrl+Shift+Enter: all"),
             "{text}"
         );
         assert!(!text.contains("choose count"));
@@ -379,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn local_reveal_is_exact_and_enter_on_the_marker_does_nothing() {
+    fn local_reveal_is_exact_and_marker_is_informational() {
         let mut state = local_state();
         assert_eq!(visible(&mut state), [3, 4, 5, 6, 7]);
         let marker = state

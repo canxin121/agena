@@ -18,6 +18,16 @@ impl App {
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
+        // The Hub is the client's root screen. Its interrupt closes the TUI
+        // immediately, including while the catalog is loading; a hidden
+        // composer or background session must not intercept this key.
+        if global_action == Some(KeyAction::Interrupt)
+            && matches!(&self.current_route, Route::Hub(_))
+        {
+            self.last_ctrl_c_at = None;
+            self.should_quit = true;
+            return;
+        }
         // Only the focused BTW input owns its stop key. Background questions
         // never intercept the parent conversation's input or cancellation.
         if global_action == Some(KeyAction::Interrupt) && self.btw_has_focus() {

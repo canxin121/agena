@@ -6,9 +6,19 @@ use super::TerminalContext;
 
 /// The application host is responsible only for collecting bounded tmux
 /// evidence. The graphics policy itself lives in `agena-tui`.
-pub(super) fn detect(context: &TerminalContext, mode: GraphicsMode) -> GraphicsTransportPolicy {
+pub(super) fn detect(
+    context: &TerminalContext,
+    mode: GraphicsMode,
+) -> (GraphicsTransportPolicy, bool) {
     let tmux_path = context.in_tmux().then(probe_tmux_graphics_path);
-    GraphicsTransportPolicy::detect(&context.identity, &context.transport, mode, tmux_path)
+    // Ordinary queries can be answered by tmux itself. Only send them to the
+    // outer terminal when that pane actually permits passthrough; otherwise
+    // tmux silently drops the query, including its completion barrier.
+    let query_through_tmux = tmux_path == Some(TmuxGraphicsPath::Verified);
+    (
+        GraphicsTransportPolicy::detect(&context.identity, &context.transport, mode, tmux_path),
+        query_through_tmux,
+    )
 }
 
 fn probe_tmux_graphics_path() -> TmuxGraphicsPath {

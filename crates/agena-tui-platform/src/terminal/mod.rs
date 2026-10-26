@@ -46,6 +46,7 @@ pub use password::read_server_password;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 const PROTOCOL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+const PROTOCOL_RESTORE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 struct ProtocolTransaction {
@@ -83,7 +84,7 @@ impl TerminalRuntime {
         // Provider and multiplexer helpers are read-only, bounded subprocess
         // probes. Finish them before entering raw/alternate-screen mode so a
         // slow local helper never leaves the user staring at a blank screen.
-        let graphics_policy = graphics::detect(&context, graphics_mode);
+        let (graphics_policy, query_through_tmux) = graphics::detect(&context, graphics_mode);
         install_panic_hook();
 
         // Keep this guard local until construction succeeds. Every `?` below
@@ -102,8 +103,7 @@ impl TerminalRuntime {
         // Color detection is independent from graphics support. Query it even
         // in Unicode graphics mode, before runtime input starts, and use the
         // environment only when both bounded terminal attempts fail.
-        let queried_color =
-            query_terminal_background(context.identity.family, graphics_policy.through_tmux);
+        let queried_color = query_terminal_background(context.identity.family, query_through_tmux);
         let color_query_succeeded = queried_color.is_some();
         let color = queried_color.unwrap_or_else(detect_terminal_background);
         context.record_color_detection(color);
@@ -160,7 +160,12 @@ impl TerminalRuntime {
         let protocol_transaction = if cfg!(unix) {
             let capture = TerminalResponseCapture::begin()
                 .context("failed to begin the startup terminal-response transaction")?;
-            let startup_barrier = startup_barrier(graphics_policy.through_tmux);
+            // A user-forced native graphics probe can still target the outer
+            // terminal on an unverified tmux path. Its final barrier must use
+            // that same path so late graphics replies remain captured.
+            let barrier_through_tmux = query_through_tmux
+                || (graphics_policy.probe_native && graphics_policy.through_tmux);
+            let startup_barrier = startup_barrier(barrier_through_tmux);
             broker
                 .write_frame(terminal.backend_mut(), &startup_barrier)
                 .context("failed to write the startup terminal-response barrier")?;
@@ -183,7 +188,7 @@ impl TerminalRuntime {
             context,
             background,
             math_graphics,
-            color_refresh_through_tmux: graphics_policy.through_tmux,
+            color_refresh_through_tmux: query_through_tmux,
             protocol_transaction,
             generation: 1,
             restored: false,
@@ -482,11 +487,15 @@ impl TerminalRuntime {
         if self.restored {
             return Ok(());
         }
-        let protocol_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
-            self.settle_protocol_transaction(PROTOCOL_SETTLE_TIMEOUT)
-        } else {
-            Ok(())
-        };
+        // A protocol acknowledgement is required before handing stdin to an
+        // editor, but cannot be required to leave the TUI. Some terminals and
+        // multiplexers never answer queries. Drain replies briefly while we
+        // still own raw input, then restore every mode even without a reply.
+        if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire)
+            && let Err(error) = self.settle_protocol_transaction(PROTOCOL_RESTORE_TIMEOUT)
+        {
+            tracing::debug!(%error, "terminal response drain ended during shutdown");
+        }
         let flush_result = self
             .terminal
             .flush()
@@ -501,27 +510,18 @@ impl TerminalRuntime {
             Ok(())
         };
         if lifecycle_result.is_ok() {
+            self.protocol_transaction.take();
+            self.input.reset();
             self.restored = true;
             TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
             TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
             self.ownership.release();
         }
-        match (protocol_result, flush_result, lifecycle_result) {
-            (Ok(()), Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(()), Ok(()))
-            | (Ok(()), Err(error), Ok(()))
-            | (Ok(()), Ok(()), Err(error)) => Err(error),
-            (Err(protocol), Err(flush), Ok(())) => Err(anyhow::anyhow!(
-                "terminal protocol restoration failed: {protocol:#}; terminal flush also failed: {flush:#}"
-            )),
-            (Err(protocol), Ok(()), Err(lifecycle)) => Err(anyhow::anyhow!(
-                "terminal protocol restoration failed: {protocol:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
-            )),
-            (Ok(()), Err(flush), Err(lifecycle)) => Err(anyhow::anyhow!(
+        match (flush_result, lifecycle_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(flush), Err(lifecycle)) => Err(anyhow::anyhow!(
                 "terminal flush failed during restoration: {flush:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
-            )),
-            (Err(protocol), Err(flush), Err(lifecycle)) => Err(anyhow::anyhow!(
-                "terminal protocol restoration failed: {protocol:#}; terminal flush also failed: {flush:#}; terminal lifecycle restoration also failed: {lifecycle:#}"
             )),
         }
     }

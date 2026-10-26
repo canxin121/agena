@@ -407,6 +407,192 @@ class McpOAuthTests(unittest.TestCase):
                 self.assertNotIn(self.password, result.stdout + result.stderr)
         record_path.write_bytes(original_record)
 
+    @unittest.skipUnless(os.name == 'posix', 'Terminal restoration requires POSIX PTYs')
+    def test_tui_hub_ctrl_c_restores_terminal_with_missing_protocol_replies(self):
+        import fcntl
+        import importlib.util
+        from http.client import HTTPException
+        import pty
+        import select
+        import struct
+        import termios
+
+        spec = importlib.util.spec_from_file_location(
+            'tui_screen_fixture', Path(__file__).resolve().parents[2] / 'probes/tui_experience.py')
+        tui_screen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tui_screen)
+        tui_screen.ROWS, tui_screen.COLS = 35, 120
+
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        _, environment = self.write_client_environment()
+        # This is an isolated tmux helper, never the user's running tmux server.
+        helpers = self.root / 'helpers'
+        helpers.mkdir()
+        tmux = helpers / 'tmux'
+        tmux.write_text('#!/bin/sh\ncase "$1" in\nshow-options) echo off;;\n'
+                        'display-message) echo xterm-256color;;\nesac\n')
+        tmux.chmod(0o755)
+        for mode in ('responsive', 'catalog-loading', 'no-startup-barrier',
+                     'no-refresh-barrier', 'tmux-no-passthrough'):
+            for command in ([], ['tui']):
+                with self.subTest(mode=mode, command=command,
+                                  keyboard='legacy' if not command else 'CSI-u'):
+                    selected_environment = dict(environment)
+                    for key in ('TMUX', 'TMUX_PANE', 'STY', 'ZELLIJ', 'SSH_CONNECTION', 'SSH_TTY'):
+                        selected_environment.pop(key, None)
+                    selected_environment['TERM_PROGRAM'] = 'xterm'
+                    if mode == 'tmux-no-passthrough':
+                        selected_environment.update(
+                            TMUX='/isolated-fixture,1,0', TERM='tmux-256color',
+                            PATH=str(helpers) + os.pathsep + os.environ.get('PATH', ''),
+                        )
+                    proxy = None
+                    catalog_pending, release_catalog = threading.Event(), threading.Event()
+                    if mode == 'catalog-loading':
+                        base = self.base
+
+                        class PendingHubProxy(BaseHTTPRequestHandler):
+                            pending = catalog_pending
+                            release = release_catalog
+
+                            def forward(self):
+                                if self.command == 'GET' and self.path.split('?')[0] == '/api/v1/sessions':
+                                    self.pending.set()
+                                    self.release.wait(timeout=20)
+                                length = int(self.headers.get('Content-Length', 0))
+                                request = Request(base + self.path,
+                                                  data=self.rfile.read(length) if length else None,
+                                                  headers=dict(self.headers), method=self.command)
+                                try:
+                                    response = build_opener(ProxyHandler({})).open(request, timeout=5)
+                                except HTTPError as error:
+                                    response = error
+                                with response:
+                                    content_type = response.headers.get('Content-Type', '')
+                                    if content_type.startswith('text/event-stream'):
+                                        # Live subscriptions must stream through
+                                        # the proxy while the catalog is held.
+                                        self.send_response(response.status)
+                                        self.send_header('Content-Type', content_type)
+                                        self.end_headers()
+                                        try:
+                                            while block := response.read1(65536):
+                                                self.wfile.write(block)
+                                                self.wfile.flush()
+                                        except (OSError, HTTPException):
+                                            pass  # Either endpoint may close during TUI shutdown.
+                                        return
+                                    body = response.read()
+                                    self.send_response(response.status)
+                                    self.send_header('Content-Type', content_type)
+                                    self.send_header('Content-Length', str(len(body)))
+                                    self.end_headers()
+                                    try:
+                                        self.wfile.write(body)
+                                    except (BrokenPipeError, ConnectionResetError):
+                                        pass
+
+                            do_GET = do_POST = do_PUT = forward
+
+                            def log_message(self, *_args):
+                                pass
+
+                        proxy = ThreadingHTTPServer(('127.0.0.1', 0), PendingHubProxy)
+                        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+                        selected_environment.update(
+                            AGENA_SERVER_URL=f'http://127.0.0.1:{proxy.server_port}',
+                            AGENA_SERVER_PASSWORD=self.password,
+                        )
+                    master, slave = pty.openpty()
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 35, 120, 0, 0))
+                    before = termios.tcgetattr(slave)
+                    process = subprocess.Popen(
+                        [binary, *command], cwd=self.workspace, env=selected_environment,
+                        stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                    )
+                    try:
+                        output = bytearray()
+                        screen = tui_screen.Screen()
+                        queries = {
+                            b'\x1b[6n': b'\x1b[1;1R', b'\x1b[5n': b'\x1b[0n',
+                            b'\x1b[?u': b'\x1b[?0u', b'\x1b[c': b'\x1b[?1;2c',
+                            b'\x1b[0c': b'\x1b[?1;2c',
+                            b'\x1b]11;?\x07': b'\x1b]11;rgb:1010/1010/1010\x1b\\',
+                            b'\x1b]4;-2;?\x07': b'\x1b]4;-2;rgb:1010/1010/1010\x1b\\',
+                        }
+                        answered = {query: 0 for query in queries}
+                        cursor_queries = 0
+                        hub_visible = focus_sent = False
+                        focus_query_count = 0
+                        interrupt_at = None
+                        deadline = time.monotonic() + 20
+                        while time.monotonic() < deadline:
+                            if select.select([master], [], [], 0.03)[0]:
+                                block = os.read(master, 65536)
+                                output.extend(block)
+                                screen.feed(block)
+                            pending_replies = []
+                            for query, reply in queries.items():
+                                matches = list(re.finditer(re.escape(query), output))
+                                pending_replies.extend((match.start(), query, reply)
+                                                       for match in matches[answered[query]:])
+                                answered[query] = len(matches)
+                            for _, query, reply in sorted(pending_replies):
+                                if query == b'\x1b[6n':
+                                    cursor_queries += 1
+                                # Ratatui's synchronous setup needs its first
+                                # CPR; withhold the runtime's final barrier.
+                                if (query == b'\x1b[6n' and cursor_queries > 1 and mode == 'no-startup-barrier'
+                                        or query == b'\x1b[5n' and mode == 'no-refresh-barrier' and focus_sent):
+                                    continue
+                                os.write(master, reply)
+                            visible = screen.text()
+                            if 'Session Hub' in visible:
+                                hub_visible = True
+                            ready_to_quit = hub_visible and 'Loading...' not in visible
+                            if mode == 'catalog-loading':
+                                ready_to_quit = hub_visible and catalog_pending.is_set() and 'Loading...' in visible
+                            if mode == 'no-refresh-barrier' and hub_visible:
+                                if not focus_sent:
+                                    focus_query_count = output.count(b'\x1b[5n')
+                                    os.write(master, b'\x1b[I')
+                                    focus_sent = True
+                                ready_to_quit = output.count(b'\x1b[5n') > focus_query_count
+                            if ready_to_quit and interrupt_at is None:
+                                os.write(master, b'\x03' if not command else b'\x1b[99;5u')
+                                interrupt_at = time.monotonic()
+                                deadline = min(deadline, interrupt_at + 3)
+                            if process.poll() is not None:
+                                while select.select([master], [], [], 0)[0]:
+                                    output.extend(os.read(master, 65536))
+                                break
+                        diagnostic = (output[:6000] + output[-500:]).decode(errors='replace')
+                        self.assertTrue(hub_visible, diagnostic)
+                        self.assertIsNotNone(interrupt_at, diagnostic)
+                        self.assertEqual(process.poll(), 0, diagnostic)
+                        self.assertLess(time.monotonic() - interrupt_at, 3)
+                        self.assertNotIn(b'Ctrl+C again', output)
+                        self.assertNotIn(b'Server password:', output)
+                        self.assertNotIn(b'failed to restore the terminal', output)
+                        self.assertNotIn(b'protocol barrier within', output)
+                        self.assertIn(b'\x1b[?1049l', output)
+                        self.assertIn(b'\x1b[?25h', output)
+                        self.assertEqual(termios.tcgetattr(slave), before)
+                        if mode == 'no-startup-barrier':
+                            self.assertGreaterEqual(cursor_queries, 2)
+                        if mode == 'tmux-no-passthrough':
+                            self.assertNotIn(b'\x1bPtmux;', output)
+                    finally:
+                        release_catalog.set()
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=5)
+                        os.close(master)
+                        os.close(slave)
+                        if proxy is not None:
+                            proxy.shutdown()
+                            proxy.server_close()
+
     def test_tui_reports_missing_or_incorrect_server_password_as_configuration(self):
         binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
         for password, expected in ((None, 'requires a password'), ('incorrect-do-not-echo', 'password is incorrect')):

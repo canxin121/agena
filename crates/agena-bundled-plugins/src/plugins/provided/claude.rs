@@ -254,7 +254,6 @@ impl ClaudeToolsPlugin {
         provider_output(
             self.host()?,
             self.workspace_root()?,
-            "claude",
             tool_name,
             model.as_str(),
             title,

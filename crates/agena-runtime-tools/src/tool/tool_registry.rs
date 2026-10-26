@@ -600,7 +600,10 @@ mod execution_namespace_tests {
             let registered = registered("custom", name, name);
             let canonical = registered.canonical_name();
             let tools = vec![ExecutionTool::from_registered_tool(registered.clone())];
-            assert_eq!(execution_tool_names(&tools), [canonical.clone()]);
+            assert_eq!(
+                execution_tool_names(&tools),
+                std::slice::from_ref(&canonical)
+            );
             assert!(!registered_tool_matches_name(&registered, name));
             assert!(unique_registered_tool_match([registered.clone()], name).is_none());
             assert_eq!(

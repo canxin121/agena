@@ -414,7 +414,6 @@ impl<'a> Service<'a> {
         let mut result = official_service::provider_output(
             self.host,
             self.root,
-            self.provider,
             operation,
             &model,
             "Cloud media analysis",

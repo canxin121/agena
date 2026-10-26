@@ -472,8 +472,10 @@ mod tests {
     }
 
     fn transcript(parts: Vec<PartResource>) -> TranscriptState {
-        let mut state = TranscriptState::default();
-        state.session_id = Some(1);
+        let mut state = TranscriptState {
+            session_id: Some(1),
+            ..Default::default()
+        };
         state.detail_expanded_by_default.activity_default_expanded = true;
         state.merge_parts(parts);
         state

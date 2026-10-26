@@ -304,11 +304,9 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
                         .pointer("/inlineData/mimeType")
                         .and_then(Value::as_str)
                         .is_some_and(|m| m.starts_with("audio/pcm"))
+                        && let Some(data) = part.pointer("/inlineData/data").and_then(Value::as_str)
                     {
-                        if let Some(data) = part.pointer("/inlineData/data").and_then(Value::as_str)
-                        {
-                            append_pcm(&mut pcm, data)?;
-                        }
+                        append_pcm(&mut pcm, data)?;
                     }
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
                         transcripts.push_str(text);
@@ -329,11 +327,10 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
             if matches!(
                 kind.as_str(),
                 "response.audio.delta" | "response.output_audio.delta"
-            ) {
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    append_pcm(&mut pcm, delta)?;
-                    event["delta"] = json!("[saved as attachment]");
-                }
+            ) && let Some(delta) = event.get("delta").and_then(Value::as_str)
+            {
+                append_pcm(&mut pcm, delta)?;
+                event["delta"] = json!("[saved as attachment]");
             }
             if matches!(
                 kind.as_str(),
@@ -341,10 +338,9 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
                     | "response.output_audio_transcript.delta"
                     | "response.text.delta"
                     | "response.output_text.delta"
-            ) {
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    transcripts.push_str(delta);
-                }
+            ) && let Some(delta) = event.get("delta").and_then(Value::as_str)
+            {
+                transcripts.push_str(delta);
             }
             if matches!(kind.as_str(), "response.done" | "response.completed") {
                 let status = event

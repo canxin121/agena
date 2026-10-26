@@ -341,7 +341,6 @@ impl ChatGptToolsPlugin {
         provider_output(
             self.host()?,
             self.workspace_root()?,
-            "chatgpt",
             tool_name,
             model.as_str(),
             title,
@@ -1466,7 +1465,6 @@ impl ChatGptToolsPlugin {
         provider_output(
             self.host()?,
             self.workspace_root()?,
-            "chatgpt",
             "image_edit",
             model.as_str(),
             "ChatGPT image edit",

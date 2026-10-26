@@ -31,18 +31,10 @@ pub(crate) struct GeminiToolsPlugin {
     config: OnceLock<GeminiToolsConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct GeminiToolsConfig {
     stable_system_instruction: Option<String>,
-}
-
-impl Default for GeminiToolsConfig {
-    fn default() -> Self {
-        Self {
-            stable_system_instruction: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
@@ -112,6 +104,14 @@ struct GeminiImageEditInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cached_content: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    request_options: BTreeMap<String, serde_json::Value>,
+}
+
+struct GenerateContentRequest {
+    model: String,
+    parts: Vec<serde_json::Value>,
+    generation_config: BTreeMap<String, serde_json::Value>,
+    cached_content: Option<String>,
     request_options: BTreeMap<String, serde_json::Value>,
 }
 
@@ -220,7 +220,6 @@ impl GeminiToolsPlugin {
         provider_output(
             self.host()?,
             self.workspace_root()?,
-            "gemini",
             tool_name,
             model.as_str(),
             title,
@@ -236,12 +235,15 @@ impl GeminiToolsPlugin {
         connection: agena_plugin_sdk::host_api::BuiltinProviderConnection,
         tool_name: &str,
         title: &str,
-        model: String,
-        parts: Vec<serde_json::Value>,
-        mut generation_config: BTreeMap<String, serde_json::Value>,
-        cached_content: Option<String>,
-        request_options: BTreeMap<String, serde_json::Value>,
+        request: GenerateContentRequest,
     ) -> SdkResult<ToolInvokeOutput> {
+        let GenerateContentRequest {
+            model,
+            parts,
+            mut generation_config,
+            cached_content,
+            request_options,
+        } = request;
         super::official_service::hosted::validate_options(&request_options, "request_options")?;
         super::official_service::hosted::validate_options(&generation_config, "generation_config")?;
         generation_config
@@ -278,7 +280,6 @@ impl GeminiToolsPlugin {
         provider_output(
             self.host()?,
             self.workspace_root()?,
-            "gemini",
             tool_name,
             model.as_str(),
             title,
@@ -1361,11 +1362,13 @@ impl GeminiToolsPlugin {
             connection,
             "image_generation",
             "Gemini image generation",
-            model,
-            vec![serde_json::json!({"text":input.prompt})],
-            input.generation_config,
-            input.cached_content,
-            input.request_options,
+            GenerateContentRequest {
+                model,
+                parts: vec![serde_json::json!({"text":input.prompt})],
+                generation_config: input.generation_config,
+                cached_content: input.cached_content,
+                request_options: input.request_options,
+            },
         )
         .await
     }
@@ -1450,11 +1453,13 @@ impl GeminiToolsPlugin {
             connection,
             "image_edit",
             "Gemini image edit",
-            model,
-            parts,
-            input.generation_config,
-            input.cached_content,
-            input.request_options,
+            GenerateContentRequest {
+                model,
+                parts,
+                generation_config: input.generation_config,
+                cached_content: input.cached_content,
+                request_options: input.request_options,
+            },
         )
         .await
     }

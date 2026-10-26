@@ -352,11 +352,11 @@ async fn request(
         &path,
     )?)
     .map_err(|_| invalid("invalid provider endpoint"))?;
-    if family == Family::Inference && service.provider == "claude" {
-        if let Some(messages_url) = &service.connection.messages_url {
-            url =
-                url::Url::parse(messages_url).map_err(|_| invalid("invalid messages endpoint"))?;
-        }
+    if family == Family::Inference
+        && service.provider == "claude"
+        && let Some(messages_url) = &service.connection.messages_url
+    {
+        url = url::Url::parse(messages_url).map_err(|_| invalid("invalid messages endpoint"))?;
     }
     for (key, value) in &input.query {
         url.query_pairs_mut().append_pair(key, value);
@@ -880,7 +880,7 @@ pub(super) async fn save_binary(
                     .and_then(|v| v.parse::<u32>().ok())
             })
             .unwrap_or(24000);
-        if !(8000..=192000).contains(&rate) || bytes.len() % 2 != 0 {
+        if !(8000..=192000).contains(&rate) || !bytes.len().is_multiple_of(2) {
             return Err(invalid("invalid provider PCM format"));
         }
         ("audio/wav", realtime::wav(bytes, rate))
@@ -1173,13 +1173,13 @@ fn collect_binary(value: &mut Value, output: &mut Vec<(String, String)>, depth: 
                     }
                 }
             }
-            if object.get("type").and_then(Value::as_str) == Some("image_generation_call") {
-                if let Some(Value::String(encoded)) = object.get_mut("result") {
-                    output.push((
-                        "image/png".into(),
-                        std::mem::replace(encoded, "[saved as attachment]".into()),
-                    ));
-                }
+            if object.get("type").and_then(Value::as_str) == Some("image_generation_call")
+                && let Some(Value::String(encoded)) = object.get_mut("result")
+            {
+                output.push((
+                    "image/png".into(),
+                    std::mem::replace(encoded, "[saved as attachment]".into()),
+                ));
             }
             for value in object.values_mut() {
                 collect_binary(value, output, depth + 1);

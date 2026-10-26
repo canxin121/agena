@@ -45,6 +45,16 @@ pub(crate) enum ProviderUsageKind {
     AnthropicMessages,
 }
 
+impl ProviderUsageKind {
+    fn provider(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses | Self::OpenAiImage => "chatgpt",
+            Self::GeminiInteractions | Self::GeminiGenerateContent => "gemini",
+            Self::AnthropicMessages => "claude",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ProviderHttpResponse {
     pub value: serde_json::Value,
@@ -371,7 +381,6 @@ pub(crate) async fn post_json(
 pub(crate) async fn provider_output(
     host: &Arc<dyn HostClient>,
     workspace_root: &Path,
-    provider: &str,
     tool: &str,
     model: &str,
     title: &str,
@@ -379,6 +388,7 @@ pub(crate) async fn provider_output(
     response: ProviderHttpResponse,
     connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
 ) -> SdkResult<ToolInvokeOutput> {
+    let provider = usage_kind.provider();
     let request_id = response.request_id;
     let response = Arc::new(response.value);
     let cloud_tool = agena_tool::provider_tools::cloud_operation(provider, tool);

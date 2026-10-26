@@ -309,15 +309,19 @@ mod tests {
     }
 
     fn local_state() -> TranscriptState {
-        let mut state = TranscriptState::default();
-        state.session_id = Some(1);
+        let mut state = TranscriptState {
+            session_id: Some(1),
+            ..Default::default()
+        };
         state.merge_parts((1..=7).map(part).collect());
         state
     }
 
     fn remote_state() -> TranscriptState {
-        let mut state = TranscriptState::default();
-        state.session_id = Some(1);
+        let mut state = TranscriptState {
+            session_id: Some(1),
+            ..Default::default()
+        };
         state.merge_parts([1, 36, 37, 38, 39, 40].into_iter().map(part).collect());
         state.transcript_folds.push(TranscriptFold {
             run_id: 1,

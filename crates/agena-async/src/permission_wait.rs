@@ -220,16 +220,10 @@ mod tests {
     #[tokio::test]
     async fn overlapping_waits_count_once_and_other_calls_keep_their_budget() {
         let same = context(4);
-        scope(same.clone(), async {
+        scope(same, async {
             timeout(Duration::from_millis(25), async {
-                let first = scope(
-                    same.clone(),
-                    waiting(tokio::time::sleep(Duration::from_millis(60))),
-                );
-                let second = scope(
-                    same.clone(),
-                    waiting(tokio::time::sleep(Duration::from_millis(80))),
-                );
+                let first = scope(same, waiting(tokio::time::sleep(Duration::from_millis(60))));
+                let second = scope(same, waiting(tokio::time::sleep(Duration::from_millis(80))));
                 let unrelated = scope(
                     context(5),
                     timeout(Duration::from_millis(10), std::future::pending::<()>()),

@@ -122,12 +122,11 @@ pub(super) async fn metadata(
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         });
-        if family != Family::Batches {
-            if let Some(resource) = resource {
-                if !claim(service, "inference", resource, &usage, warnings).await? {
-                    continue;
-                }
-            }
+        if family != Family::Batches
+            && let Some(resource) = resource
+            && !claim(service, "inference", resource, &usage, warnings).await?
+        {
+            continue;
         }
         attributed.push(usage);
     }
@@ -154,8 +153,8 @@ pub(super) async fn metadata(
             .or_else(|| raw.get("name"))
             .and_then(Value::as_str)
             .or(input.id.as_deref());
-        if let Some(resource) = resource {
-            if !claim(
+        if let Some(resource) = resource
+            && !claim(
                 service,
                 "batch",
                 resource.strip_prefix("batches/").unwrap_or(resource),
@@ -163,9 +162,8 @@ pub(super) async fn metadata(
                 warnings,
             )
             .await?
-            {
-                return Ok(BTreeMap::new());
-            }
+        {
+            return Ok(BTreeMap::new());
         }
     }
     Ok(BTreeMap::from([(

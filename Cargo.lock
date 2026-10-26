@@ -12303,11 +12303,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "prometheus"
-version = "0.14.0"
-
-[[patch.unused]]
-name = "xxhash-rust"
-version = "0.8.18"

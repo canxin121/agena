@@ -237,10 +237,10 @@ impl AppError {
 
         // These are expected access/availability outcomes, not internal faults.
         // Preserve SDK failures already rebuilt at the trusted executor boundary.
-        if let Self::Tool(error) = self {
-            if let crate::tool::ToolError::Plugin(problem) = error.as_ref() {
-                return problem.public.clone();
-            }
+        if let Self::Tool(error) = self
+            && let crate::tool::ToolError::Plugin(problem) = error.as_ref()
+        {
+            return problem.public.clone();
         }
         let access_failure = match self {
             Self::PolicyDenied(denial) => Some((

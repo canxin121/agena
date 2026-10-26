@@ -153,6 +153,11 @@ pub(crate) fn activity_status_icon(status: PartExecutionStatusResource) -> &'sta
     }
 }
 
+enum ActivitySummary<'a> {
+    Markdown(&'a str),
+    Literal(&'a str),
+}
+
 /// Render the shared one-line Activity chrome with a literal title and
 /// Markdown-aware summary. Status belongs to the icon, title carries heading emphasis,
 /// and the compact summary stays visually subordinate instead of tinting and
@@ -168,7 +173,14 @@ pub(crate) fn push_activity_headline(
     i18n: &I18n,
 ) {
     push_activity_headline_content(
-        out, status, expanded, toggleable, title, summary, width, i18n, true,
+        out,
+        status,
+        expanded,
+        toggleable,
+        title,
+        ActivitySummary::Markdown(summary),
+        width,
+        i18n,
     );
 }
 
@@ -184,7 +196,14 @@ pub(crate) fn push_literal_activity_headline(
     i18n: &I18n,
 ) {
     push_activity_headline_content(
-        out, status, expanded, toggleable, title, summary, width, i18n, false,
+        out,
+        status,
+        expanded,
+        toggleable,
+        title,
+        ActivitySummary::Literal(summary),
+        width,
+        i18n,
     );
 }
 
@@ -194,28 +213,28 @@ fn push_activity_headline_content(
     expanded: bool,
     toggleable: bool,
     title: &str,
-    summary: &str,
+    summary: ActivitySummary<'_>,
     width: u16,
     i18n: &I18n,
-    markdown_summary: bool,
 ) {
     let disclosure = if toggleable && expanded { "▾" } else { "▸" };
     let icon = activity_status_icon(status);
     let chrome = format!("{disclosure} {icon} ");
     let content_width = usize::from(width).saturating_sub(UnicodeWidthStr::width(chrome.as_str()));
     let summary_style = Style::default().fg(agena_tui_components::theme::muted_color());
-    let summary = if markdown_summary {
-        let source = crate::part_headline::first_content_line(summary).unwrap_or_default();
-        markdown_inline_line(&source, summary_style, i18n)
-            .unwrap_or_else(|| Line::from(Span::styled(source, summary_style)))
-    } else {
-        Line::from(Span::styled(
+    let summary = match summary {
+        ActivitySummary::Markdown(summary) => {
+            let source = crate::part_headline::first_content_line(summary).unwrap_or_default();
+            markdown_inline_line(&source, summary_style, i18n)
+                .unwrap_or_else(|| Line::from(Span::styled(source, summary_style)))
+        }
+        ActivitySummary::Literal(summary) => Line::from(Span::styled(
             sanitize_terminal_text(summary)
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" "),
             summary_style,
-        ))
+        )),
     };
     let summary_text = summary
         .spans

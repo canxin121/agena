@@ -737,19 +737,50 @@ async fn generic_file_upload_accepts_binary_datasets_and_default_model_is_not_se
 #[tokio::test]
 async fn realtime_uses_current_provider_waits_for_setup_and_saves_bounded_wav() {
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::{
+        Message,
+        handshake::server::{Callback, ErrorResponse, Request, Response},
+    };
+
+    struct Handshake {
+        index: usize,
+    }
+
+    impl Callback for Handshake {
+        fn on_request(
+            self,
+            request: &Request,
+            response: Response,
+        ) -> std::result::Result<Response, ErrorResponse> {
+            assert_eq!(
+                request.headers().get("x-gateway-token").unwrap(),
+                "provider-secret"
+            );
+            assert_eq!(
+                request.headers().get("x-agena-provider-api").unwrap(),
+                if self.index == 0 { "chatgpt" } else { "gemini" }
+            );
+            if self.index == 0 {
+                assert_eq!(request.uri().path(), "/v1/realtime");
+                assert_eq!(request.uri().query(), Some("model=voice-model"));
+            } else {
+                assert_eq!(
+                    request.uri().path(),
+                    "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+                );
+            }
+            Ok(response)
+        }
+    }
+
     for index in [0, 2] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let mock = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let mut socket=tokio_tungstenite::accept_hdr_async(stream,move |request:&tokio_tungstenite::tungstenite::handshake::server::Request,response| {
-                assert_eq!(request.headers().get("x-gateway-token").unwrap(),"provider-secret");
-                assert_eq!(request.headers().get("x-agena-provider-api").unwrap(),if index==0 {"chatgpt"} else {"gemini"});
-                if index==0 {assert_eq!(request.uri().path(),"/v1/realtime");assert_eq!(request.uri().query(),Some("model=voice-model"));}
-                else {assert_eq!(request.uri().path(),"/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent");}
-                Ok(response)
-            }).await.unwrap();
+            let mut socket = tokio_tungstenite::accept_hdr_async(stream, Handshake { index })
+                .await
+                .unwrap();
             let setup: Value =
                 serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
                     .unwrap();

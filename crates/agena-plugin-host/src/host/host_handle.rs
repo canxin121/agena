@@ -227,7 +227,7 @@ impl HostHandle {
                     }
                     crate::scoped_registry::ScopedRegistryLayer::Global => None,
                 },
-                tool: Some(tool.definition.clone()),
+                tool: Some(tool.definition().clone()),
             });
         }
     }
@@ -1677,13 +1677,13 @@ impl HostHandle {
                 plugin: plugin_key,
                 tool_key,
                 scope: Some(scope.to_string()),
-                tool: Some(tool.definition.clone()),
+                tool: Some(tool.definition().clone()),
             };
             self.record_tool_registry_event(event.clone());
             return Ok(HostToolMutationResponse {
                 generation,
                 model_name: Some(tool.canonical_name()),
-                tool: Some(tool.definition),
+                tool: Some(tool.into_definition()),
                 event: Some(event),
             });
         }
@@ -1703,7 +1703,7 @@ impl HostHandle {
             plugin: tool.plugin_key().clone(),
             tool_key: tool.tool_key().clone(),
             scope: None,
-            tool: Some(tool.definition.clone()),
+            tool: Some(tool.definition().clone()),
         };
         let generation = tool_registry.generation();
         drop(tool_registry);
@@ -1711,7 +1711,7 @@ impl HostHandle {
         Ok(HostToolMutationResponse {
             generation,
             model_name: Some(tool.canonical_name()),
-            tool: Some(tool.definition),
+            tool: Some(tool.into_definition()),
             event: Some(event),
         })
     }
@@ -1766,7 +1766,7 @@ impl HostHandle {
                 plugin: tool.plugin_key().clone(),
                 tool_key: tool.tool_key().clone(),
                 scope: Some(scope.to_string()),
-                tool: Some(fallback.as_ref().unwrap_or(tool).definition.clone()),
+                tool: Some(fallback.as_ref().unwrap_or(tool).definition().clone()),
             });
             if let Some(event) = event.as_ref() {
                 self.record_tool_registry_event(event.clone());
@@ -1774,7 +1774,7 @@ impl HostHandle {
             return Ok(HostToolMutationResponse {
                 generation,
                 model_name: removed.as_ref().map(RegisteredTool::canonical_name),
-                tool: removed.map(|tool| tool.definition),
+                tool: removed.map(|tool| tool.into_definition()),
                 event,
             });
         }
@@ -1789,7 +1789,7 @@ impl HostHandle {
             plugin: tool.plugin_key().clone(),
             tool_key: tool.tool_key().clone(),
             scope: None,
-            tool: Some(tool.definition.clone()),
+            tool: Some(tool.definition().clone()),
         });
         drop(tool_registry);
         if let Some(event) = event.as_ref() {
@@ -1798,7 +1798,7 @@ impl HostHandle {
         Ok(HostToolMutationResponse {
             generation,
             model_name: removed.as_ref().map(RegisteredTool::canonical_name),
-            tool: removed.map(|tool| tool.definition),
+            tool: removed.map(|tool| tool.into_definition()),
             event,
         })
     }
@@ -1822,7 +1822,7 @@ impl HostHandle {
             .map(|tool| HostRegisteredToolDescriptor {
                 plugin: tool.plugin_key().clone(),
                 tool_key: tool.tool_key().clone(),
-                tool: tool.definition.clone(),
+                tool: tool.definition().clone(),
             })
             .collect();
         Ok(HostRegisteredToolListResponse {
@@ -1870,7 +1870,7 @@ impl HostHandle {
                 if !(tool.namespace() == "agena" && tool.plugin_name() == "tools") {
                     descriptor.tools.push(tool.canonical_name());
                 }
-                for tag in &tool.definition.tags {
+                for tag in &tool.definition().tags {
                     let label = tag.to_string();
                     if !descriptor.tags.contains(&label) {
                         descriptor.tags.push(label);

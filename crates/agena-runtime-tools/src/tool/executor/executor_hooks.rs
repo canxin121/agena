@@ -28,11 +28,31 @@ impl ToolExecutor {
         model_tool_name: &str,
         call_id: i64,
         mut execution: ToolInvocationExecution,
+        original_payload: Option<&serde_json::Value>,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        let definition = self
+            .invocation_definition(invocation)
+            .ok_or_else(|| self.unknown_tool_error(invocation.name.as_str()))?;
+        // The domain projection normalizes missing/null payloads to an empty
+        // object. Validate the producer's value before that distinction is
+        // lost, using the same compiled contract as the host boundary.
+        definition
+            .validate_output(original_payload)
+            .map_err(|error| {
+                ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(
+                    error,
+                ))
+            })?;
         execution.view.normalize_presentation();
         let raw_execution = execution.clone();
         if let Err(error) = self
-            .apply_after_hooks_async(invocation, session_id, call_id, &mut execution)
+            .apply_after_hooks_async(
+                &definition,
+                session_id,
+                call_id,
+                &mut execution,
+                original_payload,
+            )
             .await
         {
             // The tool has already returned. A post-hook failure cannot undo
@@ -112,31 +132,22 @@ impl ToolExecutor {
 
     pub(crate) async fn apply_after_hooks_async(
         &self,
-        invocation: &ToolInvocation,
+        definition: &agena_plugin_host::registry::RegisteredTool,
         session_id: i64,
         call_id: i64,
         execution: &mut ToolInvocationExecution,
+        original_payload: Option<&serde_json::Value>,
     ) -> Result<(), ToolError> {
-        let model_tool_name = invocation_name(invocation).to_owned();
-        let hook_tool_name = self
-            .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name().to_string())
-            .unwrap_or(model_tool_name);
-        let hook_tool = self
-            .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_key().clone())
-            .or_else(|| hook_tool_name.parse().ok())
-            .ok_or_else(|| self.unknown_tool_error(hook_tool_name.as_str()))?;
         let summary = execution.summary();
         let after_in = PluginToolAfterInput {
-            tool: hook_tool,
+            tool: definition.tool_key().clone(),
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             title: summary.title,
             summary: summary.summary,
             output_text: summary.output_text,
-            payload: summary.payload,
+            payload: original_payload.cloned(),
             metadata: summary.metadata.into_iter().collect(),
         };
 
@@ -153,8 +164,19 @@ impl ToolExecutor {
             hooked.metadata,
         );
         if let Some(payload_value) = hooked.payload {
-            execution.output = ToolOutput::from_json_payload(Some(&payload_value))
-                .map_err(ToolError::invalid_input)?;
+            definition
+                .validate_output(Some(&payload_value))
+                .map_err(|error| {
+                    ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(
+                        error,
+                    ))
+                })?;
+            execution.output =
+                ToolOutput::from_json_payload(Some(&payload_value)).map_err(|error| {
+                    ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(
+                        error,
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -170,15 +192,10 @@ impl ToolExecutor {
         if self.plugins.is_empty() {
             return;
         }
-        let model_tool_name = invocation_name(invocation).to_owned();
-        let hook_tool_name = self
-            .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name().to_string())
-            .unwrap_or(model_tool_name);
         let Some(hook_tool) = self
-            .plugin_resolution_for_invocation(invocation)
+            .invocation_definition(invocation)
             .map(|entry| entry.tool_key().clone())
-            .or_else(|| hook_tool_name.parse().ok())
+            .or_else(|| invocation.name.parse().ok())
         else {
             return;
         };
@@ -233,7 +250,7 @@ impl ToolExecutor {
             input: serde_json::Value::from(invocation.input.clone()),
             output: output.clone(),
         };
-        let registered = self.plugin_resolution_for_invocation(invocation);
+        let registered = self.invocation_definition(invocation);
         let mut rendered = if let Some(registered) = registered.as_ref() {
             match self.plugins.render_tool(registered, input).await {
                 Ok(Some(rendered)) => rendered,
@@ -372,5 +389,160 @@ fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
 use super::{
     Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, ToolError,
     ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput, invocation_input_json,
-    invocation_name,
 };
+
+#[cfg(test)]
+mod output_contract_tests {
+    use super::*;
+    use crate::authorization::ExecutionPrincipal;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+    use agena_plugin_host::sdk::{ToolContract, ToolDefinition};
+    use agena_plugin_host::{PluginHost, registry::RegisteredTool};
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct PresentationHook(Arc<AtomicUsize>);
+
+    #[agena_plugin_host::sdk::async_trait]
+    impl agena_plugin_host::sdk::Plugin for PresentationHook {
+        fn manifest(&self) -> agena_plugin_host::sdk::PluginManifest {
+            let mut manifest =
+                agena_plugin_host::sdk::PluginManifest::new("test", "after", "1.0.0");
+            manifest.hooks = agena_plugin_host::sdk::HookSubscription::TOOL_AFTER;
+            manifest
+        }
+
+        async fn tool_execute_after(
+            &self,
+            input: agena_plugin_host::sdk::ToolAfterInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::sdk::ToolAfterPatch>>
+        {
+            assert!(input.payload.is_none());
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(Some(agena_plugin_host::sdk::ToolAfterPatch {
+                summary: Some("Presentation updated".into()),
+                ..Default::default()
+            }))
+        }
+    }
+
+    fn executor(output_schema: serde_json::Value) -> (ToolExecutor, ToolInvocation) {
+        let tool = RegisteredTool::new(
+            "test.output".parse().unwrap(),
+            ToolDefinition {
+                name: "run".into(),
+                contract: ToolContract {
+                    input_schema: json!({"type":"object"}),
+                    output_schema,
+                },
+                docs: Default::default(),
+                runtime: Default::default(),
+                tags: vec![],
+            },
+        )
+        .unwrap();
+        let invocation = ToolInvocation::new(tool.canonical_name(), Default::default());
+        let mut executor = ToolExecutor::new(
+            std::env::temp_dir(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            PluginHost::new_empty(),
+            None,
+            None,
+        );
+        executor.definition_catalog = Some(Arc::new(vec![tool]));
+        (executor, invocation)
+    }
+
+    fn execution() -> ToolInvocationExecution {
+        ToolInvocationExecution::new(
+            ToolOutput::default(),
+            crate::tool::ToolExecutionView::simple("Run", "Completed", ""),
+        )
+    }
+
+    #[tokio::test]
+    async fn finalization_distinguishes_absent_payload_from_an_empty_object() {
+        let (null_executor, invocation) = executor(json!({"type":"null"}));
+        assert!(
+            null_executor
+                .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None,)
+                .await
+                .is_ok()
+        );
+        assert!(
+            null_executor
+                .finalize_execution_async(
+                    &invocation,
+                    1,
+                    &invocation.name,
+                    1,
+                    execution(),
+                    Some(&json!({})),
+                )
+                .await
+                .is_err()
+        );
+        let (object_executor, invocation) = executor(json!({"type":"object"}));
+        assert!(
+            object_executor
+                .finalize_execution_async(
+                    &invocation,
+                    1,
+                    &invocation.name,
+                    1,
+                    execution(),
+                    Some(&json!({})),
+                )
+                .await
+                .is_ok()
+        );
+        assert!(
+            object_executor
+                .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None,)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_output_survives_a_hook_that_only_changes_presentation() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hook_key = "test.after".parse().unwrap();
+        let host = PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
+            static_plugins: vec![agena_plugin_host::StaticPluginRegistration::new(
+                hook_key,
+                PresentationHook(calls.clone()),
+            )],
+            config: agena_plugin_host::PluginsConfig {
+                list: [("test.after".into(), Default::default())].into(),
+                ..Default::default()
+            },
+            workspace_root: std::env::temp_dir(),
+            agena_version: env!("CARGO_PKG_VERSION").into(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: Default::default(),
+        })
+        .await
+        .unwrap();
+        let (mut executor, invocation) = executor(json!({"type":"null"}));
+        executor.plugins = host;
+        let execution = executor
+            .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(execution.view.summary, "Presentation updated");
+        assert!(
+            !execution
+                .view
+                .metadata
+                .contains_key("postprocessing_warning")
+        );
+    }
+}

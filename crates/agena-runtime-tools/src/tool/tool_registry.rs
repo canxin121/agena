@@ -309,9 +309,6 @@ pub enum ToolError {
 
     #[error("plugin error: {0}")]
     Plugin(Box<PluginToolFailure>),
-
-    #[error("stale tool call: {tool}")]
-    StaleToolCall { tool: String },
 }
 
 impl ToolError {
@@ -332,9 +329,6 @@ impl ToolError {
             Self::Shell(error) => Some(agena_failure::diagnostic::format_error_chain(error)),
             Self::Io(error) => Some(agena_failure::diagnostic::format_error_chain(error)),
             Self::Plugin(problem) => Some(problem.public.user.fallback.clone()),
-            Self::StaleToolCall { tool } => Some(format!(
-                "Tool `{tool}` changed after this call was created. Refresh the tool catalog and retry."
-            )),
             Self::Cancelled
             | Self::PolicyDenied(_)
             | Self::UserDeclined(_)
@@ -380,17 +374,20 @@ impl ToolError {
 
     pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self {
         let error_kind = error.kind;
-        let configuration_required = error
+        let public_problem = error
             .diagnostic
             .data
             .as_ref()
             .and_then(serde_json::Value::as_object)
             .and_then(|data| data.get("agena_public_problem"))
-            .and_then(serde_json::Value::as_str)
-            == Some(agena_plugin_host::sdk::CONFIGURATION_REQUIRED_MARKER);
+            .and_then(serde_json::Value::as_str);
         let proposed_public_detail = error.failure.user.fallback.clone();
         let diagnostic = bounded_plugin_diagnostic(error.diagnostic.message);
-        let mut public = if configuration_required {
+        let mut public = if public_problem
+            == Some(agena_plugin_host::schema::OUTPUT_CONTRACT_VIOLATION_MARKER)
+        {
+            agena_plugin_host::schema::output_contract_failure()
+        } else if public_problem == Some(agena_plugin_host::sdk::CONFIGURATION_REQUIRED_MARKER) {
             configuration_required_failure()
         } else {
             // Plugin transports are not trusted to choose Failure semantics
@@ -448,6 +445,11 @@ impl ToolError {
                 if problem.public.code.as_str() == "tool.configuration_required" =>
             {
                 Some(CONFIGURATION_REQUIRED_MARKER)
+            }
+            Self::Plugin(problem)
+                if problem.public.code.as_str() == "tool.output_contract_violation" =>
+            {
+                Some(agena_plugin_host::schema::OUTPUT_CONTRACT_VIOLATION_MARKER)
             }
             _ => None,
         };
@@ -621,6 +623,34 @@ mod execution_namespace_tests {
                 "fs.read",
             )
             .is_none(),
+        );
+    }
+
+    #[test]
+    fn output_contract_failure_never_becomes_an_automatic_retry() {
+        let error = ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(
+            "$/ok: expected a boolean",
+        ));
+        let ToolError::Plugin(problem) = &error else {
+            panic!("expected a plugin failure");
+        };
+        assert_eq!(problem.public.retry, agena_failure::RetryDirective::Never);
+        assert_eq!(
+            problem.public.impact,
+            agena_failure::FailureImpact::PartialSuccess
+        );
+        let roundtrip = ToolError::from_plugin_error(error.into_plugin_error());
+        let ToolError::Plugin(problem) = roundtrip else {
+            panic!("expected a plugin failure");
+        };
+        assert_eq!(
+            problem.public.code.as_str(),
+            "tool.output_contract_violation"
+        );
+        assert_eq!(problem.public.retry, agena_failure::RetryDirective::Never);
+        assert_eq!(
+            problem.public.impact,
+            agena_failure::FailureImpact::PartialSuccess
         );
     }
 }

@@ -30,6 +30,7 @@ pub mod profiles;
 pub mod quota;
 mod registration_owner;
 pub mod registry;
+pub mod schema;
 pub mod scoped_registry;
 pub mod services;
 pub mod status;

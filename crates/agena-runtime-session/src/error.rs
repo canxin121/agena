@@ -638,10 +638,6 @@ impl AppError {
                 crate::tool::ToolError::Plugin(p) => {
                     Some(ModelFeedback::plugin_failure().with_text(p.public.user.fallback.clone()))
                 }
-                crate::tool::ToolError::StaleToolCall { tool } => Some(
-                    ModelFeedback::stale_tool_call()
-                        .with_text(format!("Tool `{tool}` is stale; refresh the catalog.")),
-                ),
                 _ => None,
             },
             _ => None,

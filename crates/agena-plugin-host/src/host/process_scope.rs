@@ -113,7 +113,9 @@ impl HostHandle {
                     snapshot.parents.insert(child, parent.clone());
                     child = parent;
                 }
-                snapshot.scoped_tools.push((scope, value.value.definition));
+                snapshot
+                    .scoped_tools
+                    .push((scope, value.value.into_definition()));
             }
         }
         snapshot.display = self.display.owned_values(owner);

@@ -443,7 +443,7 @@ impl App {
             .ok_or_else(|| {
                 crate::UiFailure::message(self.i18n.text("workbench-error-tool-unavailable"))
             })?;
-        agena_plugin_host::loader::validate_json_schema_value(&schema, &value).map_err(
+        agena_plugin_host::schema::validate_json_schema_value(&schema, &value).map_err(
             |error| {
                 crate::UiFailure::invalid_with_diagnostic(
                     self.i18n.text("workbench-error-args-schema-mismatch"),

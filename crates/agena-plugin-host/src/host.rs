@@ -73,6 +73,8 @@ mod callback_rpc;
 pub use call_completion::{PluginCallCompletion, current_plugin_call_completion};
 mod contribution_registry;
 pub use callback_rpc::{PluginCallbackDispatcher, PluginCallbackRpcError};
+#[cfg(test)]
+mod contract_tests;
 mod host_handle;
 mod host_scoped_client;
 #[cfg(test)]

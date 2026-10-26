@@ -1004,7 +1004,7 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
                 tags.sort();
                 tags.dedup();
                 let summary_translations = tool
-                    .definition
+                    .definition()
                     .docs
                     .translations
                     .iter()

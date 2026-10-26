@@ -648,6 +648,9 @@ impl PluginHost {
         input: ToolInvokeInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolInvokeOutput, PluginError> {
+        registered_tool
+            .validate_input(&input.input)
+            .map_err(PluginError::invalid_params)?;
         let plugin = self
             .plugins_by_id
             .get(registered_tool.plugin_key())
@@ -689,7 +692,12 @@ impl PluginHost {
             None => invoke.await,
         };
         let value = result.map_err(transport_to_plugin_error)?;
-        serde_json::from_value(value).map_err(|e| PluginError::invalid_params_error(&e))
+        let output: ToolInvokeOutput =
+            serde_json::from_value(value).map_err(crate::schema::output_contract_error)?;
+        registered_tool
+            .validate_output(output.payload.as_ref())
+            .map_err(crate::schema::output_contract_error)?;
+        Ok(output)
     }
 
     pub fn register_command_middleware<F, Fut>(
@@ -853,6 +861,9 @@ impl PluginHost {
         registered_tool: &RegisteredTool,
         input: ToolInvokeInput,
     ) -> Result<ToolInvokeStream, PluginError> {
+        registered_tool
+            .validate_input(&input.input)
+            .map_err(PluginError::invalid_params)?;
         let plugin = self
             .plugins_by_id
             .get(registered_tool.plugin_key())
@@ -889,16 +900,27 @@ impl PluginHost {
             let stream_id = stream.stream_id;
             let chunks = stream.chunks;
             let native_end = stream.end;
-            let (end_tx, end_rx) = tokio::sync::oneshot::channel();
+            let (mut end_tx, end_rx) = tokio::sync::oneshot::channel();
             let stream_id_for_task = stream_id.clone();
+            let definition = registered_tool.clone();
             tokio::spawn(async move {
                 // Keep callback authority until the transport reports a
                 // terminal stream result; chunk consumers may stop earlier.
                 let _callback_authority = callback_authority;
-                let result = native_end.await.unwrap_or_else(|error| {
-                    Err(PluginError::internal(format!(
-                        "plugin stream ended without a terminal result: {error}"
-                    )))
+                let result = tokio::select! {
+                    biased;
+                    _ = end_tx.closed() => return,
+                    result = native_end => result.unwrap_or_else(|error| {
+                        Err(PluginError::internal(format!(
+                            "plugin stream ended without a terminal result: {error}"
+                        )))
+                    }),
+                };
+                let result = result.and_then(|output| {
+                    definition
+                        .validate_output(output.payload.as_ref())
+                        .map_err(crate::schema::output_contract_error)?;
+                    Ok(output)
                 });
                 if end_tx.send(result).is_err() {
                     tracing::debug!(
@@ -926,8 +948,11 @@ impl PluginHost {
             ))
             .await
             .map_err(transport_to_plugin_error)?;
-        let result: ToolInvokeOutput = serde_json::from_value(invoke_result)
-            .map_err(|e| PluginError::invalid_params_error(&e))?;
+        let result: ToolInvokeOutput =
+            serde_json::from_value(invoke_result).map_err(crate::schema::output_contract_error)?;
+        registered_tool
+            .validate_output(result.payload.as_ref())
+            .map_err(crate::schema::output_contract_error)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(8);
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();

@@ -1,6 +1,7 @@
 //! Registry of tools published by loaded plugins.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +10,13 @@ use crate::registration_owner::{RegistrationId, RegistrationOwner};
 use crate::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
 
 pub fn validate_tool_definition(
+    plugin: &PluginKey,
+    definition: &ToolDefinition,
+) -> Result<ToolKey, String> {
+    RegisteredTool::new(plugin.clone(), definition.clone()).map(|tool| tool.key)
+}
+
+fn validate_tool_key(
     plugin_key: &PluginKey,
     definition: &ToolDefinition,
 ) -> Result<ToolKey, String> {
@@ -21,21 +29,8 @@ pub fn validate_tool_definition(
             definition.name
         ));
     }
-    let key = ToolKey::new(plugin_key.clone(), definition.name.clone())
-        .map_err(|error| format!("invalid tool name `{}`: {error}", definition.name))?;
-    validate_schema_shape(
-        definition.name.as_str(),
-        "input_schema",
-        &definition.input_schema(),
-        false,
-    )?;
-    validate_schema_shape(
-        definition.name.as_str(),
-        "output_schema",
-        &definition.output_schema(),
-        true,
-    )?;
-    Ok(key)
+    ToolKey::new(plugin_key.clone(), definition.name.clone())
+        .map_err(|error| format!("invalid tool name `{}`: {error}", definition.name))
 }
 
 #[cfg(test)]
@@ -61,40 +56,136 @@ mod protocol_boundary_tests {
     }
 }
 
-fn validate_schema_shape(
-    tool_name: &str,
-    field: &str,
-    schema: &serde_json::Value,
-    allow_null: bool,
-) -> Result<(), String> {
-    let schema_object = match schema {
-        serde_json::Value::Null if allow_null => return Ok(()),
-        serde_json::Value::Bool(_) => return Ok(()),
-        serde_json::Value::Object(object) => object,
-        _ => {
-            return Err(format!(
-                "tool `{tool_name}` {field} must be a JSON Schema object or boolean"
-            ));
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn definition(input: serde_json::Value, output: serde_json::Value) -> ToolDefinition {
+        ToolDefinition {
+            name: "run".into(),
+            contract: crate::sdk::ToolContract {
+                input_schema: input,
+                output_schema: output,
+            },
+            docs: Default::default(),
+            runtime: Default::default(),
+            tags: vec![],
         }
-    };
-    if schema_object
-        .get("properties")
-        .is_some_and(|properties| !properties.is_object())
-    {
-        return Err(format!(
-            "tool `{tool_name}` {field}.properties must be an object"
-        ));
     }
-    if schema_object.get("required").is_some_and(|required| {
-        required
-            .as_array()
-            .is_none_or(|items| items.iter().any(|item| item.as_str().is_none()))
-    }) {
-        return Err(format!(
-            "tool `{tool_name}` {field}.required must be an array of strings"
-        ));
+
+    fn plugin() -> PluginKey {
+        "test.contract".parse().unwrap()
     }
-    Ok(())
+
+    #[test]
+    fn compiled_contracts_validate_aliases_and_business_payloads() {
+        let tool = RegisteredTool::new(plugin(), definition(
+            json!({"type":"object","properties":{"count":{"type":"integer","minimum":1,"x-agena-aliases":["n"]}},"required":["count"],"additionalProperties":false}),
+            json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),
+        )).unwrap();
+        assert!(tool.validate_input(&json!({"n":2})).is_ok());
+        assert!(
+            tool.validate_input(&json!({"count":0}))
+                .unwrap_err()
+                .contains("$/count")
+        );
+        assert!(tool.validate_input(&json!({"unknown":2})).is_err());
+        assert!(tool.validate_output(Some(&json!({"ok":true}))).is_ok());
+        assert!(
+            tool.validate_output(Some(&json!({"payload":{"ok":true}})))
+                .is_err()
+        );
+        assert!(tool.validate_output(None).is_err());
+    }
+
+    #[test]
+    fn documentation_overrides_and_clones_share_compiled_contracts() {
+        let tool = RegisteredTool::new(plugin(), definition(json!({"type":"object"}), json!(null)))
+            .unwrap();
+        let mut docs = tool.definition().clone();
+        docs.docs.summary = Some("Updated help".into());
+        let updated = tool.with_definition(docs).unwrap();
+        assert!(Arc::ptr_eq(&tool.input_validator, &updated.input_validator));
+        let cloned = updated.clone();
+        assert!(Arc::ptr_eq(&updated.definition, &cloned.definition));
+        let mut changed = updated.definition().clone();
+        changed.contract.input_schema = json!({"type":"object","required":["new"]});
+        let changed = updated.with_definition(changed).unwrap();
+        assert!(!Arc::ptr_eq(
+            &updated.input_validator,
+            &changed.input_validator
+        ));
+        assert!(updated.validate_input(&json!({})).is_ok());
+        assert!(changed.validate_input(&json!({})).is_err());
+    }
+
+    #[test]
+    fn malformed_contract_rejects_the_whole_registration_batch() {
+        let mut registry = PluginToolRegistry::new();
+        let valid = definition(json!({"type":"object"}), json!(null));
+        let mut invalid = definition(
+            json!({"type":"object","properties":{"x":{"pattern":"["}}}),
+            json!(null),
+        );
+        invalid.name = "bad".into();
+        assert!(
+            registry
+                .extend_from_plugin(&plugin(), &[valid, invalid])
+                .is_err()
+        );
+        assert!(registry.by_key.is_empty());
+        assert_eq!(registry.generation, 0);
+    }
+
+    #[test]
+    fn registration_validates_the_complete_input_and_output_schemas() {
+        for schema in [
+            json!("object"),
+            json!([]),
+            json!({"type":"not-a-json-type"}),
+            json!({"properties":[]}),
+            json!({"required":[1]}),
+            json!({"properties":{"nested":{"minimum":"zero"}}}),
+        ] {
+            let input = RegisteredTool::new(plugin(), definition(schema.clone(), json!(null)));
+            assert!(
+                input.is_err(),
+                "invalid input schema was accepted: {schema}"
+            );
+            let output = RegisteredTool::new(
+                plugin(),
+                definition(json!({"type":"object"}), schema.clone()),
+            );
+            assert!(
+                output.is_err(),
+                "invalid output schema was accepted: {schema}"
+            );
+        }
+        let default_input =
+            RegisteredTool::new(plugin(), definition(json!(null), json!(null))).unwrap();
+        assert!(default_input.validate_input(&json!({})).is_ok());
+        assert!(default_input.validate_input(&json!(null)).is_err());
+        for schema in [json!(true), json!(false)] {
+            assert!(RegisteredTool::new(plugin(), definition(schema.clone(), schema)).is_ok());
+        }
+    }
+
+    #[test]
+    fn deserialization_rebuilds_contract_and_rejects_identity_mismatch() {
+        let tool = RegisteredTool::new(
+            plugin(),
+            definition(json!({"type":"object","required":["x"]}), json!(null)),
+        )
+        .unwrap();
+        let value = serde_json::to_value(&tool).unwrap();
+        let restored: RegisteredTool = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored, tool);
+        assert!(restored.validate_input(&json!({})).is_err());
+        let mut mismatched = value;
+        mismatched["definition"]["name"] = json!("other");
+        assert!(serde_json::from_value::<RegisteredTool>(mismatched).is_err());
+    }
 }
 
 #[derive(Debug)]
@@ -126,17 +217,106 @@ pub struct ToolRegistrySnapshot {
     pub tools: Vec<RegisteredTool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A registered plugin tool.
+#[derive(Debug, Clone)]
+/// An immutable registered tool and its compiled execution contract.
 pub struct RegisteredTool {
-    pub key: ToolKey,
-    pub definition: ToolDefinition,
+    key: ToolKey,
+    definition: Arc<ToolDefinition>,
+    input_validator: Arc<crate::schema::CompiledSchema>,
+    output_validator: Option<Arc<crate::schema::CompiledSchema>>,
+}
+
+impl PartialEq for RegisteredTool {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.definition == other.definition
+    }
+}
+
+impl Serialize for RegisteredTool {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("RegisteredTool", 2)?;
+        state.serialize_field("key", &self.key)?;
+        state.serialize_field("definition", self.definition.as_ref())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RegisteredTool {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Data {
+            key: ToolKey,
+            definition: ToolDefinition,
+        }
+        let data = Data::deserialize(deserializer)?;
+        let tool = Self::new(data.key.plugin().clone(), data.definition)
+            .map_err(serde::de::Error::custom)?;
+        if tool.key != data.key {
+            return Err(serde::de::Error::custom(
+                "registered tool key and definition name differ",
+            ));
+        }
+        Ok(tool)
+    }
 }
 
 impl RegisteredTool {
     pub fn new(plugin: PluginKey, definition: ToolDefinition) -> Result<Self, String> {
-        let key = validate_tool_definition(&plugin, &definition)?;
-        Ok(Self { key, definition })
+        let key = validate_tool_key(&plugin, &definition)?;
+        let compile = |field, schema: &serde_json::Value| {
+            crate::schema::CompiledSchema::new(schema)
+                .map(Arc::new)
+                .map_err(|error| format!("tool `{}` {field}: {error}", definition.name))
+        };
+        let input_validator = compile("input_schema", &definition.input_schema())?;
+        let output_schema = definition.output_schema();
+        let output_validator = (!output_schema.is_null())
+            .then(|| compile("output_schema", &output_schema))
+            .transpose()?;
+        Ok(Self {
+            key,
+            definition: Arc::new(definition),
+            input_validator,
+            output_validator,
+        })
+    }
+
+    /// Publish a replacement while retaining compiled validators for unchanged
+    /// contracts. Definition hooks usually change documentation only.
+    pub fn with_definition(&self, definition: ToolDefinition) -> Result<Self, String> {
+        if definition.name != self.tool_name() {
+            return Err("a definition override cannot rename its registered tool".into());
+        }
+        if definition.contract == self.definition.contract {
+            return Ok(Self {
+                key: self.key.clone(),
+                definition: Arc::new(definition),
+                input_validator: Arc::clone(&self.input_validator),
+                output_validator: self.output_validator.clone(),
+            });
+        }
+        Self::new(self.plugin_key().clone(), definition)
+    }
+
+    pub fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    pub fn into_definition(self) -> ToolDefinition {
+        Arc::unwrap_or_clone(self.definition)
+    }
+
+    pub fn validate_input(&self, input: &serde_json::Value) -> Result<(), String> {
+        self.input_validator.validate(input)
+    }
+
+    /// A declared output schema describes the business payload, never the
+    /// presentation envelope. Missing payload is validated as JSON null.
+    pub fn validate_output(&self, payload: Option<&serde_json::Value>) -> Result<(), String> {
+        self.output_validator.as_ref().map_or(Ok(()), |validator| {
+            validator.validate(payload.unwrap_or(&serde_json::Value::Null))
+        })
     }
 
     pub fn plugin_key(&self) -> &PluginKey {
@@ -246,13 +426,14 @@ impl PluginToolRegistry {
         plugin_key: &PluginKey,
         definitions: &[ToolDefinition],
     ) -> Result<(), String> {
-        // Validate the whole batch before changing defaults or inserting any
-        // tools. A bad manifest must never leave a partially updated registry.
-        for definition in definitions {
-            validate_tool_definition(plugin_key, definition)?;
-        }
-        for definition in definitions {
-            self.upsert_from_plugin(plugin_key, definition.clone())?;
+        // Compile and validate the whole batch before publishing any tool.
+        let tools = definitions
+            .iter()
+            .cloned()
+            .map(|definition| RegisteredTool::new(plugin_key.clone(), definition))
+            .collect::<Result<Vec<_>, _>>()?;
+        for tool in tools {
+            self.insert(tool, None);
         }
         Ok(())
     }
@@ -304,7 +485,7 @@ impl PluginToolRegistry {
             .iter()
             .filter(|(_, entry)| entry.belongs_to(owner))
             .filter_map(|(key, _)| self.by_key.get(key))
-            .map(|tool| tool.definition.clone())
+            .map(|tool| tool.definition().clone())
             .collect()
     }
 

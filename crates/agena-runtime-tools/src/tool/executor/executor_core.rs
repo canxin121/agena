@@ -74,6 +74,7 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_ceiling_or_self(session_context.permission_ceiling());
         }
+        scoped.definition_catalog = None;
         let definition_catalog = scoped
             .registered_tools_with_definition_overrides_async()
             .await;
@@ -279,17 +280,7 @@ impl ToolExecutor {
         if let Some(catalog) = self.definition_catalog.as_ref() {
             return catalog.as_ref().clone();
         }
-        let mut tools = self
-            .plugins
-            .registered_tools_for_scope(self.plugin_scope.as_ref())
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        tools.sort_by(|left, right| {
-            left.canonical_name()
-                .cmp(&right.canonical_name())
-                .then_with(|| left.summary_text().cmp(&right.summary_text()))
-        });
+        let mut tools = self.registered_tools_with_definition_overrides();
 
         if !self.plugins.is_empty() {
             let inputs = tools
@@ -297,7 +288,7 @@ impl ToolExecutor {
                 .map(|entry| PluginToolDefinitionInput {
                     tool: entry.tool_key().clone(),
                     summary: tool_summary(entry),
-                    help: entry.definition.docs.help.clone(),
+                    help: entry.definition().docs.help.clone(),
                     input_schema: entry.input_schema(),
                 })
                 .collect::<Vec<_>>();
@@ -444,12 +435,19 @@ fn apply_definition_overrides(
     let tools = tools
         .into_iter()
         .zip(patched)
-        .map(|(mut entry, patched)| match patched {
+        .map(|(entry, patched)| match patched {
             Ok(patched) => {
-                entry.definition.docs.summary = Some(patched.summary);
-                entry.definition.docs.help = patched.help;
-                entry.definition.contract.input_schema = patched.input_schema;
-                entry
+                let mut definition = entry.definition().clone();
+                definition.docs.summary = Some(patched.summary);
+                definition.docs.help = patched.help;
+                definition.contract.input_schema = patched.input_schema;
+                match entry.with_definition(definition) {
+                    Ok(patched) => patched,
+                    Err(error) => {
+                        tracing::warn!(tool = %entry.canonical_name(), %error, "invalid tool.definition contract; keeping original");
+                        entry
+                    }
+                }
             }
             Err(err) => {
                 failure_count += 1;

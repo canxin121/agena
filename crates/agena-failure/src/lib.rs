@@ -320,7 +320,6 @@ pub enum ModelFeedbackKind {
     InvalidInput,
     InvalidPattern,
     ToolUnavailable,
-    StaleToolCall,
     PermissionRequired,
     UserInputRequired,
     PluginFailure,
@@ -383,10 +382,6 @@ impl ModelFeedback {
         Self::fixed(ModelFeedbackKind::ToolUnavailable)
     }
 
-    pub fn stale_tool_call() -> Self {
-        Self::fixed(ModelFeedbackKind::StaleToolCall)
-    }
-
     pub fn permission_required() -> Self {
         Self::fixed(ModelFeedbackKind::PermissionRequired)
     }
@@ -415,7 +410,6 @@ impl ModelFeedback {
             ModelFeedbackKind::InvalidInput | ModelFeedbackKind::InvalidPattern => {
                 RetryDirective::CorrectInput
             }
-            ModelFeedbackKind::StaleToolCall => RetryDirective::AfterRefresh,
             ModelFeedbackKind::PermissionRequired | ModelFeedbackKind::PermissionDenied => {
                 RetryDirective::AfterUserAction
             }
@@ -437,7 +431,6 @@ impl ModelFeedback {
             ModelFeedbackKind::InvalidInput => "The tool input is invalid. Review the tool schema, correct the arguments, and retry.".to_owned(),
             ModelFeedbackKind::InvalidPattern => "The search pattern is invalid. Correct the pattern syntax and retry.".to_owned(),
             ModelFeedbackKind::ToolUnavailable => "The requested tool is unavailable. Choose another available tool.".to_owned(),
-            ModelFeedbackKind::StaleToolCall => "The tool call is stale. Refresh the available tools before retrying.".to_owned(),
             ModelFeedbackKind::PermissionRequired => "The tool requires user approval before it can run. Wait for the permission decision.".to_owned(),
             ModelFeedbackKind::UserInputRequired => "The tool needs user input before it can continue.".to_owned(),
             ModelFeedbackKind::PluginFailure => "The plugin failed. Do not repeat the identical call indefinitely; try an alternative approach.".to_owned(),
@@ -472,7 +465,6 @@ impl ModelFeedback {
             ModelFeedbackKind::InvalidInput => "invalid input",
             ModelFeedbackKind::InvalidPattern => "invalid pattern",
             ModelFeedbackKind::ToolUnavailable => "tool unavailable",
-            ModelFeedbackKind::StaleToolCall => "stale tool call",
             ModelFeedbackKind::PermissionRequired => "permission required",
             ModelFeedbackKind::UserInputRequired => "user input required",
             ModelFeedbackKind::PluginFailure => "plugin failure",

@@ -6,28 +6,6 @@ impl ToolExecutor {
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
     }
 
-    pub fn validate_advertised_tool_identity(
-        &self,
-        invocation: &ToolInvocation,
-        advertised_identity: Option<&str>,
-    ) -> Result<(), ToolError> {
-        let Some(advertised_identity) = advertised_identity
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(());
-        };
-        let current = self
-            .invocation_definition(invocation)
-            .map(|definition| definition.definition_identity());
-        if current.as_deref() == Some(advertised_identity) {
-            return Ok(());
-        }
-        Err(ToolError::StaleToolCall {
-            tool: invocation_name(invocation).to_string(),
-        })
-    }
-
     pub(crate) fn plugin_invocation_definition(
         &self,
         invocation: &PluginInvocation,
@@ -42,29 +20,12 @@ impl ToolExecutor {
         )
     }
 
-    pub(crate) fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
-        self.plugin_invocation_plugin_name_for(&PluginInvocation::from_tool_invocation(invocation))
-    }
-
-    pub(crate) fn plugin_invocation_plugin_name_for(
-        &self,
-        invocation: &PluginInvocation,
-    ) -> String {
-        if let Some(entry) = self.plugin_invocation_definition(invocation) {
-            return entry.plugin_full_name();
-        }
-
-        self.plugin_resolution_for_plugin_invocation(invocation)
-            .map(|entry| entry.plugin_full_name())
-            .unwrap_or_else(|| "custom".to_string())
-    }
-
     pub(crate) fn invocation_streaming_mode(
         &self,
         invocation: &ToolInvocation,
     ) -> Option<SdkToolStreamingMode> {
         self.invocation_definition(invocation)
-            .map(|entry| entry.definition.runtime.streaming)
+            .map(|entry| entry.definition().runtime.streaming)
     }
 
     /// Declared plugin streams need the streaming entry point even when the
@@ -109,17 +70,12 @@ impl ToolExecutor {
             )));
         }
         let command = shell_command_from_invocation(invocation);
-        let resolution = self.plugin_resolution_for_invocation(invocation);
-        let canonical_name = resolution.as_ref().map(|tool| tool.canonical_name());
-        let mut tool_name_aliases = vec![tool_name.as_str()];
-        if let Some(name) = canonical_name.as_deref() {
-            tool_name_aliases.push(name);
-        }
-        if let Some(resolution) = resolution.as_ref()
-            && resolution.tool_name() != tool_name
-            && self.plugin_tool_name_is_unambiguous(resolution.tool_name())
+        let canonical_name = definition.canonical_name();
+        let mut tool_name_aliases = vec![tool_name.as_str(), canonical_name.as_str()];
+        if definition.tool_name() != tool_name
+            && self.plugin_tool_name_is_unambiguous(definition.tool_name())
         {
-            tool_name_aliases.push(resolution.tool_name());
+            tool_name_aliases.push(definition.tool_name());
         }
         Ok((
             tool_name.clone(),
@@ -138,29 +94,6 @@ impl ToolExecutor {
             .take(2)
             .count()
             == 1
-    }
-
-    pub(crate) fn plugin_resolution_for_invocation(
-        &self,
-        invocation: &ToolInvocation,
-    ) -> Option<agena_plugin_host::registry::RegisteredTool> {
-        self.plugin_resolution_for_plugin_invocation(&PluginInvocation::from_tool_invocation(
-            invocation,
-        ))
-    }
-
-    pub(crate) fn plugin_resolution_for_plugin_invocation(
-        &self,
-        invocation: &PluginInvocation,
-    ) -> Option<agena_plugin_host::registry::RegisteredTool> {
-        self.plugins
-            .lookup_tool_for_name_scope(invocation.tool_name.as_str(), self.plugin_scope.as_ref())
-            .or_else(|| {
-                unique_registered_tool_match(
-                    self.registered_tools_with_definition_overrides(),
-                    invocation.tool_name.as_str(),
-                )
-            })
     }
 
     /// Record the path and network effects of the host's *own* builtin tools.
@@ -320,3 +253,90 @@ use super::{
     shell_command_from_invocation, unique_registered_tool_match,
 };
 use agena_domain::PluginInvocation;
+
+#[cfg(test)]
+mod snapshot_contract_tests {
+    use super::*;
+    use crate::authorization::ExecutionPrincipal;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+    use agena_plugin_host::sdk::{PluginKey, ToolContract, ToolDefinition, ToolTag};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[test]
+    fn frozen_definition_drives_resolution_after_live_registry_replacement() {
+        let plugin: PluginKey = "test.snapshot".parse().unwrap();
+        let original = RegisteredTool::new(
+            plugin.clone(),
+            ToolDefinition {
+                name: "run".into(),
+                contract: ToolContract {
+                    input_schema: json!({"type":"object","required":["original"]}),
+                    ..Default::default()
+                },
+                docs: Default::default(),
+                runtime: Default::default(),
+                tags: vec![ToolTag::ReadOnly],
+            },
+        )
+        .unwrap();
+        let host = agena_plugin_host::PluginHost::new_empty();
+        let handle = host.host_handle();
+        let owner = handle.begin_plugin_instance(plugin);
+        let registry = handle.scoped_tool_registry();
+        let _registration = registry
+            .register(
+                &owner,
+                None,
+                original.tool_key().clone(),
+                original.clone(),
+                "original contract",
+            )
+            .unwrap();
+        let mut executor = ToolExecutor::new(
+            std::env::temp_dir(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            host.clone(),
+            None,
+            None,
+        );
+        executor.definition_catalog = Some(Arc::new(vec![original.clone()]));
+
+        let mut replacement = original.definition().clone();
+        replacement.contract.input_schema = json!({"type":"object","required":["replacement"]});
+        replacement.tags = vec![ToolTag::Mutate];
+        let replacement = original.with_definition(replacement).unwrap();
+        let (_replacement_registration, _) = registry
+            .replace_owned(
+                &owner,
+                None,
+                original.tool_key().clone(),
+                replacement.clone(),
+                "tool",
+                "replacement contract",
+            )
+            .unwrap();
+        assert_eq!(
+            host.lookup_tool(&original.canonical_name()),
+            Some(replacement)
+        );
+
+        let invocation = ToolInvocation::new(original.canonical_name(), Default::default());
+        let advertised = executor.invocation_definition(&invocation).unwrap();
+        let execution = executor
+            .plugin_invocation_definition(&PluginInvocation::from_tool_invocation(&invocation))
+            .unwrap();
+        assert_eq!(advertised, original);
+        assert_eq!(execution, advertised);
+        assert_eq!(execution.effective_tags(), vec![ToolTag::ReadOnly]);
+        assert!(execution.validate_input(&json!({"original":true})).is_ok());
+        assert!(
+            execution
+                .validate_input(&json!({"replacement":true}))
+                .is_err()
+        );
+    }
+}

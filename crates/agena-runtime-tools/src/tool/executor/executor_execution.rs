@@ -9,7 +9,7 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(resolution) = self.plugin_resolution_for_invocation(invocation) else {
+        let Some(resolution) = self.invocation_definition(invocation) else {
             return Ok((invocation.clone(), None));
         };
         let Some(payload) =
@@ -85,40 +85,26 @@ impl ToolExecutor {
             // preparation can observe a mutation request.
             self.authorize_invocation(invocation)?;
         }
-        let plugin_name = self.invocation_plugin_name_for(invocation);
-        if definition.is_none() {
+        let Some(definition) = definition else {
             let mut prepared_invocation = invocation.clone();
-            prepared_invocation.plugin_name = Some(plugin_name);
+            prepared_invocation.plugin_name = Some("custom".into());
             return Ok(PreparedToolInvocation {
                 invocation: prepared_invocation,
                 title_override: None,
                 metadata: Default::default(),
             });
-        }
-        if let Some(definition) = definition.as_ref() {
-            self.check_cloud_tool_adapter(&definition.canonical_name())?;
-        }
-        let hook_tool_name = self
-            .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name().to_string())
-            .unwrap_or_else(|| model_tool_name.clone());
-        let hook_tool = self
-            .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_key().clone())
-            .or_else(|| hook_tool_name.parse().ok())
-            .ok_or_else(|| self.unknown_tool_error(hook_tool_name.as_str()))?;
+        };
+        let plugin_name = definition.plugin_full_name();
+        self.check_cloud_tool_adapter(&definition.canonical_name())?;
         let input_json = invocation_input_json(invocation)?;
         let input_value: serde_json::Value =
             serde_json::from_str(&input_json).map_err(|e| ToolError::invalid_input_error(&e))?;
-        let effective_tags = definition
-            .as_ref()
-            .map(|definition| invocation_effective_tags(definition, invocation))
-            .unwrap_or_default();
+        let effective_tags = invocation_effective_tags(&definition, invocation);
         let hooked = self
             .plugins
             .dispatch_tool_before(
                 PluginToolBeforeInput {
-                    tool: hook_tool,
+                    tool: definition.tool_key().clone(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -132,6 +118,9 @@ impl ToolExecutor {
             .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
+        definition
+            .validate_input(&hooked.input)
+            .map_err(ToolError::invalid_input)?;
         let input_json =
             serde_json::to_string(&hooked.input).map_err(|e| ToolError::invalid_input_error(&e))?;
         let mut prepared_invocation =
@@ -176,7 +165,7 @@ impl ToolExecutor {
             checks.extend(inspector.additional_checks(invocation, &self.principal)?);
         }
 
-        if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
+        if let Some(resolution) = self.invocation_definition(invocation) {
             self.collect_builtin_effect_checks(&mut checks, &resolution, invocation)?;
         }
 
@@ -190,7 +179,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
     ) -> Result<Option<agena_domain::ContentKind>, ToolError> {
         let resolution = self
-            .plugin_resolution_for_invocation(invocation)
+            .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(invocation.name.as_str()))?;
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
@@ -262,8 +251,18 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         context: crate::tool::ToolRuntimeContext,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        // Bare host callers get the same immutable view that session callers
+        // capture before model dispatch. Every subsequent lookup uses this view.
+        let mut executor = self.clone();
+        if executor.definition_catalog.is_none() {
+            executor.definition_catalog = Some(Arc::new(
+                executor
+                    .registered_tools_with_definition_overrides_async()
+                    .await,
+            ));
+        }
         let writer = context.output.clone();
-        let mut result = self.execute_invocation_inner(invocation, context).await;
+        let mut result = executor.execute_invocation_inner(invocation, context).await;
         if let Some(error) = writer.and_then(|output| output.capture_diagnostic())
             && let Ok(execution) = &mut result
         {
@@ -293,8 +292,12 @@ impl ToolExecutor {
         let tool_name = plugin_invocation_name(&plugin_invocation);
         tracing::debug!(session_id, call_id, tool = tool_name.as_str(), "tool.call");
         let resolution = self
-            .plugin_resolution_for_invocation(invocation)
+            .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
+
+        resolution
+            .validate_input(&serde_json::Value::from(invocation.input.clone()))
+            .map_err(ToolError::invalid_input)?;
 
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
@@ -306,14 +309,17 @@ impl ToolExecutor {
                 resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
             )
             .map_err(|error| self.plugin_error_or_cancelled(error))?;
-            let execution = crate::tool::read_media::execute(self, input).await?;
+            let execution: ToolInvocationExecution =
+                crate::tool::read_media::execute(self, input).await?.into();
+            let payload = serde_json::Value::from(execution.output.payload.clone());
             return self
                 .finalize_execution_async(
                     invocation,
                     session_id,
                     resolution.canonical_name().as_str(),
                     call_id,
-                    execution.into(),
+                    execution,
+                    Some(&payload),
                 )
                 .await;
         }
@@ -399,13 +405,16 @@ impl ToolExecutor {
             })
             .await?;
             self.ensure_not_cancelled()?;
+            let execution: ToolInvocationExecution = execution.into();
+            let payload = serde_json::Value::from(execution.output.payload.clone());
             return self
                 .finalize_execution_async(
                     invocation,
                     session_id,
                     resolution.canonical_name().as_str(),
                     call_id,
-                    execution.into(),
+                    execution,
+                    Some(&payload),
                 )
                 .await;
         }
@@ -463,8 +472,11 @@ impl ToolExecutor {
                     ToolError::plugin(format!("tool stream lost its terminal result: {error}"))
                 })?
                 .map_err(|error| self.plugin_error_or_cancelled(error))?;
-            let output = ToolOutput::from_json_payload(end.payload.as_ref())
-                .map_err(ToolError::invalid_input)?;
+            let output = ToolOutput::from_json_payload(end.payload.as_ref()).map_err(|error| {
+                ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(
+                    error,
+                ))
+            })?;
             return self
                 .finalize_execution_async(
                     invocation,
@@ -482,6 +494,7 @@ impl ToolExecutor {
                             attachments: end.attachments,
                         },
                     },
+                    end.payload.as_ref(),
                 )
                 .await;
         }
@@ -508,8 +521,9 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let output = ToolOutput::from_json_payload(response.payload.as_ref())
-            .map_err(ToolError::invalid_input)?;
+        let output = ToolOutput::from_json_payload(response.payload.as_ref()).map_err(|error| {
+            ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(error))
+        })?;
         let execution = ToolInvocationExecution {
             output: output.clone(),
             view,
@@ -521,6 +535,7 @@ impl ToolExecutor {
             resolution.canonical_name().as_str(),
             call_id,
             execution,
+            response.payload.as_ref(),
         ))
         .await
     }
@@ -550,6 +565,7 @@ impl ToolExecutor {
     }
 }
 use agena_domain::{PluginInvocation, StructuredObject};
+use std::sync::Arc;
 
 use super::{
     PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,

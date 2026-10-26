@@ -1,9 +1,9 @@
 import { apiUrl } from '../../../lib/api'
-import { buildActiveUiAuthHeaders } from '../../../lib/uiAuthToken'
+import { buildActiveServerAuthHeaders } from '../../../lib/serverAuthToken'
 
 /** Check headers first, so an iframe does not download and rewrite its HTML twice. */
 export async function probePreviewProxyResponse(src: string, signal: AbortSignal) {
-  const authHeaders = buildActiveUiAuthHeaders()
+  const authHeaders = buildActiveServerAuthHeaders()
   const headers = {
     accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
     ...authHeaders,

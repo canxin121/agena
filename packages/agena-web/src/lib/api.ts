@@ -2,7 +2,7 @@ import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired } from './authEvents.ts'
 import { readActiveBackendBaseUrl, resolveBackendUrl } from './backend'
-import { buildActiveUiAuthHeaders, readUiAuthTokenVersion } from './uiAuthToken'
+import { buildActiveServerAuthHeaders, readServerAuthTokenVersion } from './serverAuthToken'
 
 export class ApiError extends Error {
   status: number
@@ -119,7 +119,7 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
 /** Authenticated fetch with standard HTTP status semantics and an unread body.
  * Callers that consume streamed bodies can impose a limit before reading them. */
 export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const authHeaders = buildActiveUiAuthHeaders()
+  const authHeaders = buildActiveServerAuthHeaders()
   const headers = new Headers(init?.headers)
   if (!headers.has('accept')) headers.set('accept', 'application/json')
   if (authHeaders.authorization && !headers.has('authorization'))
@@ -133,7 +133,7 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
 }
 
 export async function apiResponse(url: string, init?: RequestInit): Promise<Response> {
-  const authTokenVersion = readUiAuthTokenVersion()
+  const authTokenVersion = readServerAuthTokenVersion()
   const resp = await apiFetch(url, init)
 
   if (!resp.ok && resp.status !== 304) {
@@ -158,8 +158,8 @@ export async function apiResponse(url: string, init?: RequestInit): Promise<Resp
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isUiAuthRequired) {
+    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
+    if (isServerAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,
@@ -179,8 +179,8 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export async function apiText(url: string, init?: RequestInit): Promise<string> {
-  const authHeaders = buildActiveUiAuthHeaders()
-  const authTokenVersion = readUiAuthTokenVersion()
+  const authHeaders = buildActiveServerAuthHeaders()
+  const authTokenVersion = readServerAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
@@ -211,8 +211,8 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isUiAuthRequired) {
+    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
+    if (isServerAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,
@@ -228,8 +228,8 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
 }
 
 export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
-  const authHeaders = buildActiveUiAuthHeaders()
-  const authTokenVersion = readUiAuthTokenVersion()
+  const authHeaders = buildActiveServerAuthHeaders()
+  const authTokenVersion = readServerAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
     credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
@@ -260,8 +260,8 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
     attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
-    const isUiAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isUiAuthRequired) {
+    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
+    if (isServerAuthRequired) {
       emitAuthRequired({
         message: err.message,
         status: err.status,

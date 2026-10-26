@@ -6,7 +6,7 @@ import { resourceDirectory } from '@/app/workspace/resourceDirectory'
 import { connectSse, type SseClient } from '@/lib/sse'
 import { createRevalidator } from '@/lib/revalidation'
 import { apiUrl } from '@/lib/api'
-import { readUiAuthTokenVersion } from '@/lib/uiAuthToken'
+import { readServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
@@ -4113,7 +4113,7 @@ function watchFilesystem() {
   const paths = visiblePaths.slice(0, 128)
   const query = new URLSearchParams({ directory: rootPath, paths: JSON.stringify([...paths].sort()) })
   const endpoint = `/api/v1/workbench/fs/stream?${query}`
-  const identity = `${readUiAuthTokenVersion()}:${apiUrl(endpoint)}:${visiblePaths.length > 128}`
+  const identity = `${readServerAuthTokenVersion()}:${apiUrl(endpoint)}:${visiblePaths.length > 128}`
   // Selecting another file in an already watched folder changes no watch.
   // Keeping this stream also avoids a full reconciliation on every selection.
   if (filesystemStream && filesystemWatchIdentity === identity) return

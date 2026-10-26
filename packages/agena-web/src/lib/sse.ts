@@ -4,7 +4,7 @@ import type { JsonValue as JsonLike } from '@/types/json'
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from './authEvents.ts'
 import { apiUrl } from './api'
 import { SseFrames } from './sseFrames'
-import { buildActiveUiAuthHeaders, readUiAuthTokenVersion } from './uiAuthToken'
+import { buildActiveServerAuthHeaders, readServerAuthTokenVersion } from './serverAuthToken'
 
 export type SseEvent = {
   type: string
@@ -440,8 +440,8 @@ export function connectSse(opts: SseClientOptions): SseClient {
         headers.set('accept', 'text/event-stream')
         if (lastEventId) headers.set('last-event-id', lastEventId)
 
-        const auth = buildActiveUiAuthHeaders()
-        const authTokenVersion = readUiAuthTokenVersion()
+        const auth = buildActiveServerAuthHeaders()
+        const authTokenVersion = readServerAuthTokenVersion()
         if (auth.authorization) {
           try {
             headers.set('authorization', auth.authorization)
@@ -472,7 +472,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
               // ignore
             }
             emitAuthRequired({
-              message: msg || 'UI authentication required',
+              message: msg || 'Server password required',
               status: resp.status,
               code: 'auth.required',
               url,

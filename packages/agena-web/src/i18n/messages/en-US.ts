@@ -606,7 +606,7 @@ export default {
     },
   },
   auth: {
-    uiAuthRequired: 'UI authentication required',
+    serverAuthRequired: 'Server password required',
   },
   login: {
     title: 'Agena',

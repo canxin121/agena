@@ -2224,7 +2224,7 @@ export default {
     },
   },
   auth: {
-    uiAuthRequired: 'UI प्रमाणीकरण आवश्यक है',
+    serverAuthRequired: 'सर्वर पासवर्ड आवश्यक है',
   },
   login: {
     title: 'Agena',

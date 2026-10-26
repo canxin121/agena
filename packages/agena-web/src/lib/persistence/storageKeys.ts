@@ -71,7 +71,8 @@ export const localStorageKeys = {
     lastRoute: namespacedKey('settings.last-route'),
   },
   auth: {
-    uiTokenByBaseUrl: namespacedKey('auth.ui-token-by-base-url'),
+    // Keep the persisted key compatible with existing server login sessions.
+    serverTokenByBaseUrl: namespacedKey('auth.ui-token-by-base-url'),
   },
   broadcast: {
     channelFallbackEvent: namespacedKey('broadcast.event'),

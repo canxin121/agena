@@ -16,8 +16,8 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-const UI_SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
-const UI_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const SERVER_SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
+const SERVER_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const LOGIN_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
 const LOGIN_FAILURE_LIMIT: u32 = 8;
 const LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
@@ -30,9 +30,9 @@ const MAX_LOGIN_PASSWORD_BYTES: usize = 4096;
 static PASSWORD_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Clone)]
-pub(crate) enum UiAuth {
+pub(crate) enum ServerAuth {
     Disabled,
-    Enabled(Arc<UiAuthInner>),
+    Enabled(Arc<ServerAuthInner>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub(crate) enum OAuthPasswordError {
     Locked(i64),
 }
 
-pub(crate) struct UiAuthInner {
+pub(crate) struct ServerAuthInner {
     password_phc: String,
     sessions: DashMap<String, SessionRecord>,
     login_attempts: DashMap<String, LoginAttemptRecord>,
@@ -185,10 +185,10 @@ async fn verify_password_async(phc: String, candidate: String) -> Result<bool, S
         .map_err(|error| format!("password verification worker failed: {error}"))
 }
 
-pub(crate) async fn init_ui_auth_async(
+pub(crate) async fn init_server_auth_async(
     password: Option<String>,
     database: &super::persistence::db::ServerStateDb,
-) -> Result<UiAuth, String> {
+) -> Result<ServerAuth, String> {
     use super::persistence::db::KV_KEY_SERVER_PASSWORD_VERIFIER;
     let candidate = normalize_password(password.as_deref());
     // The environment/CLI remains authoritative. A stored verifier never
@@ -209,7 +209,7 @@ pub(crate) async fn init_ui_auth_async(
         database
             .set_json(KV_KEY_SERVER_PASSWORD_VERIFIER, Option::<String>::None)
             .await?;
-        return Ok(UiAuth::Disabled);
+        return Ok(ServerAuth::Disabled);
     }
     let previous = database
         .get_json::<Option<String>>(KV_KEY_SERVER_PASSWORD_VERIFIER)
@@ -228,10 +228,10 @@ pub(crate) async fn init_ui_auth_async(
     database
         .set_json(KV_KEY_SERVER_PASSWORD_VERIFIER, Some(phc.clone()))
         .await?;
-    init_ui_auth_from_phc(phc)
+    init_server_auth_from_phc(phc)
 }
 
-impl UiAuth {
+impl ServerAuth {
     /// A stable credential version, not another password. OAuth uses it to
     /// revoke grants when the single Agena login credential changes.
     pub(crate) fn credential_fingerprint(&self) -> Option<String> {
@@ -247,12 +247,12 @@ impl UiAuth {
 }
 
 pub(crate) async fn verify_password_for_oauth_async(
-    ui_auth: UiAuth,
+    server_auth: ServerAuth,
     candidate: String,
     headers: HeaderMap,
 ) -> Result<(), OAuthPasswordError> {
     PASSWORD_WORKERS
-        .run(move || verify_password_for_oauth(&ui_auth, &candidate, &headers))
+        .run(move || verify_password_for_oauth(&server_auth, &candidate, &headers))
         .await
         .unwrap_or_else(|error| {
             tracing::error!(%error, "OAuth password verification worker failed");
@@ -279,13 +279,13 @@ fn get_token_from_authorization(headers: &HeaderMap) -> Option<String> {
     Some(token.to_string())
 }
 
-fn is_session_valid(inner: &UiAuthInner, token: &str) -> bool {
+fn is_session_valid(inner: &ServerAuthInner, token: &str) -> bool {
     let now = OffsetDateTime::now_utc();
     let Some(mut entry) = inner.sessions.get_mut(token) else {
         return false;
     };
 
-    if now - entry.last_seen > time::Duration::seconds(UI_SESSION_TTL.as_secs() as i64) {
+    if now - entry.last_seen > time::Duration::seconds(SERVER_SESSION_TTL.as_secs() as i64) {
         drop(entry);
         inner.sessions.remove(token);
         return false;
@@ -304,7 +304,7 @@ fn login_lockout_duration(duration: Duration) -> time::Duration {
 }
 
 fn login_lockout_remaining_seconds(
-    inner: &UiAuthInner,
+    inner: &ServerAuthInner,
     attempt_key: &str,
     now: OffsetDateTime,
 ) -> Option<i64> {
@@ -331,7 +331,7 @@ fn login_lockout_remaining_seconds(
 }
 
 fn record_failed_login_attempt(
-    inner: &UiAuthInner,
+    inner: &ServerAuthInner,
     attempt_key: &str,
     now: OffsetDateTime,
     failure_limit: u32,
@@ -363,7 +363,7 @@ fn record_failed_login_attempt(
 }
 
 fn login_lockout_remaining_for_request(
-    inner: &UiAuthInner,
+    inner: &ServerAuthInner,
     attempt_key: &str,
     now: OffsetDateTime,
 ) -> Option<i64> {
@@ -377,7 +377,7 @@ fn login_lockout_remaining_for_request(
 }
 
 fn record_failed_login_attempts(
-    inner: &UiAuthInner,
+    inner: &ServerAuthInner,
     attempt_key: &str,
     now: OffsetDateTime,
 ) -> Option<i64> {
@@ -402,22 +402,22 @@ fn record_failed_login_attempts(
     .max()
 }
 
-fn clear_failed_login_attempts(inner: &UiAuthInner, attempt_key: &str) {
+fn clear_failed_login_attempts(inner: &ServerAuthInner, attempt_key: &str) {
     inner.login_attempts.remove(attempt_key);
     // A successful authentication proves possession of the credential and
     // safely releases the coarse global circuit breaker as well.
     inner.login_attempts.remove(GLOBAL_LOGIN_ATTEMPT_KEY);
 }
 
-async fn cleanup_sessions_task(inner: std::sync::Weak<UiAuthInner>) {
-    let mut ticker = tokio::time::interval(UI_SESSION_CLEANUP_INTERVAL);
+async fn cleanup_sessions_task(inner: std::sync::Weak<ServerAuthInner>) {
+    let mut ticker = tokio::time::interval(SERVER_SESSION_CLEANUP_INTERVAL);
     loop {
         ticker.tick().await;
         let Some(inner) = inner.upgrade() else {
             break;
         };
         let now = OffsetDateTime::now_utc();
-        let ttl = time::Duration::seconds(UI_SESSION_TTL.as_secs() as i64);
+        let ttl = time::Duration::seconds(SERVER_SESSION_TTL.as_secs() as i64);
         let login_window = login_failure_window_duration();
         inner
             .sessions
@@ -434,10 +434,10 @@ async fn cleanup_sessions_task(inner: std::sync::Weak<UiAuthInner>) {
     }
 }
 
-pub(crate) fn spawn_cleanup_sessions_task_if_enabled(ui_auth: &UiAuth) -> bool {
-    match ui_auth {
-        UiAuth::Disabled => false,
-        UiAuth::Enabled(inner) => {
+pub(crate) fn spawn_cleanup_sessions_task_if_enabled(server_auth: &ServerAuth) -> bool {
+    match server_auth {
+        ServerAuth::Disabled => false,
+        ServerAuth::Enabled(inner) => {
             tokio::spawn(cleanup_sessions_task(Arc::downgrade(inner)));
             true
         }
@@ -472,12 +472,12 @@ pub(crate) fn hash_password(candidate: &str) -> Result<String, String> {
 /// Rehydrate a password verifier from a PHC value read from server state.
 /// Keeping the login-attempt map on the verifier preserves the same OAuth
 /// lockout behavior as the server password without ever returning the PHC value.
-pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, String> {
+pub(crate) fn init_server_auth_from_phc(password_phc: String) -> Result<ServerAuth, String> {
     PasswordHash::new(password_phc.as_str()).map_err(|error| {
         // password_hash::Error has no std::error::Error implementation/source.
         format!("failed to parse the persisted server password hash: {error}")
     })?;
-    Ok(UiAuth::Enabled(Arc::new(UiAuthInner {
+    Ok(ServerAuth::Enabled(Arc::new(ServerAuthInner {
         password_phc,
         sessions: DashMap::new(),
         login_attempts: DashMap::new(),
@@ -486,17 +486,17 @@ pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, Stri
 
 /// Verify the server password for the MCP OAuth authorization page.
 ///
-/// MCP authorization is deliberately a separate browser flow from the UI
+/// MCP authorization is deliberately a separate browser flow from the server
 /// bearer session: a successful password check issues an OAuth authorization
-/// code, never a UI session token. The same failure counters and lockout
+/// code, never a server session token. The same failure counters and lockout
 /// policy are shared so the public OAuth endpoint does not become a weaker
 /// password oracle.
 pub(crate) fn verify_password_for_oauth(
-    ui_auth: &UiAuth,
+    server_auth: &ServerAuth,
     candidate: &str,
     headers: &HeaderMap,
 ) -> Result<(), OAuthPasswordError> {
-    let UiAuth::Enabled(inner) = ui_auth else {
+    let ServerAuth::Enabled(inner) = server_auth else {
         return Err(OAuthPasswordError::NotConfigured);
     };
 
@@ -523,14 +523,14 @@ pub(crate) async fn auth_session_status(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    match &state.ui_auth {
-        UiAuth::Disabled => Json(AuthStatusOk {
+    match &state.server_auth {
+        ServerAuth::Disabled => Json(AuthStatusOk {
             authenticated: true,
             disabled: true,
             token: None,
         })
         .into_response(),
-        UiAuth::Enabled(inner) => {
+        ServerAuth::Enabled(inner) => {
             if let Some(token) = get_token_from_authorization(&headers)
                 && is_session_valid(inner, &token)
             {
@@ -558,15 +558,15 @@ pub(crate) async fn auth_session_create(
 ) -> impl IntoResponse {
     let candidate = normalize_password(body.password.as_deref());
 
-    match &state.ui_auth {
-        UiAuth::Disabled => (
+    match &state.server_auth {
+        ServerAuth::Disabled => (
             StatusCode::BAD_REQUEST,
             Json(agena_api::ApiError::bad_request(
                 "Server password authentication is not configured.",
             )),
         )
             .into_response(),
-        UiAuth::Enabled(inner) => {
+        ServerAuth::Enabled(inner) => {
             let attempt_key = login_attempt_key(&headers);
             let now = OffsetDateTime::now_utc();
 
@@ -641,7 +641,7 @@ pub(crate) async fn auth_session_create(
     }
 }
 
-pub(crate) async fn require_ui_auth(
+pub(crate) async fn require_server_auth(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
     req: axum::http::Request<axum::body::Body>,
@@ -650,11 +650,11 @@ pub(crate) async fn require_ui_auth(
     let req_method = req.method().clone();
     let req_path = req.uri().path().to_string();
 
-    match &state.ui_auth {
-        UiAuth::Disabled => next.run(req).await,
-        UiAuth::Enabled(inner) => {
+    match &state.server_auth {
+        ServerAuth::Disabled => next.run(req).await,
+        ServerAuth::Enabled(inner) => {
             // Server discovery and identity-safe lifecycle controls must work
-            // before a UI login exists. This endpoint exposes only readiness
+            // before a server login exists. This endpoint exposes only readiness
             // and process identity; all session/runtime APIs remain protected.
             if req_method == Method::GET && req_path == "/api/v1/health" {
                 return next.run(req).await;
@@ -671,7 +671,7 @@ pub(crate) async fn require_ui_auth(
             (
                 StatusCode::UNAUTHORIZED,
                 Json(agena_api::ApiError::authentication_required(
-                    "UI authentication is required. Sign in with the server password or token.",
+                    "Server password is required. Set AGENA_SERVER_PASSWORD or enter the server password to connect.",
                 )),
             )
                 .into_response()

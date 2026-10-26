@@ -4,7 +4,7 @@ import { computed, onScopeDispose, ref } from 'vue'
 
 import { conditionalJsonObserved } from '../lib/conditionalJson'
 import { apiUrl } from '../lib/api'
-import { readUiAuthTokenVersion } from '../lib/uiAuthToken'
+import { readServerAuthTokenVersion } from '../lib/serverAuthToken'
 import { isDocumentVisible } from '../lib/backgroundReads'
 import {
   canReuseResource,
@@ -53,7 +53,7 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
   let observedRecoveryGeneration = -1
   let forceNextRead = false
   function ensureActivityScope() {
-    const next = `${readUiAuthTokenVersion()}:${apiUrl('/')}`
+    const next = `${readServerAuthTokenVersion()}:${apiUrl('/')}`
     if (next !== resourceScope) {
       resourceScope = next
       controller?.abort()

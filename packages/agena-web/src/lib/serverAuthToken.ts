@@ -4,13 +4,13 @@ import { localStorageKeys } from './persistence/storageKeys'
 
 type TokenMap = Record<string, string>
 
-const STORAGE_KEY = localStorageKeys.auth.uiTokenByBaseUrl
+const STORAGE_KEY = localStorageKeys.auth.serverTokenByBaseUrl
 
 // A monotonically increasing version lets callers tell whether a response was
 // produced with the same token that is currently active. This matters during
 // login: requests started by the locked page can finish after a new token has
 // been issued and must not invalidate that new session.
-let uiAuthTokenVersion = 0
+let serverAuthTokenVersion = 0
 
 function normalizeKey(baseUrl: string): string {
   const trimmed = String(baseUrl || '').trim()
@@ -26,11 +26,11 @@ function writeMap(next: TokenMap) {
   setLocalJson(STORAGE_KEY, next)
 }
 
-export function readUiAuthTokenVersion(): number {
-  return uiAuthTokenVersion
+export function readServerAuthTokenVersion(): number {
+  return serverAuthTokenVersion
 }
 
-export function readUiAuthTokenForBaseUrl(baseUrl: string): string {
+export function readServerAuthTokenForBaseUrl(baseUrl: string): string {
   const key = normalizeKey(baseUrl)
   if (!key) return ''
   const map = readMap()
@@ -38,21 +38,21 @@ export function readUiAuthTokenForBaseUrl(baseUrl: string): string {
   return token
 }
 
-export function writeUiAuthTokenForBaseUrl(baseUrl: string, token: string) {
+export function writeServerAuthTokenForBaseUrl(baseUrl: string, token: string) {
   const key = normalizeKey(baseUrl)
   const value = String(token || '').trim()
   if (!key) return
   if (!value) {
-    clearUiAuthTokenForBaseUrl(key)
+    clearServerAuthTokenForBaseUrl(key)
     return
   }
   const map = readMap()
   if (map[key] === value) return
   writeMap({ ...map, [key]: value })
-  uiAuthTokenVersion += 1
+  serverAuthTokenVersion += 1
 }
 
-export function clearUiAuthTokenForBaseUrl(baseUrl: string) {
+export function clearServerAuthTokenForBaseUrl(baseUrl: string) {
   const key = normalizeKey(baseUrl)
   if (!key) return
   const map = readMap()
@@ -62,20 +62,20 @@ export function clearUiAuthTokenForBaseUrl(baseUrl: string) {
   // Keep storage tidy.
   if (Object.keys(next).length === 0) {
     removeLocalKey(STORAGE_KEY)
-    uiAuthTokenVersion += 1
+    serverAuthTokenVersion += 1
     return
   }
   writeMap(next)
-  uiAuthTokenVersion += 1
+  serverAuthTokenVersion += 1
 }
 
-export function readActiveUiAuthToken(): string {
+export function readActiveServerAuthToken(): string {
   const baseUrl = readActiveBackendBaseUrl()
-  return readUiAuthTokenForBaseUrl(baseUrl)
+  return readServerAuthTokenForBaseUrl(baseUrl)
 }
 
-export function buildActiveUiAuthHeaders(): Record<string, string> {
-  const token = readActiveUiAuthToken()
+export function buildActiveServerAuthHeaders(): Record<string, string> {
+  const token = readActiveServerAuthToken()
   if (!token) return {}
   return { authorization: `Bearer ${token}` }
 }

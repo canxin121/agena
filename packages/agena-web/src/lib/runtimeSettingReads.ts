@@ -2,7 +2,7 @@ import { i18n } from '@/i18n'
 import { apiJson, apiUrl } from './api'
 import { createSharedRead, limitBackgroundReads } from './backgroundReads'
 import { captureResourceObservation } from './resourceSync'
-import { readUiAuthTokenVersion } from './uiAuthToken'
+import { readServerAuthTokenVersion } from './serverAuthToken'
 import type { RuntimeSettingReadResponse, RuntimeSettingsReadBundle } from './runtimeSettings'
 
 type Pending = {
@@ -89,7 +89,7 @@ export function readBatchedRuntimeSettingSources(
   signal?.throwIfAborted()
   const epoch = JSON.stringify([
     captureResourceObservation('sessions').scope,
-    readUiAuthTokenVersion(),
+    readServerAuthTokenVersion(),
     apiUrl('/'),
     generation,
   ])

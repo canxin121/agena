@@ -224,7 +224,7 @@ export default {
     }
   },
   "auth": {
-    "uiAuthRequired": "É necessário autenticar-se na interface"
+    "serverAuthRequired": "É necessária a senha do servidor"
   },
   "login": {
     "title": "Agena",

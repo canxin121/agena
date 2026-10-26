@@ -639,9 +639,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .await
         .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
     );
-    let ui_auth = crate::server::auth::init_ui_auth_async(args.password.clone(), &server_state_db)
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let server_auth =
+        crate::server::auth::init_server_auth_async(args.password.clone(), &server_state_db)
+            .await
+            .map_err(anyhow::Error::msg)?;
     let terminal = Arc::new(
         crate::server::terminal::manager::TerminalManager::new(server_state_db.clone())
             .await
@@ -702,7 +703,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         crate::server::mcp::McpServerState::load(
             application.clone(),
             mcp_workspace.id,
-            ui_auth.clone(),
+            server_auth.clone(),
             server_state_db.clone(),
             crate::server::mcp::McpServerStartupConfig {
                 enabled: args.mcp_enabled,
@@ -718,7 +719,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     mcp_state.log_startup_status();
 
     let shared_state = Arc::new(AppState {
-        ui_auth: ui_auth.clone(),
+        server_auth: server_auth.clone(),
         mcp_server: mcp_state.clone(),
         terminal,
         workspace_preview_registry,
@@ -727,7 +728,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         server_state_db,
         application: application.clone(),
     });
-    crate::server::auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
+    crate::server::auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.server_auth);
 
     tracing::info!(
         target: "agena.runtime",
@@ -747,7 +748,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let server_identity = api_state.server().clone();
     let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
         shared_state.clone(),
-        crate::server::auth::require_ui_auth,
+        crate::server::auth::require_server_auth,
     ));
 
     let server_api_routes =
@@ -755,7 +756,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             .with_state(shared_state.clone())
             .layer(middleware::from_fn_with_state(
                 shared_state.clone(),
-                crate::server::auth::require_ui_auth,
+                crate::server::auth::require_server_auth,
             ));
 
     let app = public_router

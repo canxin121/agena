@@ -3,11 +3,11 @@ import { computed, ref } from 'vue'
 
 import { ApiError, apiJson, apiUrl } from '../lib/api'
 import {
-  buildActiveUiAuthHeaders,
-  clearUiAuthTokenForBaseUrl,
-  readUiAuthTokenVersion,
-  writeUiAuthTokenForBaseUrl,
-} from '../lib/uiAuthToken'
+  buildActiveServerAuthHeaders,
+  clearServerAuthTokenForBaseUrl,
+  readServerAuthTokenVersion,
+  writeServerAuthTokenForBaseUrl,
+} from '../lib/serverAuthToken'
 import { readActiveBackendBaseUrl } from '../lib/backend'
 
 const AUTH_REQUEST_TIMEOUT_MS = 5000
@@ -66,7 +66,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     // Clear any stored token for the active backend so we don't keep sending a stale credential.
     try {
-      clearUiAuthTokenForBaseUrl(readActiveBackendBaseUrl())
+      clearServerAuthTokenForBaseUrl(readActiveBackendBaseUrl())
     } catch {
       // ignore
     }
@@ -76,10 +76,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function performRefresh(requestRevision: number, requestTokenVersion: number) {
     const isCurrent = () =>
-      requestRevision === stateRevision && requestTokenVersion === readUiAuthTokenVersion() && !loginInFlight.value
+      requestRevision === stateRevision && requestTokenVersion === readServerAuthTokenVersion() && !loginInFlight.value
 
     try {
-      const authHeaders = buildActiveUiAuthHeaders()
+      const authHeaders = buildActiveServerAuthHeaders()
       const resp = await fetch(apiUrl('/auth/session'), {
         signal: timeoutSignal(AUTH_REQUEST_TIMEOUT_MS),
         headers: {
@@ -100,7 +100,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (!isCurrent()) return
         authenticated.value = Boolean(data.authenticated)
         disabled.value = Boolean(data.disabled)
-        // The server reports a missing UI session as HTTP 200 with
+        // The server reports a missing server session as HTTP 200 with
         // { authenticated: false, locked: true }. Treat that as a login
         // requirement instead of mounting the protected page and waiting for
         // its first request to return 401.
@@ -109,7 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
         // Best-effort: if the backend returns a token (optional), persist it.
         const token = typeof data.token === 'string' ? data.token.trim() : ''
         if (token) {
-          writeUiAuthTokenForBaseUrl(readActiveBackendBaseUrl(), token)
+          writeServerAuthTokenForBaseUrl(readActiveBackendBaseUrl(), token)
         }
         return
       }
@@ -122,9 +122,9 @@ export const useAuthStore = defineStore('auth', () => {
         locked.value = true
         lastError.value = String(
           data?.problem?.user?.fallback ||
-            (resp.status === 429 ? 'Too many login attempts' : 'UI authentication is required.'),
+            (resp.status === 429 ? 'Too many login attempts' : 'Server password is required.'),
         )
-        clearUiAuthTokenForBaseUrl(readActiveBackendBaseUrl())
+        clearServerAuthTokenForBaseUrl(readActiveBackendBaseUrl())
         return
       }
 
@@ -146,7 +146,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function refresh() {
     const requestRevision = stateRevision
-    const requestTokenVersion = readUiAuthTokenVersion()
+    const requestTokenVersion = readServerAuthTokenVersion()
     const existing = refreshInFlight
     if (existing && existing.stateRevision === requestRevision && existing.tokenVersion === requestTokenVersion) {
       return existing.promise
@@ -184,7 +184,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       const token = typeof data?.token === 'string' ? data.token.trim() : ''
       if (token) {
-        writeUiAuthTokenForBaseUrl(readActiveBackendBaseUrl(), token)
+        writeServerAuthTokenForBaseUrl(readActiveBackendBaseUrl(), token)
       }
 
       // The create-session response is authoritative and already contains the

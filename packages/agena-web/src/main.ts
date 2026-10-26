@@ -25,7 +25,7 @@ import {
   clearAuthRequiredFromStorage,
   type AuthRequiredDetail,
 } from './lib/authEvents.ts'
-import { readUiAuthTokenVersion } from './lib/uiAuthToken'
+import { readServerAuthTokenVersion } from './lib/serverAuthToken'
 import { installImeCompositionGuard } from './lib/imeKeyboard'
 
 // An input method's confirmation key belongs to the input method. Install the
@@ -79,13 +79,13 @@ function handleAuthRequired(detail?: AuthRequiredDetail) {
   // been written. Their event is stale and must not bounce the app back to the
   // login page. The version is intentionally metadata only; the bearer token
   // itself is never placed in the event or sessionStorage.
-  if (typeof detail?.authTokenVersion === 'number' && detail.authTokenVersion !== readUiAuthTokenVersion()) {
+  if (typeof detail?.authTokenVersion === 'number' && detail.authTokenVersion !== readServerAuthTokenVersion()) {
     return
   }
 
   const msg =
-    String(detail?.message || i18n.global.t('auth.uiAuthRequired')).trim() ||
-    String(i18n.global.t('auth.uiAuthRequired'))
+    String(detail?.message || i18n.global.t('auth.serverAuthRequired')).trim() ||
+    String(i18n.global.t('auth.serverAuthRequired'))
 
   const now = Date.now()
   if (msg !== lastAuthToastMsg || now - lastAuthToastAt > 4000) {

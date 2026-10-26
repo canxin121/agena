@@ -466,13 +466,13 @@ impl AgenaClient {
             return client.with_bearer_token(token);
         }
         if let Some(password) = password {
-            let token = client.create_ui_session(password).await?;
+            let token = client.create_server_session(password).await?;
             return client.with_password_session(password, token.as_str());
         }
         Ok(client)
     }
 
-    async fn create_ui_session(&self, password: &str) -> Result<String, ClientError> {
+    async fn create_server_session(&self, password: &str) -> Result<String, ClientError> {
         if password.trim().is_empty() {
             return Err(ClientError::Protocol(
                 "server password must not be empty".to_owned(),
@@ -556,7 +556,7 @@ impl AgenaClient {
         if self.authentication.generation.load(Ordering::Acquire) != observed_generation {
             return Ok(true);
         }
-        let token = self.create_ui_session(password.expose_secret()).await?;
+        let token = self.create_server_session(password.expose_secret()).await?;
         self.authentication.replace_bearer(token.as_str())?;
         Ok(true)
     }

@@ -173,7 +173,7 @@ export default {
       empty: { noMatches: 'لا توجد نتائج مطابقة' },
     },
   },
-  auth: { uiAuthRequired: 'يلزم تسجيل الدخول إلى الواجهة' },
+  auth: { serverAuthRequired: 'كلمة مرور الخادم مطلوبة' },
   login: {
     title: 'Agena', unlockDescription: 'أدخل كلمة المرور لفتح Agena.',
     subtitle: 'اختر واجهة خلفية. إذا كانت مقفلة، فأدخل كلمة المرور للمتابعة.',

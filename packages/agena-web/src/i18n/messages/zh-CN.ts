@@ -605,7 +605,7 @@ export default {
     },
   },
   auth: {
-    uiAuthRequired: '需要 UI 认证',
+    serverAuthRequired: '请输入服务器密码',
   },
   login: {
     title: 'Agena',

@@ -2,7 +2,7 @@ import { ref, shallowRef } from 'vue'
 
 import { connectSse } from '@/lib/sse'
 import { apiUrl } from '@/lib/api'
-import { readUiAuthTokenVersion } from '@/lib/uiAuthToken'
+import { readServerAuthTokenVersion } from '@/lib/serverAuthToken'
 
 export function useGitWatchSse<TPayload>(opts: {
   buildUrl: (directory: string) => string
@@ -38,7 +38,7 @@ export function useGitWatchSse<TPayload>(opts: {
   }
 
   function startWatch(directory: string, identity = directory) {
-    const key = `${readUiAuthTokenVersion()}:${apiUrl(opts.buildUrl(directory))}:${identity}`
+    const key = `${readServerAuthTokenVersion()}:${apiUrl(opts.buildUrl(directory))}:${identity}`
     if (watchSource.value && watchDirectory === directory && watchIdentity === key) return
     stopWatch()
     watchDirectory = directory

@@ -1,6 +1,6 @@
 import { i18n } from '@/i18n'
 import { apiResponse, apiUrl } from './api'
-import { readUiAuthTokenVersion } from './uiAuthToken'
+import { readServerAuthTokenVersion } from './serverAuthToken'
 import { canReuseResource, captureResourceObservation, noteResourceVersion } from './resourceSync'
 import { createSharedRead, limitBackgroundReads } from './backgroundReads'
 
@@ -58,7 +58,7 @@ export async function conditionalJsonObserved<T>(
   forceFresh = false,
 ): Promise<Observed<T>> {
   init?.signal?.throwIfAborted()
-  const authVersion = readUiAuthTokenVersion()
+  const authVersion = readServerAuthTokenVersion()
   const resolvedUrl = apiUrl(url)
   const nextScope = `${authVersion}:${apiUrl('/')}`
   if (nextScope !== cacheScope) {
@@ -115,7 +115,7 @@ export async function conditionalJsonObserved<T>(
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
       })
       signal.throwIfAborted()
-      if (authVersion !== readUiAuthTokenVersion() || resolvedUrl !== apiUrl(url))
+      if (authVersion !== readServerAuthTokenVersion() || resolvedUrl !== apiUrl(url))
         throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       if (response.status === 304) {
         if (!cached) throw new Error(i18n.global.t('errors.content.notModifiedWithoutCache'))
@@ -132,7 +132,7 @@ export async function conditionalJsonObserved<T>(
       }
       const text = await response.text()
       signal.throwIfAborted()
-      if (authVersion !== readUiAuthTokenVersion() || resolvedUrl !== apiUrl(url))
+      if (authVersion !== readServerAuthTokenVersion() || resolvedUrl !== apiUrl(url))
         throw new Error(i18n.global.t('errors.content.backendOrAuthChanged'))
       const value = JSON.parse(text) as T
       const etag = response.headers.get('etag') ?? ''

@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::auth::{self, OAuthPasswordError, UiAuth};
+use super::auth::{self, OAuthPasswordError, ServerAuth};
 
 use super::persistence::db::{KV_KEY_MCP_OAUTH_RUNTIME, KV_KEY_MCP_SERVER_CONTROL, ServerStateDb};
 
@@ -151,7 +151,7 @@ pub(crate) struct McpServerState {
     application: Application,
     workspace_id: i64,
     next_call_id: Arc<AtomicI64>,
-    ui_auth: UiAuth,
+    server_auth: ServerAuth,
     oauth: Arc<OAuthState>,
     control: Arc<McpControlState>,
     fallback_resource: String,
@@ -402,7 +402,7 @@ impl McpServerState {
     pub(crate) fn new(
         application: Application,
         workspace_id: i64,
-        ui_auth: UiAuth,
+        server_auth: ServerAuth,
         configured_public_url: Option<&str>,
         fallback_public_url: &str,
     ) -> Result<Self, String> {
@@ -414,7 +414,7 @@ impl McpServerState {
             application,
             workspace_id,
             Arc::new(AtomicI64::new(1)),
-            ui_auth,
+            server_auth,
             Arc::new(OAuthState::new(OAuthSigningKey::generate()?, None, None)),
             configured_resource,
             None,
@@ -427,7 +427,7 @@ impl McpServerState {
     pub(crate) async fn load(
         application: Application,
         workspace_id: i64,
-        ui_auth: UiAuth,
+        server_auth: ServerAuth,
         database: Arc<ServerStateDb>,
         startup: McpServerStartupConfig<'_>,
     ) -> Result<Self, String> {
@@ -447,7 +447,7 @@ impl McpServerState {
             };
         let credential_changed = persisted.as_ref().is_some_and(|control| {
             control.oauth_password_phc.is_some()
-                || control.server_password_fingerprint != ui_auth.credential_fingerprint()
+                || control.server_password_fingerprint != server_auth.credential_fingerprint()
         });
         let mut configured_resource = configured_public_url
             .map(|value| normalize_public_mcp_url(value.as_str()))
@@ -523,7 +523,7 @@ impl McpServerState {
             application,
             workspace_id,
             Arc::new(AtomicI64::new(1)),
-            ui_auth,
+            server_auth,
             Arc::new(OAuthState::new(
                 signing_key,
                 Some(Arc::clone(&database)),
@@ -568,7 +568,7 @@ impl McpServerState {
         application: Application,
         workspace_id: i64,
         next_call_id: Arc<AtomicI64>,
-        ui_auth: UiAuth,
+        server_auth: ServerAuth,
         oauth: Arc<OAuthState>,
         configured_resource: Option<String>,
         configured_issuer: Option<String>,
@@ -580,7 +580,7 @@ impl McpServerState {
             application,
             workspace_id,
             next_call_id,
-            ui_auth,
+            server_auth,
             oauth,
             control: Arc::new(McpControlState {
                 enabled: std::sync::atomic::AtomicBool::new(enabled),
@@ -721,7 +721,7 @@ impl McpServerState {
                 "ChatGPT requires a canonical remote HTTPS MCP resource URL. Configure a public HTTPS endpoint or Secure MCP Tunnel before connecting it.".to_owned(),
             );
         }
-        if matches!(self.ui_auth, UiAuth::Disabled) {
+        if matches!(self.server_auth, ServerAuth::Disabled) {
             warnings.push(
                 "Server password is not configured. Set AGENA_SERVER_PASSWORD or --password and restart Agena to enable MCP OAuth authorization.".to_owned(),
             );
@@ -771,7 +771,7 @@ impl McpServerState {
         headers: &HeaderMap,
     ) -> Result<(), OAuthPasswordError> {
         auth::verify_password_for_oauth_async(
-            self.ui_auth.clone(),
+            self.server_auth.clone(),
             candidate.to_owned(),
             headers.clone(),
         )
@@ -800,8 +800,8 @@ impl McpServerState {
             ready: readiness.ready,
             warnings: readiness.warnings.clone(),
             oauth: McpOAuthControlStatus {
-                configured: matches!(self.ui_auth, UiAuth::Enabled(_)),
-                password_configured: matches!(self.ui_auth, UiAuth::Enabled(_)),
+                configured: matches!(self.server_auth, ServerAuth::Enabled(_)),
+                password_configured: matches!(self.server_auth, ServerAuth::Enabled(_)),
                 password_source: "server".to_owned(),
                 ready: readiness.ready,
                 authorization_server_kind: "agena-managed".to_owned(),
@@ -848,7 +848,7 @@ impl McpServerState {
                     public_url,
                     oauth_issuer_url,
                     oauth_password_phc: None,
-                    server_password_fingerprint: self.ui_auth.credential_fingerprint(),
+                    server_password_fingerprint: self.server_auth.credential_fingerprint(),
                 },
             )
             .await
@@ -4566,20 +4566,22 @@ mod tests {
         let database = ServerStateDb::from_store(Arc::new(TestInstanceStateStore::default()))
             .await
             .unwrap();
-        let first = auth::init_ui_auth_async(Some("shared-test-password".into()), &database)
+        let first = auth::init_server_auth_async(Some("shared-test-password".into()), &database)
             .await
             .unwrap();
-        let restarted = auth::init_ui_auth_async(Some("shared-test-password".into()), &database)
-            .await
-            .unwrap();
+        let restarted =
+            auth::init_server_auth_async(Some("shared-test-password".into()), &database)
+                .await
+                .unwrap();
         assert!(first.credential_fingerprint().is_some());
         assert_eq!(
             first.credential_fingerprint(),
             restarted.credential_fingerprint()
         );
-        let changed = auth::init_ui_auth_async(Some("replacement-test-password".into()), &database)
-            .await
-            .unwrap();
+        let changed =
+            auth::init_server_auth_async(Some("replacement-test-password".into()), &database)
+                .await
+                .unwrap();
         assert_ne!(
             first.credential_fingerprint(),
             changed.credential_fingerprint()
@@ -4596,7 +4598,7 @@ mod tests {
             )
             .is_ok()
         );
-        let disabled = auth::init_ui_auth_async(None, &database).await.unwrap();
+        let disabled = auth::init_server_auth_async(None, &database).await.unwrap();
         assert!(disabled.credential_fingerprint().is_none());
         assert_eq!(
             auth::verify_password_for_oauth(
@@ -4607,7 +4609,7 @@ mod tests {
             Err(OAuthPasswordError::NotConfigured)
         );
         let restored =
-            auth::init_ui_auth_async(Some("replacement-test-password".into()), &database)
+            auth::init_server_auth_async(Some("replacement-test-password".into()), &database)
                 .await
                 .unwrap();
         assert_ne!(

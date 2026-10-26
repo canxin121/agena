@@ -4,7 +4,7 @@ use agena_application::Application;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) ui_auth: crate::server::auth::UiAuth,
+    pub(crate) server_auth: crate::server::auth::ServerAuth,
     pub(crate) mcp_server: Arc<crate::server::mcp::McpServerState>,
     pub(crate) terminal: Arc<crate::server::terminal::manager::TerminalManager>,
     pub(crate) workspace_preview_registry:

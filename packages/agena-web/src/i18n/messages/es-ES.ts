@@ -847,7 +847,7 @@ export default {
     }
   },
   "auth": {
-    "uiAuthRequired": "Se requiere autenticación de la interfaz"
+    "serverAuthRequired": "Se requiere la contraseña del servidor"
   },
   "login": {
     "title": "Agena",

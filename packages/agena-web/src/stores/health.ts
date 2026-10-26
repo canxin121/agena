@@ -48,7 +48,7 @@ export const useHealthStore = defineStore('health', () => {
     loading.value = true
     error.value = null
     try {
-      // GET /api/v1/health is public even when UI auth is enabled.
+      // GET /api/v1/health is public even when server password is configured.
       const next = await apiJson<Health>(url, { signal: timeoutSignal(HEALTH_REQUEST_TIMEOUT_MS) })
       if (url !== backendUrl) return
       data.value = next

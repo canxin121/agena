@@ -2,7 +2,7 @@ import { i18n } from '@/i18n'
 import { apiJson } from './api'
 import { createSharedRead, isDocumentVisible } from './backgroundReads'
 import { readActiveBackendBaseUrl } from './backend'
-import { readUiAuthTokenVersion } from './uiAuthToken'
+import { readServerAuthTokenVersion } from './serverAuthToken'
 import { createRevalidator } from './revalidation'
 import type { SseEvent } from './sse'
 
@@ -38,7 +38,7 @@ let probeError: unknown
 let checkFlight: { keys: Set<string>; scope: number; read: ReturnType<typeof createSharedRead<void>> } | null = null
 
 function ensureScope() {
-  const next = `${readActiveBackendBaseUrl()}:${readUiAuthTokenVersion()}`
+  const next = `${readActiveBackendBaseUrl()}:${readServerAuthTokenVersion()}`
   if (scope === next) return scopeGeneration
   scope = next
   scopeGeneration++

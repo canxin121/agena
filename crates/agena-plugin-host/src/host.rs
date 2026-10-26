@@ -74,6 +74,8 @@ pub use call_completion::{PluginCallCompletion, current_plugin_call_completion};
 mod contribution_registry;
 pub use callback_rpc::{PluginCallbackDispatcher, PluginCallbackRpcError};
 #[cfg(test)]
+mod cancellation_tests;
+#[cfg(test)]
 mod contract_tests;
 mod host_handle;
 mod host_scoped_client;
@@ -779,6 +781,10 @@ fn unix_timestamp_ms() -> i64 {
 
 fn transport_to_plugin_error(e: TransportError) -> PluginError {
     match e {
+        TransportError::Cancelled => PluginError::from_kind(
+            crate::sdk::PluginErrorKind::Cancelled,
+            "plugin request was cancelled",
+        ),
         TransportError::Plugin(pe) => pe,
         other => PluginError::internal(other.to_string()),
     }
@@ -925,6 +931,7 @@ struct CallbackAuthorityRecord {
     generation: u64,
     context: HostCallbackContext,
     completion: PluginCallCompletion,
+    cancellation: tokio_util::sync::CancellationToken,
 }
 
 type ToolRegistryEventListener = Arc<dyn Fn(ToolRegistryChangedEvent) + Send + Sync>;

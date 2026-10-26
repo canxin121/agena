@@ -6,7 +6,11 @@ pub mod http;
 pub mod initialization;
 pub mod inproc;
 pub mod quiescent;
+mod request;
 pub mod stdio;
+
+#[cfg(test)]
+mod cancellation_tests;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

@@ -70,20 +70,52 @@ impl CallCompletionLease {
 
 impl HostHandle {
     /// `context` has already passed this handle's authority validation.
-    pub(super) async fn run_in_callback_completion<T>(
+    pub(super) fn run_in_callback_completion<T>(
         &self,
         context: &HostCallbackContext,
-        future: impl Future<Output = T>,
-    ) -> T {
-        let inherited = context.authority_token.as_ref().and_then(|token| {
-            super::host_handle::recover_mutex(
-                &self.callback_authorities,
-                "plugin callback authority registry",
-            )
-            .get(token)
-            .map(|record| record.completion.clone())
-        });
-        let lease = CallCompletionLease::new(inherited);
-        lease.completion.scope(future).await
+        future: impl Future<Output = crate::sdk::Result<T>>,
+    ) -> impl Future<Output = crate::sdk::Result<T>> {
+        // Box before creating the async cancellation/scope layers. The RPC
+        // handler is large; retaining it inline through every nested scope
+        // multiplies its poll stack, especially for callback -> service calls.
+        let future = Box::pin(future);
+        // Retain the exact authority's signal before the first await. A
+        // revocation racing with admission must never detach a callback from
+        // its originating call and give it a fresh independent lifetime.
+        let authority = context
+            .authority_token
+            .as_ref()
+            .map(|token| {
+                super::host_handle::recover_mutex(
+                    &self.callback_authorities,
+                    "plugin callback authority registry",
+                )
+                .get(token)
+                .cloned()
+                .ok_or_else(|| {
+                    crate::sdk::PluginError::from_kind(
+                        crate::sdk::PluginErrorKind::Cancelled,
+                        "originating plugin call has ended",
+                    )
+                })
+            })
+            .transpose();
+        async move {
+            let authority = authority?;
+            let lease = CallCompletionLease::new(
+                authority.as_ref().map(|record| record.completion.clone()),
+            );
+            lease.completion.scope(async move {
+                let Some(authority) = authority else { return future.await; };
+                tokio::select! {
+                    biased;
+                    _ = authority.cancellation.cancelled() => Err(crate::sdk::PluginError::from_kind(
+                        crate::sdk::PluginErrorKind::Cancelled,
+                        "originating plugin call has ended",
+                    )),
+                    result = future => result,
+                }
+            }).await
+        }
     }
 }

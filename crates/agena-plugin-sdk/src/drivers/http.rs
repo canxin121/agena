@@ -38,6 +38,7 @@ struct HttpDriverState<P: Plugin> {
     manifest: crate::PluginManifest,
     fallback_host: Arc<dyn HostClient>,
     dispatch_slots: Arc<Semaphore>,
+    requests: crate::cancellation::RequestRegistry,
     instances: instance::Instances<P>,
 }
 
@@ -51,6 +52,7 @@ impl<P: Plugin> HttpDriverState<P> {
             manifest,
             fallback_host: host,
             dispatch_slots: Arc::new(Semaphore::new(64)),
+            requests: crate::cancellation::RequestRegistry::default(),
             instances: instance::Instances::default(),
         }
     }
@@ -500,6 +502,18 @@ async fn handle_rpc<P: Plugin>(
     let id = req.id.clone();
     let params = req.params.unwrap_or(serde_json::Value::Null);
     let callback_context = req.context;
+    if req.method == method::CANCEL_REQUEST {
+        let result = serde_json::from_value::<crate::rpc::CancelRequest>(params)
+            .map_err(PluginError::from)
+            .and_then(|request| instance::request_id(&headers, &request.id))
+            .map(|id| serde_json::json!({"cancelled": state.requests.cancel(&id)}));
+        return Json(rpc_response(id, result));
+    }
+    let request_scope =
+        match instance::request_id(&headers, &id).and_then(|id| state.requests.begin(id)) {
+            Ok(scope) => scope,
+            Err(error) => return Json(error_response(id, error)),
+        };
     if matches!(
         req.method.as_str(),
         method::META_INIT
@@ -509,7 +523,15 @@ async fn handle_rpc<P: Plugin>(
     ) {
         return Json(rpc_response(
             id,
-            instance::control(state, &headers, &req.method, params, callback_context).await,
+            request_scope
+                .run(instance::control(
+                    state,
+                    &headers,
+                    &req.method,
+                    params,
+                    callback_context,
+                ))
+                .await,
         ));
     }
     let dispatch_slot = Arc::clone(&state.dispatch_slots).try_acquire_owned();
@@ -537,7 +559,6 @@ async fn handle_rpc<P: Plugin>(
         Ok(admission) => admission,
         Err(error) => return Json(error_response(id, error)),
     };
-
     if req.method == method::HOOK_TOOL_INVOKE_STREAM {
         let Some(callback_client) = admission.instance.callback_client.read().await.clone() else {
             return Json(error_response(
@@ -564,9 +585,11 @@ async fn handle_rpc<P: Plugin>(
         let mut handle = crate::host_api::run_in_isolated_host_callback_context(
             callback_context.clone(),
             async {
-                admission
-                    .dispatcher
-                    .dispatch_stream_with_lifetime(input, admission.clone())
+                admission.dispatcher.dispatch_stream_request(
+                    input,
+                    &request_scope,
+                    admission.clone(),
+                )
             },
         )
         .await;
@@ -703,7 +726,7 @@ async fn handle_rpc<P: Plugin>(
             tokio::select! {
                 biased;
                 _ = stop.cancelled() => {},
-                () = forward => {},
+                _ = request_scope.run(async { forward.await; Ok(()) }) => {},
             }
         });
         let handle_resource = match serde_json::to_value(ToolInvokeStreamHandle {
@@ -730,10 +753,12 @@ async fn handle_rpc<P: Plugin>(
 
     let dispatch = admission.dispatcher.dispatch(&req.method, params);
     let result = admission
-        .run(crate::host_api::run_in_isolated_host_callback_context(
-            callback_context.unwrap_or_default(),
-            dispatch,
-        ))
+        .run(
+            request_scope.run(crate::host_api::run_in_isolated_host_callback_context(
+                callback_context.unwrap_or_default(),
+                dispatch,
+            )),
+        )
         .await;
     match result {
         Ok(v) => Json(Response {
@@ -834,7 +859,11 @@ fn error_response(id: RequestId, error: PluginError) -> Response {
         id,
         payload: ResponsePayload::Err {
             error: ErrorObject {
-                code: codes::PLUGIN_GENERIC,
+                code: if error.kind == PluginErrorKind::Cancelled {
+                    codes::REQUEST_CANCELLED
+                } else {
+                    codes::PLUGIN_GENERIC
+                },
                 message: error.to_string(),
                 data: error.rpc_error_data(),
             },
@@ -850,6 +879,362 @@ fn rpc_response(id: RequestId, result: crate::Result<serde_json::Value>) -> Resp
             payload: ResponsePayload::Ok { result },
         },
         Err(error) => error_response(id, error),
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    struct WaitingPlugin {
+        started: tokio::sync::mpsc::UnboundedSender<crate::CancellationToken>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for WaitingPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "http-cancellation", "1.0.0")
+        }
+
+        async fn tool_invoke(&self, input: ToolInvokeInput) -> crate::Result<ToolInvokeOutput> {
+            self.started.send(input.context().cancellation).unwrap();
+            std::future::pending().await
+        }
+    }
+
+    fn request(id: i64, method: &str, params: serde_json::Value) -> Request {
+        Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(id),
+            method: method.into(),
+            params: Some(params),
+            context: None,
+        }
+    }
+
+    async fn initialized() -> (
+        Arc<HttpDriverState<WaitingPlugin>>,
+        HeaderMap,
+        tokio::sync::mpsc::UnboundedReceiver<crate::CancellationToken>,
+    ) {
+        let (started, signals) = tokio::sync::mpsc::unbounded_channel();
+        let (state, headers) = initialized_with(
+            move || WaitingPlugin {
+                started: started.clone(),
+            },
+            None,
+        )
+        .await;
+        (state, headers, signals)
+    }
+
+    async fn initialized_with<P: Plugin>(
+        factory: impl Fn() -> P + Send + Sync + 'static,
+        callback_url: Option<String>,
+    ) -> (Arc<HttpDriverState<P>>, HeaderMap) {
+        let state = Arc::new(HttpDriverState::new(
+            factory,
+            Arc::new(crate::NoopHostClient),
+        ));
+        let mut headers = HeaderMap::new();
+        headers.insert(INSTANCE_HEADER, "test-owner".parse().unwrap());
+        headers.insert(EXPECTED_REVISION_HEADER, "-".parse().unwrap());
+        let context = InitContext {
+            agena_version: "test".into(),
+            workspace_root: "/tmp".into(),
+            plugin_id: format!("{}.{}", state.manifest.namespace, state.manifest.name)
+                .parse()
+                .unwrap(),
+            host_callback_url: callback_url,
+            host_callback_token: None,
+            settings: serde_json::json!({}),
+            protocol_version: crate::rpc::PROTOCOL_VERSION,
+        };
+        let Json(response) = handle_rpc(
+            State(state.clone()),
+            headers.clone(),
+            Json(request(
+                1,
+                method::META_INIT,
+                serde_json::to_value(context).unwrap(),
+            )),
+        )
+        .await;
+        assert!(matches!(response.payload, ResponsePayload::Ok { .. }));
+        headers.remove(EXPECTED_REVISION_HEADER);
+        (state, headers)
+    }
+
+    fn invocation() -> serde_json::Value {
+        serde_json::to_value(ToolInvokeInput {
+            tool_name: "wait".into(),
+            session_id: 1,
+            call_id: 2,
+            workspace_root: "/tmp".into(),
+            input: serde_json::json!({}),
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cancellation_bypasses_exhausted_capacity_and_checks_instance_owner() {
+        let (state, headers, mut signals) = initialized().await;
+        let task = tokio::spawn(handle_rpc(
+            State(state.clone()),
+            headers.clone(),
+            Json(request(42, method::HOOK_TOOL_INVOKE, invocation())),
+        ));
+        let signal = signals.recv().await.unwrap();
+        let _remaining = state
+            .dispatch_slots
+            .clone()
+            .acquire_many_owned(63)
+            .await
+            .unwrap();
+        let mut wrong_owner = headers.clone();
+        wrong_owner.insert(INSTANCE_HEADER, "other-owner".parse().unwrap());
+        let Json(rejected) = handle_rpc(
+            State(state.clone()),
+            wrong_owner,
+            Json(request(
+                80,
+                method::CANCEL_REQUEST,
+                serde_json::json!({"id":42}),
+            )),
+        )
+        .await;
+        assert!(
+            matches!(rejected.payload, ResponsePayload::Ok { result } if result["cancelled"] == false)
+        );
+        assert!(!signal.is_cancelled());
+        let Json(cancelled) = handle_rpc(
+            State(state),
+            headers,
+            Json(request(
+                81,
+                method::CANCEL_REQUEST,
+                serde_json::json!({"id":42}),
+            )),
+        )
+        .await;
+        assert!(
+            matches!(cancelled.payload, ResponsePayload::Ok { result } if result["cancelled"] == true)
+        );
+        let Json(response) = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(response.payload, ResponsePayload::Err { error } if error.code == codes::REQUEST_CANCELLED)
+        );
+        assert!(signal.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn early_http_cancellation_prevents_late_request_execution() {
+        let (state, headers, mut signals) = initialized().await;
+        let _ = handle_rpc(
+            State(state.clone()),
+            headers.clone(),
+            Json(request(
+                81,
+                method::CANCEL_REQUEST,
+                serde_json::json!({"id":42}),
+            )),
+        )
+        .await;
+        let Json(response) = handle_rpc(
+            State(state),
+            headers,
+            Json(request(42, method::HOOK_TOOL_INVOKE, invocation())),
+        )
+        .await;
+        assert!(
+            matches!(response.payload, ResponsePayload::Err { error } if error.code == codes::REQUEST_CANCELLED)
+        );
+        assert!(signals.try_recv().is_err());
+    }
+
+    struct BufferedStreamPlugin {
+        emit_chunk: bool,
+        finished: tokio::sync::mpsc::UnboundedSender<crate::CancellationToken>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for BufferedStreamPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "buffered-stream", "1.0.0")
+        }
+
+        async fn tool_invoke_stream(
+            &self,
+            input: ToolInvokeInput,
+            sink: crate::ToolStreamSink,
+        ) -> crate::Result<crate::ToolStreamEnd> {
+            if self.emit_chunk {
+                sink.text("buffered").await;
+            }
+            self.finished.send(input.context().cancellation).unwrap();
+            Ok(crate::ToolStreamEnd::text(sink.stream_id(), "done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_stream_capacity_when_chunk_or_terminal_callbacks_are_blocked() {
+        for emit_chunk in [true, false] {
+            let (callback_started, mut callbacks) = tokio::sync::mpsc::unbounded_channel();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let app = Router::new().route(
+                "/",
+                post(move |Json(request): Json<Request>| {
+                    let callback_started = callback_started.clone();
+                    async move {
+                        callback_started.send(request.method).unwrap();
+                        std::future::pending::<Json<Response>>().await
+                    }
+                }),
+            );
+            let callback_server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let (finished, mut completions) = tokio::sync::mpsc::unbounded_channel();
+            let (state, headers) = initialized_with(
+                move || BufferedStreamPlugin {
+                    emit_chunk,
+                    finished: finished.clone(),
+                },
+                Some(format!("http://{address}/")),
+            )
+            .await;
+            let _remaining = state
+                .dispatch_slots
+                .clone()
+                .acquire_many_owned(63)
+                .await
+                .unwrap();
+            let Json(response) = handle_rpc(
+                State(state.clone()),
+                headers.clone(),
+                Json(request(42, method::HOOK_TOOL_INVOKE_STREAM, invocation())),
+            )
+            .await;
+            assert!(matches!(response.payload, ResponsePayload::Ok { .. }));
+            let callback_method = tokio::time::timeout(Duration::from_secs(2), callbacks.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                callback_method,
+                if emit_chunk {
+                    method::TOOL_STREAM_CHUNK
+                } else {
+                    method::TOOL_STREAM_END
+                }
+            );
+            let signal = completions.recv().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), signal.cancelled())
+                .await
+                .unwrap();
+            assert_eq!(state.dispatch_slots.available_permits(), 0);
+            let Json(cancelled) = handle_rpc(
+                State(state.clone()),
+                headers,
+                Json(request(
+                    81,
+                    method::CANCEL_REQUEST,
+                    serde_json::json!({"id":42}),
+                )),
+            )
+            .await;
+            assert!(
+                matches!(cancelled.payload, ResponsePayload::Ok { result } if result["cancelled"] == true)
+            );
+            let released =
+                tokio::time::timeout(Duration::from_secs(2), state.dispatch_slots.acquire())
+                    .await
+                    .expect("cancelled stream callback must release its dispatch capacity")
+                    .unwrap();
+            drop(released);
+            callback_server.abort();
+            assert!(callback_server.await.unwrap_err().is_cancelled());
+        }
+    }
+
+    struct WaitingInitPlugin {
+        started: tokio::sync::mpsc::UnboundedSender<crate::CancellationToken>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for WaitingInitPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "init-cancellation", "1.0.0")
+        }
+
+        async fn init(
+            &self,
+            _: InitContext,
+            _: Arc<dyn HostClient>,
+        ) -> crate::Result<crate::InitOutcome> {
+            self.started
+                .send(crate::current_cancellation_token().unwrap())
+                .unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn initialization_uses_the_same_request_cancellation_lifetime() {
+        let (started, mut signals) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(HttpDriverState::new(
+            move || WaitingInitPlugin {
+                started: started.clone(),
+            },
+            Arc::new(crate::NoopHostClient),
+        ));
+        let mut headers = HeaderMap::new();
+        headers.insert(INSTANCE_HEADER, "init-owner".parse().unwrap());
+        headers.insert(EXPECTED_REVISION_HEADER, "-".parse().unwrap());
+        let context = InitContext {
+            agena_version: "test".into(),
+            workspace_root: "/tmp".into(),
+            plugin_id: "test.init-cancellation".parse().unwrap(),
+            host_callback_url: None,
+            host_callback_token: None,
+            settings: serde_json::json!({}),
+            protocol_version: crate::rpc::PROTOCOL_VERSION,
+        };
+        let task = tokio::spawn(handle_rpc(
+            State(state.clone()),
+            headers.clone(),
+            Json(request(
+                7,
+                method::META_INIT,
+                serde_json::to_value(context).unwrap(),
+            )),
+        ));
+        let signal = signals.recv().await.unwrap();
+        let Json(response) = handle_rpc(
+            State(state),
+            headers,
+            Json(request(
+                8,
+                method::CANCEL_REQUEST,
+                serde_json::json!({"id":7}),
+            )),
+        )
+        .await;
+        assert!(
+            matches!(response.payload, ResponsePayload::Ok { result } if result["cancelled"] == true)
+        );
+        let Json(result) = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result.payload, ResponsePayload::Err { error } if error.code == codes::REQUEST_CANCELLED)
+        );
+        assert!(signal.is_cancelled());
     }
 }
 

@@ -4,8 +4,8 @@
 //! dispatch/notification/stream to settle, and only then runs the plugin's
 //! shutdown hook and closes the underlying transport. This is the host-side
 //! equivalent of an effect scope reaching quiescence rather than merely
-//! requesting cancellation. Forced close reaches the underlying transport
-//! first so a pending request cannot prevent process cleanup.
+//! requesting cancellation. Forced close cancels accepted work before closing
+//! the underlying transport, even while graceful shutdown is waiting for idle.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -25,6 +25,7 @@ struct ActivityState {
     active: AtomicUsize,
     idle: Notify,
     closing: CancellationToken,
+    forced_stop: CancellationToken,
     finish: Mutex<FinishState>,
 }
 
@@ -40,6 +41,7 @@ impl ActivityState {
             active: AtomicUsize::new(0),
             idle: Notify::new(),
             closing: CancellationToken::new(),
+            forced_stop: CancellationToken::new(),
             finish: Mutex::new(FinishState::default()),
         }
     }
@@ -73,6 +75,17 @@ impl ActivityState {
                 return;
             }
             notified.await;
+        }
+    }
+
+    async fn run<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, TransportError>>,
+    ) -> Result<T, TransportError> {
+        tokio::select! {
+            biased;
+            _ = self.forced_stop.cancelled() => Err(TransportError::Cancelled),
+            result = future => result,
         }
     }
 }
@@ -116,6 +129,14 @@ impl QuiescentTransport {
     }
 
     async fn finish(&self, graceful: bool) -> Result<(), TransportError> {
+        if !graceful {
+            // A graceful waiter may own `finish` while awaiting these calls.
+            // Signal them before taking that lock so forced close can release
+            // the waiter and reach the underlying transport cleanup.
+            self.state.accepting.store(false, Ordering::Release);
+            self.state.closing.cancel();
+            self.state.forced_stop.cancel();
+        }
         let mut finish = self.state.finish.lock().await;
         if let Some(outcome) = &finish.outcome {
             self.state.wait_idle().await;
@@ -128,11 +149,11 @@ impl QuiescentTransport {
             // The shutdown hook runs outside admission tracking after all
             // ordinary calls settle, so it cannot race with a new invocation.
             let _ = self
-                .inner
-                .dispatch(
+                .state
+                .run(self.inner.dispatch(
                     method::META_SHUTDOWN,
                     serde_json::Value::Object(Default::default()),
-                )
+                ))
                 .await;
         }
         let result = self.inner.close().await;
@@ -151,7 +172,7 @@ impl PluginTransport for QuiescentTransport {
         initialization: super::initialization::PluginInitialization,
     ) -> Result<crate::sdk::InitOutcome, TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.initialize(initialization).await
+        self.state.run(self.inner.initialize(initialization)).await
     }
 
     async fn dispatch(
@@ -160,17 +181,17 @@ impl PluginTransport for QuiescentTransport {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.dispatch(method, params).await
+        self.state.run(self.inner.dispatch(method, params)).await
     }
 
     async fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.notify(method, params).await
+        self.state.run(self.inner.notify(method, params)).await
     }
 
     async fn attach_host(&self, host: Arc<dyn HostClient>) -> Result<(), TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.attach_host(host).await
+        self.state.run(self.inner.attach_host(host)).await
     }
 
     async fn bind_host(
@@ -179,11 +200,16 @@ impl PluginTransport for QuiescentTransport {
         scope: Arc<crate::effect_scope::PluginEffectScope>,
     ) -> Result<(), TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.bind_host(host, scope).await
+        self.state.run(self.inner.bind_host(host, scope)).await
     }
 
     async fn can_reuse(&self, owner: &Arc<crate::effect_scope::PluginEffectScope>) -> bool {
-        self.is_accepting() && self.inner.can_reuse(owner).await
+        self.is_accepting()
+            && self
+                .state
+                .run(async { Ok(self.inner.can_reuse(owner).await) })
+                .await
+                .unwrap_or(false)
     }
 
     async fn try_rebind_host(
@@ -196,8 +222,11 @@ impl PluginTransport for QuiescentTransport {
         let Ok(_activity) = self.state.enter() else {
             return Ok(false);
         };
-        self.inner
-            .try_rebind_host(host, scope, previous_scope, initialization)
+        self.state
+            .run(
+                self.inner
+                    .try_rebind_host(host, scope, previous_scope, initialization),
+            )
             .await
     }
 
@@ -206,16 +235,23 @@ impl PluginTransport for QuiescentTransport {
         input: ToolInvokeInput,
     ) -> Result<Option<ToolStreamHandle>, TransportError> {
         let activity = self.state.enter()?;
-        let Some(mut inner) = self.inner.invoke_stream(input).await? else {
+        let Some(mut inner) = self.state.run(self.inner.invoke_stream(input)).await? else {
             return Ok(None);
         };
         let stream_id = inner.stream_id.clone();
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel(32);
-        let (end_tx, end_rx) = tokio::sync::oneshot::channel();
+        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel();
         let closing = self.state.closing.clone();
+        let forced_stop = self.state.forced_stop.clone();
         let stream_id_for_task = stream_id.clone();
         tokio::spawn(async move {
             let _activity = activity;
+            let cancelled = || {
+                PluginError::from_kind(
+                    crate::sdk::PluginErrorKind::Cancelled,
+                    "plugin transport was forcibly closed",
+                )
+            };
             let terminal = |result: Result<_, tokio::sync::oneshot::error::RecvError>| {
                 result.unwrap_or_else(|error| {
                     Err(PluginError::internal(format!(
@@ -226,15 +262,25 @@ impl PluginTransport for QuiescentTransport {
             let mut chunks_open = true;
             let mut forward_chunks = true;
             let mut outcome = None;
-            let result = loop {
+            let result = 'relay: loop {
                 if !chunks_open {
                     break match outcome {
                         Some(result) => result,
-                        None => terminal(inner.end.await),
+                        None => tokio::select! {
+                            biased;
+                            _ = forced_stop.cancelled() => Err(cancelled()),
+                            _ = end_tx.closed() => return,
+                            result = &mut inner.end => terminal(result),
+                        },
                     };
                 }
                 tokio::select! {
                     biased;
+                    _ = forced_stop.cancelled() => break Err(cancelled()),
+                    // The request's transport lifetime owns cancellation.
+                    // Releasing the inner handle must not be hidden by this
+                    // forwarding task after its caller has gone away.
+                    _ = end_tx.closed() => return,
                     // Completion seals ingress, then drains every accepted
                     // record. A ready terminal must never overtake buffered
                     // output, even before the initial HTTP response arrives.
@@ -264,6 +310,8 @@ impl PluginTransport for QuiescentTransport {
                             }
                             tokio::select! {
                                 biased;
+                                _ = forced_stop.cancelled() => break 'relay Err(cancelled()),
+                                _ = end_tx.closed() => return,
                                 result = &mut inner.end, if outcome.is_none() => {
                                     outcome = Some(terminal(result));
                                     inner.chunks.close();
@@ -281,6 +329,9 @@ impl PluginTransport for QuiescentTransport {
                     }
                 }
             };
+            // Dropping the original terminal receiver drives cancellation in
+            // each concrete transport before reporting this wrapper's result.
+            drop(inner);
             drop(chunk_tx);
             if end_tx.send(result).is_err() {
                 tracing::debug!(
@@ -302,7 +353,9 @@ impl PluginTransport for QuiescentTransport {
         params: serde_json::Value,
     ) -> Result<bool, TransportError> {
         let _activity = self.state.enter()?;
-        self.inner.ingest_stream_event(method, params).await
+        self.state
+            .run(self.inner.ingest_stream_event(method, params))
+            .await
     }
 
     async fn shutdown(&self) -> Result<(), TransportError> {

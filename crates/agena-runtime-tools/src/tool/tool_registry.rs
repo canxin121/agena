@@ -373,6 +373,9 @@ impl ToolError {
     }
 
     pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self {
+        if error.kind == agena_plugin_host::sdk::PluginErrorKind::Cancelled {
+            return Self::Cancelled;
+        }
         let error_kind = error.kind;
         let public_problem = error
             .diagnostic
@@ -454,6 +457,7 @@ impl ToolError {
             _ => None,
         };
         let kind = match self {
+            Self::Cancelled => PluginErrorKind::Cancelled,
             Self::InvalidPatch(_) | Self::InvalidInput { .. } => PluginErrorKind::InvalidParams,
             _ => PluginErrorKind::Internal,
         };

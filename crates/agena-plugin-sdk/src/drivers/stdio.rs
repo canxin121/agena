@@ -21,7 +21,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-use crate::drivers::dispatch::PluginDispatcher;
+use crate::drivers::dispatch::{PluginDispatcher, StreamHandle};
 use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
     EventEnvelope, EventFilter, ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
@@ -63,6 +63,26 @@ const STDIO_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 /// Run a plugin to completion as a stdio JSON-RPC server. Returns when stdin
 /// closes.
 pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
+    serve_stdio_io(
+        plugin,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY)),
+    )
+    .await
+}
+
+async fn serve_stdio_io<P, R, W>(
+    plugin: P,
+    input: R,
+    output: W,
+    dispatch_slots: Arc<Semaphore>,
+) -> io::Result<()>
+where
+    P: Plugin,
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let dispatcher = Arc::new(PluginDispatcher::new(plugin));
 
     let (tx, rx) = mpsc::channel::<Bytes>(STDIO_WRITER_QUEUE_CAPACITY);
@@ -79,10 +99,7 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
 
     // Writer task: owns stdout, drains channel.
     let mut writer = tokio::spawn(async move {
-        let mut stdout = FramedWrite::new(
-            tokio::io::stdout(),
-            ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES),
-        );
+        let mut stdout = FramedWrite::new(output, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
         let mut rx = rx;
         while let Some(payload) = rx.recv().await {
             stdout.send(payload).await.map_err(io::Error::other)?;
@@ -90,18 +107,13 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    // The reader must never wait for a dispatch slot: responses to plugin ->
-    // host callbacks share this pipe and must always be demultiplexed. Excess
-    // host requests receive an explicit overload response instead of spawning
-    // an unbounded number of tasks.
-    let dispatch_slots = Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY));
+    // The reader must never wait for dispatch capacity or writer backpressure:
+    // cancellation and responses to plugin -> host callbacks share this pipe.
+    // If a control/error response cannot be queued, disconnect and stop work.
     let mut dispatch_tasks = JoinSet::new();
 
     // Reader loop: owns stdin, demuxes frames.
-    let mut reader = FramedRead::new(
-        tokio::io::stdin(),
-        ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES),
-    );
+    let mut reader = FramedRead::new(input, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
     let (read_result, writer_finished) = {
         let read_loop = async {
             loop {
@@ -139,9 +151,32 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
 
                 match frame {
                     Frame::Request(req) => {
+                        if req.method == method::CANCEL_REQUEST {
+                            let result = dispatcher
+                                .dispatch(
+                                    &req.method,
+                                    req.params.unwrap_or(serde_json::Value::Null),
+                                )
+                                .await;
+                            let payload = match result {
+                                Ok(result) => ResponsePayload::Ok { result },
+                                Err(error) => ResponsePayload::Err {
+                                    error: error_object_from(error),
+                                },
+                            };
+                            try_send_response(
+                                &tx,
+                                Response {
+                                    jsonrpc: JsonRpcVersion,
+                                    id: req.id,
+                                    payload,
+                                },
+                            )?;
+                            continue;
+                        }
                         let dispatch_slot = Arc::clone(&dispatch_slots).try_acquire_owned();
                         let Ok(dispatch_slot) = dispatch_slot else {
-                            if !send_response(
+                            try_send_response(
                                 &tx,
                                 Response {
                                     jsonrpc: JsonRpcVersion,
@@ -155,168 +190,141 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                                         },
                                     },
                                 },
-                            )
-                            .await
-                            {
-                                return Ok(());
-                            }
+                            )?;
                             continue;
+                        };
+                        let request_scope = match dispatcher.begin_request(req.id.clone()) {
+                            Ok(scope) => scope,
+                            Err(error) => {
+                                try_send_response(
+                                    &tx,
+                                    Response {
+                                        jsonrpc: JsonRpcVersion,
+                                        id: req.id,
+                                        payload: ResponsePayload::Err {
+                                            error: error_object_from(error),
+                                        },
+                                    },
+                                )?;
+                                continue;
+                            }
                         };
                         let dispatcher = Arc::clone(&dispatcher);
                         let tx = tx.clone();
                         dispatch_tasks.spawn(async move {
-                        let _dispatch_slot = dispatch_slot;
-                        let id = req.id.clone();
-                        let params = req.params.unwrap_or(serde_json::Value::Null);
-                        let callback_context = req.context;
-                        if req.method == method::HOOK_TOOL_INVOKE_STREAM {
-                            match serde_json::from_value(params) {
-                                Ok(input) => {
-                                    let mut handle = if let Some(context) = callback_context {
+                            let _dispatch_slot = dispatch_slot;
+                            let id = req.id.clone();
+                            let params = req.params.unwrap_or(serde_json::Value::Null);
+                            let callback_context = req.context;
+                            if req.method == method::HOOK_TOOL_INVOKE_STREAM {
+                                let _ = request_scope
+                                    .run(async {
+                                        match serde_json::from_value(params) {
+                                            Ok(input) => {
+                                                let handle = if let Some(context) = callback_context
+                                                {
+                                                    crate::host_api::run_in_host_callback_context(
+                                                        context,
+                                                        async {
+                                                            dispatcher.dispatch_stream_request(
+                                                                input,
+                                                                &request_scope,
+                                                                (),
+                                                            )
+                                                        },
+                                                    )
+                                                    .await
+                                                } else {
+                                                    dispatcher.dispatch_stream_request(
+                                                        input,
+                                                        &request_scope,
+                                                        (),
+                                                    )
+                                                };
+                                                forward_tool_stream(&tx, id, handle).await;
+                                            }
+                                            Err(err) => {
+                                                let _sent = send_response(
+                                                    &tx,
+                                                    Response {
+                                                        jsonrpc: JsonRpcVersion,
+                                                        id,
+                                                        payload: ResponsePayload::Err {
+                                                            error: error_object_from(
+                                                                PluginError::invalid_params_error(
+                                                                    &err,
+                                                                ),
+                                                            ),
+                                                        },
+                                                    },
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                        Ok(())
+                                    })
+                                    .await;
+                                return;
+                            }
+                            let result = request_scope
+                                .run(async {
+                                    let dispatch = dispatcher.dispatch(&req.method, params);
+                                    let result = if let Some(context) = callback_context {
                                         crate::host_api::run_in_host_callback_context(
-                                            context,
-                                            async { dispatcher.dispatch_stream(input) },
+                                            context, dispatch,
                                         )
                                         .await
                                     } else {
-                                        dispatcher.dispatch_stream(input)
+                                        dispatch.await
                                     };
-                                    let stream_id = handle.stream_id.clone();
-                                    let stream_handle = match serde_json::to_value(
-                                        ToolInvokeStreamHandle {
-                                            stream_id: stream_id.clone(),
-                                            title: None,
+                                    let payload = match result {
+                                        Ok(result) => ResponsePayload::Ok { result },
+                                        Err(error) => ResponsePayload::Err {
+                                            error: error_object_from(error),
                                         },
-                                    ) {
-                                        Ok(value) => value,
-                                        Err(error) => {
-                                            let _sent = send_response(
-                                                &tx,
-                                                Response {
-                                                    jsonrpc: JsonRpcVersion,
-                                                    id,
-                                                    payload: ResponsePayload::Err {
-                                                        error: error_object_from(
-                                                            PluginError::internal_error(&error),
-                                                        ),
-                                                    },
-                                                },
-                                            )
-                                            .await;
-                                            return;
-                                        }
                                     };
-                                    if !send_response(
-                                        &tx,
-                                        Response {
-                                            jsonrpc: JsonRpcVersion,
-                                            id,
-                                            payload: ResponsePayload::Ok {
-                                                result: stream_handle,
-                                            },
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        return;
-                                    }
-                                    while let Some(chunk) = handle.chunks.recv().await {
-                                        if !send_notification(
-                                            &tx,
-                                            method::TOOL_STREAM_CHUNK,
-                                            &chunk,
-                                        )
-                                        .await
-                                        {
-                                            return;
-                                        }
-                                    }
-                                    match handle.end.await {
-                                        Ok(Ok(end)) => {
-                                            if !send_notification(
-                                                &tx,
-                                                method::TOOL_STREAM_END,
-                                                &end,
-                                            )
-                                            .await
-                                            {
-                                                return;
-                                            }
-                                        }
-                                        Ok(Err(error)) => {
-                                            if !send_notification(
-                                                &tx,
-                                                method::TOOL_STREAM_ERROR,
-                                                &ToolStreamError { stream_id, error },
-                                            )
-                                            .await
-                                            {
-                                                return;
-                                            }
-                                        }
-                                        Err(error) => {
-                                            if !send_notification(
-                                                &tx,
-                                                method::TOOL_STREAM_ERROR,
-                                                &ToolStreamError {
-                                                    stream_id,
-                                                    error: PluginError::internal(
-                                                        agena_failure::diagnostic::format_error_chain_with_context(
-                                                            "tool stream terminated before sending its final frame",
-                                                            &error,
-                                                        ),
-                                                    ),
-                                                },
-                                            )
-                                            .await
-                                            {
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(err) => {
                                     let _sent = send_response(
                                         &tx,
                                         Response {
                                             jsonrpc: JsonRpcVersion,
-                                            id,
-                                            payload: ResponsePayload::Err {
-                                                error: error_object_from(
-                                                    PluginError::invalid_params_error(&err),
-                                                ),
-                                            },
+                                            id: id.clone(),
+                                            payload,
                                         },
                                     )
                                     .await;
-                                }
+                                    Ok(())
+                                })
+                                .await;
+                            if let Err(error) = result {
+                                // Cancellation must release this worker even
+                                // when the host is no longer draining stdout.
+                                let _ = try_send_response(
+                                    &tx,
+                                    Response {
+                                        jsonrpc: JsonRpcVersion,
+                                        id,
+                                        payload: ResponsePayload::Err {
+                                            error: error_object_from(error),
+                                        },
+                                    },
+                                );
                             }
-                            return;
-                        }
-                        let dispatch = dispatcher.dispatch(&req.method, params);
-                        let result = if let Some(context) = callback_context {
-                            crate::host_api::run_in_host_callback_context(context, dispatch).await
-                        } else {
-                            dispatch.await
-                        };
-                        let resp = match result {
-                            Ok(v) => Response {
-                                jsonrpc: JsonRpcVersion,
-                                id,
-                                payload: ResponsePayload::Ok { result: v },
-                            },
-                            Err(e) => Response {
-                                jsonrpc: JsonRpcVersion,
-                                id,
-                                payload: ResponsePayload::Err {
-                                    error: error_object_from(e),
-                                },
-                            },
-                        };
-                        let _sent = send_response(&tx, resp).await;
-                    });
+                        });
                     }
                     Frame::Notification(notif) => {
+                        if notif.method == method::CANCEL_REQUEST {
+                            match serde_json::from_value::<crate::rpc::CancelRequest>(
+                                notif.params.unwrap_or(serde_json::Value::Null),
+                            ) {
+                                Ok(request) => {
+                                    dispatcher.cancel_request(&request.id);
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "invalid plugin cancellation notification")
+                                }
+                            }
+                            continue;
+                        }
                         // Plugins can receive notifications (like `hooks/event`).
                         let Ok(dispatch_slot) = Arc::clone(&dispatch_slots).try_acquire_owned()
                         else {
@@ -466,6 +474,92 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
             Err(read_error)
         }
     }
+}
+
+async fn forward_tool_stream(tx: &mpsc::Sender<Bytes>, id: RequestId, mut handle: StreamHandle) {
+    let stream_id = handle.stream_id.clone();
+    let stream_handle = match serde_json::to_value(ToolInvokeStreamHandle {
+        stream_id: stream_id.clone(),
+        title: None,
+    }) {
+        Ok(value) => value,
+        Err(error) => {
+            let _sent = send_response(
+                tx,
+                Response {
+                    jsonrpc: JsonRpcVersion,
+                    id,
+                    payload: ResponsePayload::Err {
+                        error: error_object_from(PluginError::internal_error(&error)),
+                    },
+                },
+            )
+            .await;
+            return;
+        }
+    };
+    if !send_response(
+        tx,
+        Response {
+            jsonrpc: JsonRpcVersion,
+            id,
+            payload: ResponsePayload::Ok {
+                result: stream_handle,
+            },
+        },
+    )
+    .await
+    {
+        return;
+    }
+    while let Some(chunk) = handle.chunks.recv().await {
+        if !send_notification(tx, method::TOOL_STREAM_CHUNK, &chunk).await {
+            return;
+        }
+    }
+    match handle.end.await {
+        Ok(Ok(end)) => {
+            let _sent = send_notification(tx, method::TOOL_STREAM_END, &end).await;
+        }
+        Ok(Err(error)) => {
+            let _sent = send_notification(
+                tx,
+                method::TOOL_STREAM_ERROR,
+                &ToolStreamError { stream_id, error },
+            )
+            .await;
+        }
+        Err(error) => {
+            let _sent = send_notification(
+                tx,
+                method::TOOL_STREAM_ERROR,
+                &ToolStreamError {
+                    stream_id,
+                    error: PluginError::internal(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "tool stream terminated before sending its final frame",
+                            &error,
+                        ),
+                    ),
+                },
+            )
+            .await;
+        }
+    }
+}
+
+fn try_send_response(tx: &mpsc::Sender<Bytes>, response: Response) -> io::Result<()> {
+    let body = serde_json::to_vec(&response).map_err(io::Error::other)?;
+    tx.try_send(body.into()).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "stdio plugin writer queue is full; cannot enqueue a response",
+        ),
+        mpsc::error::TrySendError::Closed(_) => io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "stdio plugin writer closed while enqueueing a response",
+        ),
+    })
 }
 
 async fn send_response(tx: &mpsc::Sender<Bytes>, response: Response) -> bool {
@@ -1379,6 +1473,7 @@ impl HostClient for StdioHostClient {
 
 fn error_object_from(e: PluginError) -> ErrorObject {
     let code = match e.kind {
+        PluginErrorKind::Cancelled => codes::REQUEST_CANCELLED,
         PluginErrorKind::Internal => codes::PLUGIN_GENERIC,
         PluginErrorKind::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
         PluginErrorKind::InvalidParams => codes::PLUGIN_INVALID_PARAMS,
@@ -1395,6 +1490,488 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         code,
         message: e.to_string(),
         data: e.rpc_error_data(),
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+
+    struct WaitingPlugin {
+        started: mpsc::UnboundedSender<(i64, crate::CancellationToken)>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for WaitingPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "stdio-cancellation", "1.0.0")
+        }
+
+        async fn tool_invoke(
+            &self,
+            input: crate::ToolInvokeInput,
+        ) -> crate::Result<ToolInvokeOutput> {
+            self.started
+                .send((input.call_id, input.context().cancellation))
+                .unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_is_received_when_all_stdio_dispatch_slots_are_busy() {
+        let (started, mut signals) = mpsc::unbounded_channel();
+        let (host_write, plugin_read) = tokio::io::duplex(256 * 1024);
+        let (plugin_write, host_read) = tokio::io::duplex(256 * 1024);
+        let server = tokio::spawn(serve_stdio_io(
+            WaitingPlugin { started },
+            plugin_read,
+            plugin_write,
+            Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY)),
+        ));
+        let mut writer =
+            FramedWrite::new(host_write, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
+        let mut reader = FramedRead::new(host_read, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
+        for id in 0..STDIO_DISPATCH_CONCURRENCY as i64 {
+            let request = Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(id),
+                method: method::HOOK_TOOL_INVOKE.into(),
+                params: Some(
+                    serde_json::to_value(crate::ToolInvokeInput {
+                        tool_name: "wait".into(),
+                        session_id: 1,
+                        call_id: id,
+                        workspace_root: "/tmp".into(),
+                        input: serde_json::json!({}),
+                    })
+                    .unwrap(),
+                ),
+                context: None,
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&request).unwrap()))
+                .await
+                .unwrap();
+        }
+        let mut active = HashMap::new();
+        for _ in 0..STDIO_DISPATCH_CONCURRENCY {
+            let (id, token) = tokio::time::timeout(Duration::from_secs(2), signals.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            active.insert(id, token);
+        }
+        for id in 0..STDIO_DISPATCH_CONCURRENCY as i64 {
+            let cancellation = Notification {
+                jsonrpc: JsonRpcVersion,
+                method: method::CANCEL_REQUEST.into(),
+                params: Some(serde_json::json!({"id": id})),
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&cancellation).unwrap()))
+                .await
+                .unwrap();
+        }
+        for _ in 0..STDIO_DISPATCH_CONCURRENCY {
+            let body = tokio::time::timeout(Duration::from_secs(2), reader.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let response: Response = serde_json::from_slice(&body).unwrap();
+            assert!(
+                matches!(response.payload, ResponsePayload::Err { error } if error.code == codes::REQUEST_CANCELLED)
+            );
+        }
+        assert!(active.values().all(crate::CancellationToken::is_cancelled));
+        drop(writer);
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    struct ReturningPlugin {
+        finished: mpsc::UnboundedSender<crate::CancellationToken>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for ReturningPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "returning", "1.0.0")
+        }
+
+        async fn tool_invoke(
+            &self,
+            input: crate::ToolInvokeInput,
+        ) -> crate::Result<ToolInvokeOutput> {
+            self.finished.send(input.context().cancellation).unwrap();
+            Ok(ToolInvokeOutput::text("done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_capacity_when_an_ordinary_response_is_blocked() {
+        use tokio::io::AsyncReadExt;
+
+        let (finished, mut completions) = mpsc::unbounded_channel();
+        let slots = Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY));
+        let (host_write, plugin_read) = tokio::io::duplex(4096);
+        let (plugin_write, mut host_read) = tokio::io::duplex(1);
+        let server = tokio::spawn(serve_stdio_io(
+            ReturningPlugin { finished },
+            plugin_read,
+            plugin_write,
+            slots.clone(),
+        ));
+        let mut writer =
+            FramedWrite::new(host_write, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
+        let mut blocked = None;
+        // One response blocks in stdout and the next 256 fill its queue.
+        // The final request has completed its body but cannot enqueue output.
+        for id in 0..STDIO_WRITER_QUEUE_CAPACITY as i64 + 2 {
+            let request = Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(id),
+                method: method::HOOK_TOOL_INVOKE.into(),
+                params: Some(serde_json::json!({
+                    "tool_name":"return", "session_id":1, "call_id":id,
+                    "workspace_root":"/tmp", "input":{}
+                })),
+                context: None,
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&request).unwrap()))
+                .await
+                .unwrap();
+            let signal = tokio::time::timeout(Duration::from_secs(2), completions.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if id == 0 {
+                tokio::time::timeout(Duration::from_secs(2), host_read.read_u8())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            if id <= STDIO_WRITER_QUEUE_CAPACITY as i64 {
+                tokio::time::timeout(Duration::from_secs(2), signal.cancelled())
+                    .await
+                    .unwrap();
+                let idle = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    slots.acquire_many(STDIO_DISPATCH_CONCURRENCY as u32),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                drop(idle);
+            } else {
+                assert!(!signal.is_cancelled());
+                blocked = Some((id, signal));
+            }
+        }
+        assert_eq!(slots.available_permits(), STDIO_DISPATCH_CONCURRENCY - 1);
+        let (id, signal) = blocked.unwrap();
+        let cancellation = Notification {
+            jsonrpc: JsonRpcVersion,
+            method: method::CANCEL_REQUEST.into(),
+            params: Some(serde_json::json!({"id":id})),
+        };
+        writer
+            .send(Bytes::from(serde_json::to_vec(&cancellation).unwrap()))
+            .await
+            .unwrap();
+        let idle = tokio::time::timeout(
+            Duration::from_secs(2),
+            slots.acquire_many(STDIO_DISPATCH_CONCURRENCY as u32),
+        )
+        .await
+        .expect("cancelled response delivery must release its dispatch capacity")
+        .unwrap();
+        assert!(signal.is_cancelled());
+        drop(idle);
+        drop(writer);
+        let mut discarded = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            host_read.read_to_end(&mut discarded),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    struct BufferedStreamPlugin {
+        ready: Arc<tokio::sync::Notify>,
+        finished: mpsc::UnboundedSender<crate::CancellationToken>,
+        chunks: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for BufferedStreamPlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "buffered-stream", "1.0.0")
+        }
+
+        async fn tool_invoke_stream(
+            &self,
+            input: crate::ToolInvokeInput,
+            sink: crate::ToolStreamSink,
+        ) -> crate::Result<crate::ToolStreamEnd> {
+            self.ready.notified().await;
+            for _ in 0..self.chunks {
+                sink.text("buffered").await;
+            }
+            self.finished.send(input.context().cancellation).unwrap();
+            Ok(crate::ToolStreamEnd::text(sink.stream_id(), "done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_stream_capacity_when_chunk_or_terminal_writes_are_blocked() {
+        use tokio::io::AsyncReadExt;
+
+        // A blocked setup frame leaves room for exactly the writer queue's
+        // chunks. The extra case also fills the stream buffer, so cancellation
+        // must interrupt both chunk forwarding and the final terminal write.
+        for chunks in [
+            STDIO_WRITER_QUEUE_CAPACITY,
+            STDIO_WRITER_QUEUE_CAPACITY + 65,
+        ] {
+            let (finished, mut completions) = mpsc::unbounded_channel();
+            let ready = Arc::new(tokio::sync::Notify::new());
+            let slots = Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY));
+            let (host_write, plugin_read) = tokio::io::duplex(4096);
+            let (plugin_write, mut host_read) = tokio::io::duplex(1);
+            let server = tokio::spawn(serve_stdio_io(
+                BufferedStreamPlugin {
+                    ready: ready.clone(),
+                    finished,
+                    chunks,
+                },
+                plugin_read,
+                plugin_write,
+                slots.clone(),
+            ));
+            let mut writer =
+                FramedWrite::new(host_write, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
+            let request = Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(1),
+                method: method::HOOK_TOOL_INVOKE_STREAM.into(),
+                params: Some(serde_json::json!({
+                    "tool_name":"buffered", "session_id":1, "call_id":1,
+                    "workspace_root":"/tmp", "input":{}
+                })),
+                context: None,
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&request).unwrap()))
+                .await
+                .unwrap();
+            // The writer has removed setup from its queue and is blocked on
+            // the one-byte pipe. Keep stdout stalled until after cancellation.
+            tokio::time::timeout(Duration::from_secs(2), host_read.read_u8())
+                .await
+                .unwrap()
+                .unwrap();
+            ready.notify_one();
+            let signal = tokio::time::timeout(Duration::from_secs(2), completions.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), signal.cancelled())
+                .await
+                .unwrap();
+            assert_eq!(slots.available_permits(), STDIO_DISPATCH_CONCURRENCY - 1);
+            let cancellation = Notification {
+                jsonrpc: JsonRpcVersion,
+                method: method::CANCEL_REQUEST.into(),
+                params: Some(serde_json::json!({"id":1})),
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&cancellation).unwrap()))
+                .await
+                .unwrap();
+            let all_slots = tokio::time::timeout(
+                Duration::from_secs(2),
+                slots.acquire_many(STDIO_DISPATCH_CONCURRENCY as u32),
+            )
+            .await
+            .expect("cancelled stream forwarding must release its dispatch capacity")
+            .unwrap();
+            drop(all_slots);
+            drop(writer);
+            let mut discarded = Vec::new();
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                host_read.read_to_end(&mut discarded),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    struct BodyDrop {
+        id: i64,
+        stopped: mpsc::UnboundedSender<i64>,
+    }
+
+    impl Drop for BodyDrop {
+        fn drop(&mut self) {
+            let _ = self.stopped.send(self.id);
+        }
+    }
+
+    struct BackpressurePlugin {
+        started: mpsc::UnboundedSender<(i64, crate::CancellationToken)>,
+        stopped: mpsc::UnboundedSender<i64>,
+        ready: Arc<tokio::sync::Notify>,
+        full: mpsc::UnboundedSender<()>,
+    }
+
+    impl BackpressurePlugin {
+        fn begin(&self, input: &crate::ToolInvokeInput) -> BodyDrop {
+            self.started
+                .send((input.call_id, input.context().cancellation))
+                .unwrap();
+            BodyDrop {
+                id: input.call_id,
+                stopped: self.stopped.clone(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for BackpressurePlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "stdio-backpressure", "1.0.0")
+        }
+
+        async fn tool_invoke(
+            &self,
+            input: crate::ToolInvokeInput,
+        ) -> crate::Result<ToolInvokeOutput> {
+            let _body = self.begin(&input);
+            std::future::pending().await
+        }
+
+        async fn tool_invoke_stream(
+            &self,
+            input: crate::ToolInvokeInput,
+            sink: crate::ToolStreamSink,
+        ) -> crate::Result<crate::ToolStreamEnd> {
+            let _body = self.begin(&input);
+            self.ready.notified().await;
+            for _ in 0..STDIO_WRITER_QUEUE_CAPACITY + 65 {
+                sink.text("buffered").await;
+            }
+            self.full.send(()).unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn overload_with_a_full_writer_disconnects_and_drops_all_running_bodies() {
+        use tokio::io::AsyncReadExt;
+
+        let (started, mut starts) = mpsc::unbounded_channel();
+        let (stopped, mut stops) = mpsc::unbounded_channel();
+        let (full, mut filled) = mpsc::unbounded_channel();
+        let ready = Arc::new(tokio::sync::Notify::new());
+        let slots = Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY));
+        let (host_write, plugin_read) = tokio::io::duplex(256 * 1024);
+        let (plugin_write, mut host_read) = tokio::io::duplex(1);
+        let server = tokio::spawn(serve_stdio_io(
+            BackpressurePlugin {
+                started,
+                stopped,
+                ready: ready.clone(),
+                full,
+            },
+            plugin_read,
+            plugin_write,
+            slots.clone(),
+        ));
+        let mut writer =
+            FramedWrite::new(host_write, ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES));
+        let mut signals = Vec::new();
+        for id in 0..=STDIO_DISPATCH_CONCURRENCY as i64 {
+            let request = Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(id),
+                method: if id == 0 {
+                    method::HOOK_TOOL_INVOKE_STREAM.into()
+                } else {
+                    method::HOOK_TOOL_INVOKE.into()
+                },
+                params: Some(serde_json::json!({
+                    "tool_name":"wait", "session_id":1, "call_id":id,
+                    "workspace_root":"/tmp", "input":{}
+                })),
+                context: None,
+            };
+            writer
+                .send(Bytes::from(serde_json::to_vec(&request).unwrap()))
+                .await
+                .unwrap();
+            if id == 0 {
+                tokio::time::timeout(Duration::from_secs(2), host_read.read_u8())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                ready.notify_one();
+                tokio::time::timeout(Duration::from_secs(2), filled.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            if id == STDIO_DISPATCH_CONCURRENCY as i64 - 1 {
+                // Ensure the next frame encounters overload while the writer
+                // is already full and all ordinary dispatch slots are busy.
+                for _ in 0..STDIO_DISPATCH_CONCURRENCY {
+                    let (_, signal) = tokio::time::timeout(Duration::from_secs(2), starts.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    signals.push(signal);
+                }
+                assert_eq!(slots.available_permits(), 0);
+                assert!(signals.iter().all(|signal| !signal.is_cancelled()));
+            }
+        }
+        let mut dropped = std::collections::HashSet::new();
+        for _ in 0..STDIO_DISPATCH_CONCURRENCY {
+            let id = tokio::time::timeout(Duration::from_secs(2), stops.recv())
+                .await
+                .expect("disconnect must drop every running plugin body")
+                .unwrap();
+            assert!(dropped.insert(id));
+        }
+        let error = tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .expect("a full writer cannot leave the reader waiting on its overload response")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+        assert!(error.to_string().contains("writer queue is full"));
+        assert!(signals.iter().all(crate::CancellationToken::is_cancelled));
+        assert_eq!(slots.available_permits(), STDIO_DISPATCH_CONCURRENCY);
     }
 }
 

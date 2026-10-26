@@ -5,6 +5,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::cancellation::{RequestRegistry, RequestScope, run_with_cancellation};
 use crate::error::{PluginError, Result};
 use crate::hooks::*;
 use crate::host_api::HostClient;
@@ -16,6 +17,7 @@ use crate::rpc::method;
 pub struct PluginDispatcher<P: Plugin> {
     plugin: Arc<P>,
     host: tokio::sync::RwLock<Option<Arc<dyn HostClient>>>,
+    requests: RequestRegistry,
 }
 
 impl<P: Plugin> PluginDispatcher<P> {
@@ -23,6 +25,7 @@ impl<P: Plugin> PluginDispatcher<P> {
         Self {
             plugin: Arc::new(plugin),
             host: tokio::sync::RwLock::new(None),
+            requests: RequestRegistry::default(),
         }
     }
 
@@ -30,6 +33,7 @@ impl<P: Plugin> PluginDispatcher<P> {
         Self {
             plugin,
             host: tokio::sync::RwLock::new(None),
+            requests: RequestRegistry::default(),
         }
     }
 
@@ -37,6 +41,7 @@ impl<P: Plugin> PluginDispatcher<P> {
         Self {
             plugin: Arc::new(plugin),
             host: tokio::sync::RwLock::new(Some(host)),
+            requests: RequestRegistry::default(),
         }
     }
 
@@ -44,9 +49,33 @@ impl<P: Plugin> PluginDispatcher<P> {
         *self.host.write().await = Some(host);
     }
 
+    pub fn begin_request(&self, id: crate::rpc::RequestId) -> Result<RequestScope> {
+        self.requests.begin(id)
+    }
+
+    pub fn cancel_request(&self, id: &crate::rpc::RequestId) -> bool {
+        self.requests.cancel(id)
+    }
+
     /// Single dispatch point: routes a method/params pair to the right `Plugin`
     /// trait method and returns the JSON-encoded result.
     pub async fn dispatch(&self, method_name: &str, params: Value) -> Result<Value> {
+        if method_name == method::CANCEL_REQUEST {
+            let request: crate::rpc::CancelRequest = serde_json::from_value(params)?;
+            return Ok(serde_json::json!({"cancelled": self.cancel_request(&request.id)}));
+        }
+        if crate::current_cancellation_token().is_some() {
+            self.dispatch_inner(method_name, params).await
+        } else {
+            run_with_cancellation(
+                crate::CancellationToken::new(),
+                self.dispatch_inner(method_name, params),
+            )
+            .await
+        }
+    }
+
+    async fn dispatch_inner(&self, method_name: &str, params: Value) -> Result<Value> {
         let plugin = Arc::clone(&self.plugin);
         match method_name {
             method::META_INIT => {
@@ -311,9 +340,32 @@ impl<P: Plugin> PluginDispatcher<P> {
         self.dispatch_stream_with_lifetime(input, ())
     }
 
+    pub fn dispatch_stream_request(
+        self: &Arc<Self>,
+        input: ToolInvokeInput,
+        request: &RequestScope,
+        lifetime: impl Send + 'static,
+    ) -> StreamHandle {
+        // The transport retains the request through terminal delivery. Ending
+        // plugin execution only cancels its child work, not buffered output.
+        self.dispatch_stream_scoped(input, request.token().child_token(), lifetime)
+    }
+
     pub(crate) fn dispatch_stream_with_lifetime(
         self: &std::sync::Arc<Self>,
         input: ToolInvokeInput,
+        lifetime: impl Send + 'static,
+    ) -> StreamHandle {
+        let token = crate::current_cancellation_token()
+            .map(|token| token.child_token())
+            .unwrap_or_default();
+        self.dispatch_stream_scoped(input, token, lifetime)
+    }
+
+    fn dispatch_stream_scoped(
+        self: &Arc<Self>,
+        input: ToolInvokeInput,
+        cancellation: crate::CancellationToken,
         lifetime: impl Send + 'static,
     ) -> StreamHandle {
         let stream_id = format!("stream-{}", _random_id());
@@ -337,11 +389,17 @@ impl<P: Plugin> PluginDispatcher<P> {
                 ctx,
                 plugin.tool_invoke_stream(input, sink),
             );
-            let result = tokio::select! {
-                biased;
-                _ = end_tx.closed() => return,
-                result = invoke => result,
-            };
+            let result = run_with_cancellation(cancellation, async {
+                tokio::select! {
+                    biased;
+                    _ = end_tx.closed() => Err(PluginError::from_kind(
+                        crate::PluginErrorKind::Cancelled,
+                        "plugin stream receiver was closed",
+                    )),
+                    result = invoke => result,
+                }
+            })
+            .await;
             if end_tx.send(result).is_err() {
                 tracing::debug!("plugin stream terminal-result receiver was dropped");
             }
@@ -368,4 +426,72 @@ fn _random_id() -> String {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     format!("{nanos:x}")
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use crate::{CancellationToken, PluginManifest, ToolInvokeOutput};
+
+    struct WaitingPlugin {
+        started: tokio::sync::mpsc::UnboundedSender<CancellationToken>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for WaitingPlugin {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::new("test", "cancellation", "1.0.0")
+        }
+
+        async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+            self.started.send(input.context().cancellation).unwrap();
+            std::future::pending().await
+        }
+    }
+
+    fn invocation() -> ToolInvokeInput {
+        ToolInvokeInput {
+            tool_name: "wait".into(),
+            session_id: 1,
+            call_id: 2,
+            workspace_root: "/tmp".into(),
+            input: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_request_remains_cancellable_after_its_setup_response() {
+        let (started, mut signals) = tokio::sync::mpsc::unbounded_channel();
+        let dispatcher = Arc::new(PluginDispatcher::new(WaitingPlugin { started }));
+        let id = crate::rpc::RequestId::Num(71);
+        let request = dispatcher.begin_request(id.clone()).unwrap();
+        let handle = dispatcher.dispatch_stream_request(invocation(), &request, ());
+        let token = signals.recv().await.unwrap();
+        assert!(
+            !token.is_cancelled(),
+            "returning a stream handle must keep its request active"
+        );
+        assert!(dispatcher.cancel_request(&id));
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle.end)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err().kind, crate::PluginErrorKind::Cancelled);
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn closing_a_stream_receiver_cancels_the_plugin_signal() {
+        let (started, mut signals) = tokio::sync::mpsc::unbounded_channel();
+        let dispatcher = Arc::new(PluginDispatcher::new(WaitingPlugin { started }));
+        let request = dispatcher
+            .begin_request(crate::rpc::RequestId::Num(72))
+            .unwrap();
+        let handle = dispatcher.dispatch_stream_request(invocation(), &request, ());
+        let token = signals.recv().await.unwrap();
+        drop(handle);
+        tokio::time::timeout(std::time::Duration::from_secs(2), token.cancelled())
+            .await
+            .unwrap();
+    }
 }

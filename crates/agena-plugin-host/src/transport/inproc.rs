@@ -3,6 +3,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -19,6 +20,7 @@ type ManifestTransform = Arc<dyn Fn(&mut PluginManifest) + Send + Sync>;
 pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
     manifest_transform: Option<ManifestTransform>,
+    next_id: AtomicI64,
 }
 
 /// Keep cancellation tied to the caller when a plugin is dispatched on a
@@ -36,6 +38,7 @@ impl<P: Plugin> InProcessTransport<P> {
         Self {
             dispatcher: Arc::new(PluginDispatcher::new(plugin)),
             manifest_transform: None,
+            next_id: AtomicI64::new(1),
         }
     }
 
@@ -46,6 +49,7 @@ impl<P: Plugin> InProcessTransport<P> {
         Self {
             dispatcher: Arc::new(PluginDispatcher::new(plugin)),
             manifest_transform: Some(Arc::new(transform)),
+            next_id: AtomicI64::new(1),
         }
     }
 
@@ -91,13 +95,18 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         let method_name = method.to_string();
         let method = method_name.clone();
         let context = current_host_callback_context();
+        let request = dispatcher
+            .begin_request(crate::sdk::rpc::RequestId::Num(
+                self.next_id.fetch_add(1, Ordering::Relaxed),
+            ))
+            .map_err(TransportError::from)?;
         // A Tool API call may arrive through several nested async layers.
         // Dispatch it on a fresh worker stack while preserving the callback
         // context and aborting the task if the caller cancels. This also keeps
         // a large plugin callback from overflowing the initiating worker.
         let mut task = AbortOnDrop(tokio::spawn(async move {
             AssertUnwindSafe(async move {
-                let fut = Box::pin(dispatcher.dispatch(&method, params));
+                let fut = Box::pin(request.run(dispatcher.dispatch(&method, params)));
                 if let Some(context) = context {
                     run_in_host_callback_context(context, fut).await
                 } else {
@@ -126,7 +135,16 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         &self,
         input: ToolInvokeInput,
     ) -> Result<Option<ToolStreamHandle>, TransportError> {
-        let handle = self.dispatcher.dispatch_stream(input);
+        let request = self
+            .dispatcher
+            .begin_request(crate::sdk::rpc::RequestId::Num(
+                self.next_id.fetch_add(1, Ordering::Relaxed),
+            ))
+            .map_err(TransportError::from)?;
+        let request = Arc::new(request);
+        let handle = self
+            .dispatcher
+            .dispatch_stream_request(input, &request, request.clone());
         Ok(Some(ToolStreamHandle {
             stream_id: handle.stream_id,
             chunks: handle.chunks,

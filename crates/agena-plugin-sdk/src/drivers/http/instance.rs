@@ -122,6 +122,16 @@ fn header(headers: &HeaderMap, name: &str) -> crate::Result<Option<String>> {
     Ok(Some(value.into()))
 }
 
+/// HTTP request IDs are only unique within the caller's instance. Include the
+/// same owner header for ordinary and control requests so a stale owner cannot
+/// cancel a successor's work, including initialization not yet admitted.
+pub(super) fn request_id(headers: &HeaderMap, id: &RequestId) -> crate::Result<RequestId> {
+    let owner = header(headers, INSTANCE_HEADER)?;
+    serde_json::to_string(&(owner, id))
+        .map(RequestId::Str)
+        .map_err(PluginError::from)
+}
+
 impl<P: Plugin> Instances<P> {
     pub(super) fn current(&self) -> Option<Arc<Instance<P>>> {
         self.current

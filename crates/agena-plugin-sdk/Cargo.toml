@@ -24,7 +24,7 @@ serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
-tokio-util = { workspace = true, features = ["codec"], optional = true }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -36,8 +36,8 @@ reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 [features]
 default = []
 cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
-stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "dep:tokio-util", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "tokio/time"]
-http = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "dep:axum", "dep:reqwest", "dep:tokio-util", "tokio-util/rt"]
+stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "tokio-util/codec", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "tokio/time"]
+http = ["tokio/rt-multi-thread", "tokio/macros", "tokio/time", "dep:axum", "dep:reqwest"]
 
 [lints]
 workspace = true

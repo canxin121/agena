@@ -1,8 +1,9 @@
 #![allow(non_camel_case_types)]
 
-//! Stable C ABI for cdylib plugins. Only one method goes through the FFI line:
-//! `dispatch(method, params)`. All hook semantics live above it as JSON. New
-//! hooks therefore never bump the ABI.
+//! C ABI for cdylib plugins. Hook requests use
+//! `dispatch(request_id, method, params)`; an independent `cancel(request_id)`
+//! control entry point can interrupt the request without waiting in its queue.
+//! Hook semantics live above this boundary as JSON.
 
 use abi_stable::{
     StableAbi,
@@ -12,7 +13,7 @@ use abi_stable::{
     std_types::{RResult, RString},
 };
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[repr(C)]
 #[derive(StableAbi)]
@@ -21,7 +22,14 @@ pub const ABI_VERSION: u32 = 1;
 /// Stable-ABI struct exported by a cdylib plugin.
 pub struct AgenaPluginCdylib {
     pub abi_version: u32,
-    pub dispatch: extern "C" fn(method: RString, params: RString) -> RResult<RString, RString>,
+    pub dispatch: extern "C" fn(
+        request_id: RString,
+        method: RString,
+        params: RString,
+    ) -> RResult<RString, RString>,
+    /// Control bypasses the plugin's dispatch actor, so a running request can
+    /// be cancelled without waiting for itself to finish.
+    pub cancel: extern "C" fn(request_id: RString) -> bool,
     #[sabi(last_prefix_field)]
     pub shutdown: extern "C" fn(),
 }

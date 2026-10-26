@@ -8,7 +8,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use abi_stable::library::RootModule;
@@ -28,10 +28,13 @@ pub struct CdylibTransport {
     commands: mpsc::Sender<ActorCommand>,
     actor: Mutex<Option<std::thread::JoinHandle<()>>>,
     closed: AtomicBool,
+    module: AgenaPluginCdylib_Ref,
+    next_id: AtomicI64,
 }
 
 enum ActorCommand {
     Dispatch {
+        request_id: String,
         method: String,
         params: String,
         response: oneshot::Sender<Result<serde_json::Value, TransportError>>,
@@ -46,6 +49,13 @@ impl CdylibTransport {
         let module = AgenaPluginCdylib_Ref::load_from_file(path).map_err(|error| {
             TransportError::Io(format!("load cdylib `{}`: {error}", path.display()))
         })?;
+        if module.abi_version() != crate::sdk::cdylib_abi::ABI_VERSION {
+            return Err(TransportError::Rpc(format!(
+                "cdylib plugin ABI {} does not match host ABI {}",
+                module.abi_version(),
+                crate::sdk::cdylib_abi::ABI_VERSION,
+            )));
+        }
         let (commands, receiver) = mpsc::channel(ACTOR_QUEUE_CAPACITY);
         let actor = std::thread::Builder::new()
             .name("agena-cdylib-plugin".to_string())
@@ -55,6 +65,8 @@ impl CdylibTransport {
             commands,
             actor: Mutex::new(Some(actor)),
             closed: AtomicBool::new(false),
+            module,
+            next_id: AtomicI64::new(1),
         })
     }
 }
@@ -63,6 +75,7 @@ fn run_actor(module: AgenaPluginCdylib_Ref, mut receiver: mpsc::Receiver<ActorCo
     while let Some(command) = receiver.blocking_recv() {
         match command {
             ActorCommand::Dispatch {
+                request_id,
                 method,
                 params,
                 response,
@@ -73,7 +86,7 @@ fn run_actor(module: AgenaPluginCdylib_Ref, mut receiver: mpsc::Receiver<ActorCo
                     continue;
                 }
                 if response
-                    .send(dispatch_native(module, method, params))
+                    .send(dispatch_native(module, request_id, method, params))
                     .is_err()
                 {
                     tracing::debug!(
@@ -98,12 +111,13 @@ fn run_actor(module: AgenaPluginCdylib_Ref, mut receiver: mpsc::Receiver<ActorCo
 
 fn dispatch_native(
     module: AgenaPluginCdylib_Ref,
+    request_id: String,
     method: String,
     params: String,
 ) -> Result<serde_json::Value, TransportError> {
     let dispatch = module.dispatch();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        dispatch(method.into(), params.into())
+        dispatch(request_id.into(), method.into(), params.into())
     }));
     match result {
         Ok(result) => match result.into_result() {
@@ -135,9 +149,21 @@ impl PluginTransport for CdylibTransport {
             ));
         }
         let params = serde_json::to_string(&params)?;
+        let request_id = serde_json::to_string(&crate::sdk::rpc::RequestId::Num(
+            self.next_id.fetch_add(1, Ordering::Relaxed),
+        ))?;
+        let cancel_id = request_id.clone();
+        let cancel = self.module.cancel();
+        let mut lifetime = super::request::RemoteRequest::new(move || {
+            // The control ABI accesses only the SDK request registry. Running
+            // it directly lets it cancel the active dispatch rather than
+            // waiting behind that dispatch in the actor mailbox.
+            let _ = cancel(cancel_id.into());
+        });
         let (response, result) = oneshot::channel();
         self.commands
             .send(ActorCommand::Dispatch {
+                request_id,
                 method: method.to_string(),
                 params,
                 response,
@@ -149,12 +175,14 @@ impl PluginTransport for CdylibTransport {
                     &error,
                 )
             })?;
-        result.await.map_err(|error| {
+        let result = result.await.map_err(|error| {
             TransportError::disconnected_error(
                 "cdylib plugin actor exited before returning the dispatch result",
                 &error,
             )
-        })?
+        })?;
+        lifetime.complete();
+        result
     }
 
     async fn close(&self) -> Result<(), TransportError> {

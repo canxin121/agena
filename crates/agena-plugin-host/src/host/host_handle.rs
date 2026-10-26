@@ -50,7 +50,13 @@ pub(super) struct CallbackAuthorityLease {
 
 impl Drop for CallbackAuthorityLease {
     fn drop(&mut self) {
-        recover_mutex(&self.authorities, "callback authority registry").remove(&self.token);
+        let authority =
+            recover_mutex(&self.authorities, "callback authority registry").remove(&self.token);
+        if let Some(authority) = authority {
+            // Revocation also stops callbacks already admitted with this
+            // authority, including nested tool and service invocations.
+            authority.cancellation.cancel();
+        }
     }
 }
 
@@ -372,6 +378,7 @@ impl HostHandle {
                 generation,
                 context: context.clone(),
                 completion: completion.completion.clone(),
+                cancellation: tokio_util::sync::CancellationToken::new(),
             },
         );
         context.authority_token = Some(token.clone());
@@ -478,92 +485,98 @@ impl HostHandle {
         context: Option<HostCallbackContext>,
     ) -> Result<PluginServiceInvokeOutput, PluginError> {
         let context = self.validated_callback_context(Some(consumer.to_string()), context)?;
-        request
-            .validate()
-            .map_err(|error| PluginError::invalid_params_error(&error))?;
-        let key = PluginServiceBindingKey {
-            consumer: consumer.to_string(),
-            service: request.service.clone(),
-            api_version: request.api_version,
-        };
-        let binding = self
-            .service_bindings
-            .read()
-            .await
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::invalid_params(format!(
-                    "plugin `{consumer}` did not resolve service `{}` API v{}",
-                    request.service, request.api_version
-                ))
-            })?;
-        let method_contract = binding
-            .methods
-            .get(&request.method)
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::invalid_params(format!(
-                    "service `{}` API v{} does not declare method `{}`",
-                    request.service, request.api_version, request.method
-                ))
-            })?;
-        method_contract
-            .input
-            .validate_value(&request.input)
-            .map_err(|error| {
-                PluginError::invalid_params(format!(
-                    "service `{}@v{}::{}` input is invalid: {error}",
-                    request.service, request.api_version, request.method
-                ))
-            })?;
-        let provider_key: PluginKey = binding.provider.parse().map_err(|error| {
-            PluginError::internal(format!(
-                "resolved service provider `{}` is invalid: {error}",
-                binding.provider
-            ))
-        })?;
-        let transport = self
-            .plugin_transports
-            .get(&provider_key, "primary")
-            .ok_or_else(|| {
-                PluginError::from_kind(
-                    PluginErrorKind::HostUnavailable,
-                    format!(
-                        "service provider `{}` is not active for `{}` API v{}",
-                        binding.provider, request.service, request.api_version
-                    ),
-                )
-            })?;
-        let params = serde_json::to_value(&request)
-            .map_err(|error| PluginError::invalid_params_error(&error))?;
-        let call = self.run_in_authorized_callback_context(
-            &provider_key,
-            context,
-            transport.dispatch(method::SERVICE_INVOKE, params),
-        );
-        let value = crate::sdk::permission_wait::timeout(std::time::Duration::from_secs(30), call)
-            .await
-            .map_err(|_| {
+        let completion_context = context.clone();
+        self.run_in_callback_completion(&completion_context, async move {
+            request
+                .validate()
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
+            let key = PluginServiceBindingKey {
+                consumer: consumer.to_string(),
+                service: request.service.clone(),
+                api_version: request.api_version,
+            };
+            let binding = self
+                .service_bindings
+                .read()
+                .await
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    PluginError::invalid_params(format!(
+                        "plugin `{consumer}` did not resolve service `{}` API v{}",
+                        request.service, request.api_version
+                    ))
+                })?;
+            let method_contract =
+                binding
+                    .methods
+                    .get(&request.method)
+                    .cloned()
+                    .ok_or_else(|| {
+                        PluginError::invalid_params(format!(
+                            "service `{}` API v{} does not declare method `{}`",
+                            request.service, request.api_version, request.method
+                        ))
+                    })?;
+            method_contract
+                .input
+                .validate_value(&request.input)
+                .map_err(|error| {
+                    PluginError::invalid_params(format!(
+                        "service `{}@v{}::{}` input is invalid: {error}",
+                        request.service, request.api_version, request.method
+                    ))
+                })?;
+            let provider_key: PluginKey = binding.provider.parse().map_err(|error| {
                 PluginError::internal(format!(
-                    "service `{}` API v{} invocation timed out",
-                    request.service, request.api_version
-                ))
-            })?
-            .map_err(transport_to_plugin_error)?;
-        method_contract
-            .output
-            .validate_value(&value)
-            .map_err(|error| {
-                PluginError::internal(format!(
-                    "service provider `{}` returned invalid output for `{}@v{}::{}`: {error}",
-                    binding.provider, request.service, request.api_version, request.method
+                    "resolved service provider `{}` is invalid: {error}",
+                    binding.provider
                 ))
             })?;
-        Ok(PluginServiceInvokeOutput {
-            provider: binding.provider,
-            output: value,
+            let transport = self
+                .plugin_transports
+                .get(&provider_key, "primary")
+                .ok_or_else(|| {
+                    PluginError::from_kind(
+                        PluginErrorKind::HostUnavailable,
+                        format!(
+                            "service provider `{}` is not active for `{}` API v{}",
+                            binding.provider, request.service, request.api_version
+                        ),
+                    )
+                })?;
+            let params = serde_json::to_value(&request)
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
+            let call = self.run_in_authorized_callback_context(
+                &provider_key,
+                context,
+                transport.dispatch(method::SERVICE_INVOKE, params),
+            );
+            let value =
+                crate::sdk::permission_wait::timeout(std::time::Duration::from_secs(30), call)
+                    .await
+                    .map_err(|_| {
+                        PluginError::internal(format!(
+                            "service `{}` API v{} invocation timed out",
+                            request.service, request.api_version
+                        ))
+                    })?
+                    .map_err(transport_to_plugin_error)?;
+            method_contract
+                .output
+                .validate_value(&value)
+                .map_err(|error| {
+                    PluginError::internal(format!(
+                        "service provider `{}` returned invalid output for `{}@v{}::{}`: {error}",
+                        binding.provider, request.service, request.api_version, request.method
+                    ))
+                })?;
+            Ok(PluginServiceInvokeOutput {
+                provider: binding.provider,
+                output: value,
+            })
         })
+        .await
     }
 
     pub async fn ingest_stream_event_for_plugin(
@@ -891,7 +904,6 @@ impl HostHandle {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
-        let inner = self.inner.read().await.clone();
         let plugin_id = (!plugin_id.is_empty()).then(|| plugin_id.to_string());
         let callback_context = self.validated_callback_context(
             plugin_id.clone(),
@@ -919,6 +931,7 @@ impl HostHandle {
         self.run_in_callback_completion(
             &completion_context,
             host_api::run_in_isolated_host_callback_context(callback_context, async {
+                let inner = self.inner.read().await.clone();
                 match method {
                     method::HOST_LOG => {
                         let p: HostLogParams = parse(params)?;

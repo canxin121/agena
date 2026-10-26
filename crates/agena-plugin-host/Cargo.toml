@@ -41,3 +41,6 @@ signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek", "dep:which"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+axum = { workspace = true }

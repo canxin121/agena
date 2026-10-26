@@ -4,6 +4,7 @@
 //! use agena_plugin_sdk::prelude::*;
 //! ```
 
+pub use crate::cancellation::{CancellationToken, current_cancellation_token};
 pub use async_trait::async_trait;
 pub use schemars::JsonSchema;
 pub use serde::{Deserialize, Serialize};

@@ -112,6 +112,7 @@ macro_rules! export_cdylib {
             }
 
             extern "C" fn dispatch(
+                request_id: $crate::abi_stable_reexport::std_types::RString,
                 method: $crate::abi_stable_reexport::std_types::RString,
                 params: $crate::abi_stable_reexport::std_types::RString,
             ) -> $crate::abi_stable_reexport::std_types::RResult<
@@ -121,6 +122,11 @@ macro_rules! export_cdylib {
                 let result = ::std::panic::catch_unwind(|| {
                     let runtime = runtime()?;
                     runtime.block_on(async move {
+                        let request_id: ::std::string::String = request_id.into();
+                        let request_id: $crate::rpc::RequestId =
+                            $crate::serde_json::from_str(&request_id).map_err(|error| {
+                                $crate::PluginError::invalid_params_error(&error)
+                            })?;
                         let method_str: ::std::string::String = method.into();
                         let params_str: ::std::string::String = params.into();
                         let value: $crate::serde_json::Value = if params_str.is_empty() {
@@ -135,7 +141,8 @@ macro_rules! export_cdylib {
                                 }
                             }
                         };
-                        dispatcher().dispatch(&method_str, value).await
+                        let request = dispatcher().begin_request(request_id)?;
+                        request.run(dispatcher().dispatch(&method_str, value)).await
                     })
                 });
                 match result {
@@ -150,6 +157,17 @@ macro_rules! export_cdylib {
                         ),
                     )),
                 }
+            }
+
+            extern "C" fn cancel(
+                request_id: $crate::abi_stable_reexport::std_types::RString,
+            ) -> bool {
+                ::std::panic::catch_unwind(|| {
+                    $crate::serde_json::from_str::<$crate::rpc::RequestId>(request_id.as_str())
+                        .map(|id| dispatcher().cancel_request(&id))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
             }
 
             extern "C" fn shutdown() {
@@ -176,6 +194,7 @@ macro_rules! export_cdylib {
                 ::abi_stable::prefix_type::PrefixTypeTrait::leak_into_prefix(AgenaPluginCdylib {
                     abi_version: ABI_VERSION,
                     dispatch,
+                    cancel,
                     shutdown,
                 })
             }

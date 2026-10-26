@@ -129,6 +129,7 @@ struct Inner {
 struct ChildHandles {
     generation: u64,
     writer: mpsc::Sender<WriteRequest>,
+    control: mpsc::UnboundedSender<WriteRequest>,
     stop: CancellationToken,
     ready: bool,
     finished:
@@ -137,7 +138,8 @@ struct ChildHandles {
 
 struct WriteRequest {
     body: Bytes,
-    completion: oneshot::Sender<Result<(), String>>,
+    completion: Option<oneshot::Sender<Result<(), String>>>,
+    cancellation: Option<CancellationToken>,
 }
 
 /// Remove an in-flight request slot when its dispatch future is dropped by a
@@ -158,6 +160,30 @@ impl Drop for PendingRequestGuard {
     fn drop(&mut self) {
         self.inner.pending.remove(&self.request_id);
     }
+}
+
+fn remote_request(
+    control: mpsc::UnboundedSender<WriteRequest>,
+    id: RequestId,
+    cancellation: CancellationToken,
+) -> Result<super::request::RemoteRequest, TransportError> {
+    let body = serde_json::to_vec(&Notification {
+        jsonrpc: JsonRpcVersion,
+        method: method::CANCEL_REQUEST.to_owned(),
+        params: Some(serde_json::to_value(crate::sdk::rpc::CancelRequest { id })?),
+    })?;
+    Ok(super::request::RemoteRequest::new(move || {
+        cancellation.cancel();
+        // This mailbox belongs to the original child generation. It cannot
+        // cancel an unrelated call after a reconnect, and bypasses ordinary
+        // writer backpressure. A queued original frame observes the token and
+        // is skipped if this control frame overtakes it.
+        let _ = control.send(WriteRequest {
+            body: Bytes::from(body),
+            completion: None,
+            cancellation: None,
+        });
+    }))
 }
 
 impl StdioTransport {
@@ -418,6 +444,7 @@ impl Inner {
         // mailbox preserves frame ordering and applies backpressure without
         // coupling a blocked pipe write to the child/restart state mutex.
         let (writer, mut write_requests) = mpsc::channel::<WriteRequest>(64);
+        let (control, mut controls) = mpsc::unbounded_channel::<WriteRequest>();
         let tasks = TaskTracker::new();
         let generation_stop = self.shutdown.child_token();
         let writer_shutdown = generation_stop.clone();
@@ -428,9 +455,21 @@ impl Inner {
                 let request = tokio::select! {
                     biased;
                     _ = writer_shutdown.cancelled() => return,
+                    Some(request) = controls.recv() => Some(request),
                     request = write_requests.recv() => request,
                 };
                 let Some(request) = request else { return };
+                if request
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+                {
+                    if let Some(completion) = request.completion {
+                        let _ = completion
+                            .send(Err("plugin request cancelled before transmission".into()));
+                    }
+                    continue;
+                }
                 let write = async {
                     tokio::select! {
                         biased;
@@ -465,7 +504,10 @@ impl Inner {
                         })
                     });
                 let failure = result.as_ref().err().cloned();
-                if request.completion.send(result).is_err() {
+                if request
+                    .completion
+                    .is_some_and(|completion| completion.send(result).is_err())
+                {
                     tracing::debug!(
                         target: "agena_plugin_host::stdio",
                         "plugin stdin write-result receiver was dropped"
@@ -490,6 +532,7 @@ impl Inner {
         *self.handles.lock().await = Some(ChildHandles {
             generation,
             writer,
+            control,
             stop: generation_stop.clone(),
             ready: restart_initialization.is_none(),
             finished,
@@ -760,6 +803,15 @@ impl Inner {
         body: &[u8],
         expected: Option<u64>,
     ) -> Result<u64, TransportError> {
+        self.write_cancellable_frame(body, expected, None).await
+    }
+
+    async fn write_cancellable_frame(
+        &self,
+        body: &[u8],
+        expected: Option<u64>,
+        cancellation: Option<CancellationToken>,
+    ) -> Result<u64, TransportError> {
         let (writer, generation, stop) = {
             let handles = self.handles.lock().await;
             let handles = handles
@@ -786,7 +838,8 @@ impl Inner {
             writer
                 .send(WriteRequest {
                     body: Bytes::copy_from_slice(body),
-                    completion,
+                    completion: Some(completion),
+                    cancellation,
                 })
                 .await
                 .map_err(|error| {
@@ -836,7 +889,7 @@ impl Inner {
         request_id: RequestId,
         response: oneshot::Sender<Response>,
         expected_generation: Option<u64>,
-    ) -> Result<(u64, CancellationToken), TransportError> {
+    ) -> Result<(u64, CancellationToken, mpsc::UnboundedSender<WriteRequest>), TransportError> {
         // Publish the response slot against one specific child while holding
         // the same lock used to remove that child on exit. An exit must not
         // fail this request and then let its frame reach a replacement child.
@@ -853,7 +906,11 @@ impl Inner {
                 TransportError::disconnected("stdio plugin has no active child for this request")
             })?;
         self.pending.insert(request_id, response);
-        Ok((handles.generation, handles.stop.clone()))
+        Ok((
+            handles.generation,
+            handles.stop.clone(),
+            handles.control.clone(),
+        ))
     }
 
     pub(super) async fn dispatch_to_generation(
@@ -873,11 +930,13 @@ impl Inner {
         };
         let body = encode_frame(req).await?;
         let (tx, rx) = oneshot::channel();
-        let (generation, stop) = self
+        let (generation, stop, control) = self
             .begin_request(req_id.clone(), tx, expected_generation)
             .await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(self), req_id.clone());
-        self.write_frame_for_generation(&body, Some(generation))
+        let cancellation = CancellationToken::new();
+        let mut request = remote_request(control, req_id.clone(), cancellation.clone())?;
+        self.write_cancellable_frame(&body, Some(generation), Some(cancellation))
             .await?;
         let response = tokio::select! {
             biased;
@@ -892,6 +951,7 @@ impl Inner {
                 &error,
             )
         })?;
+        request.complete();
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
@@ -1117,10 +1177,13 @@ impl PluginTransport for StdioTransport {
                 TransportError::Io(format!("stdio stream encode worker failed: {error}"))
             })??;
         let (tx, rx) = oneshot::channel();
-        let (generation, _stop) = self.inner.begin_request(req_id.clone(), tx, None).await?;
+        let (generation, _stop, control) =
+            self.inner.begin_request(req_id.clone(), tx, None).await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
+        let cancellation = CancellationToken::new();
+        let mut request = remote_request(control, req_id, cancellation.clone())?;
         self.inner
-            .write_frame_for_generation(&body, Some(generation))
+            .write_cancellable_frame(&body, Some(generation), Some(cancellation))
             .await?;
         let resp = rx.await.map_err(|error| {
             TransportError::disconnected_error(
@@ -1139,6 +1202,7 @@ impl PluginTransport for StdioTransport {
                     error,
                     "decode stdio plugin streaming-dispatch error",
                 );
+                request.complete();
                 return Err(TransportError::Plugin(pe));
             }
         };
@@ -1148,11 +1212,13 @@ impl PluginTransport for StdioTransport {
         self.inner
             .register_stream(handle.stream_id.clone(), chunk_tx, end_tx, generation)
             .await?;
-        Ok(Some(crate::transport::ToolStreamHandle {
-            stream_id: handle.stream_id,
-            chunks: chunk_rx,
-            end: end_rx,
-        }))
+        Ok(Some(request.bind_stream(
+            crate::transport::ToolStreamHandle {
+                stream_id: handle.stream_id,
+                chunks: chunk_rx,
+                end: end_rx,
+            },
+        )))
     }
 
     async fn close(&self) -> Result<(), TransportError> {

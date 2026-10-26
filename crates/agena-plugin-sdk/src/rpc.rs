@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::host_api::HostCallbackContext;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A JSON-RPC request.
@@ -92,6 +92,12 @@ pub enum RequestId {
     Str(String),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelRequest {
+    pub id: RequestId,
+}
+
 impl From<i64> for RequestId {
     fn from(v: i64) -> Self {
         RequestId::Num(v)
@@ -109,6 +115,7 @@ pub enum Frame {
 
 /// JSON-RPC error code ranges. Custom agena codes live in -33xxx.
 pub mod codes {
+    pub const REQUEST_CANCELLED: i32 = -32800;
     pub const PARSE_ERROR: i32 = -32700;
     pub const INVALID_REQUEST: i32 = -32600;
     pub const METHOD_NOT_FOUND: i32 = -32601;
@@ -130,6 +137,7 @@ pub mod codes {
 
 /// Method-name constants. **Both sides** import from here.
 pub mod method {
+    pub const CANCEL_REQUEST: &str = "$/cancelRequest";
     // host -> plugin
     pub const META_INIT: &str = "meta/init";
     pub const META_SHUTDOWN: &str = "meta/shutdown";

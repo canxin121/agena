@@ -203,13 +203,15 @@ pub struct ToolInvokeInput {
     pub input: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Context of a tool invocation hook.
 pub struct ToolInvokeContext<'a> {
     pub tool_name: &'a str,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: &'a str,
+    /// Invocation-scoped cancellation, also available to spawned child work.
+    pub cancellation: crate::CancellationToken,
 }
 
 impl ToolInvokeInput {
@@ -219,6 +221,7 @@ impl ToolInvokeInput {
             session_id: self.session_id,
             call_id: self.call_id,
             workspace_root: self.workspace_root.as_str(),
+            cancellation: crate::current_cancellation_token().unwrap_or_default(),
         }
     }
 }

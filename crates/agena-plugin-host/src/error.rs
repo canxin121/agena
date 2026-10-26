@@ -100,7 +100,11 @@ impl TransportError {
 
 impl From<crate::sdk::PluginError> for TransportError {
     fn from(value: crate::sdk::PluginError) -> Self {
-        TransportError::Plugin(value)
+        if value.kind == crate::sdk::PluginErrorKind::Cancelled {
+            TransportError::Cancelled
+        } else {
+            TransportError::Plugin(value)
+        }
     }
 }
 

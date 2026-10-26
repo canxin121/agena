@@ -38,6 +38,7 @@ const PUBLIC_PROBLEM_DATA_KEY: &str = "agena_public_problem";
 #[serde(rename_all = "snake_case")]
 /// Kind of a plugin error.
 pub enum PluginErrorKind {
+    Cancelled,
     Internal,
     NotImplemented,
     InvalidParams,
@@ -235,6 +236,17 @@ impl PluginError {
 
 fn failure_for_kind(kind: PluginErrorKind) -> Failure {
     let (code, category, responsibility, retry, recovery, fallback, model) = match kind {
+        PluginErrorKind::Cancelled => (
+            // Cancellation is a terminal outcome. Transports consume the kind
+            // before projecting failures, as they do for host cancellation.
+            "internal.cancelled_as_failure",
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::Never,
+            RecoveryDirective::None,
+            "The plugin request was cancelled.",
+            None,
+        ),
         PluginErrorKind::InvalidParams => (
             "plugin.invalid_input",
             FailureCategory::InvalidInput,

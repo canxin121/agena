@@ -39,6 +39,7 @@ pub extern crate serde_json;
 
 pub mod activity;
 pub mod attachment;
+pub mod cancellation;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
@@ -64,6 +65,7 @@ pub use activity::ActivitySourceAdapter;
 pub use agena_macros::{ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
+pub use cancellation::{CancellationToken, current_cancellation_token};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{

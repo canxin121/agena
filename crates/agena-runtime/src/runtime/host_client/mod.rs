@@ -76,6 +76,10 @@ fn plugin_error(error: impl std::error::Error + 'static) -> PluginError {
 
 fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     match error {
+        crate::AppError::Cancelled => PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::Cancelled,
+            "the originating execution was cancelled",
+        ),
         crate::AppError::PolicyDenied(denial) => {
             let mut error = PluginError::from_kind(
                 agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,

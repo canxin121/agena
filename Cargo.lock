@@ -596,6 +596,7 @@ dependencies = [
  "agena-process",
  "agena-stdio-codec",
  "async-trait",
+ "axum",
  "blake3",
  "bytes",
  "dashmap",

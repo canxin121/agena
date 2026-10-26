@@ -177,6 +177,44 @@ impl HttpTransport {
     fn next_request_id(&self) -> i64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
+
+    fn request_lifetime(&self, id: RequestId) -> super::request::RemoteRequest {
+        let client = self.client.clone();
+        let url = self.url.clone();
+        let auth_header = self.auth_header.clone();
+        let instance_id = self.instance_id.clone();
+        let cancel = Request {
+            jsonrpc: JsonRpcVersion,
+            id: RequestId::Num(self.next_request_id()),
+            method: method::CANCEL_REQUEST.to_owned(),
+            params: Some(serde_json::json!({"id": id})),
+            context: None,
+        };
+        super::request::RemoteRequest::new(move || {
+            let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                return;
+            };
+            runtime.spawn(async move {
+                // Cancellation is an independent control request. It must
+                // remain deliverable while every ordinary dispatch is busy.
+                let mut request = client
+                    .post(url)
+                    .header(crate::sdk::drivers::http::INSTANCE_HEADER, instance_id)
+                    .timeout(Duration::from_secs(5))
+                    .json(&cancel);
+                if let Some(auth) = auth_header {
+                    request = request.header(reqwest::header::AUTHORIZATION, auth);
+                }
+                if let Err(error) = request
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                {
+                    tracing::warn!(%error, "HTTP plugin request cancellation was not acknowledged");
+                }
+            });
+        })
+    }
 }
 
 #[async_trait]
@@ -253,7 +291,9 @@ impl PluginTransport for HttpTransport {
         };
         let method = req.method.clone();
         let context = req.context.clone();
+        let mut lifetime = self.request_lifetime(req.id.clone());
         let resp = self.run_bound(&method, context, self.send(req)).await?;
+        lifetime.complete();
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
             ResponsePayload::Err { error } => {
@@ -286,6 +326,7 @@ impl PluginTransport for HttpTransport {
             context: Some(context),
         };
         let context = req.context.clone().unwrap_or_default();
+        let mut lifetime = self.request_lifetime(req.id.clone());
         self.run_bound(
             method::HOOK_TOOL_INVOKE_STREAM,
             Some(context.clone()),
@@ -301,11 +342,14 @@ impl PluginTransport for HttpTransport {
                             error,
                             "decode HTTP plugin streaming-dispatch error",
                         );
+                        lifetime.complete();
                         return Err(TransportError::Plugin(pe));
                     }
                 };
 
-                Ok(Some(pending.register(handle.stream_id)?))
+                Ok(Some(
+                    lifetime.bind_stream(pending.register(handle.stream_id)?),
+                ))
             },
         )
         .await

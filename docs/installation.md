@@ -487,6 +487,13 @@ and the configured `AGENA_SERVER_PASSWORD`, so a new shell can run `agena` or
 installer state and in the native service definition because the service needs
 it at startup; these files are restricted to the current user.
 
+Web, TUI, CLI, and MCP OAuth use this same server password. Both `agena` and
+`agena tui` read `AGENA_SERVER_PASSWORD` automatically. When the server requires
+a password and the TUI has no configured credential, it prompts for the server
+password with input hidden. The entered password stays in memory for that TUI
+process, including reauthentication after a server restart. For non-interactive
+commands, set the environment variable before launching the client.
+
 A native user service does **not** read `.zshrc`. Exporting a variable in an
 interactive shell configures new commands in that shell, but does not update an
 already installed service. From a shell where `AGENA_SERVER_PASSWORD` is set,

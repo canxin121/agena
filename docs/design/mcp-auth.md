@@ -4,7 +4,7 @@ Agena serves itself as a Model Context Protocol server on two transports:
 
 - **stdio** (`agena mcp-server`): a thin client that forwards tool discovery and
   invocation to the long-lived server over the ordinary server API. The local
-  process is trusted; the server API is protected by the UI session/token.
+  process is trusted; the server API is protected by the server password session/token.
 - **Streamable HTTP** (`/mcp`): the public surface used by hosted MCP clients
   such as ChatGPT connectors, reverse proxies, and Secure MCP Tunnel.
 
@@ -42,6 +42,10 @@ Host and forwarding headers never determine these addresses.
 this same credential. MCP has no independent password setting, generator or
 password-management endpoint. A TUI or CLI client reads the same environment
 variable when opening its management session.
+
+There is no separate UI password or authentication setting. A TUI without
+configured credentials prompts for this server password with input hidden;
+Web uses the same password in its login form.
 
 Without a configured server password, Web/TUI retain their local anonymous
 management mode, but MCP readiness is false and OAuth authorization cannot

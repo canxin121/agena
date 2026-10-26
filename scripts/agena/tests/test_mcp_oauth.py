@@ -291,6 +291,102 @@ class McpOAuthTests(unittest.TestCase):
         self.assertTrue(remote['ready'])
         self.assertFalse(remote['warnings'])
 
+    def tui_environment(self):
+        return {
+            **{key: value for key, value in os.environ.items() if not key.startswith('AGENA_')},
+            'AGENA_DATA_DIR': str(self.root / 'data'),
+            'AGENA_SERVER_URL': self.base,
+            'TERM': 'xterm-256color',
+        }
+
+    def test_tui_uses_server_password_environment_for_default_and_explicit_launch(self):
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        for command in ([], ['tui']):
+            with self.subTest(command=command):
+                result = subprocess.run(
+                    [binary, *command], cwd=self.workspace,
+                    env=self.tui_environment() | {'AGENA_SERVER_PASSWORD': self.password},
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+                )
+                # The authenticated handshake, runtime reads and workspace
+                # resolution must all finish before terminal setup rejects pipes.
+                self.assertIn('requires both stdin and stdout', result.stderr)
+                self.assertNotIn('cannot connect TUI', result.stderr)
+                self.assertNotIn(self.password, result.stdout + result.stderr)
+
+        # A browser login token remains a compatible optional client credential.
+        token = self.management_headers['Authorization'].removeprefix('Bearer ')
+        result = subprocess.run(
+            [binary, 'tui'], cwd=self.workspace,
+            env=self.tui_environment() | {'AGENA_SERVER_TOKEN': token},
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+        )
+        self.assertIn('requires both stdin and stdout', result.stderr)
+        self.assertNotIn(token, result.stdout + result.stderr)
+
+    def test_tui_reports_missing_or_incorrect_server_password_as_configuration(self):
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        for password, expected in ((None, 'requires a password'), ('incorrect-do-not-echo', 'password is incorrect')):
+            with self.subTest(password_configured=password is not None):
+                environment = self.tui_environment()
+                if password is not None:
+                    environment['AGENA_SERVER_PASSWORD'] = password
+                result = subprocess.run(
+                    [binary], cwd=self.workspace, env=environment,
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('configuration error:', result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertIn('AGENA_SERVER_PASSWORD', result.stderr)
+                self.assertNotIn('UI authentication', result.stderr)
+                if password is not None:
+                    self.assertNotIn(password, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.name == 'posix', 'PTY password input requires POSIX')
+    def test_tui_password_prompt_hides_input_and_restores_terminal_on_failure_or_cancel(self):
+        import pty
+        import select
+        import termios
+
+        binary = str(Path(os.environ['AGENA_TEST_BINARY']).resolve())
+        for entered, expected in (
+            (b'wrong-hidden-password\r', 'password is incorrect'),
+            (b'cancel-hidden-password\x03', 'password entry cancelled'),
+        ):
+            with self.subTest(expected=expected):
+                master, slave = pty.openpty()
+                before = termios.tcgetattr(slave)
+                process = subprocess.Popen(
+                    [binary, 'tui'], cwd=self.workspace, env=self.tui_environment(),
+                    stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                )
+                try:
+                    output = bytearray()
+                    sent = False
+                    deadline = time.monotonic() + 15
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.1)[0]:
+                            output.extend(os.read(master, 65536))
+                        if not sent and b'Server password: ' in output:
+                            os.write(master, entered)
+                            sent = True
+                        if process.poll() is not None:
+                            while select.select([master], [], [], 0)[0]:
+                                output.extend(os.read(master, 65536))
+                            break
+                    self.assertIsNotNone(process.poll(), 'password prompt did not finish')
+                    self.assertTrue(sent, output.decode(errors='replace'))
+                    self.assertIn(expected.encode(), output)
+                    self.assertNotIn(entered.split(b'\r')[0].split(b'\x03')[0], output)
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                    os.close(master)
+                    os.close(slave)
+
     def test_client_metadata_uses_configured_proxy_dns_and_still_rejects_local_destinations(self):
         connections = []
 

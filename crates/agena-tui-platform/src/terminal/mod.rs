@@ -37,10 +37,12 @@ use agena_tui_media::MathGraphicsConfig;
 mod capabilities;
 mod graphics;
 pub mod integration;
+mod password;
 
 pub use agena_tui::terminal::TerminalFamily;
 pub use agena_tui::terminal_color::TerminalColorDetection;
 pub use capabilities::TerminalContext;
+pub use password::read_server_password;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 const PROTOCOL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);

@@ -1,7 +1,7 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{self, Stderr, Write},
+    io::{self, IsTerminal, Stderr, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -162,20 +162,64 @@ pub fn init_tui_tracing(
     Ok(())
 }
 
-pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
+pub async fn run_remote(mut args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
+    // Resolve credentials at the launch boundary too: callers constructing a
+    // TuiLaunchArgs directly must get the same environment as the CLI parser.
+    if args.server_token.is_none() && args.server_password.is_none() {
+        args.server_password = nonempty_env("AGENA_SERVER_PASSWORD");
+        if args.server_password.is_none() {
+            args.server_token = nonempty_env("AGENA_SERVER_TOKEN");
+        }
+    }
     // The CLI workspace is the directory the user launched Agena from unless
     // they explicitly selected another one. Do not silently inherit the
     // long-lived server process workspace here: installed servers commonly run
     // from $HOME, which would make `cd project && agena` create sessions in ~.
     let workspace_root = resolve_tui_workspace_root(args.workspace_root.clone())?;
-    let backend = TuiBackend::connect_remote_authenticated(
+    let connection = TuiBackend::connect_remote_authenticated(
         args.server_url.as_str(),
-        Some(workspace_root),
+        Some(workspace_root.clone()),
         args.server_token.as_deref(),
         args.server_password.as_deref(),
     )
-    .await
-    .map_err(|error| {
+    .await;
+    let connection = match connection {
+        Err(error)
+            if args.server_token.is_none()
+                && args.server_password.is_none()
+                && requires_server_password(&error) =>
+        {
+            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                return Err(AgenaProcessError::Configuration(format!(
+                    "server {} requires a password; set AGENA_SERVER_PASSWORD or run agena in an interactive terminal to enter it",
+                    args.server_url
+                )));
+            }
+            args.server_password = Some(
+                tokio::task::spawn_blocking(terminal::read_server_password)
+                    .await
+                    .context("server password prompt failed")
+                    .and_then(|result| result)
+                    .map_err(AgenaProcessError::from_anyhow)?,
+            );
+            TuiBackend::connect_remote_authenticated(
+                args.server_url.as_str(),
+                Some(workspace_root),
+                None,
+                args.server_password.as_deref(),
+            )
+            .await
+        }
+        result => result,
+    };
+    let backend = connection.map_err(|error| {
+        if requires_server_password(&error) {
+            return AgenaProcessError::Configuration(format!(
+                "cannot authenticate to server {}: {}; check AGENA_SERVER_PASSWORD or --server-password",
+                args.server_url,
+                agena_failure::diagnostic::format_error_chain(error.as_ref())
+            ));
+        }
         AgenaProcessError::from_anyhow(
             error.context(format!("cannot connect TUI to server {}", args.server_url)),
         )
@@ -186,6 +230,19 @@ pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
     let preferences = backend.tui_preferences();
     let i18n = I18n::resolve(args.locale.as_deref(), preferences.locale.as_deref());
     run_app(backend, preferences, i18n, &args).await
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn requires_server_password(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<agena_client::ClientError>()
+        .and_then(|error| error.problem())
+        .is_some_and(|problem| {
+            problem.category == agena_failure::FailureCategory::AuthenticationRequired
+        })
 }
 
 async fn run_app(

@@ -15,32 +15,6 @@ use agena_domain::TimeRange;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
-    trim("resource_id", "epoch"),
-    non_empty("resource_id"),
-    non_empty_if_present("epoch"),
-    minimum("max_bytes", 4),
-    maximum("max_bytes", 4096)
-)]
-#[serde(deny_unknown_fields)]
-pub struct ContentReadToolInput {
-    /// Canonical source identity from transcript or tool output.
-    pub resource_id: String,
-    /// Epoch returned with next_position. Omit only for the first read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub epoch: Option<String>,
-    /// Text byte cursor, or last fully consumed event sequence, from next_position.after.
-    #[serde(default)]
-    pub after: u64,
-    /// UTF-8 bytes consumed within the successor event; zero for text sources.
-    #[serde(default)]
-    pub offset: usize,
-    /// Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bytes: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(
     trim(
         "command",
         "description",

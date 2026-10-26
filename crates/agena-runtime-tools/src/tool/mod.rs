@@ -4,7 +4,6 @@ pub(crate) mod apply_patch;
 pub mod ask_user;
 pub(crate) mod bash;
 pub(crate) mod builtin_tools;
-pub(crate) mod content;
 pub(crate) mod cron;
 pub mod definition;
 mod discovery;

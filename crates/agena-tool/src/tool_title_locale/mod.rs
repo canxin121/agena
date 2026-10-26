@@ -40,7 +40,6 @@ pub const ACTION_KEYS: &[&str] = &[
     "Inspect syntax tree",
     "Rewrite AST",
     "Read document",
-    "Read content",
     "Run command",
     "Execute command",
     "Spawn background command",

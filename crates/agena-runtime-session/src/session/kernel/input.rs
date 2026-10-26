@@ -253,7 +253,7 @@ impl KernelPromptHydrator {
             raw.attachments.clear();
             let rendered = executor.render_tool_result(&invocation, &raw).await;
             if let Some(text) = rendered.model {
-                let marker = "[Tool result preview limited; read the recorded content references for the complete retained output.]";
+                let marker = "[Tool result preview limited.]";
                 let text =
                     crate::tool::bounded_model_output_preview(&text, marker, 2000, 50 * 1024);
                 let mut envelope: Value =
@@ -692,7 +692,7 @@ pub(crate) async fn read_text(
         text.insert_str(0, "[Earlier tool output is outside the retained range.]\n");
     }
     if count < length {
-        text.push_str("\n[Tool output preview limited; read the content source for the complete retained range.]");
+        text.push_str("\n[Tool output preview limited.]");
     }
     Ok(text)
 }

@@ -21,7 +21,6 @@ pub(crate) const ACTIONS: &[(&str, &str)] = &[
     ("Inspect syntax tree", "構文木の検査"),
     ("Rewrite AST", "AST書き換え"),
     ("Read document", "ドキュメントの読み取り"),
-    ("Read content", "コンテンツの読み取り"),
     ("Run command", "コマンド実行"),
     ("Execute command", "コマンド実行"),
     ("Spawn background command", "バックグラウンドコマンドの起動"),

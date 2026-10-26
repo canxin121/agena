@@ -350,23 +350,6 @@ impl ToolExecutor {
                 .await;
         }
 
-        if resolution.namespace() == "agena"
-            && resolution.plugin_name() == "content"
-            && resolution.tool_name() == "read"
-        {
-            let execution = crate::tool::content::execute(self, invocation, session_id).await?;
-            self.ensure_not_cancelled()?;
-            return self
-                .finalize_execution_async(
-                    invocation,
-                    session_id,
-                    resolution.canonical_name().as_str(),
-                    call_id,
-                    execution,
-                )
-                .await;
-        }
-
         if let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {

@@ -120,7 +120,6 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_commands_plugin());
 
     add!(crate::tool::new_code_plugin());
-    add!(crate::tool::new_content_plugin());
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_fs_plugin());
     add!(crate::tool::new_interaction_plugin());

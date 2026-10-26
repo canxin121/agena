@@ -90,18 +90,6 @@ fn help(plugin: &str, tool: &str, locale: &str) -> Option<&'static str> {
             "أزِل مستندات الأوامر التي يديرها نطاق العمل فقط؛ لا تحذف البرامج أو الحزم الخارجية.",
             "Remove apenas documentos de comando gerenciados pelo workspace; não remove software nem pacotes externos.",
         ],
-        ("content", "read") => [
-            "首次读取只传 resource_id；续读时使用 next_position 中的 epoch、sequence 和 offset。has_more 表示仍有内容，gap 表示保留数据缺失；此工具不会等待任务完成。",
-            "首次讀取只傳 resource_id；續讀時使用 next_position 中的 epoch、sequence 和 offset。has_more 表示仍有內容，gap 表示保留資料缺失；此工具不會等待工作完成。",
-            "初回は resource_id のみ指定します。続きは next_position の epoch・sequence・offset を使います。has_more は続き、gap は保持データの欠落を示し、このツールは完了を待ちません。",
-            "처음에는 resource_id만 전달하세요. 이어 읽을 때는 next_position의 epoch, sequence, offset을 사용하세요. has_more는 후속 내용, gap은 보존 데이터 손실을 뜻하며 이 도구는 완료를 기다리지 않습니다.",
-            "Au premier appel, indiquez seulement resource_id. Pour continuer, reprenez epoch, sequence et offset dans next_position. has_more signale la suite, gap une perte de rétention ; cet outil n’attend pas la fin d’une tâche.",
-            "Beim ersten Lesen nur resource_id angeben. Zum Fortsetzen epoch, sequence und offset aus next_position übernehmen. has_more zeigt weitere Daten, gap einen Aufbewahrungsverlust; das Tool wartet nicht auf den Abschluss.",
-            "En la primera lectura indica solo resource_id. Para continuar, usa epoch, sequence y offset de next_position. has_more indica más datos y gap pérdida de retención; esta herramienta no espera a que termine la tarea.",
-            "पहली बार केवल resource_id दें। आगे पढ़ने के लिए next_position से epoch, sequence और offset लें। has_more आगे डेटा बताता है, gap संग्रहित डेटा की कमी; यह टूल काम पूरा होने की प्रतीक्षा नहीं करता।",
-            "في القراءة الأولى أرسل resource_id فقط. للمتابعة استخدم epoch وsequence وoffset من next_position. تعني has_more وجود المزيد، ويعني gap فقدان بيانات محتفظ بها؛ لا تنتظر هذه الأداة اكتمال المهمة.",
-            "Na primeira leitura, informe apenas resource_id. Para continuar, use epoch, sequence e offset de next_position. has_more indica mais dados e gap indica perda de retenção; esta ferramenta não espera a tarefa terminar.",
-        ],
         ("fs", "document") => [
             "可提取 PDF、DOCX、PPTX、XLSX 的本地文本；不会安装转换依赖或提供图片、音频转写。空结果可能表示扫描版 PDF 需要 OCR。",
             "可擷取 PDF、DOCX、PPTX、XLSX 的本機文字；不會安裝轉換相依套件，也不提供圖片或音訊轉錄。空結果可能代表掃描版 PDF 需要 OCR。",

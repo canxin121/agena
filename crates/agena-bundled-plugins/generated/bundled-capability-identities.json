@@ -92,10 +92,10 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "execution_tools": 175,
+    "execution_tools": 174,
     "gateway_tools": 3,
-    "plugins": 23,
-    "tools": 178
+    "plugins": 22,
+    "tools": 177
   },
   "plugins": [
     {
@@ -843,28 +843,6 @@
           "tags": [
             "mutate",
             "filesystem"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": null,
-      "hooks": [
-        "tool.invoke"
-      ],
-      "id": "agena.content",
-      "tools": [
-        {
-          "canonical_name": "agena.content.read",
-          "conditional": null,
-          "definition_identity": "11ea8c098050a7b3148c376f58ecfced5d6707ed8e55e352003aa31926353d33",
-          "gateway": false,
-          "input_schema_sha256": "0e4499229faea4efd3bbfc220cf4c004ab4904ba93776ead1501239b2c5303eb",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "read_only"
           ]
         }
       ],

@@ -500,23 +500,6 @@ fn tool_result_fragment(
         return Some(status.to_owned());
     }
     match key {
-        "content.read" => {
-            if let Some(slices) = object.get("slices").and_then(serde_json::Value::as_array) {
-                let bytes = slices
-                    .iter()
-                    .filter_map(|slice| slice.get("text").and_then(serde_json::Value::as_str))
-                    .map(str::len)
-                    .sum::<usize>();
-                let mut fragment = format!("{bytes} bytes read");
-                if object.get("has_more").and_then(serde_json::Value::as_bool) == Some(true) {
-                    fragment.push_str(" · more available");
-                }
-                if object.get("gap").and_then(serde_json::Value::as_bool) == Some(true) {
-                    fragment.push_str(" · retention gap");
-                }
-                return Some(fragment);
-            }
-        }
         "code.search_ast" => {
             let matches = object.get("matches").and_then(array_len_or_u64);
             let scanned_files = object.get("scanned_files").and_then(value_as_u64);
@@ -2296,7 +2279,6 @@ fn tool_action_label(tool_name: &str) -> String {
         return tool.title.to_owned();
     }
     match key.as_str() {
-        "content.read" => "Read content".to_owned(),
         "fs.read" | "read" => "Read".to_owned(),
         "fs.read_many" => "Read files".to_owned(),
         "fs.write" | "write" => "Write".to_owned(),

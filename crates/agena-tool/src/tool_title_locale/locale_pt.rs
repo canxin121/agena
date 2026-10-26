@@ -21,7 +21,6 @@ pub(crate) const ACTIONS: &[(&str, &str)] = &[
     ("Inspect syntax tree", "Inspecionar árvore de sintaxe"),
     ("Rewrite AST", "Reescrever AST"),
     ("Read document", "Ler documento"),
-    ("Read content", "Ler conteúdo"),
     ("Run command", "Executar comando"),
     ("Execute command", "Executar comando"),
     (

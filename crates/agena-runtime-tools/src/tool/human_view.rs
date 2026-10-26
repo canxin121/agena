@@ -5001,79 +5001,6 @@ impl BuiltinHumanRenderer {
         })
     }
 
-    fn specific_content_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
-        let Some(source) = object.get("source").and_then(Value::as_object) else {
-            return Vec::new();
-        };
-        let state = match source.get("state").and_then(Value::as_str) {
-            Some("open") => "Capturing",
-            Some("complete") => "Complete",
-            Some("interrupted") => "Capture interrupted",
-            _ => "Content",
-        };
-        let next = object.get("next_position").unwrap_or(&Value::Null);
-        let more = object
-            .get("has_more")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let mut summary = format!(
-            "### Content page\n{state}{}\n\nNext position: {}, byte {}.",
-            if more { " · more available" } else { "" },
-            next.get("after").and_then(Value::as_u64).unwrap_or(0),
-            next.get("offset").and_then(Value::as_u64).unwrap_or(0),
-        );
-        if source
-            .get("capture_loss")
-            .and_then(|loss| loss.get("packets"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            != 0
-        {
-            summary.push_str("\n\nSome observed source output could not be captured.");
-        }
-        if let Some(error) = source.get("capture_error").and_then(Value::as_str) {
-            summary.push_str(&format!("\n\nCapture error: {}", Self::inline_code(error)));
-        }
-        let mut blocks = vec![Self::markdown_block("content-page", summary)];
-        if let Some(text) = object.get("text").and_then(Value::as_str) {
-            blocks.push(ViewBlock::Text {
-                id: Some("content-text".into()),
-                text: text.into(),
-            });
-        }
-        if let Some(fragments) = object.get("fragments").and_then(Value::as_array) {
-            for fragment in fragments {
-                let Some(text) = fragment.get("text").and_then(Value::as_str) else {
-                    continue;
-                };
-                let id = Some(format!(
-                    "content-event-{}-{}",
-                    fragment
-                        .get("sequence")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    fragment.get("offset").and_then(Value::as_u64).unwrap_or(0)
-                ));
-                let stream = fragment
-                    .get("channel")
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok());
-                blocks.push(match stream {
-                    Some(stream) => ViewBlock::Log {
-                        id,
-                        stream,
-                        text: text.into(),
-                    },
-                    None => ViewBlock::Text {
-                        id,
-                        text: text.into(),
-                    },
-                });
-            }
-        }
-        blocks
-    }
-
     fn specific_tool_blocks(tool_name: &str, raw: &RawOutput) -> Vec<ViewBlock> {
         let key = Self::normalized_tool_name(tool_name);
         let Some(object) = Self::specific_result_object(raw) else {
@@ -5105,7 +5032,6 @@ impl BuiltinHumanRenderer {
             Vec::new()
         };
         match key.as_str() {
-            "content.read" => blocks.extend(Self::specific_content_blocks(&object)),
             value if value.starts_with("fs.") => {
                 blocks.extend(Self::specific_filesystem_blocks(value, &object));
             }

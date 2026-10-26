@@ -20,10 +20,6 @@ fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
     BTreeMap::from([
         (
-            crate::tool::content_plugin_id().to_string(),
-            static_entry(serde_json::Value::Null),
-        ),
-        (
             crate::tool::chatgpt_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -133,10 +129,6 @@ pub fn static_plugin_registrations(
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
-        localized_static_plugin(
-            plugin_key(crate::tool::content_plugin_id()),
-            crate::tool::new_content_plugin(),
-        ),
         localized_static_plugin(
             plugin_key(crate::tool::chatgpt_plugin_id()),
             crate::tool::new_chatgpt_plugin(),

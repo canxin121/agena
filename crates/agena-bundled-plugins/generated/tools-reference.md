@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 178 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 177 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.
@@ -19,7 +19,6 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
-- [`agena.content`](#agenacontent) — Read canonical resource-backed text and tool output with resumable byte-bounded pages. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
@@ -7673,87 +7672,6 @@ Declare the built-in commands every Agena client renders locally, and project sk
   },
   "required": [
     "name"
-  ],
-  "type": "object"
-}
-```
-
-## agena.content
-
-**Version** `0.1.0` · **Tools** 1
-
-Read canonical resource-backed text and tool output with resumable byte-bounded pages.
-
-### read
-
-`agena.content.read` · **Summary**: Read retained source text from a content resource in this session.
-
-**Tags**: `query` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Use resource_id from a Part or tool result field. The first read omits epoch/after/offset. Continue with next_position.after.epoch as epoch, next_position.after.sequence as after and next_position.offset as offset; offsets safely resume inside a single large UTF-8 record. max_bytes defaults to 4096 (4–4096 raw text bytes); slices preserve whitespace and stdout/stderr. has_more means more retained records, gap signals retention loss, and capture state is independent of process success. Non-text document/terminal records advance the position without fabricated text. This is a diagnostic read, not a wait or polling mechanism.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `after` | `integer` | — | `0` | Text byte cursor, or last fully consumed event sequence, from next_position.after. |
-| `epoch` | `string / null` | — | — | Epoch returned with next_position. Omit only for the first read. |
-| `max_bytes` | `integer / null` | — | — | Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional. |
-| `offset` | `integer` | — | `0` | UTF-8 bytes consumed within the successor event; zero for text sources. |
-| `resource_id` | `string` | ✓ | — | Canonical source identity from transcript or tool output. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "after": {
-      "default": 0,
-      "description": "Text byte cursor, or last fully consumed event sequence, from next_position.after.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "epoch": {
-      "description": "Epoch returned with next_position. Omit only for the first read.",
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "max_bytes": {
-      "description": "Raw text byte budget; default/max 4096. Cursor and JSON escaping are additional.",
-      "format": "uint",
-      "maximum": 4096,
-      "minimum": 4,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "offset": {
-      "default": 0,
-      "description": "UTF-8 bytes consumed within the successor event; zero for text sources.",
-      "format": "uint",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "resource_id": {
-      "description": "Canonical source identity from transcript or tool output.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "resource_id"
   ],
   "type": "object"
 }

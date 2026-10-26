@@ -185,18 +185,65 @@ async fn verify_password_async(phc: String, candidate: String) -> Result<bool, S
         .map_err(|error| format!("password verification worker failed: {error}"))
 }
 
-pub(crate) async fn hash_password_async(candidate: String) -> Result<String, String> {
-    PASSWORD_WORKERS
-        .run(move || hash_password(&candidate))
+pub(crate) async fn init_ui_auth_async(
+    password: Option<String>,
+    database: &super::persistence::db::ServerStateDb,
+) -> Result<UiAuth, String> {
+    use super::persistence::db::KV_KEY_SERVER_PASSWORD_VERIFIER;
+    let candidate = normalize_password(password.as_deref());
+    // The environment/CLI remains authoritative. A stored verifier never
+    // enables login when the operator removed the configured password.
+    if candidate.is_empty() {
+        // An older service definition can still contain the retired variable.
+        // Never turn a previously protected deployment into anonymous access
+        // just because its password setting has not been renamed yet.
+        if std::env::var("AGENA_SERVER_UI_PASSWORD")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(
+                "AGENA_SERVER_UI_PASSWORD has been renamed to AGENA_SERVER_PASSWORD; update the environment and run `agena server install` with the existing launch options to update the service definition."
+                    .to_owned(),
+            );
+        }
+        database
+            .set_json(KV_KEY_SERVER_PASSWORD_VERIFIER, Option::<String>::None)
+            .await?;
+        return Ok(UiAuth::Disabled);
+    }
+    let previous = database
+        .get_json::<Option<String>>(KV_KEY_SERVER_PASSWORD_VERIFIER)
+        .await?
+        .flatten();
+    let phc = PASSWORD_WORKERS
+        .run(move || {
+            if let Some(phc) = previous.filter(|phc| verify_password(phc, &candidate)) {
+                Ok(phc)
+            } else {
+                hash_password(&candidate)
+            }
+        })
         .await
-        .map_err(|error| format!("password hashing worker failed: {error}"))?
+        .map_err(|error| format!("server authentication worker failed: {error}"))??;
+    database
+        .set_json(KV_KEY_SERVER_PASSWORD_VERIFIER, Some(phc.clone()))
+        .await?;
+    init_ui_auth_from_phc(phc)
 }
 
-pub(crate) async fn init_ui_auth_async(password: Option<String>) -> Result<UiAuth, String> {
-    PASSWORD_WORKERS
-        .run(move || init_ui_auth(password))
-        .await
-        .map_err(|error| format!("UI authentication worker failed: {error}"))
+impl UiAuth {
+    /// A stable credential version, not another password. OAuth uses it to
+    /// revoke grants when the single Agena login credential changes.
+    pub(crate) fn credential_fingerprint(&self) -> Option<String> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use sha2::{Digest, Sha256};
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(inner) => {
+                Some(URL_SAFE_NO_PAD.encode(Sha256::digest(inner.password_phc.as_bytes())))
+            }
+        }
+    }
 }
 
 pub(crate) async fn verify_password_for_oauth_async(
@@ -397,16 +444,6 @@ pub(crate) fn spawn_cleanup_sessions_task_if_enabled(ui_auth: &UiAuth) -> bool {
     }
 }
 
-pub(crate) fn init_ui_auth(ui_password: Option<String>) -> UiAuth {
-    let password = normalize_password(ui_password.as_deref());
-    if password.is_empty() {
-        return UiAuth::Disabled;
-    }
-
-    let password_phc = hash_password(password.as_str()).expect("init_ui_auth: hash password");
-    init_ui_auth_from_phc(password_phc).expect("init_ui_auth: invalid password hash")
-}
-
 /// Hash a password for a server-owned credential which is persisted as an
 /// Argon2 PHC string. The plaintext never needs to leave the caller's stack.
 pub(crate) fn hash_password(candidate: &str) -> Result<String, String> {
@@ -429,16 +466,16 @@ pub(crate) fn hash_password(candidate: &str) -> Result<String, String> {
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|error| format!("failed to hash the server UI password: {error}"))
+        .map_err(|error| format!("failed to hash the server password: {error}"))
 }
 
 /// Rehydrate a password verifier from a PHC value read from server state.
 /// Keeping the login-attempt map on the verifier preserves the same OAuth
-/// lockout behavior as the UI password without ever returning the PHC value.
+/// lockout behavior as the server password without ever returning the PHC value.
 pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, String> {
     PasswordHash::new(password_phc.as_str()).map_err(|error| {
         // password_hash::Error has no std::error::Error implementation/source.
-        format!("failed to parse the persisted server UI password hash: {error}")
+        format!("failed to parse the persisted server password hash: {error}")
     })?;
     Ok(UiAuth::Enabled(Arc::new(UiAuthInner {
         password_phc,
@@ -447,7 +484,7 @@ pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, Stri
     })))
 }
 
-/// Verify the server UI password for the MCP OAuth authorization page.
+/// Verify the server password for the MCP OAuth authorization page.
 ///
 /// MCP authorization is deliberately a separate browser flow from the UI
 /// bearer session: a successful password check issues an OAuth authorization
@@ -525,7 +562,7 @@ pub(crate) async fn auth_session_create(
         UiAuth::Disabled => (
             StatusCode::BAD_REQUEST,
             Json(agena_api::ApiError::bad_request(
-                "UI password authentication is not configured.",
+                "Server password authentication is not configured.",
             )),
         )
             .into_response(),
@@ -549,7 +586,7 @@ pub(crate) async fn auth_session_create(
             {
                 Ok(verified) => verified,
                 Err(error) => {
-                    tracing::error!(%error, "UI password verification failed");
+                    tracing::error!(%error, "Server password verification failed");
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(agena_api::ApiError::internal(

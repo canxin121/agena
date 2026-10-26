@@ -399,26 +399,11 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::EditMcpOAuthIssuerUrl => {
+            SettingsPickerAction::EditMcpServerUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {
-                        section: agena_tui_settings::SettingsStudioSectionId::PluginsTools,
-                        path: MCP_OAUTH_ISSUER_URL_SETTINGS_PATH.to_owned(),
-                        label_key: "settings-mcp-oauth-issuer-label",
-                        description_key: "settings-mcp-oauth-issuer-detail",
-                        kind: SettingsFieldKind::String,
-                        label_override: None,
-                        description_override: None,
-                    },
-                    "",
-                );
-                false
-            }
-            SettingsPickerAction::EditMcpPublicUrl => {
-                self.open_settings_field_editor(
-                    SettingsFieldSpec {
-                        section: agena_tui_settings::SettingsStudioSectionId::PluginsTools,
-                        path: MCP_PUBLIC_URL_SETTINGS_PATH.to_owned(),
+                        section: agena_tui_settings::SettingsStudioSectionId::McpServer,
+                        path: MCP_SERVER_URL_SETTINGS_PATH.to_owned(),
                         label_key: "settings-mcp-public-url-label",
                         description_key: "settings-mcp-public-url-detail",
                         kind: SettingsFieldKind::String,
@@ -426,34 +411,6 @@ impl App {
                         description_override: None,
                     },
                     "",
-                );
-                false
-            }
-            SettingsPickerAction::EditMcpOAuthPassword => {
-                self.open_settings_field_editor(
-                    SettingsFieldSpec {
-                        section: agena_tui_settings::SettingsStudioSectionId::PluginsTools,
-                        path: MCP_OAUTH_PASSWORD_SETTINGS_PATH.to_owned(),
-                        label_key: "settings-mcp-oauth-password-label",
-                        description_key: "settings-mcp-oauth-password-detail",
-                        kind: SettingsFieldKind::String,
-                        label_override: None,
-                        description_override: None,
-                    },
-                    "",
-                );
-                false
-            }
-            SettingsPickerAction::ClearMcpOAuthPassword => {
-                self.dispatch_backend_operation(
-                    |application| async move { application.clear_mcp_oauth_password().await },
-                    |app, result| match result {
-                        Ok(_) => {
-                            app.flash_success(app.i18n.text("settings-mcp-oauth-password-cleared"));
-                            app.refresh_current_route_after_local_edit();
-                        }
-                        Err(error) => app.flash_error(error),
-                    },
                 );
                 false
             }
@@ -760,8 +717,7 @@ impl App {
 }
 use crate::{
     App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, DialogHost,
-    MCP_OAUTH_ISSUER_URL_SETTINGS_PATH, MCP_OAUTH_PASSWORD_SETTINGS_PATH,
-    MCP_PUBLIC_URL_SETTINGS_PATH, ModelCatalogStudioOverlay, Overlay,
+    MCP_SERVER_URL_SETTINGS_PATH, ModelCatalogStudioOverlay, Overlay,
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionMode, PermissionStudioAction,
     PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioModeTarget,
     PermissionStudioOverlay, PermissionStudioPage, ProviderPickerPurpose, ProviderStudioOverlay,

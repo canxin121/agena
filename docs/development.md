@@ -167,7 +167,7 @@ Useful server flags:
 --host, --port          Listen address and port
 --workspace             Default workspace root
 --ui-dir                Built Web frontend directory
---ui-password           Operator password for the Web/TUI management API
+--password              Server password shared by Web/TUI login and MCP OAuth
 --data-dir              Instance data root
 --mcp-enabled           Enable the HTTP MCP surface
 --mcp-auth-mode         none, oauth, or mixed

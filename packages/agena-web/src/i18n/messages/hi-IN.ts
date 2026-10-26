@@ -1741,6 +1741,7 @@ export default {
       usage: 'उपयोग',
       plugins: 'प्लगइन',
       pluginsTools: 'प्लगइन और टूल',
+      mcpServer: 'MCP सर्वर',
       runtimeSession: 'रनटाइम और सेशन',
       interface: 'इंटरफ़ेस',
       diagnostics: 'निदान',

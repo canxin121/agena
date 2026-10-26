@@ -5,7 +5,6 @@ import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSe
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
-const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const PluginMarketplacePanel = defineAsyncComponent(() => import('@/components/settings/PluginMarketplacePanel.vue'))
 const PluginsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsPanel.vue'))
 
@@ -33,7 +32,6 @@ defineProps<{ activePage: string }>()
       ref="panel"
       :tab="pluginTabForSettingsView(activePage, route.query.pluginTab)!"
     />
-    <PluginMarketplacePanel ref="panel" v-else-if="activePage === 'marketplace'" />
-    <McpServerControlPanel ref="panel" v-else />
+    <PluginMarketplacePanel ref="panel" v-else />
   </SettingsSectionWorkbench>
 </template>

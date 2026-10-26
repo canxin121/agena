@@ -77,12 +77,14 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       description: () => st('Discover, verify, install, upgrade, and remove GitHub-hosted Agena plugins.'),
       keywords: ['marketplace', 'github', 'install', 'upgrade', 'release', 'plugins'],
     },
+  ],
+  'mcp-server': [
     {
-      id: 'mcp-server',
+      id: 'connection',
       label: () => st('MCP Server'),
       description: () =>
         st('Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.'),
-      keywords: ['mcp', 'oauth', 'chatgpt', 'public url', 'tools'],
+      keywords: ['mcp', 'oauth', 'chatgpt', 'server url', 'address', 'connection', 'tools'],
     },
   ],
   'runtime-session': [
@@ -161,6 +163,7 @@ export const SETTINGS_DEFAULT_SUBPAGE: Record<SettingsTab, string> = {
   'models-providers': 'provider-studio',
   permissions: 'filesystem',
   'plugins-tools': 'plugin-workbench',
+  'mcp-server': 'connection',
   'runtime-session': 'client-versions',
   interface: 'tui',
   diagnostics: 'runtime',

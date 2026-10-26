@@ -981,6 +981,7 @@ export default {
       "usage": "Uso",
       "plugins": "Complementos",
       "pluginsTools": "Complementos y herramientas",
+      "mcpServer": "Servidor MCP",
       "runtimeSession": "Runtime y sesión",
       "interface": "Interfaz",
       "diagnostics": "Diagnóstico",

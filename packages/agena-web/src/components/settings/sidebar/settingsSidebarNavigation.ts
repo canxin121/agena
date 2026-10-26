@@ -4,6 +4,7 @@ export const SETTINGS_TAB_IDS = [
   'models-providers',
   'permissions',
   'plugins-tools',
+  'mcp-server',
   'runtime-session',
   'interface',
   'diagnostics',
@@ -15,6 +16,7 @@ export type SettingsSidebarIconKey =
   | 'models-providers'
   | 'permissions'
   | 'plugins-tools'
+  | 'mcp-server'
   | 'runtime-session'
   | 'interface'
   | 'diagnostics'
@@ -94,6 +96,13 @@ const SETTINGS_TAB_CONFIG: Array<{
     icon: 'plugins-tools',
     group: 'core',
     keywords: ['plugin', 'plugins', 'tools', 'commands'],
+  },
+  {
+    id: 'mcp-server',
+    labelKey: 'settings.tabs.mcpServer',
+    icon: 'mcp-server',
+    group: 'core',
+    keywords: ['mcp', 'server', 'oauth', 'connection', 'url', 'chatgpt'],
   },
   {
     id: 'runtime-session',

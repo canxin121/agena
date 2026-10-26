@@ -2,7 +2,7 @@
 //!
 //! launchd and systemd receive an argument vector directly. No generated
 //! service definition invokes a shell, and the definition is written with
-//! user-only permissions because it may contain the configured UI password.
+//! user-only permissions because it may contain the configured server password.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -99,19 +99,19 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
         executable.as_os_str(),
         arguments.as_slice(),
         log_path.as_path(),
-        args.ui_password.as_deref(),
+        args.password.as_deref(),
     )?;
     #[cfg(target_os = "linux")]
     let contents = systemd_unit(
         executable.as_os_str(),
         arguments.as_slice(),
-        args.ui_password.as_deref(),
+        args.password.as_deref(),
     )?;
     #[cfg(target_os = "windows")]
     let contents = windows_task_xml(
         executable.as_os_str(),
         arguments.as_slice(),
-        args.ui_password.as_deref(),
+        args.password.as_deref(),
     )?;
 
     #[cfg(target_os = "windows")]
@@ -199,6 +199,10 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     if let Some(mcp_public_url) = &args.mcp_public_url {
         arguments.push("--mcp-public-url".into());
         arguments.push(mcp_public_url.into());
+    }
+    if let Some(server_url) = &args.mcp_server_url {
+        arguments.push("--mcp-server-url".into());
+        arguments.push(server_url.into());
     }
     if let Some(mcp_oauth_issuer_url) = &args.mcp_oauth_issuer_url {
         arguments.push("--mcp-oauth-issuer-url".into());
@@ -324,7 +328,7 @@ fn launchd_plist(
     executable: &OsStr,
     arguments: &[OsString],
     log_path: &Path,
-    ui_password: Option<&str>,
+    server_password: Option<&str>,
 ) -> Result<String> {
     let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
     program_arguments.push(os_text(executable, "Agena executable")?);
@@ -332,8 +336,8 @@ fn launchd_plist(
         program_arguments.push(os_text(argument.as_os_str(), "service argument")?);
     }
     let mut environment = Vec::new();
-    if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
-        environment.push(("AGENA_SERVER_UI_PASSWORD", password.to_owned()));
+    if let Some(password) = server_password.filter(|password| !password.trim().is_empty()) {
+        environment.push(("AGENA_SERVER_PASSWORD", password.to_owned()));
     }
     let argument_xml = program_arguments
         .iter()
@@ -403,7 +407,7 @@ fn windows_task_file_bytes(contents: &str) -> Vec<u8> {
 fn systemd_unit(
     executable: &OsStr,
     arguments: &[OsString],
-    ui_password: Option<&str>,
+    server_password: Option<&str>,
 ) -> Result<String> {
     let mut command = vec![systemd_quote(
         os_text(executable, "Agena executable")?.as_str(),
@@ -414,10 +418,10 @@ fn systemd_unit(
         )?);
     }
     let mut environment = Vec::new();
-    if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
+    if let Some(password) = server_password.filter(|password| !password.trim().is_empty()) {
         environment.push(format!(
             "Environment={}",
-            systemd_quote(format!("AGENA_SERVER_UI_PASSWORD={password}").as_str())?
+            systemd_quote(format!("AGENA_SERVER_PASSWORD={password}").as_str())?
         ));
     }
     Ok(format!(
@@ -499,12 +503,12 @@ fn windows_user_id() -> Result<String> {
 fn windows_task_xml(
     executable: &OsStr,
     arguments: &[OsString],
-    ui_password: Option<&str>,
+    server_password: Option<&str>,
 ) -> Result<String> {
     windows_task_xml_for_user(
         executable,
         arguments,
-        ui_password,
+        server_password,
         windows_user_id()?.as_str(),
     )
 }
@@ -513,7 +517,7 @@ fn windows_task_xml(
 fn windows_task_xml_for_user(
     executable: &OsStr,
     arguments: &[OsString],
-    ui_password: Option<&str>,
+    server_password: Option<&str>,
     user_id: &str,
 ) -> Result<String> {
     let executable = os_text(executable, "Agena executable")?;
@@ -521,8 +525,8 @@ fn windows_task_xml_for_user(
         .iter()
         .map(|argument| os_text(argument.as_os_str(), "service argument"))
         .collect::<Result<Vec<_>>>()?;
-    if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
-        task_arguments.push("--ui-password".to_owned());
+    if let Some(password) = server_password.filter(|password| !password.trim().is_empty()) {
+        task_arguments.push("--password".to_owned());
         task_arguments.push(password.to_owned());
     }
     let task_arguments = task_arguments

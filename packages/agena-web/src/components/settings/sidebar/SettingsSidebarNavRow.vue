@@ -7,6 +7,7 @@ import {
   RiFlowChart,
   RiPlugLine,
   RiSettingsLine,
+  RiServerLine,
   RiShieldCheckLine,
 } from '@remixicon/vue'
 
@@ -41,6 +42,7 @@ const topLevelIcon = computed(() => {
   if (props.icon === 'models-providers') return RiComputerLine
   if (props.icon === 'permissions') return RiShieldCheckLine
   if (props.icon === 'plugins-tools') return RiPlugLine
+  if (props.icon === 'mcp-server') return RiServerLine
   if (props.icon === 'runtime-session') return RiFlowChart
   if (props.icon === 'diagnostics') return RiBugLine
   if (props.icon === 'interface') return RiSettingsLine

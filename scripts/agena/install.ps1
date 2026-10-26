@@ -13,7 +13,8 @@ Param(
   [string]$ListenHost = "127.0.0.1",
   [int]$Port = 3210,
   [string]$Workspace = "",
-  [string]$UiPassword = "",
+  [Alias("UiPassword")]
+  [string]$ServerPassword = $env:AGENA_SERVER_PASSWORD,
   [ValidateSet("auto", "native", "detached")]
   [string]$ServiceMode = "auto",
   [switch]$NoPathUpdate,
@@ -29,7 +30,7 @@ $DataDirSpecified = $PSBoundParameters.ContainsKey("DataDir")
 $ListenHostSpecified = $PSBoundParameters.ContainsKey("ListenHost")
 $PortSpecified = $PSBoundParameters.ContainsKey("Port")
 $WorkspaceSpecified = $PSBoundParameters.ContainsKey("Workspace")
-$UiPasswordSpecified = $PSBoundParameters.ContainsKey("UiPassword")
+$ServerPasswordSpecified = $PSBoundParameters.ContainsKey("ServerPassword")
 $ServiceModeSpecified = $PSBoundParameters.ContainsKey("ServiceMode")
 
 $ReleaseVersion = ""
@@ -52,7 +53,7 @@ $candidateParameters = @(
   }
 )
 $runtimeParameters = @(
-  foreach ($name in @("DataDir", "ListenHost", "Port", "Workspace", "UiPassword", "ServiceMode")) {
+  foreach ($name in @("DataDir", "ListenHost", "Port", "Workspace", "ServerPassword", "ServiceMode")) {
     if ($PSBoundParameters.ContainsKey($name)) { $name }
   }
 )
@@ -343,7 +344,7 @@ function Save-State {
     host = $ListenHost
     port = $Port
     workspace = $Workspace
-    uiPassword = $UiPassword
+    serverPassword = $ServerPassword
     serviceMode = $ServiceMode
   }
   $state | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
@@ -367,7 +368,10 @@ function Load-State {
   $script:ListenHost = [string]$state.host
   $script:Port = [int]$state.port
   $script:Workspace = [string]$state.workspace
-  $script:UiPassword = [string]$state.uiPassword
+  # Read the previous installer-state key once; save only the shared name.
+  $script:ServerPassword = if ($state.PSObject.Properties.Name -contains "serverPassword") {
+    [string]$state.serverPassword
+  } else { [string]$state.uiPassword }
   $script:ServiceMode = [string]$state.serviceMode
   Assert-StoragePaths
   $script:StateFile = Join-Path $script:InstallDir "install-state.json"
@@ -380,6 +384,8 @@ function Update-UserPath {
   if ($NoPathUpdate) { return }
   [Environment]::SetEnvironmentVariable("AGENA_DATA_DIR", $DataDir, "User")
   $env:AGENA_DATA_DIR = $DataDir
+  [Environment]::SetEnvironmentVariable("AGENA_SERVER_PASSWORD", $ServerPassword, "User")
+  $env:AGENA_SERVER_PASSWORD = $ServerPassword
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   $parts = @($userPath -split ';' | Where-Object { $_ })
   if ($parts -notcontains $BinDir) {
@@ -414,7 +420,7 @@ function Get-ServerArgs {
     "--workspace", $Workspace,
     "--ui-dir", $WebDir
   )
-  if ($UiPassword) { $serverArgs += @("--ui-password", $UiPassword) }
+  if ($ServerPassword) { $serverArgs += @("--password", $ServerPassword) }
   return $serverArgs
 }
 
@@ -483,7 +489,7 @@ function Resolve-Replacement {
   $requestedListenHost = $ListenHost
   $requestedPort = $Port
   $requestedWorkspace = $Workspace
-  $requestedUiPassword = $UiPassword
+  $requestedServerPassword = $ServerPassword
   $requestedServiceMode = $ServiceMode
 
   $script:ReplacementAction = $Action
@@ -514,7 +520,7 @@ function Resolve-Replacement {
     if ($ListenHostSpecified) { $script:ListenHost = $requestedListenHost }
     if ($PortSpecified) { $script:Port = $requestedPort }
     if ($WorkspaceSpecified) { $script:Workspace = $requestedWorkspace }
-    if ($UiPasswordSpecified) { $script:UiPassword = $requestedUiPassword }
+    if ($ServerPasswordSpecified) { $script:ServerPassword = $requestedServerPassword }
     if ($ServiceModeSpecified) { $script:ServiceMode = $requestedServiceMode }
     Assert-StoragePaths
     if ($Action -eq "Reinstall" -and -not $Source -and -not $Archive -and -not $ReleaseVersion) {

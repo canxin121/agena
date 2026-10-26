@@ -549,57 +549,16 @@ impl TuiBackend {
         Ok(value)
     }
 
-    pub(crate) async fn set_mcp_public_url(
+    pub(crate) async fn set_mcp_server_url(
         &self,
-        public_url: Option<String>,
-    ) -> Result<serde_json::Value> {
-        let current = self.mcp_server_control().await?;
-        let enabled = current
-            .get("enabled")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
-        let value = self
-            .inner
-            .client
-            .update_mcp_server_control(enabled, Some(public_url))
-            .await
-            .context("failed to update the Agena MCP public URL")?;
-        *self.inner.mcp_server_control.write().await = Some(value.clone());
-        Ok(value)
-    }
-
-    pub(crate) async fn set_mcp_oauth_issuer_url(
-        &self,
-        oauth_issuer_url: Option<String>,
+        server_url: Option<String>,
     ) -> Result<serde_json::Value> {
         let value = self
             .inner
             .client
-            .set_mcp_server_oauth_issuer_url(oauth_issuer_url)
+            .set_mcp_server_url(server_url)
             .await
-            .context("failed to update the Agena MCP OAuth issuer URL")?;
-        *self.inner.mcp_server_control.write().await = Some(value.clone());
-        Ok(value)
-    }
-
-    pub(crate) async fn set_mcp_oauth_password(&self, password: &str) -> Result<serde_json::Value> {
-        let value = self
-            .inner
-            .client
-            .set_mcp_server_oauth_password(password)
-            .await
-            .context("failed to set the Agena MCP OAuth password")?;
-        *self.inner.mcp_server_control.write().await = Some(value.clone());
-        Ok(value)
-    }
-
-    pub(crate) async fn clear_mcp_oauth_password(&self) -> Result<serde_json::Value> {
-        let value = self
-            .inner
-            .client
-            .clear_mcp_server_oauth_password()
-            .await
-            .context("failed to clear the Agena MCP OAuth password")?;
+            .context("failed to update the Agena access URL")?;
         *self.inner.mcp_server_control.write().await = Some(value.clone());
         Ok(value)
     }

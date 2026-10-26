@@ -652,6 +652,7 @@ export default {
       usage: 'Usage',
       plugins: 'Plugins',
       pluginsTools: 'Plugins & Tools',
+      mcpServer: 'MCP Server',
       runtimeSession: 'Runtime & Session',
       interface: 'Interface',
       diagnostics: 'Diagnostics',

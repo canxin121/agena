@@ -777,13 +777,13 @@ settings-mcp-registration-label = 註冊
 
 settings-mcp-pkce-label = PKCE
 
-settings-mcp-public-url-label = MCP 公共 URL
+settings-mcp-public-url-label = Agena 存取位址
 
 settings-mcp-public-url-value = 編輯
 
 settings-mcp-public-url-auto = 監聽器本地回退地址
 
-settings-mcp-public-url-detail = 設定規範 HTTPS MCP resource URL。Secure MCP Tunnel 可保留完整 /v1/mcp/tunnel_id 路徑；絕不信任轉發請求頭來定義 OAuth 身份。
+settings-mcp-public-url-detail = 填寫存取 Agena 的位址，系統會自動推導 MCP 和 OAuth 位址。留空使用本機監聽位址。遠端連線需要 HTTPS；回環位址也支援 HTTP。
 
 settings-mcp-oauth-issuer-label = OAuth 簽發者 URL
 
@@ -791,21 +791,13 @@ settings-mcp-oauth-issuer-derived = 從 MCP resource origin 推導
 
 settings-mcp-oauth-issuer-detail = 設定瀏覽器可訪問的公共授權服務器 issuer。Agena 內置 OAuth 要求使用不帶路徑的 origin，例如 https://auth.example.com；OAuth 與 MCP 同域時可留空自動推導。
 
-settings-mcp-oauth-password-label = MCP OAuth 密碼
 
-settings-mcp-oauth-password-value = 設定或替換
 
-settings-mcp-oauth-password-configured = 已設定 MCP 專用密碼
 
-settings-mcp-oauth-password-ui-fallback = 使用 UI 密碼回退
 
-settings-mcp-oauth-password-not-configured = 未設定
 
-settings-mcp-oauth-password-detail = 設定 Agena OAuth 授權頁面使用的密碼；密碼由 server 以 Argon2 哈希儲存。
 
-settings-mcp-oauth-password-clear-label = 清除 MCP OAuth 密碼
 
-settings-mcp-oauth-password-clear-detail = 刪除 MCP 專用密碼；如果設定了 UI 密碼，則回退到 UI 密碼。
 
 settings-field-runtime-codex-version-label = Codex 用戶端版本
 
@@ -1285,11 +1277,10 @@ command-activities-summary = 開啟背景活動面板
 command-plan-summary = 開啟目前工作階段的計畫檢視器
 command-btw-summary = 在主要對話繼續進行時另行提問。僅使用唯讀工具；不會變更主要對話。
 
-settings-mcp-public-url-updated = Agena MCP 公共 URL 已更新
+settings-mcp-public-url-updated = Agena 存取位址已更新。
 
 settings-mcp-oauth-issuer-updated = Agena MCP OAuth 頒發者 URL 已更新
 
-settings-mcp-oauth-password-updated = Agena MCP OAuth 密碼已更新
 
 settings-mcp-server-enabled-flash = Agena MCP 服務已啟用
 
@@ -1299,7 +1290,6 @@ settings-mcp-auth-mode-updated = Agena MCP 身份驗證模式已設為 {$mode}
 
 settings-mcp-anonymous-access-updated = Agena MCP 匿名工具訪問策略已設為 {$policy}
 
-settings-mcp-oauth-password-cleared = Agena MCP OAuth 密碼已清除
 
 permission-studio-command-pattern-title = {$tool_name} 命令模式
 
@@ -3089,3 +3079,4 @@ flash-skill-count-limit = 一則訊息最多可引用 {$count} 個 Skill。
 hub-column-name = 名稱
 hub-column-status = 狀態
 hub-column-updated = 時間
+settings-mcp-shared-password-detail = Web、TUI 與 MCP OAuth 使用同一個伺服器密碼，透過 AGENA_SERVER_PASSWORD 或 --password 設定。

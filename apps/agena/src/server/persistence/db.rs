@@ -16,6 +16,7 @@ pub(crate) const KV_KEY_TERMINAL_SESSION_REGISTRY: &str = "terminal.sessionRegis
 pub(crate) const KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE: &str = "workspacePreview.state.server";
 pub(crate) const KV_KEY_MCP_SERVER_CONTROL: &str = "mcp.server.control";
 pub(crate) const KV_KEY_MCP_OAUTH_RUNTIME: &str = "mcp.oauth.runtime";
+pub(crate) const KV_KEY_SERVER_PASSWORD_VERIFIER: &str = "auth.serverPasswordVerifier";
 
 /// Typed application state on the runtime's existing instance database.
 /// The runtime owns schema initialization, connection policy and shutdown.

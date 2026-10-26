@@ -26,6 +26,10 @@ if [[ "${1:-}" == "--version" ]]; then
 fi
 # A regression in the installer still cannot make this stub write real data.
 [[ "$data_root" == "$TEST_SANDBOX_ROOT/"* ]] || exit 91
+if [[ "${TEST_REQUIRE_CLEAN_MCP_ENV:-}" == 1 && -n "${AGENA_MCP_SERVER_URL+x}" ]]; then
+  echo 'MCP server URL leaked from installer environment'
+  exit 94
+fi
 [[ "${1:-}" == "server" ]] || exit 92
 action="${2:-}"
 printf '%s\t%s\t%s\n' "$data_root" "$action" "$*" >> "$TEST_CALLS_PATH"
@@ -180,6 +184,28 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
+    def test_legacy_password_state_migrates_to_shared_server_password(self):
+        self.install()
+        state = self.install_dir / "install-state.env"
+        text = state.read_text()
+        text = text.replace("SERVER_PASSWORD=''", "UI_PASSWORD=legacy-shared-password")
+        self.assertIn("UI_PASSWORD=legacy-shared-password", text)
+        state.write_text(text)
+        self.invoke("reinstall", "--archive", self.archive)
+        self.assertEqual(self.state_value("SERVER_PASSWORD"), "legacy-shared-password")
+        self.assertNotIn("\nUI_PASSWORD=", state.read_text())
+        client_env = (self.install_dir / "client-env.sh").read_text()
+        self.assertIn("export AGENA_SERVER_PASSWORD=legacy-shared-password", client_env)
+        self.assertNotIn("AGENA_SERVER_UI_PASSWORD", client_env)
+
+    def test_fresh_install_reads_canonical_password_environment(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--workspace", self.workspace, "--service-mode", "detached",
+            environment={"AGENA_SERVER_PASSWORD": "shared-password-from-environment"},
+        )
+        self.assertEqual(self.state_value("SERVER_PASSWORD"), "shared-password-from-environment")
+
     def test_lifecycle_uses_saved_root_with_spaces_despite_poisoned_environment(self):
         self.install()
         for poison in [str(self.install_dir), str(self.home), "/"]:
@@ -231,7 +257,7 @@ class InstallerStorageTests(unittest.TestCase):
             "--workspace", new_workspace,
             "--host", "0.0.0.0",
             "--port", "4321",
-            "--ui-password", "replacement password",
+            "--password", "replacement password",
             "--service-mode", "detached",
             environment={
                 "AGENA_DATA_DIR": "/",
@@ -244,7 +270,7 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertEqual(self.state_value("HOST"), "0.0.0.0")
         self.assertEqual(self.state_value("PORT"), "4321")
         self.assertEqual(self.state_value("WORKSPACE"), str(new_workspace))
-        self.assertEqual(self.state_value("UI_PASSWORD"), "replacement password")
+        self.assertEqual(self.state_value("SERVER_PASSWORD"), "replacement password")
         self.assertEqual(self.state_value("SERVICE_MODE"), "detached")
         self.assertTrue(new_workspace.is_dir())
         self.assertTrue((new_data / "agena.db").is_file())
@@ -415,6 +441,17 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertTrue((self.data_dir / "run/stub-running").exists())
         self.assertEqual(routing.read_text().strip(),
                          "keep-upper.example\tkeep-lower.example\thttp://127.0.0.1:9")
+
+    def test_lifecycle_calls_clear_the_ambient_mcp_server_url(self):
+        self.install()
+        environment = {
+            'AGENA_MCP_SERVER_URL': 'https://unselected.example.com',
+            'TEST_REQUIRE_CLEAN_MCP_ENV': '1',
+        }
+        self.invoke('stop', environment=environment)
+        self.invoke('start', environment=environment)
+        self.assertTrue((self.data_dir / 'run/stub-running').exists())
+        self.assert_only_selected_root_was_called()
 
     def test_reinstall_no_path_update_overrides_the_saved_setting(self):
         self.invoke("install", "--archive", self.archive, "--data-dir", self.data_dir,

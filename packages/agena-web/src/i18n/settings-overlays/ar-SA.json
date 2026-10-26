@@ -73,6 +73,7 @@
   "tabs": {
     "diagnostics": "التشخيصات",
     "interface": "الواجهة",
+    "mcpServer": "خادم MCP",
     "modelsProviders": "النماذج ومزودو الخدمة",
     "permissions": "الأذونات",
     "pluginsTools": "الإضافات والأدوات",

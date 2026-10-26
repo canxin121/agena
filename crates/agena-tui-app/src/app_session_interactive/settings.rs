@@ -148,8 +148,8 @@ impl App {
         )
         .map_err(crate::UiFailure::internal)?;
 
-        let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
-        plugin_items.extend(settings_studio_mcp_items(&self.i18n, &self.application));
+        let plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
+        let mcp_items = settings_studio_mcp_items(&self.i18n, &self.application);
         let mut provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
         provider_items.push(settings_studio_provider_approval_model_item(
@@ -245,6 +245,13 @@ impl App {
                 summary: ui_text::t(&self.i18n, "overlay-settings-section-plugins-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
                 items: plugin_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::McpServer,
+                label: ui_text::t(&self.i18n, "settings-mcp-server-label"),
+                summary: ui_text::t(&self.i18n, "settings-mcp-server-detail"),
+                description: ui_text::t(&self.i18n, "settings-mcp-auth-detail"),
+                items: mcp_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::RuntimeSession,

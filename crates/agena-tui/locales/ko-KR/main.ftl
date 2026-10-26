@@ -658,7 +658,7 @@ settings-mcp-registration-label = 이름 *
 
 settings-mcp-pkce-label = 사이트맵
 
-settings-mcp-public-url-label = 공개 MCP URL
+settings-mcp-public-url-label = Agena 접속 URL
 
 settings-mcp-public-url-value = 관련 기사
 
@@ -668,17 +668,11 @@ settings-mcp-oauth-issuer-label = OAuth 발급자 URL
 
 settings-mcp-oauth-issuer-derived = MCP 자원 근원에서 파생하는
 
-settings-mcp-oauth-password-label = MCP OAuth 암호
 
-settings-mcp-oauth-password-value = 설정 또는 교체
 
-settings-mcp-oauth-password-configured = MCP 별 비밀번호 설정
 
-settings-mcp-oauth-password-ui-fallback = UI 비밀번호 삭제
 
-settings-mcp-oauth-password-not-configured = 이름 *
 
-settings-mcp-oauth-password-clear-label = MCP OAuth 비밀
 
 settings-field-runtime-codex-version-label = Codex 클라이언트 버전
 
@@ -1083,11 +1077,10 @@ flash-provider-save-error-settings-object = 기존 공급자 설정은 JSON 객�
 
 command-settings-summary = 모델, 권한, 플러그인, 실행 시간, 세션, 인터페이스 및 진단에 대한 통합 설정 작업 벤치를 엽니 다
 
-settings-mcp-public-url-updated = Agena MCP 공개 URL 업데이트
+settings-mcp-public-url-updated = Agena 접속 URL을 업데이트했습니다.
 
 settings-mcp-oauth-issuer-updated = Agena MCP OAuth 발행자 URL 업데이트
 
-settings-mcp-oauth-password-updated = 나이나 MCP OAuth 암호 업데이트
 
 settings-mcp-server-enabled-flash = Agena MCP 서버 활성화
 
@@ -1097,7 +1090,6 @@ settings-mcp-auth-mode-updated = Agena MCP 인증 모드 설정 {$mode}
 
 settings-mcp-anonymous-access-updated = Agena MCP 익명 도구 액세스 설정 {$policy}
 
-settings-mcp-oauth-password-cleared = 나이나 MCP OAuth 암호가 삭제됨
 
 permission-studio-command-pattern-title = {$tool_name} 명령 패턴
 
@@ -1271,10 +1263,8 @@ settings-mcp-auth-detail = 인증 없음, 전체 OAuth 및 ChatGPT 혼합 인증
 settings-mcp-anonymous-access-none-detail = 안전한 기본값: 도구 호출은 익명이 아닙니다. ChatGPT는 로그인하기 전에 카탈로그를 초기화하고 검색할 수 있습니다.
 settings-mcp-anonymous-access-read-only-detail = 고위험 옵트인: 읽기 전용 도구는 익명으로 실행될 수 있으며 개인 작업 공간, 파일 시스템, 구성 또는 진단 데이터를 공개할 수 있습니다.
 settings-mcp-anonymous-access-inactive-detail = 이 정책은 혼합 인증 모드에만 적용됩니다. 인증을 혼합으로 전환하여 사용하세요.
-settings-mcp-public-url-detail = 표준 HTTPS MCP 리소스 URL을 설정합니다. 보안 MCP 터널 URL에는 전체 /v1/mcp/tunnel_id 경로가 포함될 수 있습니다. 전달된 요청 헤더는 OAuth ID로 신뢰되지 않습니다.
+settings-mcp-public-url-detail = Agena 접속 주소를 입력하면 MCP 및 OAuth 주소가 자동으로 설정됩니다. 비워 두면 로컬 수신 주소를 사용합니다. 원격 연결에는 HTTPS가 필요하며 루프백 주소는 HTTP도 지원합니다.
 settings-mcp-oauth-issuer-detail = 공용 브라우저에 표시되는 인증 서버 발급자를 설정합니다. Agena 관리 OAuth에는 https://auth.example.com과 같은 경로가 없는 원본이 필요합니다. OAuth와 MCP가 동일한 도메인을 사용하는 경우에는 비워 두세요.
-settings-mcp-oauth-password-detail = Agena OAuth 인증 페이지에 표시된 비밀번호를 설정하세요. 이는 서버에 Argon2 해시로 저장됩니다.
-settings-mcp-oauth-password-clear-detail = MCP 특정 비밀번호를 제거하고 구성된 경우 서버 UI 비밀번호로 대체합니다.
 settings-field-runtime-codex-version-description = 공급자 요청 ID 헤더에 사용되는 정확한 @openai/codex 호환 버전입니다.
 settings-field-runtime-claude-version-description = 공급자 요청 ID 헤더에 사용되는 정확한 @anthropic-ai/claude-code 호환성 버전입니다.
 settings-field-runtime-gemini-version-description = 공급자 요청 ID 헤더에 사용되는 정확한 @google/gemini-cli 호환 버전입니다.
@@ -3034,3 +3024,4 @@ flash-skill-count-limit = 메시지 하나에 최대 {$count}개의 스킬을 �
 hub-column-name = 이름
 hub-column-status = 상태
 hub-column-updated = 갱신 시각
+settings-mcp-shared-password-detail = Web, TUI, MCP OAuth는 AGENA_SERVER_PASSWORD 또는 --password로 설정한 동일한 서버 암호를 사용합니다.

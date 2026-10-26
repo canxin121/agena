@@ -73,6 +73,7 @@
   "tabs": {
     "diagnostics": "Diagnostics",
     "interface": "Interface",
+    "mcpServer": "Serveur MCP",
     "modelsProviders": "Modèles et fournisseurs",
     "permissions": "Autorisations",
     "pluginsTools": "Plugins et outils",

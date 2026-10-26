@@ -650,6 +650,7 @@ export default {
       usage: '用量',
       plugins: '插件',
       pluginsTools: '插件与工具',
+      mcpServer: 'MCP 服务器',
       runtimeSession: '运行时与会话',
       interface: '界面',
       diagnostics: '诊断',

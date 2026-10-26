@@ -90,11 +90,6 @@ fn server_api_router() -> Router<Arc<AppState>> {
                 .put(crate::server::mcp::update_mcp_server_control),
         )
         .route(
-            "/api/v1/server/mcp/oauth/password",
-            put(crate::server::mcp::set_mcp_oauth_password)
-                .delete(crate::server::mcp::clear_mcp_oauth_password),
-        )
-        .route(
             "/api/v1/workbench/preview",
             get(crate::server::preview::routes::workspace_preview_get),
         )
@@ -634,9 +629,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     .await
     .context("failed to build agena runtime")?;
 
-    let ui_auth = crate::server::auth::init_ui_auth_async(args.ui_password.clone())
-        .await
-        .map_err(anyhow::Error::msg)?;
     let server_state_db = Arc::new(
         crate::server::persistence::db::ServerStateDb::from_store(
             runtime
@@ -647,6 +639,9 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .await
         .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
     );
+    let ui_auth = crate::server::auth::init_ui_auth_async(args.password.clone(), &server_state_db)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let terminal = Arc::new(
         crate::server::terminal::manager::TerminalManager::new(server_state_db.clone())
             .await
@@ -711,6 +706,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             server_state_db.clone(),
             crate::server::mcp::McpServerStartupConfig {
                 enabled: args.mcp_enabled,
+                server_url: args.mcp_server_url.as_deref(),
                 public_url: args.mcp_public_url.as_deref(),
                 oauth_issuer_url: args.mcp_oauth_issuer_url.as_deref(),
                 fallback_public_url: endpoint_url.as_str(),

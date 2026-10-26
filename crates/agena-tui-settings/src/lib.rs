@@ -70,6 +70,7 @@ pub enum SettingsStudioSectionId {
     Agents,
     Permissions,
     PluginsTools,
+    McpServer,
     RuntimeSession,
     ProviderClientVersions,
     Interface,
@@ -81,7 +82,8 @@ pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> Str
         SettingsStudioSectionId::ModelsProviders
         | SettingsStudioSectionId::Agents
         | SettingsStudioSectionId::Permissions
-        | SettingsStudioSectionId::PluginsTools => "overlay-settings-group-core",
+        | SettingsStudioSectionId::PluginsTools
+        | SettingsStudioSectionId::McpServer => "overlay-settings-group-core",
         SettingsStudioSectionId::RuntimeSession
         | SettingsStudioSectionId::ProviderClientVersions
         | SettingsStudioSectionId::Interface => "overlay-settings-group-application",

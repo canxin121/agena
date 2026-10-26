@@ -743,7 +743,7 @@ settings-mcp-registration-label = 会員登録
 
 settings-mcp-pkce-label = ピクチャー
 
-settings-mcp-public-url-label = 公開 MCP URL
+settings-mcp-public-url-label = Agena アクセス URL
 
 settings-mcp-public-url-value = 編集
 
@@ -753,17 +753,11 @@ settings-mcp-oauth-issuer-label = OAuth 発行者 URL
 
 settings-mcp-oauth-issuer-derived = MCP リソースの起源から得られる
 
-settings-mcp-oauth-password-label = MCP OAuth パスワード
 
-settings-mcp-oauth-password-value = セットまたは取り替えて下さい
 
-settings-mcp-oauth-password-configured = MCP固有のパスワードの設定
 
-settings-mcp-oauth-password-ui-fallback = UIパスワードフォールバックを使用する
 
-settings-mcp-oauth-password-not-configured = 設定されていない
 
-settings-mcp-oauth-password-clear-label = MCP OAuthパスワードをクリアする
 
 settings-field-runtime-codex-version-label = Codex クライアントバージョン
 
@@ -1202,11 +1196,10 @@ command-activities-summary = バックグラウンドアクティビティのパ
 command-plan-summary = 現在のセッションのプランビューアーを開きます
 command-btw-summary = メインの会話を続けながら、別途質問します。読み取り専用ツールを使用し、メインの会話には変更を加えません。
 
-settings-mcp-public-url-updated = エイジナMCP公開URLを更新しました
+settings-mcp-public-url-updated = Agena アクセス URL を更新しました。
 
 settings-mcp-oauth-issuer-updated = エイジナ MCP OAuth 発行者 URL 更新
 
-settings-mcp-oauth-password-updated = エイジナ MCP OAuth パスワードの更新
 
 settings-mcp-server-enabled-flash = エイジナMCPサーバーが有効
 
@@ -1216,7 +1209,6 @@ settings-mcp-auth-mode-updated = エイジナ MCP 認証モードを {$mode} に
 
 settings-mcp-anonymous-access-updated = エイジナ MCP 匿名ツール {$policy}
 
-settings-mcp-oauth-password-cleared = エイジナ MCP OAuth パスワードクリア
 
 permission-studio-command-pattern-title = {$tool_name} コマンドパターン
 
@@ -1390,10 +1382,8 @@ settings-mcp-auth-detail = 非認証、完全な OAuth、および ChatGPT 混�
 settings-mcp-anonymous-access-none-detail = 安全なデフォルト: どのツール呼び出しも匿名ではありません。 ChatGPT は、サインインする前にカタログを初期化し、検出することができます。
 settings-mcp-anonymous-access-read-only-detail = 高リスクのオプトイン: 読み取り専用ツールは匿名で実行でき、プライベート ワークスペース、ファイル システム、構成、または診断データが公開される可能性があります。
 settings-mcp-anonymous-access-inactive-detail = このポリシーは混合認証モードにのみ適用されます。認証を混合に切り替えて使用します。
-settings-mcp-public-url-detail = 正規の HTTPS MCP リソース URL を設定します。安全な MCP トンネル URL には、完全な /v1/mcp/tunnel_id パスが含まれる場合があります。転送されたリクエスト ヘッダーは、OAuth ID として信頼されることはありません。
+settings-mcp-public-url-detail = Agena にアクセスするアドレスを入力すると、MCP と OAuth のアドレスが自動設定されます。空欄ではローカルの待受アドレスを使用します。リモート接続には HTTPS が必要です。ループバックアドレスは HTTP も使用できます。
 settings-mcp-oauth-issuer-detail = パブリックのブラウザ向け認可サーバー発行者を設定します。 Agena 管理の OAuth には、パスのないオリジン (https://auth.example.com など) が必要です。 OAuth と MCP が同じドメインを使用する場合は、空のままにしてください。
-settings-mcp-oauth-password-detail = Agena OAuth 認証ページに表示されるパスワードを設定します。これはサーバーによって Argon2 ハッシュとして保存されます。
-settings-mcp-oauth-password-clear-detail = MCP 固有のパスワードを削除し、サーバー UI パスワード (構成されている場合) に戻します。
 settings-field-runtime-codex-version-description = プロバイダー要求 ID ヘッダーで使用される正確な @openai/codex 互換バージョン。
 settings-field-runtime-claude-version-description = プロバイダー要求 ID ヘッダーで使用される正確な @anthropic-ai/claude-code 互換バージョン。
 settings-field-runtime-gemini-version-description = プロバイダー リクエスト ID ヘッダーで使用される正確な @google/gemini-cli 互換バージョン。
@@ -3038,3 +3028,4 @@ flash-skill-count-limit = 1 件のメッセージには最大 {$count} 個のス
 hub-column-name = 名前
 hub-column-status = 状態
 hub-column-updated = 更新日時
+settings-mcp-shared-password-detail = Web、TUI、MCP OAuth は同じサーバーパスワードを使用します。AGENA_SERVER_PASSWORD または --password で設定します。

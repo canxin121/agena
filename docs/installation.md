@@ -124,14 +124,14 @@ only needed on macOS.
 | `--host HOST` | Server listen host |
 | `--port PORT` | Server listen port |
 | `--workspace PATH` | Default workspace root for the server |
-| `--ui-password PASSWORD` | Operator password for the Web/TUI management API |
+| `--password PASSWORD` | Server password shared by Web/TUI login and MCP OAuth |
 | `--service-mode MODE` | `auto`, `native`, or `detached` |
 | `--no-path-update` | Do not update shell startup files or `AGENA_DATA_DIR` |
 | `--purge-data` | With `uninstall`, also remove the saved data root |
 
 The matching environment variables are `AGENA_INSTALL_REPO`,
 `AGENA_INSTALL_VERSION`, `AGENA_INSTALL_DIR`, `AGENA_DATA_DIR`,
-`AGENA_SERVER_HOST`, `AGENA_SERVER_PORT`, `AGENA_SERVER_UI_PASSWORD`,
+`AGENA_SERVER_HOST`, `AGENA_SERVER_PORT`, `AGENA_SERVER_PASSWORD`,
 `AGENA_WORKSPACE_ROOT`, and `AGENA_INSTALL_SERVICE_MODE`. Command-line options
 take precedence over the environment.
 
@@ -159,7 +159,7 @@ Windows.
 | `-ListenHost HOST` | Server listen host |
 | `-Port PORT` | Server listen port |
 | `-Workspace PATH` | Default workspace root for the server |
-| `-UiPassword PASSWORD` | Operator password for the Web/TUI management API |
+| `-ServerPassword PASSWORD` | Server password shared by Web/TUI login and MCP OAuth |
 | `-ServiceMode MODE` | `auto`, `native`, or `detached` |
 | `-NoPathUpdate` | Do not update the user `Path` or `AGENA_DATA_DIR` |
 | `-PurgeData` | With `Uninstall`, also remove the saved data root |
@@ -322,13 +322,13 @@ bash scripts/agena/install.sh reinstall --source \
   --workspace /path/to/projects
 ```
 
-The same rule applies to `--data-dir`, `--ui-password`, and `--service-mode`.
+The same rule applies to `--data-dir`, `--password`, and `--service-mode`.
 The installer stops the saved service, starts the replacement with the new
 settings, and writes them to the installation state. If startup fails, it
 restores the previous binary, settings, active data root, and service.
 
 On Windows, use `-Action Reinstall` or `-Action Upgrade` with `-ListenHost`,
-`-Port`, `-Workspace`, `-DataDir`, `-UiPassword`, or `-ServiceMode`.
+`-Port`, `-Workspace`, `-DataDir`, `-ServerPassword`, or `-ServiceMode`.
 
 Environment variables are used for a fresh install, but do not override saved
 values during `reinstall` or `upgrade`; pass the corresponding option
@@ -447,6 +447,7 @@ agena server permissions
 
 `agena server install` and `agena server uninstall` manage the native per-user
 service. `agena server permissions` opens the macOS Full Disk Access setup.
+
 Running `agena server` without an action runs the server in the foreground for
 development. The installer's `restart` action is a stop followed by a start;
 `agena server` itself does not define a `restart` action.
@@ -455,16 +456,38 @@ The TUI workspace is independent of the long-lived server process working
 directory. `cd /path/to/project && agena` uses `/path/to/project` for new
 sessions. `agena tui --workspace /other/path` is the explicit override.
 
-## Operator password and client environment
+## Server password and client environment
+
+Use **one Server Password** for Web login, TUI/CLI clients and MCP OAuth:
+
+```bash
+export AGENA_SERVER_PASSWORD='choose-your-server-password'
+```
+
+`agena server --password` accepts the same credential; prefer the environment
+variable to keep the secret out of process arguments. MCP has no separate
+password. Without a server password, OAuth authorization is unavailable.
+The old `--ui-password` flag is accepted as a hidden compatibility alias. Rename
+`AGENA_SERVER_UI_PASSWORD` in existing shell configuration to
+`AGENA_SERVER_PASSWORD`. If a service still has only the old variable, startup
+reports the required rename instead of silently disabling login protection.
 
 On macOS/Linux the installer writes `client-env.sh` under the installation
-root, and the managed shell block sources it. The file always exports
-`AGENA_DATA_DIR`; when `--ui-password` or `AGENA_SERVER_UI_PASSWORD` is
-supplied, it also exports `AGENA_SERVER_PASSWORD`, so a new shell can run
-`agena` or `agena tui` against the protected local server. The password is not
-written directly into the shell profile, but it is present in the installer
-state and, when a native service is used, in the service definition because
-the service needs it at startup.
+root, and the managed shell block sources it. The file exports `AGENA_DATA_DIR`
+and the configured `AGENA_SERVER_PASSWORD`, so a new shell can run `agena` or
+`agena tui` against the protected local server. The password is present in
+installer state and in the native service definition because the service needs
+it at startup; these files are restricted to the current user.
+
+A native user service does **not** read `.zshrc`. Exporting a variable in an
+interactive shell configures new commands in that shell, but does not update an
+already installed service. From a shell where `AGENA_SERVER_PASSWORD` is set,
+run `agena server install` with the deployment's existing `--host`, `--port`,
+`--workspace`, and `--ui-dir` options. This updates the saved definition and
+restarts the service with the shared password. `agena server start` always
+uses the saved definition when a service is installed. Changing or removing
+the server password invalidates existing MCP OAuth grants, so connectors must
+authorize again; restarting with the same password preserves them.
 
 With `--no-path-update`, the installer does not modify startup files. Set
 `AGENA_DATA_DIR` yourself or pass `--data-dir` explicitly.

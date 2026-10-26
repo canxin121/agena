@@ -384,29 +384,17 @@ impl App {
             get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let effective_value =
             get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-        let prefill = if field.path == crate::MCP_PUBLIC_URL_SETTINGS_PATH {
+        let prefill = if field.path == crate::MCP_SERVER_URL_SETTINGS_PATH {
             self.application
                 .cached_mcp_server_control()
                 .and_then(|control| {
                     control
-                        .get("publicUrl")
-                        .and_then(JsonValue::as_str)
-                        .map(|value| JsonValue::String(value.to_owned()))
-                })
-                .unwrap_or(JsonValue::Null)
-        } else if field.path == crate::MCP_OAUTH_ISSUER_URL_SETTINGS_PATH {
-            self.application
-                .cached_mcp_server_control()
-                .and_then(|control| {
-                    control
-                        .get("oauthIssuerUrl")
+                        .get("serverUrl")
                         .and_then(JsonValue::as_str)
                         .map(|value| JsonValue::String(value.to_owned()))
                 })
                 .unwrap_or(JsonValue::Null)
         } else if !file_value.is_null() {
-            // The MCP OAuth password is synthetic and must never be read back
-            // from the server. It intentionally opens with an empty editor.
             file_value.clone()
         } else {
             JsonValue::Null

@@ -447,7 +447,7 @@ impl AgenaClient {
     }
 
     /// Connect to a server, validate its public identity, and
-    /// optionally authenticate using an ephemeral bearer token or UI password.
+    /// optionally authenticate using an ephemeral bearer token or server password.
     /// Password login exchanges the password for an in-memory session token;
     /// neither secret is written to endpoint discovery metadata.
     pub async fn connect_server(
@@ -562,7 +562,7 @@ impl AgenaClient {
     }
 
     /// Send one replayable REST/SSE handshake request and, for clients created
-    /// from a UI password, reauthenticate and replay it once after HTTP 401.
+    /// from a server password, reauthenticate and replay it once after HTTP 401.
     /// Authentication middleware rejects a request before its handler runs, so
     /// replaying a mutation after this specific response cannot duplicate an
     /// accepted write.
@@ -1003,6 +1003,19 @@ impl AgenaClient {
             .await
     }
 
+    /// Configure one Agena address for both the MCP resource and OAuth issuer.
+    /// `None` clears the configured address and uses the listener-local URL.
+    pub async fn set_mcp_server_url(
+        &self,
+        server_url: Option<String>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({"serverUrl": server_url}),
+        )
+        .await
+    }
+
     /// Configure the stable OAuth authorization-server issuer. `None` clears
     /// the explicit issuer so the server derives it from the configured public
     /// MCP resource, never from request Host/forwarded headers.
@@ -1015,26 +1028,6 @@ impl AgenaClient {
             serde_json::json!({"oauthIssuerUrl": oauth_issuer_url}),
         )
         .await
-    }
-
-    /// Replace the server-owned MCP OAuth authorization password. Only the
-    /// plaintext request value is accepted; the server persists an Argon2 PHC
-    /// hash and returns a redacted control projection.
-    pub async fn set_mcp_server_oauth_password(
-        &self,
-        password: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.put_json(
-            "/api/v1/server/mcp/oauth/password",
-            serde_json::json!({"password": password}),
-        )
-        .await
-    }
-
-    /// Remove the MCP-specific OAuth password. The running server then falls
-    /// back to its startup UI password, if one exists.
-    pub async fn clear_mcp_server_oauth_password(&self) -> Result<serde_json::Value, ClientError> {
-        self.delete_json("/api/v1/server/mcp/oauth/password").await
     }
 
     /// Validate the endpoint protocol and return its process-lifetime identity.

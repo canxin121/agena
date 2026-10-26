@@ -15,7 +15,6 @@ import { settingsText as st } from '@/i18n/settingsText'
 type McpOAuthStatus = {
   configured: boolean
   passwordConfigured: boolean
-  fallbackToUiPassword: boolean
   ready: boolean
   authorizationServerKind: string
   registrationMethods: string[]
@@ -34,12 +33,10 @@ type McpOAuthStatus = {
 
 type McpServerControl = {
   enabled: boolean
-  publicUrl: string | null
-  oauthIssuerUrl: string | null
+  serverUrl: string | null
   resourceUrl: string
   ready: boolean
   warnings: string[]
-  generatedOauthPassword?: string | null
   oauth: McpOAuthStatus
 }
 
@@ -48,20 +45,14 @@ const saving = ref(false)
 const error = ref('')
 const control = ref<McpServerControl | null>(null)
 const enabled = ref(false)
-const publicUrl = ref('')
-const oauthIssuerUrl = ref('')
-const oauthPassword = ref('')
+const serverUrl = ref('')
 const copiedEndpoint = ref('')
 
 const oauth = computed(() => control.value?.oauth || null)
 const controlDirty = computed(() => {
   const value = control.value
   if (!value) return false
-  return (
-    enabled.value !== value.enabled ||
-    publicUrl.value.trim() !== String(value.publicUrl || '') ||
-    oauthIssuerUrl.value.trim() !== String(value.oauthIssuerUrl || '')
-  )
+  return enabled.value !== value.enabled || serverUrl.value.trim() !== String(value.serverUrl || '')
 })
 const mcpSurfaceSummary = computed(() => {
   const value = control.value
@@ -83,8 +74,7 @@ function applyControl(value: McpServerControl, preserveDraft = false) {
   control.value = value
   if (keepDraft) return
   enabled.value = value.enabled
-  publicUrl.value = value.publicUrl || ''
-  oauthIssuerUrl.value = value.oauthIssuerUrl || ''
+  serverUrl.value = value.serverUrl || ''
 }
 
 async function copyEndpoint(label: string, value: string | undefined) {
@@ -113,11 +103,7 @@ async function refresh() {
   }
 }
 
-async function updateControl(body: {
-  enabled?: boolean
-  publicUrl?: string | null
-  oauthIssuerUrl?: string | null
-}) {
+async function updateControl(body: { enabled?: boolean; serverUrl?: string | null }) {
   if (!control.value || saving.value) return
   saving.value = true
   error.value = ''
@@ -127,10 +113,7 @@ async function updateControl(body: {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         enabled: body.enabled ?? control.value.enabled,
-        ...(Object.prototype.hasOwnProperty.call(body, 'publicUrl') ? { publicUrl: body.publicUrl } : {}),
-        ...(Object.prototype.hasOwnProperty.call(body, 'oauthIssuerUrl')
-          ? { oauthIssuerUrl: body.oauthIssuerUrl }
-          : {}),
+        ...(Object.prototype.hasOwnProperty.call(body, 'serverUrl') ? { serverUrl: body.serverUrl } : {}),
       }),
     })
     applyControl(next)
@@ -148,52 +131,18 @@ function toggleEnabled() {
 async function saveControlDraft() {
   await updateControl({
     enabled: enabled.value,
-    publicUrl: publicUrl.value.trim() || null,
-    oauthIssuerUrl: oauthIssuerUrl.value.trim() || null,
+    ...(serverUrl.value.trim() !== String(control.value?.serverUrl || '')
+      ? { serverUrl: serverUrl.value.trim() || null }
+      : {}),
   })
 }
 
 function discardControlDraft() {
   if (control.value) applyControl(control.value)
 }
-async function setPassword() {
-  const password = oauthPassword.value
-  if (!password.trim() || saving.value) return
-  saving.value = true
-  error.value = ''
-  try {
-    const next = await apiJson<McpServerControl>('/api/v1/server/mcp/oauth/password', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password }),
-    })
-    oauthPassword.value = ''
-    applyControl(next, true)
-  } catch (err) {
-    error.value = errorMessage(err)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function clearPassword() {
-  if (saving.value) return
-  saving.value = true
-  error.value = ''
-  try {
-    const next = await apiJson<McpServerControl>('/api/v1/server/mcp/oauth/password', { method: 'DELETE' })
-    oauthPassword.value = ''
-    applyControl(next, true)
-  } catch (err) {
-    error.value = errorMessage(err)
-  } finally {
-    saving.value = false
-  }
-}
-
 async function canLeave() {
   if (saving.value) return false
-  if (!controlDirty.value && !oauthPassword.value) return true
+  if (!controlDirty.value) return true
   return confirmAction({
     title: st('Discard unsaved changes?'),
     confirmText: st('Discard changes'),
@@ -269,70 +218,41 @@ onMounted(() => {
             <div class="font-medium">
               {{ control.ready ? $st('MCP connection ready') : $st('MCP connection needs attention') }}
             </div>
-            <code class="break-all">{{ control.resourceUrl }}</code>
+            <div class="flex min-w-0 items-start gap-2">
+              <code class="break-all">{{ control.resourceUrl }}</code>
+              <Button size="sm" variant="ghost" @click="copyEndpoint('mcp', control.resourceUrl)">
+                {{ copiedEndpoint === 'mcp' ? $st('Copied') : $st('Copy') }}
+              </Button>
+            </div>
           </div>
           <ul v-if="control.warnings.length" class="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
             <li v-for="warning in control.warnings" :key="warning">{{ warning }}</li>
           </ul>
           <div v-else class="mt-1 text-muted-foreground">
-            {{ $st('The live Agena server is ready to serve the selected MCP mode.') }}
+            {{ $st('The MCP server is ready at the connection address above.') }}
           </div>
         </div>
       </SettingsCard>
       <SettingsCard :title="$st('Connection addresses')">
-        <div class="grid min-w-0 gap-4 xl:grid-cols-2">
-          <div class="min-w-0 space-y-2">
-            <label for="mcp-public-url" class="text-sm font-medium">{{ $st('Public MCP resource URL') }}</label>
-            <div>
-              <Input
-                id="mcp-public-url"
-                v-model="publicUrl"
-                class="font-mono text-xs"
-                placeholder="https://your-domain.example/mcp or https://tunnel-service.../v1/mcp/tunnel_id"
-                :disabled="saving"
-              />
-            </div>
-            <details class="text-xs leading-relaxed text-muted-foreground">
-              <summary class="cursor-pointer">{{ $st('Details') }}</summary>
-              <div class="mt-2">
-                {{ $st('Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full') }}
-                <code>/v1/mcp/tunnel_id</code>
-                {{
-                  $st(
-                    'path and must be kept intact. Leaving this empty keeps the listener-local URL; request Host and forwarded headers are never trusted to define OAuth identity. Current effective resource:',
-                  )
-                }}
-                <code class="break-all">{{ control.resourceUrl }}</code>
-              </div>
-            </details>
-          </div>
-
-          <div class="min-w-0 space-y-2">
-            <label for="mcp-issuer-url" class="text-sm font-medium">{{ $st('OAuth issuer URL') }}</label>
-            <div>
-              <Input
-                id="mcp-issuer-url"
-                v-model="oauthIssuerUrl"
-                class="font-mono text-xs"
-                placeholder="https://auth.your-domain.example"
-                :disabled="saving"
-              />
-            </div>
-            <details class="text-xs leading-relaxed text-muted-foreground">
-              <summary class="cursor-pointer">{{ $st('Details') }}</summary>
-              <div class="mt-2">
-                {{
-                  $st('This is the stable authorization-server identity placed in OAuth discovery, signed access-token')
-                }}
-                <code>iss</code>
-                {{
-                  $st(
-                    'claims, and the RFC 9207 authorization callback. Use a canonical public HTTPS URL. A path is supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414 well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin. Request headers are never trusted.',
-                  )
-                }}
-              </div>
-            </details>
-          </div>
+        <div class="min-w-0 space-y-2">
+          <label for="mcp-server-url" class="text-sm font-medium">{{ $st('Agena access URL') }}</label>
+          <Input
+            id="mcp-server-url"
+            v-model="serverUrl"
+            class="font-mono text-xs"
+            placeholder="https://agena.example.com / 127.0.0.1:3210"
+            :disabled="saving"
+          />
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{
+              $st(
+                'Enter the address used to access Agena. MCP and OAuth addresses are configured automatically. Leave empty to use the local listener address.',
+              )
+            }}
+          </p>
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            {{ $st('Remote connections require HTTPS. Localhost and loopback IP addresses also support HTTP.') }}
+          </p>
         </div>
       </SettingsCard>
       <SettingsCard
@@ -343,28 +263,11 @@ onMounted(() => {
           )
         "
       >
-        <div
-          v-if="control?.generatedOauthPassword"
-          class="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-        >
-          {{
-            $st(
-              'Agena generated an OAuth authorization password because none was configured. Copy it now; it is reported only once.',
-            )
-          }}
-          <code class="mt-1 block select-all break-all">{{ control.generatedOauthPassword }}</code>
-        </div>
         <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <div class="rounded-md border border-border/60 p-3 text-xs">
             <div class="text-muted-foreground">{{ $st('Password status') }}</div>
             <div class="mt-1 font-medium">
-              {{
-                oauth?.passwordConfigured
-                  ? $st('MCP-specific password configured')
-                  : oauth?.fallbackToUiPassword
-                    ? $st('Using server UI password')
-                    : $st('Not configured')
-              }}
+              {{ oauth?.passwordConfigured ? $st('Using server password') : $st('Not configured') }}
             </div>
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
@@ -396,23 +299,13 @@ onMounted(() => {
         <ul v-if="oauth?.warnings.length" class="list-disc space-y-1 pl-4 text-xs text-amber-700 dark:text-amber-300">
           <li v-for="warning in oauth.warnings" :key="warning">{{ warning }}</li>
         </ul>
-        <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <Input
-            v-model="oauthPassword"
-            :aria-label="$st('New MCP OAuth password')"
-            type="password"
-            autocomplete="new-password"
-            class="min-w-0 sm:min-w-40 sm:flex-1 font-mono text-xs"
-            :placeholder="$st('New MCP OAuth password')"
-            :disabled="saving"
-          />
-          <Button class="shrink-0" :disabled="saving || !oauthPassword.trim()" @click="setPassword">{{
-            $st('Set password')
-          }}</Button>
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="clearPassword">{{
-            $st('Clear')
-          }}</Button>
-        </div>
+        <p class="mt-4 text-xs leading-relaxed text-muted-foreground">
+          {{
+            $st(
+              'Web, TUI, and MCP OAuth use the same server password, configured with AGENA_SERVER_PASSWORD or --password.',
+            )
+          }}
+        </p>
       </SettingsCard>
 
       <details v-if="oauth" class="min-w-0 rounded-xl border border-border/60 bg-card/30 p-4">

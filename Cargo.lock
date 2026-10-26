@@ -100,6 +100,7 @@ dependencies = [
  "agena-tui",
  "agena-tui-app",
  "agena-tui-platform",
+ "agena-web",
  "anyhow",
  "argon2",
  "async-stream",

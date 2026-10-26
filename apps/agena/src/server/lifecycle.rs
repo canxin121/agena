@@ -54,9 +54,10 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     if super::user_service::is_installed() {
         if !args.overrides.is_empty()
             || args.workspace_root.is_some()
-            || args.ui_password.is_some()
+            || args.password.is_some()
             || args.mcp_enabled.is_some()
             || args.mcp_public_url.is_some()
+            || args.mcp_server_url.is_some()
             || args.mcp_oauth_issuer_url.is_some()
             || args.ui_dir.is_some()
         {
@@ -169,13 +170,16 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     if let Some(mcp_public_url) = &args.mcp_public_url {
         command.arg("--mcp-public-url").arg(mcp_public_url);
     }
+    if let Some(server_url) = &args.mcp_server_url {
+        command.arg("--mcp-server-url").arg(server_url);
+    }
     if let Some(mcp_oauth_issuer_url) = &args.mcp_oauth_issuer_url {
         command
             .arg("--mcp-oauth-issuer-url")
             .arg(mcp_oauth_issuer_url);
     }
-    if let Some(password) = &args.ui_password {
-        command.env("AGENA_SERVER_UI_PASSWORD", password);
+    if let Some(password) = &args.password {
+        command.env("AGENA_SERVER_PASSWORD", password);
     }
     command
         .stdin(Stdio::null())

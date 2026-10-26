@@ -2,7 +2,6 @@ use super::super::{
     App, ConfirmOverlay, Frame, Overlay, Rect, Route, SurfaceMode, render_confirm_dialog,
     render_overlay_line_input_dialog, sanitize_display_text,
 };
-use crate::MCP_OAUTH_PASSWORD_SETTINGS_PATH;
 use crate::ui_text;
 use agena_tui_components::{EditorDialogSpec, render_editor_dialog};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -76,28 +75,17 @@ impl App {
                 let prompt = sanitize_display_text(dialog.prompt.as_str()).into();
                 let footer =
                     sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into();
-                if dialog.action.path == MCP_OAUTH_PASSWORD_SETTINGS_PATH {
-                    agena_tui_components::render_overlay_masked_line_input_dialog(
-                        frame,
-                        area,
-                        SurfaceMode::Overlay,
-                        title,
-                        prompt,
-                        footer,
-                        &dialog.input,
-                    );
-                } else {
-                    render_overlay_line_input_dialog(
-                        frame,
-                        area,
-                        SurfaceMode::Overlay,
-                        title,
-                        prompt,
-                        footer,
-                        &dialog.input,
-                    );
-                }
+                render_overlay_line_input_dialog(
+                    frame,
+                    area,
+                    SurfaceMode::Overlay,
+                    title,
+                    prompt,
+                    footer,
+                    &dialog.input,
+                );
             }
+
             Overlay::QueueEditor(dialog) => self.render_queue_editor(frame, area, dialog),
             Overlay::Choice(dialog) => {
                 agena_tui::choice::render_overlay(frame, area, &dialog.presentation, &self.i18n);

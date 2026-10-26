@@ -1,0 +1,32 @@
+<div class="page-heading">
+  <span class="error-page-icon" aria-hidden="true"
+    ><svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v6m0 4h.01" /></svg
+  ></span>
+  <h1 data-i18n="error_title">{{ERROR_TITLE}}</h1>
+  <p data-i18n="error_subtitle">{{ERROR_SUBTITLE}}</p>
+</div>
+<section class="auth-card error-card">
+  <p class="error-guidance" data-i18n="error_guidance">{{ERROR_GUIDANCE}}</p>
+  <details class="connection-details error-details">
+    <summary>
+      <span data-i18n="error_details">{{ERROR_DETAILS}}</span
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+    </summary>
+    <dl>
+      <div>
+        <dt data-i18n="error_code">{{ERROR_CODE}}</dt>
+        <dd dir="ltr">{{CODE}}</dd>
+      </div>
+      <div>
+        <dt data-i18n="error_reason">{{ERROR_REASON}}</dt>
+        <dd dir="ltr">{{DESCRIPTION}}</dd>
+      </div>
+    </dl>
+  </details>
+  <a class="button button-primary" href="/"
+    ><span data-i18n="back_to_agena">{{BACK_TO_AGENA}}</span
+    ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg
+  ></a>
+</section>

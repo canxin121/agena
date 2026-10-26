@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="{{LANG}}" dir="{{DIRECTION}}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#fbf8f3" />
+    <title>{{TITLE}}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{{FAVICON}}" />
+    <!-- prettier-ignore -->
+    <style>{{THEME_CSS}}
+{{PAGE_CSS}}</style>
+    <!-- prettier-ignore -->
+    <script type="application/json" id="oauth-translations">{{TRANSLATIONS}}</script>
+    <!-- Keep these exact script bytes in sync with the CSP hash. -->
+    <!-- prettier-ignore -->
+    <script>{{SCRIPT}}</script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="page-header">
+        <a class="brand" href="/" aria-label="Agena"
+          ><span class="brand-mark" aria-hidden="true">{{LOGO}}</span><span>Agena</span></a
+        >
+        <div class="preferences">
+          <label class="language-picker">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m4 5 7 0m-3.5-2v2m-2 0c0 5 3 8 6 10M10 5c0 4-3 8-7 10m10 6 5-12 5 12m-8-4h6" />
+            </svg>
+            <span class="sr-only" data-i18n="language">{{LANGUAGE}}</span>
+            <select id="ui-locale" name="ui_locale" form="authorize-form">
+              {{LANGUAGE_OPTIONS}}
+            </select>
+          </label>
+          <button
+            class="icon-button theme-toggle"
+            type="button"
+            id="theme-toggle"
+            hidden
+            aria-label="{{THEME_LABEL}}"
+            title="{{THEME_LABEL}}"
+          >
+            <svg class="sun-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" />
+            </svg>
+            <svg class="moon-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.5 14.2A8.7 8.7 0 0 1 9.8 3.5a8.8 8.8 0 1 0 10.7 10.7Z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+      <main id="main-content" class="auth-main">{{BODY}}</main>
+      <footer class="page-footer">
+        <span>Agena</span><span class="footer-dot" aria-hidden="true">·</span><span data-i18n="footer">{{FOOTER}}</span>
+      </footer>
+    </div>
+  </body>
+</html>

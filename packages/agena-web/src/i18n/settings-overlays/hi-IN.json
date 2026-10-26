@@ -73,6 +73,7 @@
   "tabs": {
     "diagnostics": "निदान",
     "interface": "इंटरफ़ेस",
+    "mcpServer": "MCP सर्वर",
     "modelsProviders": "मॉडल और प्रदाता",
     "permissions": "अनुमतियाँ",
     "pluginsTools": "प्लगइन और उपकरण",

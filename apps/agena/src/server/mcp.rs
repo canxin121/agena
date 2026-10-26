@@ -1,10 +1,10 @@
-//! Remote MCP transport with an optional OAuth resource/authorization server.
+//! Remote MCP transport with an embedded OAuth resource/authorization server.
 //!
 //! The stdio bridge lives in `agena-cli`; this module is the HTTP-facing
-//! integration used by ChatGPT's Custom MCP Connector. The MCP surface is
-//! anonymous by default; the Web/TUI control plane can enable the OAuth
-//! resource server when a client requires it.
+//! integration used by remote MCP clients. Protocol discovery is public;
+//! tool calls require OAuth unless the tool explicitly allows anonymous use.
 
+use agena_web::network::is_public_ip;
 use portable_atomic::AtomicI64;
 use std::{
     collections::{HashMap, HashSet},
@@ -39,6 +39,8 @@ use url::Url;
 use super::auth::{self, OAuthPasswordError, UiAuth};
 
 use super::persistence::db::{KV_KEY_MCP_OAUTH_RUNTIME, KV_KEY_MCP_SERVER_CONTROL, ServerStateDb};
+
+mod oauth_ui;
 
 const MCP_SCOPE: &str = "agena:tools";
 const OFFLINE_ACCESS_SCOPE: &str = "offline_access";
@@ -131,7 +133,6 @@ fn mcp_worker_unavailable(error: String) -> Response {
         .into_response()
 }
 const MAX_CIMD_DOCUMENT_BYTES: usize = 256 * 1024;
-const MAX_MCP_OAUTH_PASSWORD_BYTES: usize = 4096;
 const MAX_CACHED_CIMD_CLIENTS: usize = 128;
 const MAX_OUTSTANDING_AUTHORIZATION_CODES: usize = 1024;
 const MAX_REFRESH_TOKEN_RECORDS: usize = 4096;
@@ -268,18 +269,8 @@ struct McpControlState {
     enabled: std::sync::atomic::AtomicBool,
     configured_resource: RwLock<Option<String>>,
     configured_issuer: RwLock<Option<String>>,
-    oauth_password: RwLock<Option<McpOAuthPassword>>,
-    /// Plaintext of a password Agena generated itself because the deployment
-    /// configured none. It is surfaced once through the control plane and then
-    /// dropped from memory.
-    generated_password: RwLock<Option<String>>,
     database: Option<Arc<ServerStateDb>>,
     update_lock: tokio::sync::Mutex<()>,
-}
-
-struct McpOAuthPassword {
-    verifier: UiAuth,
-    phc: String,
 }
 
 #[derive(Debug, Clone)]
@@ -299,7 +290,11 @@ struct PersistedMcpServerControl {
     /// Removed selector. Parsed for backward compatibility and never written.
     #[serde(default, skip_serializing)]
     anonymous_access: Option<LegacyMcpAnonymousAccess>,
-    oauth_password_phc: Option<String>,
+    /// Legacy independent password: deserialize only to discard it on upgrade.
+    #[serde(default, skip_serializing)]
+    oauth_password_phc: Option<serde_json::Value>,
+    #[serde(default)]
+    server_password_fingerprint: Option<String>,
     oauth_issuer_url: Option<String>,
 }
 
@@ -396,6 +391,7 @@ fn decode_persisted_signing_key(value: &str) -> Result<OAuthSigningKey, String> 
 
 pub(crate) struct McpServerStartupConfig<'a> {
     pub(crate) enabled: Option<bool>,
+    pub(crate) server_url: Option<&'a str>,
     pub(crate) public_url: Option<&'a str>,
     pub(crate) oauth_issuer_url: Option<&'a str>,
     pub(crate) fallback_public_url: &'a str,
@@ -425,7 +421,6 @@ impl McpServerState {
             fallback_resource,
             true,
             None,
-            None,
         ))
     }
 
@@ -440,32 +435,20 @@ impl McpServerState {
             .get_json::<PersistedMcpServerControl>(KV_KEY_MCP_SERVER_CONTROL)
             .await?;
         let had_persisted_control = persisted.is_some();
-        let (
-            mut enabled,
-            configured_public_url,
-            configured_issuer_url,
-            oauth_password,
-            legacy_selectors,
-        ) = match persisted.as_ref() {
-            Some(persisted) => {
-                let oauth_password = persisted
-                    .oauth_password_phc
-                    .clone()
-                    .map(|phc| {
-                        let verifier = auth::init_ui_auth_from_phc(phc.clone())?;
-                        Ok::<_, String>(McpOAuthPassword { verifier, phc })
-                    })
-                    .transpose()?;
-                (
+        let (mut enabled, configured_public_url, configured_issuer_url, legacy_selectors) =
+            match persisted.as_ref() {
+                Some(persisted) => (
                     persisted.enabled,
                     persisted.public_url.clone(),
                     persisted.oauth_issuer_url.clone(),
-                    oauth_password,
                     Some((persisted.auth_mode, persisted.anonymous_access)),
-                )
-            }
-            None => (true, None, None, None, None),
-        };
+                ),
+                None => (true, None, None, None),
+            };
+        let credential_changed = persisted.as_ref().is_some_and(|control| {
+            control.oauth_password_phc.is_some()
+                || control.server_password_fingerprint != ui_auth.credential_fingerprint()
+        });
         let mut configured_resource = configured_public_url
             .map(|value| normalize_public_mcp_url(value.as_str()))
             .transpose()?;
@@ -497,16 +480,26 @@ impl McpServerState {
         if let Some(oauth_issuer_url) = startup.oauth_issuer_url {
             configured_issuer = Some(normalize_oauth_issuer_url(oauth_issuer_url)?);
         }
-        // A deployment without any operator credential is no longer a startup
-        // error: the unified policy always serves the OAuth surface, so Agena
-        // generates a dedicated authorization password below instead of
-        // refusing to start or leaving the authorization page unusable.
+        if let Some(server_url) = startup.server_url {
+            if startup.public_url.is_some() || startup.oauth_issuer_url.is_some() {
+                return Err(
+                    "MCP server URL cannot be combined with legacy public/issuer URLs".to_owned(),
+                );
+            }
+            configured_resource = Some(append_public_endpoint(
+                &normalize_agena_server_url(server_url)?,
+                MCP_PATH,
+            ));
+            configured_issuer = None;
+        }
         let effective_control = (
             enabled,
             configured_resource.clone(),
             configured_issuer.clone(),
         );
-        let control_changed = !had_persisted_control || persisted_effective != effective_control;
+        let control_changed = !had_persisted_control
+            || persisted_effective != effective_control
+            || credential_changed;
         let fallback_resource = normalize_public_mcp_url(startup.fallback_public_url)?;
         if enabled {
             let effective_resource = configured_resource
@@ -540,7 +533,6 @@ impl McpServerState {
             configured_issuer.clone(),
             fallback_resource,
             enabled,
-            oauth_password,
             Some(Arc::clone(&database)),
         );
 
@@ -568,7 +560,6 @@ impl McpServerState {
                 "ignoring removed MCP authentication selectors; the unified policy applies"
             );
         }
-        state.ensure_oauth_password().await?;
         Ok(state)
     }
 
@@ -583,7 +574,6 @@ impl McpServerState {
         configured_issuer: Option<String>,
         fallback_resource: String,
         enabled: bool,
-        oauth_password: Option<McpOAuthPassword>,
         database: Option<Arc<ServerStateDb>>,
     ) -> Self {
         Self {
@@ -596,8 +586,6 @@ impl McpServerState {
                 enabled: std::sync::atomic::AtomicBool::new(enabled),
                 configured_resource: RwLock::new(configured_resource),
                 configured_issuer: RwLock::new(configured_issuer),
-                oauth_password: RwLock::new(oauth_password),
-                generated_password: RwLock::new(None),
                 database,
                 update_lock: tokio::sync::Mutex::new(()),
             }),
@@ -701,23 +689,6 @@ impl McpServerState {
         urls
     }
 
-    fn has_custom_oauth_password(&self) -> bool {
-        self.control
-            .oauth_password
-            .read()
-            .expect("MCP OAuth password lock poisoned")
-            .is_some()
-    }
-
-    fn oauth_password_phc(&self) -> Option<String> {
-        self.control
-            .oauth_password
-            .read()
-            .expect("MCP OAuth password lock poisoned")
-            .as_ref()
-            .map(|password| password.phc.clone())
-    }
-
     fn public_resource(&self, headers: &HeaderMap) -> String {
         let configured_resource = self.configured_public_url();
         self.public_resource_with_configured(headers, configured_resource.as_deref())
@@ -750,11 +721,9 @@ impl McpServerState {
                 "ChatGPT requires a canonical remote HTTPS MCP resource URL. Configure a public HTTPS endpoint or Secure MCP Tunnel before connecting it.".to_owned(),
             );
         }
-        // The OAuth surface is always advertised, so it must always be
-        // operational before the control plane calls the connector ready.
-        if !self.has_custom_oauth_password() && !matches!(self.ui_auth, UiAuth::Enabled(_)) {
+        if matches!(self.ui_auth, UiAuth::Disabled) {
             warnings.push(
-                "OAuth authorization password is not configured; set an MCP OAuth password in Web/TUI or start the server with a UI password.".to_owned(),
+                "Server password is not configured. Set AGENA_SERVER_PASSWORD or --password and restart Agena to enable MCP OAuth authorization.".to_owned(),
             );
         }
         if let Err(error) = validate_managed_oauth_identity(
@@ -801,15 +770,8 @@ impl McpServerState {
         candidate: &str,
         headers: &HeaderMap,
     ) -> Result<(), OAuthPasswordError> {
-        let custom_verifier = self
-            .control
-            .oauth_password
-            .read()
-            .expect("MCP OAuth password lock poisoned")
-            .as_ref()
-            .map(|password| password.verifier.clone());
         auth::verify_password_for_oauth_async(
-            custom_verifier.unwrap_or_else(|| self.ui_auth.clone()),
+            self.ui_auth.clone(),
             candidate.to_owned(),
             headers.clone(),
         )
@@ -817,12 +779,12 @@ impl McpServerState {
     }
 
     async fn clear_oauth_runtime_state(&self) -> Result<(), String> {
-        self.oauth.cimd_clients.clear();
-        self.oauth.registered_clients.clear();
-        self.oauth.authorization_codes.clear();
-        self.oauth.refresh_tokens.clear();
-        self.oauth.revoked_jti.clear();
-        self.oauth.persist().await
+        self.oauth.clear_runtime().await
+    }
+
+    fn configured_server_url(&self) -> Option<String> {
+        self.configured_public_url()
+            .map(|url| issuer_for_resource(&url))
     }
 
     fn control_status(&self, headers: &HeaderMap) -> McpServerControlResponse {
@@ -831,18 +793,16 @@ impl McpServerState {
         let readiness = self.readiness(headers);
         McpServerControlResponse {
             enabled: self.is_enabled(),
+            server_url: self.configured_server_url(),
             public_url: self.configured_public_url(),
-            generated_oauth_password: self.take_generated_password(),
             oauth_issuer_url: self.configured_oauth_issuer_url(),
             resource_url: resource_url.clone(),
             ready: readiness.ready,
             warnings: readiness.warnings.clone(),
             oauth: McpOAuthControlStatus {
-                configured: self.has_custom_oauth_password()
-                    || matches!(self.ui_auth, UiAuth::Enabled(_)),
-                password_configured: self.has_custom_oauth_password(),
-                fallback_to_ui_password: !self.has_custom_oauth_password()
-                    && matches!(self.ui_auth, UiAuth::Enabled(_)),
+                configured: matches!(self.ui_auth, UiAuth::Enabled(_)),
+                password_configured: matches!(self.ui_auth, UiAuth::Enabled(_)),
+                password_source: "server".to_owned(),
                 ready: readiness.ready,
                 authorization_server_kind: "agena-managed".to_owned(),
                 registration_methods: vec!["cimd".to_owned(), "dcr".to_owned()],
@@ -887,7 +847,8 @@ impl McpServerState {
                     anonymous_access: None,
                     public_url,
                     oauth_issuer_url,
-                    oauth_password_phc: self.oauth_password_phc(),
+                    oauth_password_phc: None,
+                    server_password_fingerprint: self.ui_auth.credential_fingerprint(),
                 },
             )
             .await
@@ -929,123 +890,8 @@ impl McpServerState {
             .configured_issuer
             .write()
             .expect("MCP OAuth issuer lock poisoned") = configured_issuer;
+        drop(_guard);
         Ok(())
-    }
-
-    async fn set_oauth_password(&self, password: &str) -> Result<(), String> {
-        let password = password.trim();
-        if password.is_empty() {
-            return Err("MCP OAuth password must not be empty".to_owned());
-        }
-        if password.len() > MAX_MCP_OAUTH_PASSWORD_BYTES {
-            return Err(format!(
-                "MCP OAuth password must be at most {MAX_MCP_OAUTH_PASSWORD_BYTES} bytes"
-            ));
-        }
-        let phc = auth::hash_password_async(password.to_owned()).await?;
-        let verifier = auth::init_ui_auth_from_phc(phc.clone())?;
-        let _guard = self.control.update_lock.lock().await;
-        let enabled = self.is_enabled();
-        let public_url = self.configured_public_url();
-        let oauth_issuer_url = self.configured_oauth_issuer_url();
-        let database = self
-            .control
-            .database
-            .as_ref()
-            .ok_or_else(|| "MCP server control persistence is unavailable".to_owned())?;
-        self.clear_oauth_runtime_state().await?;
-        database
-            .set_json(
-                KV_KEY_MCP_SERVER_CONTROL,
-                PersistedMcpServerControl {
-                    enabled,
-                    auth_mode: None,
-                    anonymous_access: None,
-                    public_url,
-                    oauth_issuer_url,
-                    oauth_password_phc: Some(phc.clone()),
-                },
-            )
-            .await?;
-        *self
-            .control
-            .oauth_password
-            .write()
-            .expect("MCP OAuth password lock poisoned") = Some(McpOAuthPassword { verifier, phc });
-        Ok(())
-    }
-
-    async fn clear_oauth_password(&self) -> Result<(), String> {
-        let _guard = self.control.update_lock.lock().await;
-        let enabled = self.is_enabled();
-        let public_url = self.configured_public_url();
-        let oauth_issuer_url = self.configured_oauth_issuer_url();
-        let database = self
-            .control
-            .database
-            .as_ref()
-            .ok_or_else(|| "MCP server control persistence is unavailable".to_owned())?;
-        // Removing the dedicated authorization credential revokes every
-        // outstanding access/refresh token before the fallback credential is
-        // committed.
-        self.clear_oauth_runtime_state().await?;
-        database
-            .set_json(
-                KV_KEY_MCP_SERVER_CONTROL,
-                PersistedMcpServerControl {
-                    enabled,
-                    auth_mode: None,
-                    anonymous_access: None,
-                    public_url,
-                    oauth_issuer_url,
-                    oauth_password_phc: None,
-                },
-            )
-            .await?;
-        *self
-            .control
-            .oauth_password
-            .write()
-            .expect("MCP OAuth password lock poisoned") = None;
-        Ok(())
-    }
-
-    /// Guarantee that the authorization page has an operator credential.
-    ///
-    /// The unified policy always serves the OAuth surface, so a deployment that
-    /// configured no password would otherwise advertise an authorization server
-    /// nobody can complete. Generate a dedicated MCP OAuth password, store it
-    /// through the same Argon2 path as an operator-supplied one, and surface it
-    /// once (startup log + control plane) so the operator can copy it.
-    async fn ensure_oauth_password(&self) -> Result<(), String> {
-        if !self.is_enabled()
-            || self.has_custom_oauth_password()
-            || matches!(&self.ui_auth, UiAuth::Enabled(_))
-        {
-            return Ok(());
-        }
-        let password = crate::server::issue_token();
-        self.set_oauth_password(password.as_str()).await?;
-        tracing::warn!(
-            target: "agena::server::mcp",
-            password = %password,
-            "generated an MCP OAuth password because no operator password is configured; set one in Web/TUI to replace it"
-        );
-        *self
-            .control
-            .generated_password
-            .write()
-            .expect("MCP generated password lock poisoned") = Some(password);
-        Ok(())
-    }
-
-    /// Consume the generated password so the control plane reports it once.
-    fn take_generated_password(&self) -> Option<String> {
-        self.control
-            .generated_password
-            .write()
-            .expect("MCP generated password lock poisoned")
-            .take()
     }
 }
 
@@ -1053,15 +899,12 @@ impl McpServerState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct McpServerControlResponse {
     enabled: bool,
+    server_url: Option<String>,
     public_url: Option<String>,
     oauth_issuer_url: Option<String>,
     resource_url: String,
     ready: bool,
     warnings: Vec<String>,
-    /// Plaintext of a password Agena generated itself. Reported exactly once and
-    /// omitted afterwards.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    generated_oauth_password: Option<String>,
     oauth: McpOAuthControlStatus,
 }
 
@@ -1070,7 +913,7 @@ pub(crate) struct McpServerControlResponse {
 struct McpOAuthControlStatus {
     configured: bool,
     password_configured: bool,
-    fallback_to_ui_password: bool,
+    password_source: String,
     ready: bool,
     authorization_server_kind: String,
     registration_methods: Vec<String>,
@@ -1093,9 +936,13 @@ struct McpOAuthControlStatus {
 pub(crate) struct UpdateMcpServerControlRequest {
     #[serde(default)]
     enabled: Option<bool>,
+    /// One Agena origin determines both `/mcp` and the OAuth issuer. Supplying
+    /// this field also removes any legacy split-issuer configuration.
+    #[serde(default, deserialize_with = "deserialize_nullable_update")]
+    server_url: Option<Option<String>>,
     /// `None` means "leave unchanged"; `Some(None)` explicitly clears the
     /// configured public URL and returns to the listener-local fallback.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_update")]
     public_url: Option<Option<String>>,
     /// Removed selector. Accepted so clients built against an older control API
     /// keep working; the value is ignored.
@@ -1106,13 +953,15 @@ pub(crate) struct UpdateMcpServerControlRequest {
     anonymous_access: Option<serde_json::Value>,
     /// `None` means "leave unchanged"; `Some(None)` clears the configured
     /// issuer and returns to the resource-derived issuer.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_nullable_update")]
     oauth_issuer_url: Option<Option<String>>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct SetMcpOAuthPasswordRequest {
-    password: String,
+fn deserialize_nullable_update<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 pub(crate) async fn get_mcp_server_control(
@@ -1136,21 +985,13 @@ pub(crate) async fn update_mcp_server_control(
             "ignoring removed MCP authentication selectors from the control request"
         );
     }
-    let configured_resource = match request.public_url {
-        None => state.mcp_server.configured_public_url(),
-        Some(None) => None,
-        Some(Some(value)) => match normalize_public_mcp_url(value.as_str()) {
-            Ok(value) => Some(value),
-            Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
-        },
-    };
-    let configured_issuer = match request.oauth_issuer_url {
-        None => state.mcp_server.configured_oauth_issuer_url(),
-        Some(None) => None,
-        Some(Some(value)) => match normalize_oauth_issuer_url(value.as_str()) {
-            Ok(value) => Some(value),
-            Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
-        },
+    let (configured_resource, configured_issuer) = match resolve_control_identity(
+        &request,
+        state.mcp_server.configured_public_url(),
+        state.mcp_server.configured_oauth_issuer_url(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
     if enabled {
         let effective_resource = state
@@ -1173,34 +1014,33 @@ pub(crate) async fn update_mcp_server_control(
     json_no_store(StatusCode::OK, state.mcp_server.control_status(&headers))
 }
 
-pub(crate) async fn set_mcp_oauth_password(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<SetMcpOAuthPasswordRequest>,
-) -> Response {
-    if let Err(error) = state
-        .mcp_server
-        .set_oauth_password(request.password.as_str())
-        .await
-    {
-        let status = if error.contains("must not be empty") || error.contains("at most") {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        return control_error(status, error);
+fn resolve_control_identity(
+    request: &UpdateMcpServerControlRequest,
+    current_resource: Option<String>,
+    current_issuer: Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    if let Some(server_url) = &request.server_url {
+        if request.public_url.is_some() || request.oauth_issuer_url.is_some() {
+            return Err("serverUrl cannot be combined with publicUrl or oauthIssuerUrl".to_owned());
+        }
+        let resource = server_url
+            .as_deref()
+            .map(normalize_agena_server_url)
+            .transpose()?
+            .map(|url| append_public_endpoint(&url, MCP_PATH));
+        return Ok((resource, None));
     }
-    json_no_store(StatusCode::OK, state.mcp_server.control_status(&headers))
-}
-
-pub(crate) async fn clear_mcp_oauth_password(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(error) = state.mcp_server.clear_oauth_password().await {
-        return control_error(StatusCode::INTERNAL_SERVER_ERROR, error);
-    }
-    json_no_store(StatusCode::OK, state.mcp_server.control_status(&headers))
+    let configured_resource = match &request.public_url {
+        None => current_resource,
+        Some(None) => None,
+        Some(Some(value)) => Some(normalize_public_mcp_url(value)?),
+    };
+    let configured_issuer = match &request.oauth_issuer_url {
+        None => current_issuer,
+        Some(None) => None,
+        Some(Some(value)) => Some(normalize_oauth_issuer_url(value)?),
+    };
+    Ok((configured_resource, configured_issuer))
 }
 
 fn control_error(status: StatusCode, error: String) -> Response {
@@ -1928,12 +1768,26 @@ async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, Stri
     let host = metadata_url
         .host_str()
         .ok_or_else(|| "client metadata URL must include a host".to_owned())?;
-    ensure_public_metadata_host(host, metadata_url.port_or_known_default().unwrap_or(443)).await?;
-
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(8))
+    validate_metadata_destination_host(host)?;
+    // Use the same proxy selection as ordinary Web requests, including
+    // NO_PROXY. A CONNECT/SOCKS remote-DNS proxy resolves the destination;
+    // local DNS answers are neither used nor authoritative for that route.
+    let mut route = agena_web::WebHttpRoute::for_url(&metadata_url, None)
+        .map_err(|error| format!("select the client metadata network route: {error}"))?;
+    if !route.remote_dns() {
+        let addresses =
+            resolve_public_metadata_host(host, metadata_url.port_or_known_default().unwrap_or(443))
+                .await?;
+        route = route.with_addresses(addresses);
+    }
+    let client = route
+        .apply(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(8)),
+            &metadata_url,
+        )
         .build()
         .map_err(|error| {
             agena_failure::diagnostic::format_error_chain_with_context(
@@ -2141,6 +1995,10 @@ async fn register_client(
     State(state): State<Arc<McpServerState>>,
     request: Result<Json<RegisterClientRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
+    let _control_guard = state.control.update_lock.lock().await;
+    if !state.is_enabled() {
+        return mcp_auth_disabled();
+    }
     let Json(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -2317,6 +2175,10 @@ struct AuthorizeRequest {
     scope: Option<String>,
     #[serde(default)]
     password: Option<String>,
+    #[serde(default)]
+    ui_locale: Option<String>,
+    #[serde(default)]
+    decision: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2356,9 +2218,15 @@ enum AuthorizationValidationError {
 }
 
 impl AuthorizationValidationError {
-    fn into_response(self) -> Response {
+    fn into_response(self, headers: &HeaderMap, locale: oauth_ui::Locale) -> Response {
         match self {
-            Self::Local(error) => error.into_response(),
+            Self::Local(error) => authorization_local_error(
+                StatusCode::BAD_REQUEST,
+                headers,
+                locale,
+                error.error,
+                error.description,
+            ),
             Self::Redirect {
                 redirect_uri,
                 state,
@@ -2521,15 +2389,28 @@ async fn validate_authorization_request(
 async fn authorize_get(
     State(state): State<Arc<McpServerState>>,
     headers: HeaderMap,
-    Query(request): Query<AuthorizeRequest>,
+    request: Result<Query<AuthorizeRequest>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
+    let Query(request) = match request {
+        Ok(request) => request,
+        Err(_) => {
+            return authorization_local_error(
+                StatusCode::BAD_REQUEST,
+                &headers,
+                oauth_ui::Locale::for_request(&headers, None),
+                "invalid_request",
+                "the authorization request must contain valid query parameters",
+            );
+        }
+    };
+    let locale = oauth_ui::Locale::for_request(&headers, request.ui_locale.as_deref());
     match validate_authorization_request(&state, &headers, &request).await {
         Ok(request) => authorization_html(
             StatusCode::OK,
-            render_authorization_page(&request, None),
+            oauth_ui::consent(&request, locale, None),
             request.redirect_uri.as_str(),
         ),
-        Err(error) => error.into_response(),
+        Err(error) => error.into_response(&headers, locale),
     }
 }
 
@@ -2538,6 +2419,12 @@ async fn authorize_post(
     headers: HeaderMap,
     request: Result<Form<AuthorizeRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
+    // Keep password verification and grant creation in the same control
+    // generation as password/identity updates and disabling the MCP surface.
+    let _control_guard = state.control.update_lock.lock().await;
+    if !state.is_enabled() {
+        return mcp_auth_disabled();
+    }
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -2548,17 +2435,42 @@ async fn authorize_post(
                 ),
                 "rejecting invalid MCP OAuth authorization request"
             );
-            return oauth_error(
+            return authorization_local_error(
                 StatusCode::BAD_REQUEST,
+                &headers,
+                oauth_ui::Locale::for_request(&headers, None),
                 "invalid_request",
                 "the authorization request body must be a valid form",
             );
         }
     };
+    let locale = oauth_ui::Locale::for_request(&headers, request.ui_locale.as_deref());
     let validated = match validate_authorization_request(&state, &headers, &request).await {
         Ok(request) => request,
-        Err(error) => return error.into_response(),
+        Err(error) => return error.into_response(&headers, locale),
     };
+    // A denial still validates the client and callback, but never needs the
+    // password and must not mint a code or count as a failed password attempt.
+    if request.decision.as_deref() == Some("deny") {
+        return authorization_error_redirect(
+            &validated.redirect_uri,
+            Some(&validated.state),
+            &validated.issuer,
+            &OAuthRequestError::new("access_denied", "the user cancelled authorization"),
+        );
+    }
+    if request
+        .decision
+        .as_deref()
+        .is_some_and(|decision| decision != "allow")
+    {
+        return authorization_error_redirect(
+            &validated.redirect_uri,
+            Some(&validated.state),
+            &validated.issuer,
+            &OAuthRequestError::new("invalid_request", "unsupported authorization decision"),
+        );
+    }
     if let Err(error) = state
         .verify_oauth_password(request.password.as_deref().unwrap_or(""), &headers)
         .await
@@ -2566,20 +2478,19 @@ async fn authorize_post(
         let (status, message) = match error {
             OAuthPasswordError::NotConfigured => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "The Agena MCP OAuth password is not configured. Set it in the Agena Web/TUI control plane, or set --ui-password / AGENA_SERVER_UI_PASSWORD before using ChatGPT OAuth.",
+                oauth_ui::PasswordError::Unavailable,
             ),
-            OAuthPasswordError::Invalid => (
-                StatusCode::UNAUTHORIZED,
-                "The server password is incorrect.",
-            ),
+            OAuthPasswordError::Invalid => {
+                (StatusCode::UNAUTHORIZED, oauth_ui::PasswordError::Invalid)
+            }
             OAuthPasswordError::Locked(_seconds) => (
                 StatusCode::TOO_MANY_REQUESTS,
-                "Too many failed password attempts; try again after the lockout expires.",
+                oauth_ui::PasswordError::Locked,
             ),
         };
         let mut response = authorization_html(
             status,
-            render_authorization_page(&validated, Some(message)),
+            oauth_ui::consent(&validated, locale, Some(message)),
             validated.redirect_uri.as_str(),
         );
         if let OAuthPasswordError::Locked(seconds) = error
@@ -2628,8 +2539,10 @@ async fn authorize_post(
                 ),
                 "MCP OAuth redirect URI invariant failed"
             );
-            return oauth_error(
+            return authorization_local_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
+                &headers,
+                locale,
                 "server_error",
                 "the registered redirect URI could not be rebuilt",
             );
@@ -2710,15 +2623,20 @@ fn authorization_html(status: StatusCode, html: String, redirect_uri: &str) -> R
         axum::http::HeaderName::from_static("referrer-policy"),
         HeaderValue::from_static("no-referrer"),
     );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }
 
 fn authorization_content_security_policy(redirect_uri: &str) -> HeaderValue {
     let redirect_origin = Url::parse(redirect_uri)
         .map(|url| url.origin().ascii_serialization())
-        .unwrap_or_else(|_| "'none'".to_owned());
+        .unwrap_or_default();
+    let script_hash = oauth_ui::script_hash();
     let policy = format!(
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {redirect_origin}; base-uri 'none'; frame-ancestors 'none'"
+        "default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'unsafe-inline'; img-src data:; form-action 'self' {redirect_origin}; base-uri 'none'; frame-ancestors 'none'"
     );
     HeaderValue::try_from(policy).unwrap_or_else(|_| {
         HeaderValue::from_static(
@@ -2727,40 +2645,18 @@ fn authorization_content_security_policy(redirect_uri: &str) -> HeaderValue {
     })
 }
 
-fn render_authorization_page(
-    request: &ValidatedAuthorizationRequest,
-    error: Option<&str>,
-) -> String {
-    let hidden = |name: &str, value: &str| {
-        format!(
-            "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
-            html_escape(name),
-            html_escape(value)
-        )
-    };
-    let error_html = error
-        .map(|message| format!("<p class=\"error\">{}</p>", html_escape(message)))
-        .unwrap_or_default();
-    let client_label = request
-        .client_name
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("an MCP client");
-    format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Authorize Agena MCP</title><style>body{{font-family:system-ui,sans-serif;max-width: thirtyrem;max-width:30rem;margin:4rem auto;padding:0 1.25rem;color:#202123}}main{{border:1px solid #ddd;border-radius:12px;padding:2rem;box-shadow:0 4px 24px #00000012}}input[type=password]{{display:block;width:100%;box-sizing:border-box;padding:.7rem;border:1px solid #aaa;border-radius:6px;margin:.5rem 0 1rem}}button{{padding:.7rem 1.1rem;border:0;border-radius:6px;background:#111;color:white;cursor:pointer}}.error{{color:#b42318;background:#fff1f0;padding:.7rem;border-radius:6px}}</style></head><body><main><h1>Authorize Agena MCP</h1><p><strong>{}</strong> is requesting access to Agena tools.</p><p>Resource: <code>{}</code></p><p>Scope: <code>{}</code></p>{}<form method=\"post\" action=\"authorize\">{}{}{}{}{}{}{}{}<label for=\"password\">Agena server password</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required autofocus><button type=\"submit\">Authorize</button></form></main></body></html>",
-        html_escape(client_label),
-        html_escape(request.resource.as_str()),
-        html_escape(request.scope.as_str()),
-        error_html,
-        hidden("response_type", "code"),
-        hidden("client_id", request.client_id.as_str()),
-        hidden("redirect_uri", request.redirect_uri.as_str()),
-        hidden("state", request.state.as_str()),
-        hidden("code_challenge", request.code_challenge.as_str()),
-        hidden("code_challenge_method", "S256"),
-        hidden("resource", request.resource.as_str()),
-        hidden("scope", request.scope.as_str()),
-    )
+fn authorization_local_error(
+    status: StatusCode,
+    headers: &HeaderMap,
+    locale: oauth_ui::Locale,
+    code: &'static str,
+    description: &'static str,
+) -> Response {
+    if oauth_ui::wants_html(headers) {
+        authorization_html(status, oauth_ui::error(locale, code, description), "")
+    } else {
+        oauth_error(status, code, description)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2794,6 +2690,8 @@ struct PersistedOAuthRuntime {
     revoked_jti: HashMap<String, u64>,
     #[serde(default)]
     clients: Vec<RegisteredClient>,
+    #[serde(default)]
+    token_generation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2807,6 +2705,8 @@ struct AccessTokenClaims {
     nbf: u64,
     exp: u64,
     jti: String,
+    #[serde(default)]
+    generation: String,
 }
 
 struct OAuthState {
@@ -2820,6 +2720,7 @@ struct OAuthState {
     refresh_rotation_lock: tokio::sync::Mutex<()>,
     persist_lock: tokio::sync::Mutex<()>,
     signing_key: OAuthSigningKey,
+    token_generation: RwLock<String>,
     database: Option<Arc<ServerStateDb>>,
 }
 
@@ -2829,6 +2730,10 @@ impl OAuthState {
         database: Option<Arc<ServerStateDb>>,
         persisted: Option<PersistedOAuthRuntime>,
     ) -> Self {
+        let token_generation = persisted
+            .as_ref()
+            .map(|runtime| runtime.token_generation.clone())
+            .unwrap_or_default();
         let state = Self {
             cimd_clients: DashMap::new(),
             registered_clients: DashMap::new(),
@@ -2840,6 +2745,7 @@ impl OAuthState {
             refresh_rotation_lock: tokio::sync::Mutex::new(()),
             persist_lock: tokio::sync::Mutex::new(()),
             signing_key,
+            token_generation: RwLock::new(token_generation),
             database,
         };
         if let Some(persisted) = persisted {
@@ -2880,6 +2786,11 @@ impl OAuthState {
             .iter()
             .map(|entry| entry.value().clone())
             .collect();
+        let token_generation = self
+            .token_generation
+            .read()
+            .expect("MCP token generation lock poisoned")
+            .clone();
         database
             .set_json(
                 KV_KEY_MCP_OAUTH_RUNTIME,
@@ -2887,9 +2798,44 @@ impl OAuthState {
                     refresh_tokens,
                     revoked_jti,
                     clients,
+                    token_generation,
                 },
             )
             .await
+    }
+
+    async fn clear_runtime(&self) -> Result<(), String> {
+        // A JWT does not depend on the refresh-token map. Advance a persisted
+        // generation so a password change or disable/re-enable invalidates all
+        // previously signed tokens, including across process restarts.
+        *self
+            .token_generation
+            .write()
+            .expect("MCP token generation lock poisoned") = crate::server::issue_token();
+        self.cimd_clients.clear();
+        self.registered_clients.clear();
+        self.authorization_codes.clear();
+        self.refresh_tokens.clear();
+        self.revoked_jti.clear();
+        self.persist().await
+    }
+
+    async fn revoke_refresh_token_family(&self, token: &str, client_id: Option<&str>) {
+        let _rotation_guard = self.refresh_rotation_lock.lock().await;
+        let family_id = self
+            .refresh_tokens
+            .get(&refresh_token_fingerprint(token))
+            .filter(|record| client_id.is_none_or(|client_id| client_id == record.client_id))
+            .map(|record| record.family_id.clone());
+        // Drop the DashMap reference before iterating mutably: it may lock the
+        // same shard, including the record being revoked.
+        if let Some(family_id) = family_id {
+            for mut entry in self.refresh_tokens.iter_mut() {
+                if entry.family_id == family_id {
+                    entry.revoked = true;
+                }
+            }
+        }
     }
 
     fn purge_expired(&self) {
@@ -2926,6 +2872,11 @@ impl OAuthState {
             nbf: issued_at,
             exp: issued_at + ACCESS_TOKEN_TTL.as_secs(),
             jti: crate::server::issue_token(),
+            generation: self
+                .token_generation
+                .read()
+                .expect("MCP token generation lock poisoned")
+                .clone(),
         };
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(self.signing_key.kid.clone());
@@ -2982,6 +2933,11 @@ impl OAuthState {
         let claims = token_data.claims;
         let now = unix_timestamp();
         claims.resource == resource
+            && claims.generation
+                == *self
+                    .token_generation
+                    .read()
+                    .expect("MCP token generation lock poisoned")
             && !claims.jti.is_empty()
             && claims.iat <= now.saturating_add(5)
             && scope_contains(claims.scope.as_str(), MCP_SCOPE)
@@ -3030,6 +2986,10 @@ async fn token(
     headers: HeaderMap,
     request: Result<Form<TokenRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
+    let _control_guard = state.control.update_lock.lock().await;
+    if !state.is_enabled() {
+        return mcp_auth_disabled();
+    }
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -3116,11 +3076,7 @@ async fn exchange_authorization_code(
             .as_deref()
             .filter(|value| value.len() <= MAX_OAUTH_URI_BYTES)
             != Some(record.redirect_uri.as_str())
-        || request
-            .resource
-            .as_deref()
-            .filter(|value| value.len() <= MAX_OAUTH_URI_BYTES)
-            != Some(record.resource.as_str())
+        || !resource_matches_grant(request.resource.as_deref(), &record.resource)
     {
         return Err(OAuthTokenError::new(
             "invalid_grant",
@@ -3221,11 +3177,7 @@ async fn refresh_access_token(
     if current.expires_at <= unix_timestamp()
         || current.client_id != client_id
         || current.issuer != issuer
-        || request
-            .resource
-            .as_deref()
-            .filter(|value| value.len() <= MAX_OAUTH_URI_BYTES)
-            != Some(current.resource.as_str())
+        || !resource_matches_grant(request.resource.as_deref(), &current.resource)
         || current.revoked
     {
         return Err(OAuthTokenError::new(
@@ -3310,6 +3262,7 @@ async fn revoke(
     State(state): State<Arc<McpServerState>>,
     request: Result<Form<RevokeRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
+    let _control_guard = state.control.update_lock.lock().await;
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -3353,21 +3306,10 @@ async fn revoke(
     {
         state.oauth.revoked_jti.insert(claims.jti, claims.exp);
     }
-    let refresh_key = refresh_token_fingerprint(request.token.as_str());
-    if let Some(mut refresh) = state.oauth.refresh_tokens.get_mut(refresh_key.as_str())
-        && request
-            .client_id
-            .as_deref()
-            .is_none_or(|client_id| client_id == refresh.client_id)
-    {
-        let family_id = refresh.family_id.clone();
-        refresh.revoked = true;
-        for mut entry in state.oauth.refresh_tokens.iter_mut() {
-            if entry.family_id == family_id {
-                entry.revoked = true;
-            }
-        }
-    }
+    state
+        .oauth
+        .revoke_refresh_token_family(&request.token, request.client_id.as_deref())
+        .await;
     if let Err(error) = state.oauth.persist().await {
         tracing::error!(error = %error, "failed to persist revoked MCP OAuth token");
         return oauth_error(
@@ -3684,6 +3626,12 @@ fn scope_contains(scope: &str, expected: &str) -> bool {
     scope.split_whitespace().any(|value| value == expected)
 }
 
+fn resource_matches_grant(requested: Option<&str>, granted: &str) -> bool {
+    // The stored grant is still audience-bound when RFC 8707's optional
+    // resource indicator is omitted. An explicit indicator must match it.
+    requested.is_none_or(|resource| resource.len() <= MAX_OAUTH_URI_BYTES && resource == granted)
+}
+
 fn valid_pkce_challenge(challenge: &str) -> bool {
     challenge.len() == 43
         && challenge
@@ -3762,66 +3710,61 @@ fn is_loopback_host(url: &Url) -> bool {
     url.host_str().is_some_and(is_loopback_host_name)
 }
 
-/// Reject client metadata URLs that resolve into address space Agena cannot
-/// safely reach from a public endpoint.
-///
-/// Opening CIMD to any HTTPS origin would otherwise let an unauthenticated
-/// caller point the authorization server at loopback, link-local, or private
-/// networks (SSRF). Every resolved address must be globally routable; the fetch
-/// client already refuses redirects and bounds time and size.
-async fn ensure_public_metadata_host(host: &str, port: u16) -> Result<(), String> {
+/// Allow public destinations and DNS routing tokens used by TUN proxies.
+/// The returned addresses are pinned; the original hostname still supplies
+/// TLS SNI, certificate verification and the HTTP Host header.
+async fn resolve_public_metadata_host(
+    host: &str,
+    port: u16,
+) -> Result<Vec<std::net::SocketAddr>, String> {
+    let host = host.trim_matches(['[', ']']);
+    validate_metadata_destination_host(host)?;
     if let Ok(address) = host.parse::<std::net::IpAddr>() {
-        return if is_public_ip(address) {
-            Ok(())
-        } else {
-            Err(format!(
-                "client metadata host {host} is not a public address"
-            ))
-        };
+        return Ok(vec![std::net::SocketAddr::new(address, port)]);
     }
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|error| format!("client metadata host {host} could not be resolved: {error}"))?;
-    let mut resolved = false;
-    for address in addresses {
-        resolved = true;
-        if !is_public_ip(address.ip()) {
-            return Err(format!(
-                "client metadata host {host} resolves to the non-public address {}",
-                address.ip()
-            ));
-        }
-    }
-    if !resolved {
-        return Err(format!("client metadata host {host} did not resolve"));
+    let addresses = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::net::lookup_host((host, port)),
+    )
+    .await
+    .map_err(|_| format!("client metadata host {host} resolution timed out"))?
+    .map_err(|error| format!("client metadata host {host} could not be resolved: {error}"))?;
+    permitted_metadata_addresses(host, addresses.collect())
+}
+
+fn validate_metadata_destination_host(host: &str) -> Result<(), String> {
+    let host = host.trim_matches(['[', ']']);
+    let permitted = match host.parse::<std::net::IpAddr>() {
+        Ok(address) => is_public_ip(address),
+        Err(_) => agena_web::network::is_public_hostname(host),
+    };
+    if !permitted {
+        return Err(format!(
+            "client metadata host {host} is not a public destination"
+        ));
     }
     Ok(())
 }
 
-fn is_public_ip(address: std::net::IpAddr) -> bool {
-    match address {
-        std::net::IpAddr::V4(address) => {
-            !(address.is_private()
-                || address.is_loopback()
-                || address.is_link_local()
-                || address.is_broadcast()
-                || address.is_documentation()
-                || address.is_unspecified()
-                || address.is_multicast())
-        }
-        std::net::IpAddr::V6(address) => {
-            if let Some(mapped) = address.to_ipv4_mapped() {
-                // An IPv4-mapped address must be judged as the IPv4 address the
-                // connection actually reaches.
-                return is_public_ip(std::net::IpAddr::V4(mapped));
-            }
-            !(address.is_loopback()
-                || address.is_unspecified()
-                || address.is_multicast()
-                || address.is_unique_local()
-                || address.is_unicast_link_local())
-        }
+fn permitted_metadata_addresses(
+    host: &str,
+    addresses: Vec<std::net::SocketAddr>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
+    validate_metadata_destination_host(host)?;
+    let domain_routed = agena_web::network::is_public_hostname(host);
+    let permitted: Vec<_> = addresses
+        .into_iter()
+        .filter(|address| {
+            is_public_ip(address.ip())
+                || (domain_routed && agena_web::network::is_fake_ip(address.ip()))
+        })
+        .collect();
+    if permitted.is_empty() {
+        return Err(format!(
+            "client metadata host {host} did not resolve to a public address or a supported TUN Fake-IP address"
+        ));
     }
+    Ok(permitted)
 }
 
 fn is_loopback_host_name(host: &str) -> bool {
@@ -3862,6 +3805,44 @@ fn authority_matches_url(authority: &str, value: &str) -> bool {
             _ => None,
         });
     actual_port == expected_port
+}
+
+fn normalize_agena_server_url(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_OAUTH_URI_BYTES {
+        return Err("Agena server URL must contain between 1 and 4096 bytes".to_owned());
+    }
+    let explicit_scheme = value.contains("://");
+    let candidate = if explicit_scheme {
+        value.to_owned()
+    } else {
+        format!("https://{value}")
+    };
+    let mut url =
+        Url::parse(&candidate).map_err(|error| format!("invalid Agena server URL: {error}"))?;
+    if !explicit_scheme && is_loopback_host(&url) {
+        url = Url::parse(&format!("http://{value}"))
+            .map_err(|error| format!("invalid Agena server URL: {error}"))?;
+    }
+    // A pasted MCP connection URL is equivalent to the Agena home address.
+    if url.path().trim_end_matches('/') == MCP_PATH {
+        url.set_path("");
+    }
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err("Agena access URL must be an HTTP(S) address without credentials, a path prefix, query, or fragment".to_owned());
+    }
+    let origin = url.origin().ascii_serialization();
+    if !is_acceptable_oauth_origin(&origin) {
+        return Err("Agena server URL must use HTTPS; HTTP is allowed only for localhost and loopback IP addresses".to_owned());
+    }
+    Ok(origin)
 }
 
 fn normalize_public_mcp_url(value: &str) -> Result<String, String> {
@@ -4112,6 +4093,14 @@ mod tests {
             "::1",
             "fd00::1",
             "::ffff:10.0.0.1",
+            "0.1.2.3",
+            "100.64.0.1",
+            "198.18.0.1",
+            "240.0.0.1",
+            "2001:db8::1",
+            "2002:7f00:1::1",
+            "64:ff9b::7f00:1",
+            "3fff::1",
         ] {
             let parsed: std::net::IpAddr = address.parse().expect("valid test address");
             assert!(
@@ -4123,6 +4112,84 @@ mod tests {
             let parsed: std::net::IpAddr = address.parse().expect("valid test address");
             assert!(is_public_ip(parsed), "{address} must be treated as public");
         }
+    }
+
+    #[test]
+    fn metadata_dns_accepts_tun_fake_ips_without_allowing_private_or_literal_targets() {
+        for address in [
+            "198.18.1.80:443",
+            "198.19.255.254:443",
+            "[::ffff:198.18.1.80]:443",
+            "[fc00::1]:443",
+            "[fdfe:dcba:9876::92]:443",
+        ] {
+            let address: std::net::SocketAddr = address.parse().unwrap();
+            assert_eq!(
+                permitted_metadata_addresses("chatgpt.com", vec![address]).unwrap(),
+                vec![address]
+            );
+        }
+        let fake: std::net::SocketAddr = "198.18.1.80:443".parse().unwrap();
+        for host in [
+            "198.18.1.80",
+            "::ffff:198.18.1.80",
+            "fc00::1",
+            "fdfe:dcba:9876::92",
+            "localhost",
+            "service.local",
+            "SERVICE.INTERNAL.",
+        ] {
+            assert!(
+                permitted_metadata_addresses(host, vec![fake]).is_err(),
+                "{host}"
+            );
+        }
+        for address in [
+            "127.0.0.1:443",
+            "10.0.0.5:443",
+            "169.254.169.254:443",
+            "[fd00::1]:443",
+        ] {
+            assert!(
+                permitted_metadata_addresses("chatgpt.com", vec![address.parse().unwrap()])
+                    .is_err()
+            );
+        }
+        let public: std::net::SocketAddr = "1.1.1.1:443".parse().unwrap();
+        assert_eq!(
+            permitted_metadata_addresses(
+                "chatgpt.com",
+                vec!["[fd00::1]:443".parse().unwrap(), public, fake]
+            )
+            .unwrap(),
+            vec![public, fake]
+        );
+        assert!(permitted_metadata_addresses("chatgpt.com", vec![]).is_err());
+    }
+
+    #[test]
+    fn chatgpt_metadata_selects_a_supported_public_client_method_and_keeps_validation() {
+        let client_id = "https://chatgpt.com/oauth/client.json";
+        let mut metadata: CimdClientMetadata = serde_json::from_value(serde_json::json!({
+            "client_id": client_id,
+            "client_name": "ChatGPT",
+            "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+            "token_endpoint_auth_method": "private_key_jwt",
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"]
+        }))
+        .unwrap();
+        assert!(validate_cimd_document(client_id, &metadata).is_ok());
+        assert!(validate_cimd_document("https://other.example/client.json", &metadata).is_err());
+        metadata.redirect_uris = vec!["http://attacker.example/callback".to_owned()];
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
+        metadata.redirect_uris =
+            vec!["https://chatgpt.com/connector_platform_oauth_redirect".to_owned()];
+        metadata.token_endpoint_auth_methods_supported = None;
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
+        metadata.token_endpoint_auth_method = Some("none".to_owned());
+        assert!(validate_cimd_document(client_id, &metadata).is_ok());
     }
 
     #[test]
@@ -4177,6 +4244,82 @@ mod tests {
                 .expect("tunnel path"),
             "https://tunnel.example.com/v1/mcp/tunnel_id"
         );
+    }
+
+    #[test]
+    fn one_agena_address_derives_the_mcp_and_oauth_identity() {
+        for (input, expected) in [
+            ("agena.example.com", "https://agena.example.com"),
+            (
+                "https://AGENA.example.com:443/",
+                "https://agena.example.com",
+            ),
+            (
+                "https://agena.example.com/mcp/",
+                "https://agena.example.com",
+            ),
+            ("https://203.0.113.5:8443", "https://203.0.113.5:8443"),
+            ("127.0.0.1:3210", "http://127.0.0.1:3210"),
+            ("localhost:3210", "http://localhost:3210"),
+            ("localhost:443", "http://localhost:443"),
+            ("agena.example.com:80", "https://agena.example.com:80"),
+            ("[::1]:3210", "http://[::1]:3210"),
+        ] {
+            assert_eq!(normalize_agena_server_url(input).expect(input), expected);
+            let request = serde_json::from_value(serde_json::json!({"serverUrl": input})).unwrap();
+            let (resource, issuer) = resolve_control_identity(&request, None, None).unwrap();
+            let resource = resource.unwrap();
+            assert_eq!(resource, format!("{expected}/mcp"));
+            assert_eq!(
+                validate_managed_oauth_identity(&resource, issuer.as_deref()).unwrap(),
+                expected
+            );
+        }
+        for invalid in [
+            "http://agena.example.com",
+            "http://192.168.1.2:3210",
+            "https://user:password@agena.example.com",
+            "https://agena.example.com?x=1",
+            "https://agena.example.com/#fragment",
+            "https://agena.example.com/prefix",
+            "https://tunnel.example.com/v1/mcp/id",
+            "ftp://agena.example.com",
+            "",
+        ] {
+            assert!(normalize_agena_server_url(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn control_updates_distinguish_missing_null_and_configured_urls() {
+        let resource = Some(TEST_RESOURCE.to_owned());
+        let issuer = Some("https://auth.example.com".to_owned());
+        let unchanged: UpdateMcpServerControlRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            resolve_control_identity(&unchanged, resource.clone(), issuer.clone()).unwrap(),
+            (resource.clone(), issuer.clone())
+        );
+        let cleared: UpdateMcpServerControlRequest =
+            serde_json::from_str(r#"{"serverUrl":null}"#).unwrap();
+        assert_eq!(
+            resolve_control_identity(&cleared, resource.clone(), issuer.clone()).unwrap(),
+            (None, None)
+        );
+        let unified: UpdateMcpServerControlRequest =
+            serde_json::from_str(r#"{"serverUrl":"https://new.example.com"}"#).unwrap();
+        assert_eq!(
+            resolve_control_identity(&unified, resource.clone(), issuer.clone()).unwrap(),
+            (Some("https://new.example.com/mcp".to_owned()), None)
+        );
+        let legacy_clear: UpdateMcpServerControlRequest =
+            serde_json::from_str(r#"{"publicUrl":null,"oauthIssuerUrl":null}"#).unwrap();
+        assert_eq!(
+            resolve_control_identity(&legacy_clear, resource, issuer).unwrap(),
+            (None, None)
+        );
+        let conflicting: UpdateMcpServerControlRequest =
+            serde_json::from_str(r#"{"serverUrl":null,"publicUrl":null}"#).unwrap();
+        assert!(resolve_control_identity(&conflicting, None, None).is_err());
     }
 
     #[test]
@@ -4314,6 +4457,233 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn optional_resource_keeps_code_and_refresh_grants_audience_bound() {
+        let oauth = test_oauth_state();
+        let (verifier, challenge) = pkce_pair();
+        insert_authorization_code(&oauth, "optional-resource", &challenge);
+        let mut request = code_request("optional-resource", verifier);
+        request.resource = None;
+        let issued = exchange_authorization_code(&oauth, TEST_ISSUER, &request)
+            .await
+            .unwrap();
+        assert!(oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+        let mut refresh = refresh_request(&issued.refresh_token);
+        refresh.resource = Some("https://other.example.com/mcp".to_owned());
+        assert!(
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh)
+                .await
+                .is_err()
+        );
+        refresh.resource = None;
+        let rotated = refresh_access_token(&oauth, TEST_ISSUER, &refresh)
+            .await
+            .unwrap();
+        assert!(oauth.validate_access_token(&rotated.access_token, TEST_ISSUER, TEST_RESOURCE));
+        assert!(!oauth.validate_access_token(
+            &rotated.access_token,
+            TEST_ISSUER,
+            "https://other.example.com/mcp"
+        ));
+        insert_authorization_code(&oauth, "wrong-resource", &challenge);
+        request = code_request("wrong-resource", verifier);
+        request.resource = Some("https://other.example.com/mcp".to_owned());
+        assert!(
+            exchange_authorization_code(&oauth, TEST_ISSUER, &request)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn revoking_a_refresh_family_drops_the_map_guard_before_iteration() {
+        let oauth = test_oauth_state();
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        let rotated =
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(&issued.refresh_token))
+                .await
+                .unwrap();
+        oauth
+            .revoke_refresh_token_family(&rotated.refresh_token, Some("another-client"))
+            .await;
+        assert!(
+            !oauth
+                .refresh_tokens
+                .get(&refresh_token_fingerprint(&rotated.refresh_token))
+                .unwrap()
+                .revoked
+        );
+        oauth
+            .revoke_refresh_token_family(&issued.refresh_token, Some(TEST_CLIENT))
+            .await;
+        assert!(oauth.refresh_tokens.iter().all(|record| record.revoked));
+        assert!(
+            refresh_access_token(
+                &oauth,
+                TEST_ISSUER,
+                &refresh_request(&rotated.refresh_token)
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[derive(Default)]
+    struct TestInstanceStateStore(RwLock<HashMap<String, String>>);
+
+    #[async_trait]
+    impl agena_storage::instance_state::InstanceStateRepository for TestInstanceStateStore {
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new("mcp-oauth-test")
+        }
+
+        async fn get_payload(
+            &self,
+            key: &str,
+        ) -> Result<Option<String>, agena_storage::instance_state::InstanceStateError> {
+            Ok(self.0.read().unwrap().get(key).cloned())
+        }
+
+        async fn set_payload(
+            &self,
+            key: &str,
+            payload: String,
+        ) -> Result<(), agena_storage::instance_state::InstanceStateError> {
+            self.0.write().unwrap().insert(key.to_owned(), payload);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_password_version_survives_restart_and_changes_with_the_credential() {
+        let database = ServerStateDb::from_store(Arc::new(TestInstanceStateStore::default()))
+            .await
+            .unwrap();
+        let first = auth::init_ui_auth_async(Some("shared-test-password".into()), &database)
+            .await
+            .unwrap();
+        let restarted = auth::init_ui_auth_async(Some("shared-test-password".into()), &database)
+            .await
+            .unwrap();
+        assert!(first.credential_fingerprint().is_some());
+        assert_eq!(
+            first.credential_fingerprint(),
+            restarted.credential_fingerprint()
+        );
+        let changed = auth::init_ui_auth_async(Some("replacement-test-password".into()), &database)
+            .await
+            .unwrap();
+        assert_ne!(
+            first.credential_fingerprint(),
+            changed.credential_fingerprint()
+        );
+        assert_eq!(
+            auth::verify_password_for_oauth(&changed, "shared-test-password", &HeaderMap::new()),
+            Err(OAuthPasswordError::Invalid)
+        );
+        assert!(
+            auth::verify_password_for_oauth(
+                &changed,
+                "replacement-test-password",
+                &HeaderMap::new()
+            )
+            .is_ok()
+        );
+        let disabled = auth::init_ui_auth_async(None, &database).await.unwrap();
+        assert!(disabled.credential_fingerprint().is_none());
+        assert_eq!(
+            auth::verify_password_for_oauth(
+                &disabled,
+                "replacement-test-password",
+                &HeaderMap::new()
+            ),
+            Err(OAuthPasswordError::NotConfigured)
+        );
+        let restored =
+            auth::init_ui_auth_async(Some("replacement-test-password".into()), &database)
+                .await
+                .unwrap();
+        assert_ne!(
+            changed.credential_fingerprint(),
+            restored.credential_fingerprint()
+        );
+    }
+
+    #[test]
+    fn legacy_independent_password_is_read_only_for_migration() {
+        let control: PersistedMcpServerControl = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "public_url": null,
+            "oauth_issuer_url": null,
+            "oauth_password_phc": "legacy-verifier-is-never-used",
+        }))
+        .unwrap();
+        assert!(control.oauth_password_phc.is_some());
+        let saved = serde_json::to_value(control).unwrap();
+        assert!(saved.get("oauth_password_phc").is_none());
+    }
+
+    #[tokio::test]
+    async fn resetting_oauth_invalidates_signed_tokens_across_restarts() {
+        let database = Arc::new(
+            ServerStateDb::from_store(Arc::new(TestInstanceStateStore::default()))
+                .await
+                .unwrap(),
+        );
+        let key = OAuthSigningKey::generate().unwrap();
+        let oauth = OAuthState::new(key.clone(), Some(database.clone()), None);
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        assert!(oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+        oauth.clear_runtime().await.unwrap();
+        assert!(!oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+        assert!(
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(&issued.refresh_token))
+                .await
+                .is_err()
+        );
+        let runtime = database
+            .get_json::<PersistedOAuthRuntime>(KV_KEY_MCP_OAUTH_RUNTIME)
+            .await
+            .unwrap();
+        let restored = OAuthState::new(key, Some(database), runtime);
+        assert!(!restored.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+        let new = restored
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        assert!(restored.validate_access_token(&new.access_token, TEST_ISSUER, TEST_RESOURCE));
+    }
+
+    #[test]
+    fn legacy_oauth_runtime_without_a_generation_still_deserializes() {
+        let runtime: PersistedOAuthRuntime = serde_json::from_value(serde_json::json!({
+            "refresh_tokens": {}, "revoked_jti": {}, "clients": []
+        }))
+        .unwrap();
+        assert_eq!(runtime.token_generation, "");
+    }
+
+    #[tokio::test]
     async fn refresh_rotation_detects_replay_and_revokes_the_family() {
         let oauth = test_oauth_state();
         let issued = oauth
@@ -4388,7 +4758,7 @@ mod tests {
     async fn client_metadata_host_must_be_public() {
         for host in ["127.0.0.1", "10.0.0.5", "169.254.169.254", "::1"] {
             assert!(
-                ensure_public_metadata_host(host, 443).await.is_err(),
+                resolve_public_metadata_host(host, 443).await.is_err(),
                 "{host} must not be fetchable"
             );
         }

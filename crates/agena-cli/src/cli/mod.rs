@@ -134,7 +134,7 @@ pub struct AgenaCli {
         conflicts_with = "server_password"
     )]
     pub server_token: Option<String>,
-    /// UI password exchanged for an in-memory server bearer token.
+    /// Server password exchanged for an in-memory server bearer token.
     /// Prefer AGENA_SERVER_PASSWORD so the secret is not exposed in process args.
     #[arg(
         long,
@@ -852,16 +852,16 @@ pub struct ServerArgs {
     pub host: String,
     #[arg(short, long, env = "AGENA_SERVER_PORT", default_value_t = 3210)]
     pub port: u16,
-    /// Operator password for the Web/TUI management API. It is required when
-    /// the built-in public MCP OAuth mode is enabled and also acts as the
-    /// default OAuth authorization password unless an MCP-specific one is set.
+    /// Server password shared by Web/TUI login and MCP OAuth authorization.
+    /// Set AGENA_SERVER_PASSWORD to avoid exposing it in process arguments.
     #[arg(
         long,
-        env = "AGENA_SERVER_UI_PASSWORD",
+        env = "AGENA_SERVER_PASSWORD",
+        alias = "ui-password",
         hide_env_values = true,
         value_name = "PASSWORD"
     )]
-    pub ui_password: Option<String>,
+    pub password: Option<String>,
     /// Whether the HTTP MCP surface is enabled. An explicit CLI/environment
     /// value overrides a persisted Web/TUI selection on every process start.
     #[arg(long, env = "AGENA_MCP_ENABLED", value_name = "BOOL")]
@@ -871,6 +871,10 @@ pub struct ServerArgs {
     /// never trusted to define OAuth identity.
     #[arg(long, env = "AGENA_MCP_PUBLIC_URL", value_name = "URL")]
     pub mcp_public_url: Option<String>,
+    /// Agena access address. Derives /mcp and all embedded OAuth endpoints;
+    /// remote addresses require HTTPS, while loopback addresses allow HTTP.
+    #[arg(long, env = "AGENA_MCP_SERVER_URL", value_name = "URL", conflicts_with_all = ["mcp_public_url", "mcp_oauth_issuer_url"])]
+    pub mcp_server_url: Option<String>,
     /// Public browser-facing issuer for Agena's built-in OAuth server. It must
     /// be an HTTPS origin without a path. Omit it when OAuth and MCP use the
     /// same domain; Agena then derives the issuer from the MCP public URL.

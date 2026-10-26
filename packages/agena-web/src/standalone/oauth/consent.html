@@ -1,0 +1,105 @@
+<div class="page-heading">
+  <h1 data-i18n="title">{{TITLE}}</h1>
+  <p data-i18n="subtitle">{{SUBTITLE}}</p>
+</div>
+<section class="auth-card" aria-labelledby="client-name">
+  <div class="client-identity">
+    <span class="client-icon" aria-hidden="true"
+      ><svg viewBox="0 0 24 24"><path d="M9 3v4m6-4v4M7 7h10v3a5 5 0 0 1-10 0V7Zm5 8v6m-3 0h6" /></svg
+    ></span>
+    <div class="client-copy">
+      <p class="eyebrow" data-i18n="requested_by">{{REQUESTED_BY}}</p>
+      <h2 id="client-name">{{CLIENT_NAME}}</h2>
+      <p class="client-origin" dir="ltr">{{CALLBACK_HOST}}</p>
+    </div>
+  </div>
+  <div class="permissions-section">
+    <h3 class="section-label" data-i18n="permissions">{{PERMISSIONS}}</h3>
+    <ul class="permissions">
+      <li>
+        <span class="permission-icon" aria-hidden="true"
+          ><svg viewBox="0 0 24 24">
+            <rect x="4" y="4" width="6" height="6" rx="1.5" />
+            <rect x="14" y="4" width="6" height="6" rx="1.5" />
+            <rect x="4" y="14" width="6" height="6" rx="1.5" />
+            <rect x="14" y="14" width="6" height="6" rx="1.5" /></svg
+        ></span>
+        <div>
+          <p class="permission-title" data-i18n="tools_title">{{TOOLS_TITLE}}</p>
+          <p class="permission-description" data-i18n="tools_description">{{TOOLS_DESCRIPTION}}</p>
+        </div>
+      </li>
+      {{OFFLINE_PERMISSION}}
+    </ul>
+  </div>
+  <details class="connection-details">
+    <summary>
+      <span data-i18n="connection_details">{{CONNECTION_DETAILS}}</span
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+    </summary>
+    <dl>
+      <div>
+        <dt data-i18n="server">{{SERVER}}</dt>
+        <dd dir="ltr">{{RESOURCE}}</dd>
+      </div>
+      <div>
+        <dt data-i18n="return_to">{{RETURN_TO}}</dt>
+        <dd dir="ltr">{{CALLBACK_ORIGIN}}</dd>
+      </div>
+      <div>
+        <dt data-i18n="scope">{{SCOPE}}</dt>
+        <dd dir="ltr">{{SCOPES}}</dd>
+      </div>
+    </dl>
+  </details>
+  <form id="authorize-form" method="post" action="authorize">
+    {{HIDDEN_FIELDS}} {{ERROR}}
+    <div class="password-field">
+      <label for="password" data-i18n="password_label">{{PASSWORD_LABEL}}</label>
+      <div class="input-wrap">
+        <input
+          id="password"
+          name="password"
+          type="password"
+          placeholder="{{PASSWORD_PLACEHOLDER}}"
+          data-i18n-placeholder="password_placeholder"
+          autocomplete="current-password"
+          aria-describedby="password-hint{{ERROR_DESCRIPTION}}"
+          {{INVALID}}
+          required
+          autofocus
+        />
+        <button
+          class="icon-button password-toggle"
+          type="button"
+          id="password-toggle"
+          aria-label="{{SHOW_PASSWORD}}"
+          title="{{SHOW_PASSWORD}}"
+          aria-controls="password"
+          aria-pressed="false"
+          hidden
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+            <circle cx="12" cy="12" r="3" />
+            <path class="eye-slash" d="m4 4 16 16" />
+          </svg>
+        </button>
+      </div>
+      <p id="password-hint" class="field-hint" data-i18n="password_hint">{{PASSWORD_HINT}}</p>
+    </div>
+    <button class="button button-primary" type="submit" name="decision" value="allow">
+      <span data-i18n="authorize">{{AUTHORIZE}}</span
+      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+    </button>
+    <button class="button button-cancel" type="submit" name="decision" value="deny" formnovalidate>
+      <span data-i18n="cancel">{{CANCEL}}</span>
+    </button>
+  </form>
+</section>
+<p class="privacy-note">
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="5" y="10" width="14" height="11" rx="2" />
+    <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" /></svg
+  ><span data-i18n="privacy">{{PRIVACY}}</span>
+</p>

@@ -77,6 +77,7 @@ const PermissionsWorkbenchPanel = defineAsyncComponent(
   () => import('@/components/settings/PermissionsWorkbenchPanel.vue'),
 )
 const PluginsToolsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsToolsPanel.vue'))
+const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const RuntimeSessionPanel = defineAsyncComponent(() => import('@/components/settings/RuntimeSessionPanel.vue'))
 const InterfaceSettingsPanel = defineAsyncComponent(() => import('@/components/settings/InterfaceSettingsPanel.vue'))
 const DiagnosticsWorkbenchPanel = defineAsyncComponent(
@@ -156,6 +157,10 @@ watch(
     ] as const,
   () => {
     if (!settingsTabFromRouteValue(route.params.section)) return
+    if (route.params.section === 'plugins-tools' && route.query.view === 'mcp-server') {
+      void router.replace({ path: settingsPathForTab('mcp-server'), query: { view: 'connection' }, hash: route.hash })
+      return
+    }
     try {
       localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
       localStorage.setItem(settingsScopeStorageKey(activeSection.value), activeScope.value)
@@ -186,6 +191,7 @@ const runtimeSessionPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const diagnosticsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const interfacePanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const pluginsToolsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
+const mcpServerPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const modelsProvidersPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const permissionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 
@@ -223,6 +229,8 @@ async function refreshSettingsSidebar() {
   // Configuration editors refresh in place so unsaved drafts survive.
   if (activeSection.value === 'plugins-tools') {
     await pluginsToolsPanel.value?.refresh()
+  } else if (activeSection.value === 'mcp-server') {
+    await mcpServerPanel.value?.refresh()
   } else if (activeSection.value === 'models-providers') {
     await modelsProvidersPanel.value?.refresh()
   } else if (activeSection.value === 'permissions') {
@@ -849,6 +857,17 @@ const dirtyHint = computed(
             :active-page="activeView"
             v-else-if="activeSection === 'plugins-tools'"
           />
+
+          <!-- MCP Server -->
+          <SettingsSectionWorkbench
+            v-else-if="activeSection === 'mcp-server'"
+            section="mcp-server"
+            :pages="activePages"
+            :active-page="activeView"
+            :default-page="SETTINGS_DEFAULT_SUBPAGE['mcp-server']"
+          >
+            <McpServerControlPanel ref="mcpServerPanel" />
+          </SettingsSectionWorkbench>
 
           <!-- Runtime & Session -->
           <RuntimeSessionPanel

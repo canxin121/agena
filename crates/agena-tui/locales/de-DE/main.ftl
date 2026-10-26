@@ -604,7 +604,7 @@ settings-mcp-registration-label = Registrierung
 
 settings-mcp-pkce-label = PKCE
 
-settings-mcp-public-url-label = Öffentliche MCP-URL
+settings-mcp-public-url-label = Agena-Zugriffsadresse
 
 settings-mcp-public-url-value = Edit
 
@@ -614,17 +614,11 @@ settings-mcp-oauth-issuer-label = OAuth-Aussteller-URL
 
 settings-mcp-oauth-issuer-derived = abgeleitet von MCP Resource Origin
 
-settings-mcp-oauth-password-label = MCP-OAuth-Passwort
 
-settings-mcp-oauth-password-value = Set oder Ersatz
 
-settings-mcp-oauth-password-configured = MCP-spezifisches Passwort konfiguriert
 
-settings-mcp-oauth-password-ui-fallback = Verwendung von UI Password Fallback
 
-settings-mcp-oauth-password-not-configured = nicht konfiguriert
 
-settings-mcp-oauth-password-clear-label = MCP OAuth Password
 
 settings-field-runtime-codex-version-label = Codex Client Version
 
@@ -1029,11 +1023,10 @@ flash-provider-save-error-settings-object = bestehende Providereinstellungen mü
 
 command-settings-summary = Öffnen Sie die Workbench für einheitliche Einstellungen für Modelle, Berechtigungen, Plugins, Laufzeit, Sitzungen, Schnittstelle und Diagnose
 
-settings-mcp-public-url-updated = Agena MCP Public URL aktualisiert
+settings-mcp-public-url-updated = Agena-Zugriffsadresse aktualisiert.
 
 settings-mcp-oauth-issuer-updated = Agena MCP OAuth Emittenten-URL aktualisiert
 
-settings-mcp-oauth-password-updated = Alterna MCP OAuth Passwort aktualisiert
 
 settings-mcp-server-enabled-flash = Agena MCP-Server aktiviert
 
@@ -1043,7 +1036,6 @@ settings-mcp-auth-mode-updated = Agena MCP-Authentifizierungsmodus eingestellt a
 
 settings-mcp-anonymous-access-updated = Agena MCP anonymer Toolzugriff auf {$policy}
 
-settings-mcp-oauth-password-cleared = Alterna MCP OAuth Passwort gelöscht
 
 permission-studio-command-pattern-title = {$tool_name} Befehlsmuster
 
@@ -1217,10 +1209,8 @@ settings-mcp-auth-detail = Wechseln Sie zwischen No-Auth, Full OAuth und ChatGPT
 settings-mcp-anonymous-access-none-detail = Sichere Standardeinstellung: Kein Werkzeugaufruf ist anonym. ChatGPT kann den Katalog weiterhin initialisieren und erkennen, bevor er sich anmeldet.
 settings-mcp-anonymous-access-read-only-detail = Opt-in mit hohem Risiko: Nur-Lese-Tools können anonym ausgeführt werden und können private Arbeitsbereichs-, Dateisystem-, Konfigurations- oder Diagnosedaten offenlegen.
 settings-mcp-anonymous-access-inactive-detail = Diese Richtlinie gilt nur im gemischten Authentifizierungsmodus; Schalten Sie die Authentifizierung auf gemischt um, um sie zu verwenden.
-settings-mcp-public-url-detail = Legen Sie die kanonische HTTPS-MCP-Ressourcen-URL fest. Sichere MCP-Tunnel-URLs können den vollständigen /v1/mcp/tunnel_id-Pfad enthalten; Weitergeleitete Anforderungsheader werden niemals als OAuth-Identität vertrauenswürdig.
+settings-mcp-public-url-detail = Geben Sie die Adresse für Agena ein; MCP- und OAuth-Adressen werden automatisch abgeleitet. Leer lassen für die lokale Adresse. Fernverbindungen erfordern HTTPS; Loopback-Adressen unterstützen auch HTTP.
 settings-mcp-oauth-issuer-detail = Legen Sie den öffentlichen, browserseitigen Autorisierungsserver-Aussteller fest. Von Agena verwaltetes OAuth erfordert einen Ursprung ohne Pfad, z. B. https://auth.example.com; Lassen Sie es leer, wenn OAuth und MCP dieselbe Domäne verwenden.
-settings-mcp-oauth-password-detail = Legen Sie das auf der Agena OAuth-Autorisierungsseite angezeigte Passwort fest. Es wird vom Server als Argon2-Hash gespeichert.
-settings-mcp-oauth-password-clear-detail = Entfernen Sie das MCP-spezifische Passwort und greifen Sie auf das Server-UI-Passwort zurück, sofern konfiguriert.
 settings-field-runtime-codex-version-description = Genaue @openai/codex-Kompatibilitätsversion, die in den Headern der Anbieteranforderungsidentität verwendet wird.
 settings-field-runtime-claude-version-description = Genaue @anthropic-ai/claude-code-Kompatibilitätsversion, die in Identitätsheadern der Anbieteranforderung verwendet wird.
 settings-field-runtime-gemini-version-description = Genaue @google/gemini-cli-Kompatibilitätsversion, die in den Headern der Anbieteranforderungsidentität verwendet wird.
@@ -3184,3 +3174,4 @@ flash-skill-count-limit = Eine Nachricht kann höchstens {$count} Skills referen
 hub-column-name = Name
 hub-column-status = Status
 hub-column-updated = Aktualisiert
+settings-mcp-shared-password-detail = Web, TUI und MCP OAuth verwenden dasselbe Serverpasswort, konfiguriert mit AGENA_SERVER_PASSWORD oder --password.

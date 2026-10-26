@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 
+@import './styles/theme.css';
 @import './styles/typography.css';
 @import './styles/transcript-interactions.css';
 @import './styles/mobile.css';
@@ -34,8 +35,6 @@
 
 @layer base {
   :root {
-    color-scheme: light;
-
     /* App shell / safe-area / keyboard insets */
     --oc-safe-area-top: 0px;
     --oc-safe-area-right: 0px;
@@ -59,56 +58,6 @@
     --text-ui-label: 0.875rem; /* 14px */
     --text-meta: 0.875rem;
     --text-micro: 0.8125rem; /* 13px */
-
-    /* Font Families */
-    --font-sans:
-      'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-    --font-mono:
-      'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-      monospace;
-    --ui-regular-font-weight: 400;
-
-    /* OKLCH Theme - Light Mode Default (Warm Sand) */
-    --background: 0.97 0.02 85; /* #fbf8f3 */
-    --foreground: 0.25 0.02 40; /* #423f3d */
-
-    --card: 0.99 0.01 90; /* #fcfbf8 */
-    --card-foreground: 0.25 0.02 40; /* #423f3d */
-
-    --popover: 0.99 0.01 90; /* #fcfbf8 */
-    --popover-foreground: 0.25 0.02 40;
-
-    /* Sidebar tokens (used by bg-sidebar, text-sidebar-*, border-sidebar-*) */
-    --sidebar: 0.965 0.018 85; /* slightly deeper than background */
-    --sidebar-foreground: 0.25 0.02 40;
-    --sidebar-border: 0.86 0.02 72;
-    --sidebar-accent: 0.92 0.02 80;
-    --sidebar-accent-foreground: 0.25 0.02 40;
-
-    --primary: 0.65 0.2 55; /* #e87b35 (Orange Accent) */
-    --primary-foreground: 0.99 0.01 90;
-
-    --secondary: 0.92 0.02 80; /* #ebe7e0 */
-    --secondary-foreground: 0.25 0.02 40;
-
-    --muted: 0.9 0.015 75; /* #e6e2db */
-    --muted-foreground: 0.45 0.02 50; /* #78736f */
-
-    --accent: 0.92 0.02 80; /* #ebe7e0 */
-    --accent-foreground: 0.25 0.02 40;
-
-    --destructive: 0.55 0.25 25; /* #d93d3d */
-    --destructive-foreground: 0.99 0.01 90;
-
-    --border: 0.85 0.02 70; /* #d6d1c9 */
-    --input: 0.88 0.02 75; /* #dedad3 */
-    --ring: 0.65 0.2 55; /* #e87b35 */
-
-    --radius: 0.625rem; /* 10px */
-
-    /* Scrollbars */
-    --scrollbar-thumb: 0.32 0.03 50 / 0.4;
-    --scrollbar-thumb-hover: 0.32 0.03 50 / 0.6;
   }
 
   /* Desktop shell (Electron/Tauri) drag regions.
@@ -118,45 +67,6 @@
   }
   .app-region-drag {
     -webkit-app-region: drag;
-  }
-
-  .dark {
-    color-scheme: dark;
-    /* OKLCH Theme - Dark Mode (Deep Warm Charcoal) */
-    --background: 0.16 0.01 30; /* #151313 */
-    --foreground: 0.85 0.02 90; /* #cdccc3 */
-
-    --card: 0.19 0.01 40; /* #1c1b1a */
-    --card-foreground: 0.85 0.02 90;
-
-    --popover: 0.24 0.01 40; /* #282726 */
-    --popover-foreground: 0.85 0.02 90;
-
-    /* Sidebar tokens */
-    --sidebar: 0.19 0.01 32;
-    --sidebar-foreground: 0.85 0.02 90;
-    --sidebar-border: 0.31 0.01 35;
-    --sidebar-accent: 0.29 0.01 40;
-    --sidebar-accent-foreground: 0.85 0.02 90;
-
-    --primary: 0.77 0.17 85; /* #edb449 (Golden Sand) */
-    --primary-foreground: 0.16 0.01 30;
-
-    --secondary: 0.29 0.01 40; /* #343331 */
-    --secondary-foreground: 0.85 0.02 90;
-
-    --muted: 0.33 0.01 40; /* #403e3c */
-    --muted-foreground: 0.75 0.02 80; /* #b6b4ab */
-
-    --accent: 0.29 0.01 40; /* #343331 */
-    --accent-foreground: 0.85 0.02 90;
-
-    --destructive: 0.65 0.15 30; /* #d98678 */
-    --destructive-foreground: 0.9 0.02 80;
-
-    --border: 0.31 0.01 35; /* #393836 */
-    --input: 0.33 0.01 40; /* #403e3c */
-    --ring: 0.77 0.17 85; /* #edb449 */
   }
 
   body {

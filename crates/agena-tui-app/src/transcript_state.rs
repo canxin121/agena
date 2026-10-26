@@ -1,6 +1,8 @@
 use std::time::Instant;
 
 mod action_cursor;
+#[cfg(test)]
+mod tests;
 
 /// A source frame invalidates only the entry that observes it. Static Part
 /// projection and Markdown/tool layout survive every other resource update.
@@ -462,18 +464,33 @@ impl TranscriptState {
     }
 
     pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::part::PartResource>) {
-        let mut parts = parts;
-        parts.retain(|part| !self.removed_part_ids.contains(&part.part_id));
         let previous = self
             .parts
             .iter()
             .map(|part| (part.part_id, part))
             .collect::<BTreeMap<_, _>>();
-        for part in &mut parts {
+        // History pages and queue reads can overlap the loaded window. A
+        // durable part has one identity even when several reads return it;
+        // duplicate boundaries also alias the entry render cache and repeat
+        // entire user messages. Reconcile revisions before projecting entries.
+        let mut unique = Vec::<agena_api::part::PartResource>::with_capacity(parts.len());
+        let mut positions = BTreeMap::<i64, usize>::new();
+        for mut part in parts {
+            if self.removed_part_ids.contains(&part.part_id) {
+                continue;
+            }
             if let Some(previous) = previous.get(&part.part_id) {
-                merge_part_snapshot(previous, part);
+                merge_part_snapshot(previous, &mut part);
+            }
+            if let Some(&index) = positions.get(&part.part_id) {
+                merge_part_snapshot(&unique[index], &mut part);
+                unique[index] = part;
+            } else {
+                positions.insert(part.part_id, unique.len());
+                unique.push(part);
             }
         }
+        let parts = unique;
         let changed = parts
             .iter()
             .filter(|part| previous.get(&part.part_id).is_none_or(|old| *old != *part))

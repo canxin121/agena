@@ -1189,15 +1189,6 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .collect()
     }
 
-    async fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition> {
-        self.runtime_tool_executor()
-            .available_tool_api_bindings_async()
-            .await
-            .into_iter()
-            .map(|binding| binding.definition())
-            .collect()
-    }
-
     async fn execute_runtime_tool(
         &self,
         invocation: &agena_domain::ToolInvocation,

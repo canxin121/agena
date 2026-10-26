@@ -25,6 +25,7 @@ members = [
     "crates/agena-storage",
     "crates/agena-storage-sqlite",
     "crates/agena-tool",
+    "crates/agena-tool-api",
     "crates/agena-runtime",
     "crates/agena-runtime-contracts",
     "crates/agena-runtime-config",
@@ -93,6 +94,7 @@ agena-provider-google-auth = { path = "crates/agena-provider-google-auth" }
 agena-storage = { path = "crates/agena-storage" }
 agena-storage-sqlite = { path = "crates/agena-storage-sqlite" }
 agena-tool = { path = "crates/agena-tool" }
+agena-tool-api = { path = "crates/agena-tool-api" }
 agena-runtime = { path = "crates/agena-runtime" }
 agena-runtime-contracts = { path = "crates/agena-runtime-contracts" }
 agena-runtime-config = { path = "crates/agena-runtime-config" }

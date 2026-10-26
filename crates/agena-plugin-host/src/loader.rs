@@ -544,6 +544,12 @@ fn validate_manifest(
         message: format!("invalid manifest returned by `{phase}`: {message}"),
     };
 
+    if configured_key.namespace() == "agena" && configured_key.name() == "tools" {
+        return Err(fail(
+            "agena.tools is a runtime protocol identity, not a plugin".into(),
+        ));
+    }
+
     if manifest.schema_version != SUPPORTED_MANIFEST_SCHEMA_VERSION {
         return Err(fail(format!(
             "unsupported schema version {}; expected {}",

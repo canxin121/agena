@@ -69,6 +69,4 @@ pub use output_helpers::{bounded_model_output_preview, line_count, model_output_
 pub use output_streams::ToolOutputStreams;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
-pub use tool_registry::{
-    ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
-};
+pub use tool_registry::{ExecutionPermissionInspector, ExecutionTool, ToolError, ToolExecutor};

@@ -202,7 +202,6 @@ pub(super) fn parse_invocation_from_json(
     let input = StructuredObject::try_from(value).map_err(ToolError::invalid_input)?;
 
     Ok(ToolInvocation {
-        tool_api_call: None,
         name: tool_name.to_string(),
         plugin_name: None,
         input,

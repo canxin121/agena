@@ -12,6 +12,9 @@ pub fn validate_tool_definition(
     plugin_key: &PluginKey,
     definition: &ToolDefinition,
 ) -> Result<ToolKey, String> {
+    if plugin_key.namespace() == "agena" && plugin_key.name() == "tools" {
+        return Err("agena.tools is reserved for the runtime Tool API protocol and cannot register plugin tools".into());
+    }
     if definition.name.trim() != definition.name {
         return Err(format!(
             "tool name `{}` must not contain leading or trailing whitespace",
@@ -33,6 +36,29 @@ pub fn validate_tool_definition(
         true,
     )?;
     Ok(key)
+}
+
+#[cfg(test)]
+mod protocol_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn protocol_namespace_cannot_publish_plugin_tools() {
+        let definition = ToolDefinition {
+            name: "list".into(),
+            contract: crate::sdk::ToolContract {
+                input_schema: serde_json::json!({"type":"object"}),
+                ..Default::default()
+            },
+            docs: Default::default(),
+            runtime: Default::default(),
+            tags: vec![],
+        };
+        let protocol = PluginKey::new("agena", "tools").unwrap();
+        assert!(RegisteredTool::new(protocol, definition.clone()).is_err());
+        let ordinary = PluginKey::new("agena", "fs").unwrap();
+        assert!(RegisteredTool::new(ordinary, definition).is_ok());
+    }
 }
 
 fn validate_schema_shape(

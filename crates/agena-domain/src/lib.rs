@@ -213,11 +213,11 @@ pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
 pub use tool_api::{
-    APPROVE_ACTION_FUNCTION, BLOCK_ACTION_FUNCTION, CONTROL_FUNCTION_NAMES,
-    TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD, ToolApiFunction, is_control_function_name,
+    APPROVE_ACTION_FUNCTION, BLOCK_ACTION_FUNCTION, CONTROL_FUNCTION_NAMES, ToolApiCall,
+    ToolApiFunction, is_control_function_name,
 };
 pub use tool_effects::{FilesystemAccess, FilesystemEffect, FilesystemEffects, NetworkEffect};
-pub use tool_invocation::{ToolApiCall, ToolInvocation};
+pub use tool_invocation::ToolInvocation;
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
 pub use tool_permission_config::ToolPermissionConfig;

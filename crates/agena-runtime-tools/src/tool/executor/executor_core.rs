@@ -8,7 +8,6 @@ impl ToolExecutor {
     ) -> Self {
         Self {
             read_path_authorizer: None,
-            content_reader: None,
             conversation: None,
             workspace_root: workspace_root.into(),
             principal,
@@ -39,11 +38,6 @@ impl ToolExecutor {
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
-    }
-
-    pub fn with_kernel_reader(mut self, reader: agena_storage::kernel::KernelReader) -> Self {
-        self.content_reader = Some(reader);
-        self
     }
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {
@@ -316,53 +310,21 @@ impl ToolExecutor {
 
     pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool> {
         let tool_set = self.builtin_tool_set();
-        let enabled = self
-            .registered_tools_with_definition_overrides()
-            .into_iter()
-            .filter(|entry| tool_set.is_tool_enabled(entry))
-            .collect::<Vec<_>>();
-        let has_execution_tool_capability = !self.principal.blocked
-            && enabled.iter().any(|entry| {
-                !crate::tool::is_tool_api_handler(entry) && self.tool_is_within_capability(entry)
-            });
-
-        // Do not call `is_tool_available` here. For a Tool API handler that
-        // method answers by rebuilding the complete, definition-patched
-        // catalog. Calling it from this catalog pass recursively reran every
-        // `tool.definition` hook once per gateway handler, amplifying one
-        // stalled hook into minutes of work and millions of warnings.
-        enabled
+        self.registered_tools_with_definition_overrides()
             .into_iter()
             .filter(|entry| {
-                if crate::tool::is_tool_api_handler(entry) {
-                    has_execution_tool_capability
-                } else {
-                    self.tool_is_within_capability(entry)
-                }
+                tool_set.is_tool_enabled(entry) && self.tool_is_within_capability(entry)
             })
             .collect()
     }
 
     pub(crate) async fn available_registered_tools_async(&self) -> Vec<RegisteredTool> {
         let tool_set = self.builtin_tool_set();
-        let enabled = self
-            .registered_tools_with_definition_overrides_async()
+        self.registered_tools_with_definition_overrides_async()
             .await
             .into_iter()
-            .filter(|entry| tool_set.is_tool_enabled(entry))
-            .collect::<Vec<_>>();
-        let has_execution_tool_capability = !self.principal.blocked
-            && enabled.iter().any(|entry| {
-                !crate::tool::is_tool_api_handler(entry) && self.tool_is_within_capability(entry)
-            });
-        enabled
-            .into_iter()
             .filter(|entry| {
-                if crate::tool::is_tool_api_handler(entry) {
-                    has_execution_tool_capability
-                } else {
-                    self.tool_is_within_capability(entry)
-                }
+                tool_set.is_tool_enabled(entry) && self.tool_is_within_capability(entry)
             })
             .collect()
     }
@@ -372,7 +334,6 @@ impl ToolExecutor {
             .conversation
             .as_ref()
             .is_some_and(|context| context.is_read_only())
-            || crate::tool::is_tool_api_handler(entry)
             || agena_plugin_host::sdk::ToolTag::is_read_only(&entry.effective_tags()))
             && self
                 .allowed_tool_names
@@ -390,21 +351,20 @@ impl ToolExecutor {
         self.available_registered_tools_async().await
     }
 
-    /// Return every ordinary execution tool visible to this session. There is
-    /// no direct/deferred/hidden exposure tier; only the declared Tool API handlers
-    /// are excluded because they are protocol functions rather than targets.
+    /// Return the session's execution-tool catalog. Protocol functions are
+    /// owned by a separate runtime registry and cannot appear here.
     pub async fn detailed_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
         self.detailed_tools_async()
             .await
             .into_iter()
-            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
     }
 
     pub fn available_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
         self.available_registered_tools()
             .into_iter()
-            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
     }
 
@@ -412,56 +372,15 @@ impl ToolExecutor {
         self.available_registered_tools_async()
             .await
             .into_iter()
-            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
-    }
-
-    /// The only functions ever declared through an AI provider's official
-    /// function/tool protocol are the declared Tool API gateway functions.
-    pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
-        let mut tools = self
-            .available_registered_tools()
-            .into_iter()
-            .filter_map(ToolApiBinding::from_registered_tool)
-            .collect::<Vec<_>>();
-        if tools
-            .iter()
-            .any(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
-            && !tools
-                .iter()
-                .any(|binding| binding.function() == agena_domain::ToolApiFunction::Call)
-        {
-            tools.push(ToolApiBinding::call_gateway());
-        }
-        tools.sort_by(|left, right| left.function_name().cmp(right.function_name()));
-        tools
-    }
-
-    pub async fn available_tool_api_bindings_async(&self) -> Vec<ToolApiBinding> {
-        let mut tools = self
-            .available_registered_tools_async()
-            .await
-            .into_iter()
-            .filter_map(ToolApiBinding::from_registered_tool)
-            .collect::<Vec<_>>();
-        if tools
-            .iter()
-            .any(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
-            && !tools
-                .iter()
-                .any(|binding| binding.function() == agena_domain::ToolApiFunction::Call)
-        {
-            tools.push(ToolApiBinding::call_gateway());
-        }
-        tools.sort_by(|left, right| left.function_name().cmp(right.function_name()));
-        tools
     }
 
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
         let tools = self
             .available_registered_tools()
             .into_iter()
-            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .map(crate::tool::ExecutionTool::from_registered_tool)
             .collect::<Vec<_>>();
         let mut candidates = crate::tool::execution_tool_names(&tools);
         candidates.sort();
@@ -490,7 +409,6 @@ use super::{
     PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
     suggest_tool_names, tool_summary, unknown_tool_hint,
 };
-use crate::tool::ToolApiBinding;
 use agena_plugin_host::PluginError;
 
 fn decode_plugin_diagnostic_data<T: serde::de::DeserializeOwned>(

@@ -1,16 +1,16 @@
 use agena_domain::ToolInvocation;
 use agena_tool::ToolPermissionCheck;
 
-/// A registered ordinary execution tool. The agena.tools protocol
-/// handlers can never inhabit this type.
+/// A registered plugin execution tool. Runtime protocol functions have an
+/// independent registry and are never registered as plugin tools.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionTool {
     registered: RegisteredTool,
 }
 
 impl ExecutionTool {
-    pub fn from_registered_tool(registered: RegisteredTool) -> Option<Self> {
-        (!is_tool_api_handler(&registered)).then_some(Self { registered })
+    pub fn from_registered_tool(registered: RegisteredTool) -> Self {
+        Self { registered }
     }
 
     pub fn registered(&self) -> &RegisteredTool {
@@ -32,16 +32,24 @@ impl std::ops::Deref for ExecutionTool {
 
 /// Convert an internal tool key such as `agena.session.rename` into the compact
 /// execution-tool name used by `tools_help` and `tools_call`, such as
-/// `session.rename`.
+/// `session.rename`. Names reserved for runtime protocol or control functions
+/// retain the canonical execution identity.
 pub fn compact_tool_call_name(name: &str) -> String {
     let mut parts = name.splitn(3, '.');
     let _namespace = parts.next();
     let plugin = parts.next();
     let tool = parts.next();
-    match (plugin, tool) {
+    let compact = match (plugin, tool) {
         (Some(plugin), Some(tool)) if plugin == tool => plugin.to_string(),
         (Some(plugin), Some(tool)) => format!("{plugin}.{tool}"),
         _ => name.to_string(),
+    };
+    if agena_domain::ToolApiFunction::from_function_name(&compact).is_some()
+        || agena_domain::is_control_function_name(&compact)
+    {
+        name.to_owned()
+    } else {
+        compact
     }
 }
 
@@ -74,141 +82,6 @@ pub fn execution_tool_names(tools: &[ExecutionTool]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
-    tool_api_function_for_registered(tool).is_some()
-}
-
-pub fn tools_help_function_name() -> &'static str {
-    ToolApiFunction::Help.function_name()
-}
-
-pub fn tools_call_function_name() -> &'static str {
-    ToolApiFunction::Call.function_name()
-}
-
-fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunction> {
-    if tool.namespace() != "agena" || tool.plugin_name() != "tools" {
-        return None;
-    }
-    match tool.tool_name() {
-        "list" => Some(ToolApiFunction::List),
-        "help" => Some(ToolApiFunction::Help),
-        "call" => Some(ToolApiFunction::Call),
-        "plugins_list" => Some(ToolApiFunction::PluginsList),
-        _ => None,
-    }
-}
-
-/// A registry handler proven to implement one of Agena's provider-facing
-/// Tool API functions. Ordinary execution tools cannot inhabit this type, so a
-/// `CompletionRequest` cannot accidentally advertise them as functions.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToolApiBinding {
-    function: ToolApiFunction,
-    definition: agena_provider::ToolApiDefinition,
-    handler: Option<RegisteredTool>,
-}
-
-impl serde::Serialize for ToolApiBinding {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.definition().serialize(serializer)
-    }
-}
-
-impl ToolApiBinding {
-    pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
-        let function = tool_api_function_for_registered(&handler)?;
-        let definition = agena_provider::ToolApiDefinition {
-            handler_key: handler.canonical_name(),
-            plugin_name: handler.plugin_name().to_owned(),
-            name: function.function_name().to_owned(),
-            description: tool_api_description(function).to_owned(),
-            input_schema: handler.input_schema(),
-            output_schema: handler.output_schema(),
-            definition_identity: handler.definition_identity(),
-        };
-        Some(Self {
-            function,
-            definition,
-            handler: Some(handler),
-        })
-    }
-
-    pub fn call_gateway() -> Self {
-        let function = ToolApiFunction::Call;
-        Self {
-            function,
-            definition: agena_provider::ToolApiDefinition {
-                handler_key: "agena.tools.call_gateway".to_owned(),
-                plugin_name: "agena.tools".to_owned(),
-                name: function.function_name().to_owned(),
-                description: tool_api_description(function).to_owned(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "description": "The arguments value must be a JSON object (never a JSON-encoded string and never any other non-object) with exactly two fields: `tool` (string, required) and `input` (object, required). Pass the object directly; do not stringify it.",
-                    "additionalProperties": false,
-                    "required": ["tool", "input"],
-                    "properties": {
-                        "tool": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "Exact execution-tool name known from the prompt/context or returned by tools_list, with its current availability and complete live contract already in context from tools_help or embedded help. Must name an execution tool (for example `fs.read`); never a Tool API function name such as `tools_call`, `tools_help`, or `tools_list`."
-                        },
-                        "input": {
-                            "type": "object",
-                            "additionalProperties": true,
-                            "description": "One complete argument object matching the selected execution tool's live tools_help contract. Required; supply every field the tool requires with correct names, types, and values, as valid JSON (correct quoting and escapes, no stray control characters)."
-                        }
-                    }
-                }),
-                output_schema: serde_json::json!({}),
-                definition_identity: "agena-tool-api:tools_call".to_owned(),
-            },
-            handler: None,
-        }
-    }
-
-    pub const fn function(&self) -> ToolApiFunction {
-        self.function
-    }
-
-    pub const fn gateway_function(&self) -> Option<ToolApiFunction> {
-        Some(self.function)
-    }
-
-    pub fn function_name(&self) -> &str {
-        self.function.function_name()
-    }
-
-    pub(crate) fn handler(&self) -> Option<&RegisteredTool> {
-        self.handler.as_ref()
-    }
-
-    /// Project the fixed gateway binding into the provider contract.
-    pub fn definition(&self) -> agena_provider::ToolApiDefinition {
-        self.definition.clone()
-    }
-}
-
-fn tool_api_description(function: ToolApiFunction) -> &'static str {
-    match function {
-        ToolApiFunction::List => {
-            "Enumerate the current live execution-tool inventory for one plugin or a batch of plugin targets. The plugin argument accepts one plugin id or an array of ids with OR semantics; batch multi-plugin inventory into one call. Use this whenever the pending request asks which tools or capabilities are available or broad inventory is useful; never answer inventory questions from memory. Each result contains an exact current-session identifier. Use tools_help before the first tools_call when that tool's complete live input contract is not already established. Execution-tool identifiers are not provider function names. Enumeration is paginated: continue with offset, and when the owning plugin is unknown enumerate plugins_list first and then call this function for that plugin id. There is no configured maximum for limit. Call this function directly with well-formed JSON arguments (for example {\"plugin\":[\"agena.fs\",\"agena.monitor\"],\"limit\":200}); never put its name inside tools_call.arguments.tool."
-        }
-        ToolApiFunction::Help => {
-            "Get live input schemas, required fields, examples, and usage notes for exact Agena execution-tool names known from the prompt/context or returned by tools_list. Known names need no preliminary lookup; this help checks current availability. If unavailable, return to discovery. The `tool` argument accepts one execution-tool name or an array of names; batch help for several known tools into one call. Values must name execution tools (for example `fs.read`), never Tool API function names. Use this before the first tools_call unless the complete current contract is already in context from reusable or embedded help. This function describes tools but does not run or authorize them. Arguments must be valid JSON with correct syntax."
-        }
-        ToolApiFunction::Call => {
-            "Run one known Agena execution tool. Never invent the tool name or guess its input schema. The arguments of this function must be a single JSON object with exactly two fields: `tool` (a string naming an execution tool) and `input` (an object holding that tool's arguments). One tools_call keeps one durable execution target; when several calls are independent, emit multiple complete tools_call function calls together in the same assistant response so the runtime can batch them. Never send a JSON-encoded string or any other non-object as the arguments value - the arguments value itself must be the `{ \"tool\": ..., \"input\": { ... } }` object, never a string that merely contains that JSON, and never an extra wrapper layer. Set `tool` to an exact execution-tool name known from the prompt/context or discovery, with its current availability and complete live contract already in context from tools_help or embedded help (for example `fs.read`); `tool` must be an execution tool, never a Tool API function name such as `tools_call`, `tools_help`, or `tools_list`. Set `input` to one complete argument object that exactly matches the selected tool's live tools_help contract - correct field names, types, and values; omit nothing required. The whole arguments value must be valid JSON: correct quoting and escapes (no invalid escapes such as `\\|`), no stray control characters, no truncation. If the tool is unknown, return to discovery: enumerate plugins_list, then tools_list for the owning plugin. If validation embeds complete help, read it and retry tools_call directly. The provider function name is always tools_call; all ordinary tools execute through this gateway. When the transport rejects a call, read the correction and re-emit with an exact tool name and valid arguments."
-        }
-        ToolApiFunction::PluginsList => {
-            "Enumerate the current live plugin inventory, which is the entry point for capability discovery: call this function first without a plugin selector to page through every loaded plugin, then use tools_list with a plugin id to enumerate that plugin's tools. The plugin argument accepts one exact or compact plugin id or an array of ids with OR semantics, so several known plugin records can be fetched together. Each result lists the plugin id, version, summary, metadata tags, and the number of tools it publishes. There is no configured maximum for limit. Call this function directly with valid JSON arguments; never route it through tools_call."
-        }
-    }
-}
 pub fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
 where
     I: IntoIterator<Item = T>,
@@ -622,9 +495,6 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    if is_tool_api_handler(registered_tool) {
-        return "Tool API function.".to_string();
-    }
     format!(
         "Tool `{}`.",
         compact_tool_call_name(registered_tool.canonical_name().as_str())
@@ -640,7 +510,6 @@ pub(super) struct CloudToolAdapterGate {
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
     pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
-    pub(super) content_reader: Option<agena_storage::kernel::KernelReader>,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,
@@ -691,5 +560,67 @@ use super::{
     Arc, AskUserToolInput, Error, ExecutionPrincipal, MonitorService, PathBuf, PluginHost,
     RegisteredTool, ShellError,
 };
-use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;
+
+#[cfg(test)]
+mod execution_namespace_tests {
+    use super::*;
+    use agena_plugin_host::sdk::{PluginKey, ToolContract, ToolDefinition};
+
+    fn registered(namespace: &str, plugin: &str, tool: &str) -> RegisteredTool {
+        RegisteredTool::new(
+            PluginKey::new(namespace, plugin).unwrap(),
+            ToolDefinition {
+                name: tool.into(),
+                contract: ToolContract {
+                    input_schema: serde_json::json!({"type": "object"}),
+                    ..Default::default()
+                },
+                docs: Default::default(),
+                runtime: Default::default(),
+                tags: vec![],
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn execution_aliases_cannot_claim_runtime_function_names() {
+        let reserved = agena_domain::ToolApiFunction::ALL
+            .map(|function| function.function_name())
+            .into_iter()
+            .chain(agena_domain::CONTROL_FUNCTION_NAMES);
+        for name in reserved {
+            let registered = registered("custom", name, name);
+            let canonical = registered.canonical_name();
+            let tools = vec![ExecutionTool::from_registered_tool(registered.clone())];
+            assert_eq!(execution_tool_names(&tools), [canonical.clone()]);
+            assert!(!registered_tool_matches_name(&registered, name));
+            assert!(unique_registered_tool_match([registered.clone()], name).is_none());
+            assert_eq!(
+                unique_registered_tool_match([registered.clone()], &canonical),
+                Some(registered),
+            );
+        }
+    }
+
+    #[test]
+    fn execution_alias_collisions_keep_distinct_canonical_targets() {
+        let tools = vec![
+            ExecutionTool::from_registered_tool(registered("one", "fs", "read")),
+            ExecutionTool::from_registered_tool(registered("two", "fs", "read")),
+            ExecutionTool::from_registered_tool(registered("agena", "shell", "exec")),
+        ];
+        assert_eq!(
+            execution_tool_names(&tools),
+            ["one.fs.read", "two.fs.read", "shell.exec"],
+        );
+        assert!(
+            unique_registered_tool_match(
+                tools.iter().map(|tool| tool.registered().clone()),
+                "fs.read",
+            )
+            .is_none(),
+        );
+    }
+}

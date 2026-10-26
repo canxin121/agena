@@ -60,7 +60,7 @@ impl KernelPrompt {
     pub fn estimate_tokens(
         &self,
         system: Option<&str>,
-        tools: &[crate::tool::ToolApiBinding],
+        tools: &[agena_provider::ToolApiDefinition],
     ) -> Result<u64> {
         estimate_request_tokens(&self.turns, self.compaction.as_ref(), system, tools)
     }
@@ -86,12 +86,12 @@ fn estimate_request_tokens(
     turns: &[CompletionInputRun],
     compaction: Option<&ProviderCompactionContext>,
     system: Option<&str>,
-    tools: &[crate::tool::ToolApiBinding],
+    tools: &[agena_provider::ToolApiDefinition],
 ) -> Result<u64> {
     let mut chars = 1024usize.saturating_add(system.map_or(0, str::len));
     // Only declarations actually sent to the provider belong to the prompt.
     for tool in tools {
-        chars = chars.saturating_add(json_bytes(&tool.definition())?);
+        chars = chars.saturating_add(json_bytes(tool)?);
     }
     if let Some(compaction) = compaction {
         chars = chars.saturating_add(json_bytes(compaction)?);
@@ -157,12 +157,6 @@ impl KernelPromptHydrator {
         let mut prompt = self
             .hydrate_conversation(reader, facts, model, native_compaction, conversation)
             .await?;
-        let definitions = executor
-            .available_tool_api_bindings_async()
-            .await
-            .into_iter()
-            .map(|b| b.definition())
-            .collect::<Vec<_>>();
         let tools = prompt
             .facts
             .entries
@@ -192,18 +186,55 @@ impl KernelPromptHydrator {
             let Some((tool, entry_id)) = tools.get(tool_call_id) else {
                 continue;
             };
+            if let Some(response) = tool
+                .result
+                .as_ref()
+                .and_then(|result| result.get("tool_api_response"))
+            {
+                let response: agena_tool_api::ToolApiResponse =
+                    serde_json::from_value(response.clone())
+                        .map_err(|error| invalid(format!("invalid Tool API response: {error}")))?;
+                if !response.output_text.is_empty() {
+                    *output_json = serde_json::to_string(&response.output_text)
+                        .map_err(|error| invalid(error.to_string()))?;
+                }
+                continue;
+            }
             let Some(value) = tool.result.as_ref().and_then(|r| r.get("raw_output")) else {
                 continue;
             };
             let mut raw: agena_domain::RawOutput = serde_json::from_value(value.clone())
                 .map_err(|e| invalid(format!("invalid raw tool output: {e}")))?;
-            let invocation = crate::session::processor::parse_tool_invocation_lossy(
-                prompt.facts.metadata.id.get(),
-                &tool.call.name,
-                &serde_json::to_string(&tool.call.input).map_err(|e| invalid(e.to_string()))?,
-                &definitions,
-            )
-            .map_err(|e| invalid(e.to_string()))?;
+            // Rendering is an execution concern. The stored protocol envelope
+            // is never passed to a plugin renderer as an executable target.
+            let invocation = if let Some(value) = tool
+                .result
+                .as_ref()
+                .and_then(|result| result.get("invocation"))
+            {
+                let mut value = value.clone();
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("tool_api_call");
+                }
+                serde_json::from_value(value)
+                    .map_err(|error| invalid(format!("invalid execution invocation: {error}")))?
+            } else if tool.call.name == agena_domain::ToolApiFunction::Call.function_name() {
+                let arguments = agena_domain::StructuredObject::try_from(tool.call.input.clone())
+                    .map_err(invalid)?;
+                let call = agena_domain::ToolApiCall {
+                    function: agena_domain::ToolApiFunction::Call,
+                    arguments,
+                };
+                let action = agena_tool_api::ToolApiCatalog::default()
+                    .dispatch(&call)
+                    .map_err(|error| invalid(error.to_string()))?;
+                let agena_tool_api::ToolApiAction::Execute(request) = action else {
+                    continue;
+                };
+                agena_domain::ToolInvocation::new(request.tool, request.input)
+            } else {
+                continue;
+            };
             for item in &raw.attachments {
                 if let Some(hydrated) = super::media::hydrate_attachment(
                     reader,
@@ -449,8 +480,20 @@ impl KernelPromptHydrator {
                         active_round = item.round_id;
                         continue;
                     }
-                    let function = ModelToolFunction::new(tool.call.name.clone());
-                    let arguments_json = encoded_json(&tool.call.input, &mut remaining)?;
+                    let (function, arguments) = if let Some(function) =
+                        agena_domain::ToolApiFunction::from_function_name(&tool.call.name)
+                    {
+                        (ModelToolFunction::from(function), tool.call.input.clone())
+                    } else {
+                        // Operator-initiated execution has no provider envelope.
+                        // Its history projection constructs one explicitly,
+                        // keeping the execution name inside protocol arguments.
+                        (
+                            ModelToolFunction::from(agena_domain::ToolApiFunction::Call),
+                            json!({"tool": tool.call.name, "input": tool.call.input}),
+                        )
+                    };
+                    let arguments_json = encoded_json(&arguments, &mut remaining)?;
                     parts.push(CompletionInputPart::ToolCall {
                         id: tool.call.call_id.clone(),
                         function: function.clone(),

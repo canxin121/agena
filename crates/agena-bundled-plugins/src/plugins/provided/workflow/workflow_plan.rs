@@ -15,86 +15,6 @@ impl WorkflowPlugin {
             .ok_or_else(|| PluginError::internal("workflow plugin invoked before init"))
     }
 
-    pub(in crate::plugins::provided::workflow) fn resolve_tool_descriptor<'a>(
-        requested: &str,
-        tools: &'a [ToolDescriptor],
-    ) -> SdkResult<&'a ToolDescriptor> {
-        let exact = tools
-            .iter()
-            .filter(|tool| tool.name == requested)
-            .collect::<Vec<_>>();
-        match exact.as_slice() {
-            [tool] => return Ok(*tool),
-            [] => {}
-            _ => {
-                return Err(PluginError::invalid_params(format!(
-                    "tool `{requested}` is ambiguous; call `tools_list` again and use the returned fully-qualified tool name"
-                )));
-            }
-        }
-
-        // Built-in canonical registry identities are valid payload data too,
-        // but resolution remains exact: no trimming or case folding.
-        let requested_without_namespace = requested.strip_prefix("agena.").unwrap_or(requested);
-        let aliases = tools
-            .iter()
-            .filter(|tool| tool.name == requested_without_namespace)
-            .collect::<Vec<_>>();
-        match aliases.as_slice() {
-            [tool] => return Ok(*tool),
-            [] => {}
-            _ => {
-                return Err(PluginError::invalid_params(format!(
-                    "tool `{requested}` is ambiguous; call `tools_list` again and use the returned fully-qualified tool name"
-                )));
-            }
-        }
-
-        let suggestions = Self::suggest_tool_names(requested, tools);
-        let suggestion_text = if suggestions.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " Similar live names are {}, but suggestions are not proof of the intended tool or its input contract.",
-                suggestions
-                    .iter()
-                    .map(|tool| format!("`{tool}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        let message = format!(
-            "unknown tool '{requested}'.{suggestion_text} Do not guess a replacement name or its arguments. Enumerate the loaded plugins with `plugins_list`, list the owning plugin's tools with `tools_list`, choose an exact returned identifier, call `tools_help` for its live input contract, then retry `tools_call`."
-        );
-        Err(PluginError::invalid_params_with_data(
-            message,
-            serde_json::json!({
-                "kind": "unknown_execution_tool",
-                "requested": requested,
-                "suggestions": suggestions,
-                "recovery": [
-                    {
-                        "function": "plugins_list",
-                        "arguments": { "offset": 0 }
-                    },
-                    {
-                        "function": "tools_list",
-                        "arguments": { "plugin": "plugin id returned by plugins_list" }
-                    },
-                    {
-                        "function": "tools_help",
-                        "tool_from": "exact identifier returned by tools_list"
-                    },
-                    {
-                        "function": "tools_call",
-                        "tool_from": "same exact identifier passed to tools_help",
-                        "input_from": "one complete object derived from the live tools_help contract"
-                    }
-                ]
-            }),
-        ))
-    }
-
     pub(crate) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
@@ -132,163 +52,6 @@ impl WorkflowPlugin {
                 allow_custom: question.allow_custom,
             })
             .collect()
-    }
-
-    pub(in crate::plugins::provided::workflow) fn tool_search_document(
-        record: &AvailableToolRecord,
-    ) -> ToolSearchDocument {
-        ToolSearchDocument::new(
-            record.name.clone(),
-            record.summary.clone(),
-            record.tags.clone(),
-            Some(record.plugin_id.clone()),
-        )
-    }
-
-    /// A bounded family overview prevents a paginated/exact search from
-    /// hiding the operations needed to continue a discovered Shell launch.
-    pub(in crate::plugins::provided::workflow) fn shell_discovery_hint(
-        records: &[AvailableToolRecord],
-    ) -> Option<String> {
-        let tools = [
-            ("exec", "wait for command completion"),
-            (
-                "spawn",
-                "background, return immediately and notify completion",
-            ),
-            (
-                "watch",
-                "service readiness and one mutable watch per background process",
-            ),
-            ("open", "interactive shell/terminal/PTY"),
-            ("logs", "explicit-cursor compatibility output"),
-            ("read", "unified job/terminal output without input"),
-            ("write", "terminal input"),
-            ("stop", "process-tree cleanup"),
-            ("signal", "terminal interruption/control"),
-            ("list", "owned jobs/terminals"),
-            ("resize", "terminal dimensions"),
-        ]
-        .into_iter()
-        .filter_map(|(action, purpose)| {
-            records
-                .iter()
-                .find(|record| {
-                    record.plugin_id == "agena.shell"
-                        && (record.name == format!("shell.{action}")
-                            || record.name == format!("agena.shell.{action}"))
-                })
-                .map(|record| format!("`{}` ({purpose})", record.name))
-        })
-        .collect::<Vec<_>>();
-        (!tools.is_empty()).then(|| format!("Available Shell tools: {}. Read detailed contracts with tools_help (batch supported).", tools.join("; ")))
-    }
-
-    pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_id(
-        mut records: Vec<AvailablePluginRecord>,
-        plugin: Option<&ToolApiStringBatch>,
-    ) -> Vec<AvailablePluginRecord> {
-        let filters = normalized_plugin_filters(plugin);
-        if filters.is_empty() {
-            return records;
-        }
-        records.retain(|record| {
-            filters
-                .iter()
-                .any(|filter| plugin_id_matches(record.plugin_id.as_str(), filter))
-        });
-        records
-    }
-
-    pub(in crate::plugins::provided::workflow) fn paginate<T: Clone>(
-        items: &[T],
-        offset: Option<u32>,
-        limit: Option<u32>,
-    ) -> (Vec<T>, usize, usize) {
-        let total = items.len();
-        let offset = offset.unwrap_or(0) as usize;
-        if offset >= total {
-            return (Vec::new(), total, offset);
-        }
-        let limit = limit
-            .map(|value| value as usize)
-            .unwrap_or(total.saturating_sub(offset));
-        let end = offset.saturating_add(limit).min(total);
-        (items[offset..end].to_vec(), total, offset)
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn available_tool_records(
-        &self,
-    ) -> SdkResult<Vec<AvailableToolRecord>> {
-        let host = self.host()?;
-        let tools = host.list_tools().await?;
-        let visible = tools
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect::<HashSet<_>>();
-        let registered = host.list_registered_tools().await?;
-        let mut tags_by_name = Self::tool_tags_by_visible_name(&visible, registered.tools);
-
-        let mut records = tools
-            .into_iter()
-            .map(|tool| AvailableToolRecord {
-                tags: tags_by_name.remove(&tool.name).unwrap_or_default(),
-                name: tool.name,
-                summary: tool.summary.unwrap_or_default(),
-                plugin_id: tool.plugin_id.unwrap_or_default(),
-            })
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(records)
-    }
-
-    /// Filter the tool inventory by plugin id, fully qualified plugin id,
-    /// or trailing plugin segment (e.g. `agena.fs`, `fs`).
-    pub(in crate::plugins::provided::workflow) fn filter_available_tools_by_plugin(
-        records: Vec<AvailableToolRecord>,
-        plugin: Option<&ToolApiStringBatch>,
-    ) -> Vec<AvailableToolRecord> {
-        let filters = normalized_plugin_filters(plugin);
-        if filters.is_empty() {
-            return records;
-        }
-        records
-            .into_iter()
-            .filter(|record| {
-                filters
-                    .iter()
-                    .any(|filter| plugin_id_matches(record.plugin_id.as_str(), filter))
-            })
-            .collect()
-    }
-
-    pub(in crate::plugins::provided::workflow) fn tool_tags_by_visible_name(
-        visible: &HashSet<String>,
-        registered: impl IntoIterator<Item = HostRegisteredToolDescriptor>,
-    ) -> HashMap<String, Vec<String>> {
-        let mut tags_by_name = HashMap::<String, Vec<String>>::new();
-        for entry in registered {
-            let canonical_name = entry.tool_key.to_string();
-            let compact_name =
-                agena_runtime_tools::tool::compact_tool_call_name(canonical_name.as_str());
-            let visible_name = if visible.contains(&canonical_name) {
-                canonical_name
-            } else if visible.contains(&compact_name) {
-                compact_name
-            } else {
-                continue;
-            };
-            let mut tags = entry
-                .tool
-                .effective_tags()
-                .into_iter()
-                .map(|tag| tag.to_string())
-                .collect::<Vec<_>>();
-            tags.sort();
-            tags.dedup();
-            tags_by_name.insert(visible_name, tags);
-        }
-        tags_by_name
     }
 
     pub(in crate::plugins::provided::workflow) fn pretty_json_text(
@@ -1343,10 +1106,9 @@ impl WorkflowPlugin {
     }
 }
 use super::{
-    Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord,
-    ContributionKind, HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient,
-    HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageGetRequest,
+    Arc, AskUserRequest, AskUserToolInput, ContributionKind, HostAskUserOption,
+    HostAskUserQuestion, HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest,
+    HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStorageGetRequest,
     HostStorageScope, HostStorageVisibility, OnceLock, PLAN_DISPLAY_CONTRIBUTION_ID,
     PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
@@ -1355,30 +1117,7 @@ use super::{
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanEditInput,
     PlanEditTarget, PlanGetView, PlanPhaseInput, PlanReviewKind, PluginDisplayContent,
     PluginDisplayContribution, PluginError, RwLock, SdkResult, SessionRenameToolInput,
-    SessionToolResponse, ToolApiStringBatch, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument,
-    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
-    WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin,
-    WorkflowPluginConfig,
+    SessionToolResponse, ToolInvokeOutput, WorkflowPlan, WorkflowPlanCheckpoint,
+    WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput,
+    WorkflowPlanStepStatus, WorkflowPlugin, WorkflowPluginConfig,
 };
-
-fn normalized_plugin_filters(plugin: Option<&ToolApiStringBatch>) -> Vec<String> {
-    let mut filters = plugin
-        .map(ToolApiStringBatch::as_slice)
-        .unwrap_or_default()
-        .iter()
-        .map(|value| value.trim().trim_end_matches('.'))
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    filters.sort();
-    filters.dedup();
-    filters
-}
-
-fn plugin_id_matches(plugin_id: &str, filter: &str) -> bool {
-    plugin_id == filter
-        || plugin_id
-            .strip_suffix(filter)
-            .is_some_and(|prefix| prefix.ends_with('.'))
-        || plugin_id.rsplit('.').next() == Some(filter)
-}

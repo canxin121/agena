@@ -1053,6 +1053,9 @@ pub struct LspDiagnosticsToolInput {
 pub struct OperationPart {
     pub call_id: i64,
     pub invocation: ToolInvocation,
+    /// Original provider protocol call, independent of the execution target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_api_call: Option<agena_domain::ToolApiCall>,
     #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
     pub authorization: OperationAuthorization,
     #[serde(default, skip_serializing_if = "OperationUserInput::is_empty")]
@@ -1104,6 +1107,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            tool_api_call: None,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: None,
@@ -1124,6 +1128,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            tool_api_call: None,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),
@@ -1145,6 +1150,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            tool_api_call: None,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),
@@ -1226,6 +1232,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            tool_api_call: None,
             authorization: OperationAuthorization::default(),
             user_input: OperationUserInput::default(),
             output: (!output.is_empty()).then_some(output),

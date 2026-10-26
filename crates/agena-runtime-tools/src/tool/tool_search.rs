@@ -85,7 +85,7 @@ pub(crate) fn execute_with_tools(
         if !results.is_empty() {
             lines.push(format!(
                 "Use `{}` with an exact tool name for detailed usage.",
-                crate::tool::tools_help_function_name()
+                agena_domain::ToolApiFunction::Help.function_name()
             ));
         }
     }

@@ -29,7 +29,6 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     "agena.settings",
     "agena.memory",
     "agena.commands",
-    "agena.tools",
     "agena.mcp",
 ];
 

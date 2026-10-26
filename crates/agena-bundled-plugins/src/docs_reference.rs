@@ -13,9 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use agena_plugin_host::registry::RegisteredTool;
 use agena_plugin_host::sdk::{PluginKey, PluginManifest, ToolDefinition};
-use agena_runtime_tools::tool::tool_registry::ToolApiBinding;
 use serde_json::Value;
 
 use crate::capability_manifest::bundled_plugin_manifests;
@@ -62,7 +60,7 @@ fn render_header(out: &mut String, plugin_count: usize, tool_count: usize) {
     .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.").unwrap();
-    writeln!(out, "- The `agena.tools` discovery handlers expose Tool API gateway functions (`tools_*` and `plugins_*`); `tools_call` is synthesized by the runtime. All other entries are ordinary execution tools.").unwrap();
+    writeln!(out, "- This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.").unwrap();
     writeln!(out, "- Execution-tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.").unwrap();
     writeln!(out).unwrap();
 }
@@ -129,9 +127,6 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
     writeln!(out).unwrap();
 
     let mut intro = vec![format!("`{canonical}`")];
-    if is_gateway_tool(plugin_id, tool) {
-        intro.push("**Tool API gateway handler**".to_string());
-    }
     if let Some(summary) = nonempty(tool.summary_text()) {
         intro.push(format!("**Summary**: {summary}"));
     }
@@ -225,12 +220,6 @@ fn heading_anchor(id: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
         .map(|ch| ch.to_ascii_lowercase())
         .collect()
-}
-
-fn is_gateway_tool(plugin_id: &str, tool: &ToolDefinition) -> bool {
-    let key = plugin_id.parse().expect("valid bundled plugin key");
-    let registered = RegisteredTool::new(key, tool.clone()).expect("valid bundled tool");
-    ToolApiBinding::from_registered_tool(registered).is_some()
 }
 
 fn schema_parameter_rows(schema: &Value) -> Vec<(String, String, bool, String, String)> {

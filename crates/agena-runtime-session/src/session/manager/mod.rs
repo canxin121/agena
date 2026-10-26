@@ -36,6 +36,7 @@ mod results;
 mod results_text;
 mod session_prompt;
 mod titles;
+mod tool_api;
 
 const MAX_ACTIVE_EXECUTIONS: usize = 128;
 const MAX_AUXILIARY_TASKS: usize = 4;
@@ -128,7 +129,6 @@ impl SessionManager {
         executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) -> Self {
-        let executor = executor.with_kernel_reader(kernel.ports.reader.clone());
         Self {
             kernel_runtime: kernel,
             state: Arc::new(ArcSwap::from_pointee(ExecutionState {
@@ -165,7 +165,7 @@ impl SessionManager {
             providers,
             governor,
             processor,
-            executor: executor.with_kernel_reader(self.kernel().reader.clone()),
+            executor,
             tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
             config,
         }));

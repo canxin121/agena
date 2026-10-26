@@ -1,6 +1,4 @@
-use super::super::kernel::{
-    KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, KernelToolInvocation,
-};
+use super::super::kernel::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun};
 use super::*;
 use agena_domain::{PermissionAction, PermissionDecision, Role, ToolInvocation};
 use futures_util::{FutureExt, StreamExt, stream};
@@ -366,7 +364,7 @@ impl SessionManager {
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
-                let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{executor.available_tool_api_bindings_async().await};
+                let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref());
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 let system=Some(system_text);
@@ -419,7 +417,7 @@ impl SessionManager {
                     let max=state.config.max_concurrent_tools.max(1);
                     let tools=stream::iter(outcome.tools.into_iter().map(|tool|{
                         let executor=executor.clone();let control=control.clone();let state=state.clone();let model=options.model.clone();
-                        async move {self.execute_tool(tool,executor,control,state,model).await}
+                        async move {self.dispatch_tool_api(tool,executor,control,state,model).await}
                     })).buffer_unordered(max).collect::<Vec<_>>().await;
                     for result in tools {result?;}
                     continue;
@@ -523,30 +521,31 @@ impl SessionManager {
             }
         }
     }
-    async fn execute_tool(
+    pub(super) async fn execute_tool(
         &self,
-        tool: KernelToolInvocation,
+        tool: ToolHandle,
+        invocation: ToolInvocation,
         executor: ToolExecutor,
         control: Arc<RunControl>,
         state: Arc<ExecutionState>,
         model: ModelRef,
     ) -> Result<(), AppError> {
-        let key = (control.session.get(), tool.tool.id().get());
+        let key = (control.session.get(), tool.id().get());
         let permit_slot: ToolPermitSlot = Arc::new(tokio::sync::Mutex::new(None));
         self.tools.lock().unwrap_or_else(|p| p.into_inner()).insert(
             key,
             LiveTool {
-                tool: tool.tool.clone(),
+                tool: tool.clone(),
                 control: control.clone(),
                 permit: permit_slot.clone(),
                 permissions: Default::default(),
             },
         );
-        let mut applied_invocation = tool.invocation.clone();
+        let mut applied_invocation = invocation.clone();
         let runtime = tokio::runtime::Handle::current();
         let manager = self.clone();
         let authorizer = executor.clone();
-        let authority_tool = tool.tool.clone();
+        let authority_tool = tool.clone();
         let authority_control = control.clone();
         let authority_state = state.clone();
         let executor = executor.with_read_path_authorizer(Arc::new(move |path| {
@@ -564,18 +563,18 @@ impl SessionManager {
             ))
         }));
         let effect=async {
-            let prepared=executor.prepare_invocation(&tool.invocation,key.0,key.1).await?;
+            let prepared=executor.prepare_invocation(&invocation,key.0,key.1).await?;
             let (invocation,shell)=executor.prepare_shell_invocation(&prepared.invocation,key.0,key.1).await?;
             applied_invocation=invocation.clone();
-            self.authorize_tool(&tool.tool,&invocation,&executor,&control,&state).await?;
+            self.authorize_tool(&tool,&invocation,&executor,&control,&state).await?;
             if control.cancel.is_cancelled(){return Err(ToolError::Cancelled);}
             let kind=executor.streaming_content_kind(&invocation)?;
-            let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool.tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
+            let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
             let permit=tokio::select!{_ = control.cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
             *permit_slot.lock().await = Some(permit);
             let mut execution=executor.execute_invocation(&invocation,crate::tool::ToolRuntimeContext{
                 session_id:Some(key.0),call_id:Some(key.1),prepared_shell_command:shell,launch_provenance:None,
-                output,tool:Some(tool.tool.clone()),
+                output,tool:Some(tool.clone()),
             }).await?;
             if let Some(title)=prepared.title_override{execution.view.set_title(title);}execution.view.metadata.extend(prepared.metadata);
             Ok(execution)
@@ -594,7 +593,7 @@ impl SessionManager {
         let (phase, value, blobs) = match effect {
             Ok(execution) => match self
                 .prepare_tool_result(
-                    &tool.tool,
+                    &tool,
                     control.session,
                     &model,
                     &state.providers,
@@ -609,7 +608,7 @@ impl SessionManager {
                     let failure = error.failure();
                     (
                         ToolPhase::Failed,
-                        json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"tool_api_call":applied_invocation.tool_api_call,"invocation":applied_invocation,"metadata":{},"capture_error":"the external effect completed, but its result could not be prepared"}),
+                        json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"invocation":applied_invocation,"metadata":{},"capture_error":"the external effect completed, but its result could not be prepared"}),
                         Vec::new(),
                     )
                 }
@@ -623,18 +622,14 @@ impl SessionManager {
                     } else {
                         ToolPhase::Failed
                     },
-                    json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"tool_api_call":applied_invocation.tool_api_call,"invocation":applied_invocation,"metadata":{}}),
+                    json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"invocation":applied_invocation,"metadata":{}}),
                     Vec::new(),
                 )
             }
         };
         let result = ToolResult { phase, value };
         let command = RequestId::new();
-        let committed = persist(|| {
-            tool.tool
-                .complete_with_blobs(command, result.clone(), &blobs)
-        })
-        .await;
+        let committed = persist(|| tool.complete_with_blobs(command, result.clone(), &blobs)).await;
         self.tools
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -1065,14 +1060,14 @@ pub(super) fn completion_request(
     options: &SessionRunOptions,
     system: Option<String>,
     turns: Vec<agena_provider::CompletionInputRun>,
-    bindings: Vec<crate::tool::ToolApiBinding>,
+    bindings: Vec<agena_provider::ToolApiDefinition>,
 ) -> agena_provider::CompletionRequest {
     agena_provider::CompletionRequest {
         model_supports_parallel_tool_calls: options.model_supports_parallel_tool_calls,
         model: options.model.model_id.clone(),
         system,
         turns,
-        tool_api_functions: bindings.into_iter().map(|b| b.definition()).collect(),
+        tool_api_functions: bindings,
         provider_native_tools: Default::default(),
         disable_tools: false,
         temperature: options.temperature,
@@ -1620,13 +1615,10 @@ impl SessionManager {
             .into_iter()
             .map(
                 |(name, description, input_schema)| agena_provider::ToolApiDefinition {
-                    handler_key: name.into(),
-                    plugin_name: "agena.permission".into(),
                     name: name.into(),
                     description: description.into(),
                     input_schema,
                     output_schema: serde_json::json!({}),
-                    definition_identity: format!("agena.permission:{name}:1"),
                 },
             )
             .collect();

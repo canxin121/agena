@@ -49,14 +49,8 @@ impl PlanPlugin {
             ctx.settings.clone(),
             "invalid planning config",
         )?;
-        self.inner.initialize(
-            ctx,
-            WorkflowPluginConfig {
-                tool_discovery: Default::default(),
-                plan,
-            },
-            host,
-        )?;
+        self.inner
+            .initialize(ctx, WorkflowPluginConfig { plan }, host)?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))

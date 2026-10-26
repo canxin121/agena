@@ -210,6 +210,7 @@ impl ToolCallView {
             OperationPart {
                 call_id: value.call_id,
                 invocation: value.invocation,
+                tool_api_call: value.tool_api_call,
                 authorization: value.authorization,
                 user_input: value.user_input,
                 output: value.output,

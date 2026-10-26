@@ -1,122 +1,62 @@
-use super::{AppError, StructuredObject, ToolInvocation};
-use agena_domain::{TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD, ToolApiCall, ToolApiFunction};
+use super::{AppError, StructuredObject};
+use agena_domain::{ToolApiCall, ToolApiFunction};
 use agena_provider::ToolApiDefinition;
+use agena_tool_api::ToolApiError;
 
-pub(crate) fn placeholder_tool_invocation(
-    name: Option<&str>,
-    available_tools: &[ToolApiDefinition],
-) -> ToolInvocation {
-    let requested_name = name.filter(|value| !value.is_empty()).unwrap_or("unknown");
-    let Some(tool) = available_tools
-        .iter()
-        .find(|tool| tool.name == requested_name)
-    else {
-        return ToolInvocation {
-            tool_api_call: None,
-            name: requested_name.to_string(),
-            plugin_name: None,
-            input: StructuredObject::default(),
-        };
+#[derive(Clone)]
+pub(crate) struct ParsedToolApiCall {
+    pub call: ToolApiCall,
+    pub error: Option<ToolApiError>,
+}
+
+/// Decode only the model protocol. Executable plugin invocations are created
+/// later, at the explicit tools_call dispatch boundary.
+pub(crate) fn parse_tool_api_call_lossy(
+    name: &str,
+    arguments_json: &str,
+    available_functions: &[ToolApiDefinition],
+) -> Result<ParsedToolApiCall, AppError> {
+    let function = ToolApiFunction::from_function_name(name)
+        .filter(|_| {
+            available_functions
+                .iter()
+                .any(|definition| definition.name == name)
+        })
+        .ok_or_else(|| {
+            AppError::Provider(format!(
+                "unsupported Tool API function from model: {name:?}"
+            ))
+        })?;
+    let parsed = parse_json_body::<serde_json::Value>(arguments_json);
+    let error = if function == ToolApiFunction::Call {
+        tools_call_arguments_diagnostic(arguments_json).map(ToolApiError)
+    } else {
+        match &parsed {
+            Ok(value) if value.is_object() => None,
+            Ok(value) => Some(ToolApiError(format!(
+                "{name} arguments must be a JSON object; received a JSON {}: {}",
+                json_value_type_name(value),
+                bounded_json_preview(value),
+            ))),
+            Err(error) => Some(ToolApiError(format!(
+                "{name} arguments did not parse as valid JSON ({error}). Pass one JSON object. Received: {}",
+                bounded_text_preview(arguments_json),
+            ))),
+        }
     };
-
-    // The placeholder uses a freshly constructed object, so this can only
-    // fail if an internal Tool API binding violates its own schema. Keep the
-    // placeholder path total, but record the invariant failure instead of
-    // silently substituting a different invocation.
-    match tool_invocation_for_definition(tool, StructuredObject::default()) {
-        Ok(invocation) => invocation,
-        Err(error) => {
-            tracing::error!(
-                tool = %tool.name,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "construct a placeholder Tool API invocation",
-                    &error,
-                ),
-                "Tool API placeholder invocation fell back to an unbound shape"
-            );
-            ToolInvocation {
-                tool_api_call: None,
-                name: requested_name.to_string(),
-                plugin_name: None,
-                input: StructuredObject::default(),
-            }
-        }
-    }
-}
-
-pub(crate) fn parse_tool_invocation(
-    name: &str,
-    arguments_json: &str,
-    available_tools: &[ToolApiDefinition],
-) -> Result<ToolInvocation, AppError> {
-    let tool = tool_api_binding_for_name(name, available_tools)
-        .ok_or_else(|| AppError::Provider(format!("unsupported tool call from model: {name:?}")))?;
-
-    let parsed = parse_custom_input(arguments_json)?;
-    tool_invocation_for_definition(tool, parsed)
-}
-
-pub(crate) fn parse_tool_invocation_lossy(
-    session_id: i64,
-    name: &str,
-    arguments_json: &str,
-    available_tools: &[ToolApiDefinition],
-) -> Result<ToolInvocation, AppError> {
-    if tool_api_binding_for_name(name, available_tools).is_none() {
-        tracing::warn!(
-            target: "agena::session::processor",
-            session_id,
-            tool = %name,
-            "provider returned an unknown Tool API function; executing it as an unknown tool failure"
-        );
-        return Ok(placeholder_tool_invocation(Some(name), available_tools));
-    }
-
-    match parse_tool_invocation(name, arguments_json, available_tools) {
-        Ok(invocation) => Ok(invocation),
-        Err(err) => {
-            tracing::warn!(
-                target: "agena::session::processor",
-                session_id,
-                tool = %name,
-                error = %err,
-                arguments_len = arguments_json.len(),
-                "tool arguments could not be parsed; falling back to empty input for tool-failure handling"
-            );
-            if name == ToolApiFunction::Call.function_name()
-                && let Some(diagnostic) = tools_call_arguments_diagnostic(arguments_json)
-            {
-                return Ok(tool_invocation_with_gateway_diagnostic(diagnostic));
-            }
-            Ok(placeholder_tool_invocation(Some(name), available_tools))
-        }
-    }
-}
-
-/// Build a `tools_call` placeholder that carries a precise corrective message
-/// for the executor's gateway rejection. The message is stamped into the
-/// provider envelope's arguments under
-/// [`TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD`] so the executor can surface it
-/// instead of the generic missing-`tool` text.
-fn tool_invocation_with_gateway_diagnostic(message: String) -> ToolInvocation {
-    let arguments = StructuredObject::try_from(serde_json::json!({
-        TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: message,
-    }))
-    .expect("single text field is a valid structured object");
-    ToolInvocation {
-        tool_api_call: Some(ToolApiCall {
-            function: ToolApiFunction::Call,
+    let arguments = parsed
+        .ok()
+        .and_then(|value| StructuredObject::try_from(value).ok())
+        .unwrap_or_default();
+    Ok(ParsedToolApiCall {
+        call: ToolApiCall {
+            function,
             arguments,
-        }),
-        name: ToolApiFunction::Call.function_name().to_owned(),
-        plugin_name: None,
-        input: StructuredObject::default(),
-    }
+        },
+        error,
+    })
 }
 
-/// Produce a precise corrective message for malformed `tools_call` arguments,
-/// or `None` when the executor's generic missing-`tool` rejection is the right
-/// feedback (a parseable object that simply lacks a usable `tool` target).
 fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
     match parse_json_body::<serde_json::Value>(arguments_json) {
         // The arguments parsed but were not the required object - for example
@@ -149,7 +89,7 @@ fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
             raw = bounded_text_preview(arguments_json)
         )),
         // A parseable object with an object-shaped `input` falls through to the
-        // executor's generic missing-`tool` rejection. When `input` itself has
+        // protocol dispatcher's envelope validation. When `input` itself has
         // the wrong JSON shape, surface that instead: a stringified `input` is
         // the common model mistake, and the generic missing-`tool` message
         // would hide it.
@@ -221,68 +161,6 @@ fn bounded_text_preview(text: &str) -> String {
     }
 }
 
-pub(crate) fn tool_api_binding_for_name<'a>(
-    name: &str,
-    available_tools: &'a [ToolApiDefinition],
-) -> Option<&'a ToolApiDefinition> {
-    available_tools.iter().find(|tool| tool.name == name)
-}
-
-pub(crate) fn tool_invocation_for_definition(
-    tool: &ToolApiDefinition,
-    input: StructuredObject,
-) -> Result<ToolInvocation, AppError> {
-    let Some(function) = ToolApiFunction::from_function_name(tool.name.as_str()) else {
-        return Ok(ToolInvocation::new(tool.name.clone(), input));
-    };
-    if function == ToolApiFunction::Call {
-        let arguments = serde_json::Value::from(input.clone());
-        // A `tools_call` without a usable `tool` target keeps the gateway's
-        // own function name so the executor can reject it as an invalid call
-        // instead of fabricating a phantom execution-tool name. `prepare_invocation`
-        // turns this shape into `ToolError::InvalidInput` (missing `tool`).
-        let target = arguments
-            .get("tool")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
-            .unwrap_or_else(|| function.function_name())
-            .to_owned();
-        let target_input = match arguments.get("input").cloned() {
-            Some(value) => StructuredObject::try_from(value).map_err(|error| {
-                AppError::Internal(format!(
-                    "decode the nested input of a tools_call invocation: {error}"
-                ))
-            })?,
-            None => StructuredObject::default(),
-        };
-        return Ok(ToolInvocation {
-            tool_api_call: Some(ToolApiCall {
-                function,
-                arguments: input,
-            }),
-            name: target,
-            plugin_name: None,
-            input: target_input,
-        });
-    }
-    Ok(ToolInvocation {
-        tool_api_call: Some(ToolApiCall {
-            function,
-            arguments: input.clone(),
-        }),
-        name: tool.name.clone(),
-        plugin_name: None,
-        input,
-    })
-}
-
-pub(crate) fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
-    let value = parse_json_body::<serde_json::Value>(arguments_json)?;
-    StructuredObject::try_from(value)
-        .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
-}
-
 pub(crate) fn parse_json_body<T>(arguments_json: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
@@ -300,4 +178,79 @@ where
     deserializer.end().map_err(AppError::from)?;
 
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod protocol_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn protocol_parsing_keeps_the_envelope_until_dispatch() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        let parsed = parse_tool_api_call_lossy(
+            "tools_call",
+            r#"{"tool":"fs.read","input":{"file_path":"a.txt"}}"#,
+            &definitions,
+        )
+        .unwrap();
+        assert_eq!(parsed.call.function, ToolApiFunction::Call);
+        assert!(parsed.error.is_none());
+        assert_eq!(
+            serde_json::Value::from(parsed.call.arguments)["tool"],
+            "fs.read"
+        );
+        assert!(parse_tool_api_call_lossy("fs.read", "{}", &definitions).is_err());
+    }
+
+    #[test]
+    fn malformed_arguments_produce_a_protocol_failure_without_an_execution_placeholder() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        for arguments in [r#""{}""#, "[]", r#"{"tool":"fs.read""#] {
+            let parsed = parse_tool_api_call_lossy("tools_call", arguments, &definitions).unwrap();
+            assert_eq!(parsed.call.function, ToolApiFunction::Call);
+            assert!(parsed.error.is_some());
+            assert!(parsed.call.arguments.is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_discovery_arguments_report_the_correct_protocol_function() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        for function in [
+            ToolApiFunction::List,
+            ToolApiFunction::Help,
+            ToolApiFunction::PluginsList,
+        ] {
+            for arguments in ["[]", r#"{"tool":"fs.read""#] {
+                let parsed =
+                    parse_tool_api_call_lossy(function.function_name(), arguments, &definitions)
+                        .unwrap();
+                let error = parsed.error.unwrap().to_string();
+                assert!(error.contains(function.function_name()));
+                assert!(!error.contains("tools_call"));
+            }
+        }
+    }
+
+    #[test]
+    fn stringified_execution_input_keeps_the_protocol_envelope_and_correction() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        let parsed = parse_tool_api_call_lossy(
+            "tools_call",
+            r#"{"tool":"fs.read","input":"{}"}"#,
+            &definitions,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::Value::from(parsed.call.arguments)["tool"],
+            "fs.read",
+        );
+        assert!(
+            parsed
+                .error
+                .unwrap()
+                .to_string()
+                .contains("never stringify")
+        );
+    }
 }

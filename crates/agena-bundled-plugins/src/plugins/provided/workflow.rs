@@ -1,6 +1,6 @@
 //! Shared implementation for the agent/tools/interaction/planning/repo/session plugins.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -9,9 +9,8 @@ use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    ToolDescriptor,
+    HostRenameSessionRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
 };
 use agena_plugin_host::sdk::{
     CommandBeforeInput, CommandBeforeResponse, ContributionKind, PluginDisplayContent,
@@ -19,7 +18,6 @@ use agena_plugin_host::sdk::{
     ToolInvokeOutput, ToolTag,
 };
 use agena_runtime_tools::tool::ask_user;
-use agena_tool::tool_search::{ToolSearchDocument, search_tools};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,30 +29,7 @@ mod workflow_runtime;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPluginConfig {
-    pub(crate) tool_discovery: ToolDiscoveryConfig,
     pub(crate) plan: WorkflowPlanConfig,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ToolDiscoveryConfig {
-    pub(crate) list: ToolListConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ToolListConfig {
-    pub(crate) default_limit: u32,
-    pub(crate) max_summary_chars: u32,
-}
-
-impl Default for ToolListConfig {
-    fn default() -> Self {
-        Self {
-            default_limit: 20,
-            max_summary_chars: 160,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -76,7 +51,6 @@ impl Default for WorkflowPlanConfig {
 
 mod planning_tools;
 mod runtime_tools;
-mod tool_api_inputs;
 
 pub(crate) use planning_tools::{
     PlanEditInput, PlanGetInput, PlanGetView, PlanPhaseInput, PlanReviewInput, PlanSetInput,
@@ -84,7 +58,6 @@ pub(crate) use planning_tools::{
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
-pub(crate) use tool_api_inputs::{ToolApiHelpInput, ToolApiListInput, ToolApiStringBatch};
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -125,24 +98,6 @@ pub(crate) struct WorkflowPlugin {
     workspace_root: OnceLock<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
-struct AvailableToolRecord {
-    name: String,
-    summary: String,
-    tags: Vec<String>,
-    plugin_id: String,
-}
-
-/// One loaded plugin projected for discovery (plugins_* family).
-#[derive(Debug, Clone)]
-pub(crate) struct AvailablePluginRecord {
-    pub plugin_id: String,
-    pub summary: String,
-    pub version: String,
-    pub tags: Vec<String>,
-    pub tools: Vec<String>,
-}
-
 impl WorkflowPlugin {
     pub(crate) fn initialize(
         &self,
@@ -150,7 +105,6 @@ impl WorkflowPlugin {
         config: WorkflowPluginConfig,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<()> {
-        validate_tool_discovery_config(&config.tool_discovery)?;
         self.config
             .set(config)
             .map_err(|_| PluginError::internal("workflow plugin config already initialized"))?;
@@ -266,36 +220,4 @@ impl WorkflowPlugin {
         }
         Ok(())
     }
-}
-
-fn tags_summary(tags: &[String]) -> String {
-    if tags.is_empty() {
-        return "untagged".to_string();
-    }
-    tags.join(", ")
-}
-
-fn compact_tool_summary(value: &str, max_chars: usize) -> String {
-    let single_line = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if single_line.chars().count() <= max_chars {
-        return single_line;
-    }
-    let retained = max_chars.saturating_sub(1);
-    let mut compact = single_line.chars().take(retained).collect::<String>();
-    compact.push('…');
-    compact
-}
-
-fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()> {
-    for (path, value) in [
-        ("list.default_limit", config.list.default_limit),
-        ("list.max_summary_chars", config.list.max_summary_chars),
-    ] {
-        if value == 0 {
-            return Err(PluginError::internal(format!(
-                "tools plugin config `{path}` must be greater than 0"
-            )));
-        }
-    }
-    Ok(())
 }

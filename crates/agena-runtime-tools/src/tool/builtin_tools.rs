@@ -17,12 +17,6 @@ impl BuiltinToolSet {
     }
 
     pub fn is_tool_enabled(&self, tool: &RegisteredTool) -> bool {
-        // Tool API handlers are protocol transport, not authority-bearing
-        // execution tools. Keep all five functions available and enforce the
-        // model profile on the execution tool selected inside `tools_call`.
-        if crate::tool::is_tool_api_handler(tool) {
-            return true;
-        }
         self.is_tag_set_enabled(&tool.effective_tags())
     }
 

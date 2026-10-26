@@ -266,7 +266,7 @@ impl SessionManager {
                 raw.payload = None;
             }
         }
-        let value = json!({"raw_output":raw,"title":execution.view.title,"summary":execution.view.summary,"metadata":execution.view.metadata,"tool_api_call":invocation.tool_api_call,"invocation":invocation});
+        let value = json!({"raw_output":raw,"title":execution.view.title,"summary":execution.view.summary,"metadata":execution.view.metadata,"invocation":invocation});
         if bounded_json(&value, 768 * 1024).is_err() {
             return Err(AppError::Config(
                 "tool result metadata exceeds its storage budget".into(),

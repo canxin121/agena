@@ -675,8 +675,8 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
 pub fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
     OperationPart {
         call_id: part.call_id,
+        tool_api_call: part.tool_api_call.clone(),
         invocation: ToolInvocation {
-            tool_api_call: part.tool_api_call.clone(),
             name: part.name.clone(),
             plugin_name: part.plugin.clone(),
             input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
@@ -700,7 +700,7 @@ pub fn tool_call_from_operation(operation: &OperationPart) -> ToolCallContent {
         name: operation.invocation.name.clone(),
         plugin: operation.invocation.plugin_name.clone(),
         input: Value::from(operation.invocation.input.clone()),
-        tool_api_call: operation.invocation.tool_api_call.clone(),
+        tool_api_call: operation.tool_api_call.clone(),
         call_id: operation.call_id,
         state: operation.state,
         authorization: operation.authorization.clone(),

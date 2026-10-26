@@ -182,6 +182,8 @@ pub struct HookPartResource {
 pub struct ToolCallPartResource {
     pub call_id: i64,
     pub invocation: agena_domain::ToolInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_api_call: Option<agena_domain::ToolApiCall>,
     #[serde(
         default,
         skip_serializing_if = "agena_domain::OperationAuthorization::is_empty"

@@ -1,0 +1,19 @@
+[package]
+name = "agena-tool-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Runtime-owned model Tool API protocol, independent of plugin registration"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-failure = { workspace = true }
+agena-provider = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

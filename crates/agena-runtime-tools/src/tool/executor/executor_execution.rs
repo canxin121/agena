@@ -57,7 +57,6 @@ impl ToolExecutor {
         let input = StructuredObject::try_from(input_value).map_err(ToolError::invalid_input)?;
         Ok((
             ToolInvocation {
-                tool_api_call: invocation.tool_api_call.clone(),
                 name: invocation.name.clone(),
                 plugin_name: invocation.plugin_name.clone(),
                 input,
@@ -75,25 +74,6 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         self.ensure_not_cancelled()?;
-        if invocation
-            .tool_api_call
-            .as_ref()
-            .is_some_and(|call| call.function == ToolApiFunction::Call)
-            && invocation.name == ToolApiFunction::Call.function_name()
-        {
-            let diagnostic = invocation
-                .tool_api_call
-                .as_ref()
-                .and_then(|call| call.arguments.get(TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD))
-                .and_then(StructuredValue::as_text);
-            return Err(ToolError::invalid_field(
-                "tool",
-                agena_failure::FieldIssueKind::Required,
-                diagnostic.unwrap_or(
-                    "tools_call requires a string `tool` field naming an execution tool",
-                ),
-            ));
-        }
         let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
         if self
@@ -156,12 +136,7 @@ impl ToolExecutor {
             serde_json::to_string(&hooked.input).map_err(|e| ToolError::invalid_input_error(&e))?;
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
-        prepared_invocation.tool_api_call = invocation.tool_api_call.clone();
-        let is_protocol_handler = invocation
-            .tool_api_call
-            .as_ref()
-            .is_some_and(|call| call.function != agena_domain::ToolApiFunction::Call);
-        prepared_invocation.plugin_name = (!is_protocol_handler).then_some(plugin_name);
+        prepared_invocation.plugin_name = Some(plugin_name);
 
         Ok(PreparedToolInvocation {
             invocation: prepared_invocation,
@@ -183,13 +158,6 @@ impl ToolExecutor {
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.ensure_not_cancelled()?;
-        if self
-            .invocation_definition(invocation)
-            .as_ref()
-            .is_some_and(crate::tool::is_tool_api_handler)
-        {
-            return Ok(Vec::new());
-        }
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
         let tags = self
@@ -581,10 +549,7 @@ impl ToolExecutor {
             .await
     }
 }
-use agena_domain::{
-    PluginInvocation, StructuredObject, StructuredValue, TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD,
-    ToolApiFunction,
-};
+use agena_domain::{PluginInvocation, StructuredObject};
 
 use super::{
     PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,

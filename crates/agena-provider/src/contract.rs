@@ -1237,22 +1237,19 @@ pub enum CompletionToolCall {
     },
 }
 
-/// Provider-facing declaration of one fixed Agena Tool API function.
+/// Provider-facing declaration of one runtime-owned protocol function.
 ///
-/// This deliberately contains no local registry handle. `handler_key` and
-/// `plugin_name` are stable binding references that let session processing
-/// associate a returned function call with its local tool contract; they do
-/// not grant execution capability.
+/// This covers the fixed Tool API and runtime control decisions.
+///
+/// This contains only the provider wire contract. Protocol registration and
+/// dispatch are runtime-owned and independent from plugin tool registration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolApiDefinition {
-    pub handler_key: String,
-    pub plugin_name: String,
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
     pub output_schema: serde_json::Value,
-    pub definition_identity: String,
 }
 
 /// One non-token billing dimension reported or estimated for a provider request.
@@ -1878,29 +1875,62 @@ pub enum CompletionInputPart {
     },
 }
 
-/// Exact provider-facing function name for either a gateway function or a
-/// directly exposed execution tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(transparent)]
-pub struct ModelToolFunction(String);
+/// Closed model function identity. Execution-tool keys cannot inhabit this
+/// type. Control functions are consumed by their runtime owner, never replayed
+/// as execution history.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ModelToolFunction {
+    Gateway(agena_domain::ToolApiFunction),
+    ApproveAction,
+    BlockAction,
+}
 
 impl ModelToolFunction {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+    pub fn from_function_name(name: &str) -> Option<Self> {
+        if let Some(function) = agena_domain::ToolApiFunction::from_function_name(name) {
+            return Some(Self::Gateway(function));
+        }
+        match name {
+            agena_domain::APPROVE_ACTION_FUNCTION => Some(Self::ApproveAction),
+            agena_domain::BLOCK_ACTION_FUNCTION => Some(Self::BlockAction),
+            _ => None,
+        }
     }
 
-    pub fn function_name(&self) -> &str {
-        self.0.as_str()
+    pub fn function_name(&self) -> &'static str {
+        match self {
+            Self::Gateway(function) => function.function_name(),
+            Self::ApproveAction => agena_domain::APPROVE_ACTION_FUNCTION,
+            Self::BlockAction => agena_domain::BLOCK_ACTION_FUNCTION,
+        }
     }
 
     pub fn gateway_function(&self) -> Option<agena_domain::ToolApiFunction> {
-        agena_domain::ToolApiFunction::from_function_name(self.function_name())
+        match self {
+            Self::Gateway(function) => Some(*function),
+            Self::ApproveAction | Self::BlockAction => None,
+        }
+    }
+}
+
+impl serde::Serialize for ModelToolFunction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.function_name())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ModelToolFunction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::from_function_name(&name).ok_or_else(|| {
+            serde::de::Error::custom(format!("unsupported model protocol function {name:?}"))
+        })
     }
 }
 
 impl From<agena_domain::ToolApiFunction> for ModelToolFunction {
     fn from(value: agena_domain::ToolApiFunction) -> Self {
-        Self(value.function_name().to_string())
+        Self::Gateway(value)
     }
 }
 
@@ -2564,6 +2594,28 @@ impl ProviderNativeToolKind {
                 route,
                 ProviderNativeToolRoute::Disabled | ProviderNativeToolRoute::ProviderConnector
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_function_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn execution_names_cannot_be_model_function_identities() {
+        for name in ["fs.read", "agena.fs.read", "shell.exec", "other_function"] {
+            assert!(ModelToolFunction::from_function_name(name).is_none());
+            assert!(serde_json::from_value::<ModelToolFunction>(serde_json::json!(name)).is_err());
+        }
+        for function in agena_domain::ToolApiFunction::ALL {
+            let model = ModelToolFunction::from(function);
+            let value = serde_json::to_value(&model).unwrap();
+            assert_eq!(value, function.function_name());
+            assert_eq!(
+                serde_json::from_value::<ModelToolFunction>(value).unwrap(),
+                model
+            );
         }
     }
 }

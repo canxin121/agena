@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Runtime primitives and concrete application composition"
 
 [dependencies]
+agena-tool-api = { workspace = true }
 agena-storage-layout = { workspace = true }
 agena-async = { workspace = true }
 arc-swap = { workspace = true }

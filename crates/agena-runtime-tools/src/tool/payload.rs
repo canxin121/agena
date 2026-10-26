@@ -652,12 +652,6 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena_fs_apply_patch",
     ),
     (
-        "tool_search",
-        "tools.search",
-        "agena.tools.search",
-        "agena_tools_search",
-    ),
-    (
         "ask_user",
         "interaction.ask",
         "agena.interaction.ask",
@@ -758,7 +752,6 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("grep", "agena.fs", "grep"),
     ("apply_patch", "agena.fs", "apply_patch"),
     ("task", "agena.agent", "run"),
-    ("tool_search", "agena.tools", "search"),
     ("ask_user", "agena.interaction", "ask"),
     ("lsp_definition", "agena.lsp", "definition"),
     ("lsp_references", "agena.lsp", "references"),

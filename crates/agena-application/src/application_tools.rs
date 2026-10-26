@@ -244,9 +244,36 @@ impl Application {
                 });
         }
         let content = tool_content_for_presentation(value)?;
+        if let Some(call) = &content.tool_api_call
+            && call.function != agena_domain::ToolApiFunction::Call
+        {
+            // Protocol responses have no owning plugin and use a plain-text
+            // presentation; they never enter plugin result rendering.
+            let text = content
+                .output
+                .as_ref()
+                .and_then(|output| output.payload.as_ref())
+                .and_then(|payload| payload.get("text"))
+                .and_then(serde_json::Value::as_str);
+            return Some(PartDocument {
+                title: call.function.function_name().to_owned(),
+                summary: summary.unwrap_or_default().to_owned(),
+                blocks: text
+                    .into_iter()
+                    .map(|text| ViewBlock::Text {
+                        id: Some("tool-api-response".into()),
+                        text: text.to_owned(),
+                    })
+                    .chain(content.resources.iter().map(|resource| ViewBlock::Content {
+                        id: format!("tool-api-response:{}", resource.resource_id),
+                        resource: resource.clone(),
+                        format: agena_domain::ContentFormat::Plain,
+                    }))
+                    .collect(),
+            });
+        }
         let input = agena_domain::StructuredObject::try_from(content.input.clone()).ok()?;
         let invocation = agena_domain::ToolInvocation {
-            tool_api_call: content.tool_api_call.clone(),
             name: content.name.clone(),
             plugin_name: content.plugin.clone(),
             input,

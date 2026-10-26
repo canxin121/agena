@@ -398,3 +398,6 @@ pub fn build_app_runtime() -> std::io::Result<tokio::runtime::Runtime> {
         .thread_stack_size(APP_RUNTIME_THREAD_STACK_SIZE)
         .build()
 }
+
+/// Runtime-owned model protocol, separate from the plugin execution service.
+pub use agena_tool_api as tool_api;

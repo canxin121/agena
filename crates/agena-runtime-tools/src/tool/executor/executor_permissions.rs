@@ -15,22 +15,6 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Option<RegisteredTool> {
-        if let Some(function) = invocation
-            .tool_api_call
-            .as_ref()
-            .map(|call| call.function)
-            .filter(|function| *function != agena_domain::ToolApiFunction::Call)
-        {
-            if invocation.name != function.function_name() || invocation.plugin_name.is_some() {
-                return None;
-            }
-            return self
-                .registered_tools_with_definition_overrides()
-                .into_iter()
-                .filter_map(crate::tool::ToolApiBinding::from_registered_tool)
-                .find(|binding| binding.function() == function)
-                .and_then(|binding| binding.handler().cloned());
-        }
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
     }
 
@@ -172,13 +156,6 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Option<agena_plugin_host::registry::RegisteredTool> {
-        if invocation
-            .tool_api_call
-            .as_ref()
-            .is_some_and(|call| call.function != agena_domain::ToolApiFunction::Call)
-        {
-            return self.invocation_definition(invocation);
-        }
         self.plugin_resolution_for_plugin_invocation(&PluginInvocation::from_tool_invocation(
             invocation,
         ))

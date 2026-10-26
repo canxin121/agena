@@ -4,7 +4,6 @@
 
 use agena_plugin_host::registry::RegisteredTool;
 use agena_plugin_host::sdk::{Plugin, PluginKey, PluginManifest};
-use agena_runtime_tools::tool::tool_registry::ToolApiBinding;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -30,13 +29,6 @@ const EFFECT_TAGS: &[&str] = &[
 pub struct CapabilityCounts {
     pub plugins: usize,
     pub tools: usize,
-    /// The discovery handlers implemented by the `agena.tools` plugin.
-    /// `tools_call` is a runtime-synthesized provider gateway definition, not
-    /// an executable plugin handler and therefore is not counted here.
-    pub gateway_tools: usize,
-    /// Every non-gateway tool. All of these share the same discovery,
-    /// authorization, and tools_call execution path.
-    pub execution_tools: usize,
     pub bundled_commands: usize,
 }
 
@@ -66,10 +58,6 @@ pub struct BundledPluginCapability {
 /// Tool capability of a bundled plugin.
 pub struct BundledToolCapability {
     pub canonical_name: String,
-    /// True only for the fixed agena.tools discovery protocol handlers. The
-    /// `tools_call` provider gateway is runtime-synthesized and has no plugin
-    /// tool entry. False means an ordinary execution tool.
-    pub gateway: bool,
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub effects: Vec<String>,
@@ -140,7 +128,6 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
     add!(crate::tool::new_agent_plugin());
-    add!(crate::tool::new_tool_api_plugin());
     add!(crate::tool::new_web_plugin());
     plugins
 }
@@ -174,17 +161,14 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         .iter()
         .flat_map(|plugin| plugin.tools.iter())
         .collect::<Vec<_>>();
-    let gateway_tools = tools.iter().filter(|tool| tool.gateway).count();
     let counts = CapabilityCounts {
         plugins: plugins.len(),
         tools: tools.len(),
-        gateway_tools,
-        execution_tools: tools.len().saturating_sub(gateway_tools),
         bundled_commands: commands.len(),
     };
 
     BundledCapabilityManifest {
-        schema_version: 2,
+        schema_version: 3,
         snapshot_date: "2026-07-27",
         counts,
         plugins,
@@ -273,10 +257,8 @@ fn plugin_capability(
                 .filter(|tag| EFFECT_TAGS.contains(&tag.as_str()))
                 .cloned()
                 .collect::<Vec<_>>();
-            let gateway = ToolApiBinding::from_registered_tool(registered.clone()).is_some();
             BundledToolCapability {
                 canonical_name: registered.canonical_name(),
-                gateway,
                 summary: registered.summary_text().map(str::to_owned),
                 tags,
                 effects,

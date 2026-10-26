@@ -19,9 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{KernelPrompt, KernelProviderState, reference_replay_text};
 use crate::session::processor::{
-    PendingProviderNativeToolCall, PendingToolCall, merge_provider_native_tool_invocation,
-    message_provider_state_from_provider_metadata, parse_tool_invocation_lossy,
-    pending_provider_native_tool_call_stream_key, pending_tool_call_stream_key,
+    ParsedToolApiCall, PendingProviderNativeToolCall, PendingToolCall,
+    merge_provider_native_tool_invocation, message_provider_state_from_provider_metadata,
+    parse_tool_api_call_lossy, pending_provider_native_tool_call_stream_key,
+    pending_tool_call_stream_key,
 };
 use crate::{AppError, SessionProcessor, provider::ProviderRegistry};
 
@@ -76,12 +77,12 @@ impl KernelRoundRequest {
 }
 
 #[derive(Clone)]
-pub struct KernelToolInvocation {
+pub struct KernelToolApiCall {
     pub tool: ToolHandle,
-    pub invocation: ToolInvocation,
-    /// Digest of the provider's exact tool name and arguments. Unlike the
-    /// lossy executable invocation, this still distinguishes malformed calls
-    /// that were degraded to the same placeholder.
+    pub call: agena_domain::ToolApiCall,
+    pub error: Option<agena_tool_api::ToolApiError>,
+    /// Digest of the provider's exact function name and arguments. It keeps
+    /// malformed calls distinct even when protocol parsing retains no arguments.
     pub signature: String,
 }
 
@@ -95,13 +96,12 @@ pub struct KernelRoundOutcome {
     pub follow_up_requested: bool,
     pub finish_reason: agena_domain::FinishReason,
     pub usage: Option<CompletionUsage>,
-    pub tools: Vec<KernelToolInvocation>,
+    pub tools: Vec<KernelToolApiCall>,
 }
 
 /// Stable identity of a provider tool call for the no-progress guard. It is
 /// computed from the raw provider arguments before lossy parsing, so two
-/// distinct malformed `tools_call` payloads never share one placeholder
-/// signature.
+/// distinct malformed `tools_call` payloads retain distinct signatures.
 fn tool_call_dedupe_signature(name: &str, arguments_json: &str) -> String {
     use sha2::Digest as _;
 
@@ -124,7 +124,7 @@ struct TextStream {
 struct Draft {
     handle: Option<ToolDraftHandle>,
     ready: Option<ToolHandle>,
-    invocation: Option<ToolInvocation>,
+    protocol: Option<ParsedToolApiCall>,
     signature: Option<String>,
 }
 struct Hosted {
@@ -630,7 +630,7 @@ impl KernelRoundRun {
             self.drafts.push(Draft {
                 handle: None,
                 ready: None,
-                invocation: None,
+                protocol: None,
                 signature: None,
             });
             call.call_id = Some(slot as i64);
@@ -776,8 +776,7 @@ impl KernelRoundRun {
                     "provider stream ended a tool call without its identity/name",
                 ));
             };
-            self.drafts[slot as usize].invocation = Some(parse_tool_invocation_lossy(
-                self._prompt.facts().metadata.id.get(),
+            self.drafts[slot as usize].protocol = Some(parse_tool_api_call_lossy(
                 name,
                 &call.arguments_json,
                 &self.definitions,
@@ -851,13 +850,12 @@ impl KernelRoundRun {
                 let input = match serde_json::from_str::<Value>(&call.arguments_json) {
                     Ok(value) if value.is_object() => value,
                     _ => serde_json::to_value(
-                        self.drafts[slot]
-                            .invocation
+                        &self.drafts[slot]
+                            .protocol
                             .as_ref()
-                            .expect("validated invocation")
-                            .tool_api_call
-                            .as_ref()
-                            .map(|call| &call.arguments),
+                            .expect("validated protocol call")
+                            .call
+                            .arguments,
                     )
                     .map_err(|error| KernelError::Invalid(error.to_string()))?,
                 };
@@ -891,9 +889,10 @@ impl KernelRoundRun {
                     self.drafts
                         .iter()
                         .filter_map(|draft| {
-                            Some(KernelToolInvocation {
+                            Some(KernelToolApiCall {
                                 tool: draft.ready.clone()?,
-                                invocation: draft.invocation.clone()?,
+                                call: draft.protocol.as_ref()?.call.clone(),
+                                error: draft.protocol.as_ref()?.error.clone(),
                                 signature: draft.signature.clone()?,
                             })
                         })

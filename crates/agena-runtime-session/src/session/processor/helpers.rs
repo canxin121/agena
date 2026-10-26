@@ -164,9 +164,6 @@ pub(crate) fn merge_provider_native_tool_invocation(
     if update.plugin_name.is_none() {
         update.plugin_name.clone_from(&current.plugin_name);
     }
-    if update.tool_api_call.is_none() {
-        update.tool_api_call.clone_from(&current.tool_api_call);
-    }
     update
 }
 

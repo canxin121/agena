@@ -17,7 +17,7 @@ use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::ProviderError;
-use agena_domain::{ExecutionStatus, ReasoningPart, Role, ToolApiFunction, ToolInvocation};
+use agena_domain::{ExecutionStatus, ReasoningPart, Role};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
     CompletionInputPart, CompletionInputProviderState, CompletionInputRun, ModelToolFunction,
@@ -234,7 +234,8 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                 let call_id = project_operation_call_id(&exec);
                 let status = operation_status(&exec);
 
-                let Some((function, arguments_json)) = invocation_name_and_args(exec.invocation())
+                let Some((function, arguments_json)) =
+                    protocol_name_and_args(exec.tool_api_call.as_ref())
                 else {
                     continue;
                 };
@@ -622,12 +623,48 @@ pub fn completion_input_provider_state(
 /// Tool API function; execution-tool names and internal keys are never
 /// provider function calls.
 pub fn validate_provider_native_tool_input_history(
-    _runs: &[CompletionInputRun],
+    runs: &[CompletionInputRun],
 ) -> Result<(), ProviderError> {
-    // A `CompletionInputPart::ToolCall`/`ToolResult` already carries the
-    // closed `ToolApiFunction` identity. Runtime validates dynamic operation
-    // invocations before it projects persisted history into this contract.
+    for part in runs.iter().flat_map(|run| &run.parts) {
+        if let CompletionInputPart::ToolCall { function, .. }
+        | CompletionInputPart::ToolResult { function, .. } = part
+            && function.gateway_function().is_none()
+        {
+            return Err(ProviderError::Config(format!(
+                "model history contains non-protocol function {:?}; execution tools must be replayed through tools_call",
+                function.function_name(),
+            )));
+        }
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod protocol_history_tests {
+    use super::*;
+
+    #[test]
+    fn history_replays_explicit_protocol_calls_and_rejects_control_decisions() {
+        let run = |function| CompletionInputRun {
+            role: Role::Assistant,
+            parts: vec![CompletionInputPart::ToolCall {
+                id: "call-1".into(),
+                function,
+                arguments_json: r#"{"tool":"fs.read","input":{"file_path":"a.txt"}}"#.into(),
+            }],
+            provider_state: Default::default(),
+        };
+        assert!(
+            validate_provider_native_tool_input_history(&[run(
+                agena_domain::ToolApiFunction::Call.into()
+            ),])
+            .is_ok()
+        );
+        assert!(
+            validate_provider_native_tool_input_history(&[run(ModelToolFunction::ApproveAction),])
+                .is_err()
+        );
+    }
 }
 
 /// Like [`project`] but returns a single lossy string — used when the provider
@@ -1102,89 +1139,12 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
-fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFunction, String)> {
-    let function = match model_tool_function_for_invocation(invocation) {
-        Ok(function) => function,
-        Err(error) => {
-            tracing::error!(
-                tool = %invocation.name,
-                diagnostic = %error,
-                "tool invocation was omitted from provider wire projection because its function identity is invalid"
-            );
-            return None;
-        }
-    };
-    // A direct tool call (any function other than the opaque `tools_call`
-    // envelope) carries its payload in `invocation.input`; only the envelope
-    // stores the payload inside its own arguments. Reading `arguments`
-    // unconditionally sent an empty object to the provider for every non-
-    // envelope call, so the model replayed a call with no arguments at all.
-    let source = match invocation.tool_api_call.as_ref() {
-        Some(call) if call.function == ToolApiFunction::Call => call.arguments.clone(),
-        _ => invocation.input.clone(),
-    };
-    let json_value: serde_json::Value = source.into();
-    let arguments = match serde_json::to_string(&json_value) {
-        Ok(arguments) => arguments,
-        Err(error) => {
-            tracing::error!(
-                tool = %invocation.name,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "serialize tool invocation arguments for provider wire projection",
-                    &error,
-                ),
-                "tool invocation was omitted from provider wire projection"
-            );
-            return None;
-        }
-    };
-    Some((function, arguments))
-}
-
-pub fn tool_api_function_for_invocation(
-    invocation: &ToolInvocation,
-) -> Result<ToolApiFunction, String> {
-    let stored_name = invocation.name.as_str();
-    if let Some(call) = invocation.tool_api_call.as_ref() {
-        if call.function == ToolApiFunction::Call {
-            // A result records the envelope function but repeats no arguments;
-            // its own name is the target, exactly as it is on the request that
-            // produced it. Only a *call* must name its target in `arguments`.
-            if stored_name == call.function.function_name() {
-                return Ok(call.function);
-            }
-            let target = call
-                .arguments
-                .get("tool")
-                .and_then(agena_domain::StructuredValue::as_text)
-                .map(str::trim)
-                .filter(|target| !target.is_empty());
-            if target == Some(stored_name) {
-                return Ok(call.function);
-            }
-            return Err(format!(
-                "Tool API function `tools_call` targets {target:?}, but the operation stores execution target `{stored_name}`"
-            ));
-        }
-        if stored_name == call.function.function_name() && invocation.plugin_name.is_none() {
-            return Ok(call.function);
-        }
-        return Err(format!(
-            "Tool API function `{}` must store its exact protocol handler name and no plugin identity, but the operation stores name `{stored_name}` with plugin {:?}",
-            call.function.function_name(),
-            invocation.plugin_name,
-        ));
-    }
-
-    Err(format!(
-        "invocation `{stored_name}` has no explicit Tool API function identity"
-    ))
-}
-
-pub(crate) fn model_tool_function_for_invocation(
-    invocation: &ToolInvocation,
-) -> Result<ModelToolFunction, String> {
-    tool_api_function_for_invocation(invocation).map(Into::into)
+fn protocol_name_and_args(
+    call: Option<&agena_domain::ToolApiCall>,
+) -> Option<(ModelToolFunction, String)> {
+    let call = call?;
+    let arguments = serde_json::to_string(&call.arguments).ok()?;
+    Some((call.function.into(), arguments))
 }
 
 pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {

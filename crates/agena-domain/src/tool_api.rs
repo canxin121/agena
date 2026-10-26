@@ -19,15 +19,6 @@ pub enum ToolApiFunction {
     PluginsList,
 }
 
-/// Well-known field name inside [`ToolApiCall::arguments`] that carries a
-/// corrective shape diagnostic when a provider's `tools_call` arguments could
-/// not be interpreted as the required `{ tool, input }` object (for example
-/// the arguments were a JSON-encoded string, a non-object value, or malformed
-/// JSON). The session processor stamps this field onto the gateway invocation
-/// and the executor surfaces its text in the rejection instead of a generic
-/// missing-`tool` message.
-pub const TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: &str = "__tools_call_arguments_diagnostic";
-
 /// Function the automatic-approval model calls to submit an allow verdict.
 /// See [`CONTROL_FUNCTION_NAMES`].
 pub const APPROVE_ACTION_FUNCTION: &str = "approve_action";
@@ -93,4 +84,17 @@ impl std::fmt::Display for ToolApiFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.function_name())
     }
+}
+
+/// One runtime protocol call received through a provider adapter.
+///
+/// The arguments are the protocol payload (`{ tool, input }` for `tools_call`),
+/// never an executable invocation. Only the protocol dispatcher may turn a
+/// validated invocation request into an execution target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolApiCall {
+    pub function: ToolApiFunction,
+    #[serde(default)]
+    pub arguments: crate::StructuredObject,
 }

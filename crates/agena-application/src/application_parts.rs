@@ -376,11 +376,24 @@ pub(crate) async fn project_kernel_entry(
             let result = tool.result.as_ref();
             let decode = |key: &str| result.and_then(|value| value.get(key)).cloned();
             let output = decode("raw_output")
+                .or_else(|| {
+                    decode("tool_api_response").and_then(|response| {
+                        response
+                            .get("output_text")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|text| serde_json::json!({"payload": {"text": text}}))
+                    })
+                })
                 .map(serde_json::from_value::<agena_domain::RawOutput>)
                 .transpose()
                 .map_err(|error| ApplicationError::internal_error(&error))?;
             let invocation = decode("invocation")
-                .map(serde_json::from_value::<agena_domain::ToolInvocation>)
+                .map(|mut value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.remove("tool_api_call");
+                    }
+                    serde_json::from_value::<agena_domain::ToolInvocation>(value)
+                })
                 .transpose()
                 .map_err(|error| ApplicationError::internal_error(&error))?;
             let tool_api_call = decode("tool_api_call")

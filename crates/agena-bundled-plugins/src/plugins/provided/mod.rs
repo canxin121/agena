@@ -18,7 +18,6 @@ pub mod session;
 pub mod settings;
 pub mod shell;
 pub mod terminal;
-pub mod tool_api;
 pub mod workflow;
 pub use agena_runtime_tools::tool::router;
 pub(crate) mod chatgpt;

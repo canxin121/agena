@@ -797,6 +797,7 @@ dependencies = [
  "agena-storage-layout",
  "agena-storage-sqlite",
  "agena-tool",
+ "agena-tool-api",
  "arc-swap",
  "async-trait",
  "axum",
@@ -994,6 +995,7 @@ dependencies = [
  "agena-storage",
  "agena-storage-sqlite",
  "agena-tool",
+ "agena-tool-api",
  "arc-swap",
  "async-trait",
  "base64 0.22.1",
@@ -1200,6 +1202,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tree-sitter",
+]
+
+[[package]]
+name = "agena-tool-api"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-failure",
+ "agena-provider",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

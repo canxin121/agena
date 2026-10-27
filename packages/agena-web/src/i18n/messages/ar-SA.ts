@@ -1168,6 +1168,7 @@ export default {
       plugins: 'الإضافات',
       pluginsTools: 'الإضافات والأدوات',
       skills: 'المهارات',
+      mcpConnections: 'اتصالات MCP',
       mcpServer: 'خادم MCP',
       runtimeSession: 'بيئة التشغيل والجلسة',
       interface: 'الواجهة',

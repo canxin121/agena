@@ -301,6 +301,7 @@ export default {
       "plugins": "Plugins",
       "pluginsTools": "Plugins e ferramentas",
       "skills": "Habilidades",
+      "mcpConnections": "Conexões MCP",
       "mcpServer": "Servidor MCP",
       "runtimeSession": "Runtime e sessão",
       "interface": "Interface",

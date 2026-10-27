@@ -5,6 +5,7 @@ export const SETTINGS_TAB_IDS = [
   'permissions',
   'plugins-tools',
   'skills',
+  'mcp-connections',
   'mcp-server',
   'runtime-session',
   'interface',
@@ -18,6 +19,7 @@ export type SettingsSidebarIconKey =
   | 'permissions'
   | 'plugins-tools'
   | 'skills'
+  | 'mcp-connections'
   | 'mcp-server'
   | 'runtime-session'
   | 'interface'
@@ -105,6 +107,13 @@ const SETTINGS_TAB_CONFIG: Array<{
     icon: 'skills',
     group: 'core',
     keywords: ['skills', 'instructions', 'SKILL.md', 'github', 'install', 'archive'],
+  },
+  {
+    id: 'mcp-connections',
+    labelKey: 'settings.tabs.mcpConnections',
+    icon: 'mcp-connections',
+    group: 'core',
+    keywords: ['mcp', 'connections', 'client', 'external', 'stdio', 'http', 'tools', 'resources', 'prompts'],
   },
   {
     id: 'mcp-server',
@@ -307,12 +316,20 @@ export function buildSettingsSidebarGroups(args: {
   ])
 
   for (const tab of args.tabs) {
+    const onlyChild = tab.children?.length === 1 ? tab.children[0] : undefined
+    // A single page with the same name is the section's destination, not a
+    // second navigation level. Keep the page view for routing and highlighting.
+    const directPage = onlyChild && onlyChild.label === tab.label && !onlyChild.scope && !onlyChild.children?.length
+      ? onlyChild
+      : undefined
     const filteredRoot = filterNavigationNode(
       {
         id: tab.id,
         label: tab.label,
-        keywords: tab.keywords,
-        children: tab.children,
+        description: directPage?.description,
+        keywords: [...(tab.keywords || []), ...(directPage?.keywords || [])],
+        view: directPage?.view,
+        children: directPage ? undefined : tab.children,
       },
       query,
     )

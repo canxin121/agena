@@ -93,6 +93,15 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       keywords: ['skills', 'github', 'archive', 'zip', 'tar', 'folder', 'upload', 'install'],
     },
   ],
+  'mcp-connections': [
+    {
+      id: 'connections',
+      label: () => st('MCP connections'),
+      description: () => st('Connect external MCP services and manage their configuration, authentication, tools, and resources.'),
+      keywords: ['mcp', 'client', 'external', 'servers', 'stdio', 'http', 'oauth', 'tools', 'resources', 'prompts'],
+      fillsViewport: true,
+    },
+  ],
   'mcp-server': [
     {
       id: 'connection',
@@ -185,6 +194,7 @@ export const SETTINGS_DEFAULT_SUBPAGE: Record<SettingsTab, string> = {
   permissions: 'filesystem',
   'plugins-tools': 'plugin-workbench',
   skills: 'library',
+  'mcp-connections': 'connections',
   'mcp-server': 'connection',
   'runtime-session': 'client-versions',
   interface: 'tui',

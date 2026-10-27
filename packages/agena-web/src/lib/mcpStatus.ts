@@ -1,42 +1,28 @@
-export type McpStatusResponse = {
-  operator?: {
-    mcp?: {
-      servers?: unknown[]
-    }
-  }
-}
-
+export type McpStatusResponse = { connections?: unknown[] }
 export type McpStatusItem = {
+  id: string
   name: string
-  status: 'running'
+  scope: string
+  status: string
   toolCount: number
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, unknown>
+  error: string | null
 }
 
 export function normalizeMcpStatus(payload: McpStatusResponse | null | undefined): McpStatusItem[] {
-  const servers = payload?.operator?.mcp?.servers
-  if (!Array.isArray(servers)) return []
-
-  return servers
-    .map((entry) => {
-      const record = asRecord(entry)
-      if (!record) return null
-      const name = typeof record.name === 'string' ? record.name.trim() : ''
-      const toolCount =
-        typeof record.tool_count === 'number' && Number.isFinite(record.tool_count)
-          ? Math.max(0, Math.floor(record.tool_count))
-          : null
-      if (!name || toolCount === null) return null
-      return {
-        name,
-        status: 'running' as const,
-        toolCount,
-      }
-    })
-    .filter((item): item is McpStatusItem => item !== null)
-    .sort((left, right) => left.name.localeCompare(right.name))
+  if (!Array.isArray(payload?.connections)) return []
+  return payload.connections.flatMap((entry): McpStatusItem[] => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const record = entry as Record<string, unknown>
+    const id = typeof record.id === 'string' ? record.id : ''
+    const name = typeof record.name === 'string' ? record.name.trim() : ''
+    if (!id || !name) return []
+    return [{
+      id,
+      name,
+      scope: typeof record.scope === 'string' ? record.scope : '',
+      status: typeof record.state === 'string' && record.state ? record.state : 'disconnected',
+      toolCount: typeof record.tool_count === 'number' && Number.isFinite(record.tool_count) ? Math.max(0, Math.floor(record.tool_count)) : 0,
+      error: typeof record.error === 'string' ? record.error : null,
+    }]
+  }).sort((left, right) => left.name.localeCompare(right.name) || left.scope.localeCompare(right.scope))
 }

@@ -5,7 +5,12 @@ import { baseParse, NodeTypes } from '@vue/compiler-dom'
 import { parse, parseExpression } from '@babel/parser'
 import enMessages from '../src/i18n/messages/en-US.ts'
 
-const rootFiles = [...globSync('src/components/settings/**/*.{vue,ts}'), 'src/pages/SettingsPage.vue'].sort()
+const rootFiles = [
+  ...globSync('src/components/settings/**/*.{vue,ts}'),
+  'src/pages/SettingsPage.vue',
+  'src/components/McpDialog.vue',
+  'src/lib/mcpConnections.ts',
+].sort()
 const vueFiles = rootFiles.filter((file) => file.endsWith('.vue'))
 const catalogFiles = globSync('src/i18n/settings-text/*.json').sort()
 const overlayFiles = globSync('src/i18n/settings-overlays/*.json').sort()
@@ -204,6 +209,28 @@ for (const file of rootFiles) {
   for (const match of source.matchAll(sourcePattern)) {
     referenced.add(match[1].replaceAll("\\'", "'").replaceAll('\\\\', '\\'))
   }
+  if (file === 'src/lib/mcpConnections.ts') {
+    // This pure helper returns validation messages and import errors. Its UI
+    // callers translate those messages with st(problem) or st(error.message).
+    const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] })
+    function collectMcpMessages(node) {
+      if (!node || typeof node !== 'object') return
+      if (
+        (node.type === 'CallExpression' && memberName(node.callee) === 'problems.push') ||
+        (node.type === 'NewExpression' && memberName(node.callee) === 'Error')
+      ) {
+        for (const argument of node.arguments || []) {
+          if (argument.type === 'StringLiteral') referenced.add(argument.value)
+        }
+      }
+      for (const [key, child] of Object.entries(node)) {
+        if (['loc', 'start', 'end', 'extra'].includes(key)) continue
+        if (Array.isArray(child)) child.forEach(collectMcpMessages)
+        else if (child && typeof child === 'object') collectMcpMessages(child)
+      }
+    }
+    collectMcpMessages(ast)
+  }
 }
 const catalogs = Object.fromEntries(
   catalogFiles.map((file) => [file.split('/').at(-1).replace('.json', ''), JSON.parse(readFileSync(file, 'utf8'))]),
@@ -259,6 +286,10 @@ const sameAsEnglishAllowlist = new Set([
   'Audio',
   'Image',
   'Instructions',
+  // These technical nouns share their English spelling in French.
+  'Transport',
+  'Arguments',
+  'Argument',
   'Document',
   'tokens',
   'Alpha',

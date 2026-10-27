@@ -71,6 +71,7 @@
   "refresh": "Actualiser",
   "refreshAria": "Actualiser les paramètres",
   "tabs": {
+    "mcpConnections": "Connexions MCP",
     "skills": "Compétences",
     "diagnostics": "Diagnostics",
     "interface": "Interface",

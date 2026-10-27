@@ -1013,6 +1013,7 @@ export default {
       "plugins": "Complementos",
       "pluginsTools": "Complementos y herramientas",
       "skills": "Habilidades",
+      "mcpConnections": "Conexiones MCP",
       "mcpServer": "Servidor MCP",
       "runtimeSession": "Runtime y sesión",
       "interface": "Interfaz",

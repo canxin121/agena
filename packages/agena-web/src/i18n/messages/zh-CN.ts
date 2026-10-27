@@ -682,6 +682,7 @@ export default {
       plugins: '插件',
       pluginsTools: '插件与工具',
       skills: '技能',
+      mcpConnections: 'MCP 连接',
       mcpServer: 'MCP 服务器',
       runtimeSession: '运行时与会话',
       interface: '界面',

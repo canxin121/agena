@@ -79,6 +79,7 @@ const PermissionsWorkbenchPanel = defineAsyncComponent(
 )
 const PluginsToolsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsToolsPanel.vue'))
 const SkillsPanel = defineAsyncComponent(() => import('@/components/settings/SkillsPanel.vue'))
+const McpConnectionsPanel = defineAsyncComponent(() => import('@/components/settings/McpConnectionsPanel.vue'))
 const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const RuntimeSessionPanel = defineAsyncComponent(() => import('@/components/settings/RuntimeSessionPanel.vue'))
 const InterfaceSettingsPanel = defineAsyncComponent(() => import('@/components/settings/InterfaceSettingsPanel.vue'))
@@ -194,6 +195,7 @@ const diagnosticsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const interfacePanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const pluginsToolsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const skillsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
+const mcpConnectionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const mcpServerPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const modelsProvidersPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const permissionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -234,6 +236,8 @@ async function refreshSettingsSidebar() {
     await pluginsToolsPanel.value?.refresh()
   } else if (activeSection.value === 'skills') {
     await skillsPanel.value?.refresh()
+  } else if (activeSection.value === 'mcp-connections') {
+    await mcpConnectionsPanel.value?.refresh()
   } else if (activeSection.value === 'mcp-server') {
     await mcpServerPanel.value?.refresh()
   } else if (activeSection.value === 'models-providers') {
@@ -299,6 +303,7 @@ function joinWindowTitle(parts: Array<string | null | undefined>) {
   return parts
     .map((part) => String(part || '').trim())
     .filter(Boolean)
+    .filter((part, index, parts) => index === 0 || part !== parts[index - 1])
     .join(' · ')
 }
 
@@ -866,6 +871,7 @@ const dirtyHint = computed(
 
           <!-- Skills -->
           <SkillsPanel v-else-if="activeSection === 'skills'" ref="skillsPanel" :active-page="activeView" />
+          <McpConnectionsPanel v-else-if="activeSection === 'mcp-connections'" ref="mcpConnectionsPanel" :active-page="activeView" />
 
           <!-- MCP Server -->
           <SettingsSectionWorkbench

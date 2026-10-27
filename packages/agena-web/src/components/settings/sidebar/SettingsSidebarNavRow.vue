@@ -6,6 +6,7 @@ import {
   RiBookOpenLine,
   RiComputerLine,
   RiFlowChart,
+  RiLinksLine,
   RiPlugLine,
   RiSettingsLine,
   RiServerLine,
@@ -44,6 +45,7 @@ const topLevelIcon = computed(() => {
   if (props.icon === 'permissions') return RiShieldCheckLine
   if (props.icon === 'plugins-tools') return RiPlugLine
   if (props.icon === 'skills') return RiBookOpenLine
+  if (props.icon === 'mcp-connections') return RiLinksLine
   if (props.icon === 'mcp-server') return RiServerLine
   if (props.icon === 'runtime-session') return RiFlowChart
   if (props.icon === 'diagnostics') return RiBugLine

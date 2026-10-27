@@ -44,7 +44,7 @@ async fn fixture() -> (
 
 fn plugin_event(id: &str, kind: &str, created_at_ms: i64, resolved: bool) -> HostNotification {
     serde_json::from_value(serde_json::json!({
-        "plugin_id": "agena.terminal", "title": "Session title", "session_id": 7,
+        "plugin_id": "agena.notifications", "title": "Session title", "session_id": 7,
         "attention": { "id": id, "kind": kind, "created_at_ms": created_at_ms, "resolved": resolved },
     })).unwrap()
 }

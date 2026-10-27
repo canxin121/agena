@@ -193,7 +193,7 @@ pub(super) async fn build_plugin_services(
         Option<agena_plugin_host::PluginsConfig>,
         Option<Arc<agena_mcp_client::McpConnectionManager>>,
     >,
-    notification_source: Option<agena_bundled_plugins::tool::TerminalNotificationSource>,
+    notification_source: Option<agena_bundled_plugins::tool::NotificationSource>,
 ) -> Result<Arc<PluginHost>, crate::AppError> {
     let static_plugins = agena_bundled_plugins::plugins::sources::static_plugin_registrations(
         inputs.mcp_manager.clone(),

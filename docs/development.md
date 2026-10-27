@@ -258,15 +258,23 @@ of a notification object as proof of delivery.
 Notifications cover completed AI replies, questions (including review requests),
 permission requests, execution failures, and interruptions. Clicking a
 notification focuses Agena and opens the owning session. The bundled
-`agena.terminal` notification plugin observes canonical kernel execution and
+`agena.notifications` notification plugin observes canonical kernel execution and
 interaction changes, independently of page SSE. It owns attention policy,
 stable event identities, request resolution, and persisted recovery history,
 and publishes those intents through the shared `host.notify` interface.
 The TUI consumes that queue and emits the terminal's supported OSC protocol;
 the server's browser adapter consumes the same queue and sends Web Push.
-Disabling `plugins.list.agena.terminal.enabled` stops AI attention generation
+Disabling `plugins.list.agena.notifications.enabled` stops AI attention generation
 for both adapters. Terminal capabilities and browser permissions/settings
 remain specific to each delivery device.
+
+The former `agena.terminal` plugin ID remains a configuration alias for
+`agena.notifications`. Runtime normalizes existing list entries, profile rules,
+activation dependencies, and host quotas before resolving profiles. Existing
+disabled states and settings are preserved; if both IDs occur in the same
+configuration map, the explicit `agena.notifications` entry wins. Use the new
+ID for new configuration. Notification history and browser push subscriptions
+retain their existing storage keys.
 
 VAPID-signed, encrypted Web Push wakes `/agena-notifications-sw.js`, which calls
 `ServiceWorkerRegistration.showNotification()`. There is no app-shell caching.
@@ -313,7 +321,7 @@ bun run test:notifications
 Run canonical plugin and browser transport regressions from the repository root:
 
 ```sh
-cargo test -p agena-bundled-plugins terminal::attention::tests
+cargo test -p agena-bundled-plugins notifications::attention::tests
 cargo test -p agena --bin agena server::web_push::tests
 ```
 

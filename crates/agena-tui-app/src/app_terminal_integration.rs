@@ -55,8 +55,8 @@ fn notifications_operational(app: &App) -> bool {
 /// This is the single unified projection: the App's `current_session_activity`
 /// derives from the server's authoritative session state machine
 /// (`SessionResource.state`), with pending-interactive requests refining what
-/// an awaiting state is for. The bundled `agena.terminal` plugin also publishes
-/// a hook-driven `agena.terminal.activity` display segment, but hooks only
+/// an awaiting state is for. The bundled `agena.notifications` plugin also publishes
+/// a hook-driven `agena.notifications.terminal.activity` display segment, but hooks only
 /// observe idle/running and can lag the server's derived state, so it is *not*
 /// consulted here — the state machine is the source of truth.
 fn current_title_text(app: &App) -> String {
@@ -190,7 +190,7 @@ pub(crate) fn sync_terminal_progress(
 
 /// Emits at most one attention notification, if the terminal supports them.
 /// Local flash/error alerts take precedence; AI completion, question and
-/// permission alerts consume the shared `agena.terminal` plugin queue.
+/// permission alerts consume the shared `agena.notifications` plugin queue.
 /// Returns the emitted method (or `None` when nothing was queued or the
 /// capability is disabled).
 pub(crate) fn drain_terminal_notification(

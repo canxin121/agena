@@ -754,9 +754,13 @@ impl App {
                 ) => text,
                 _ => continue,
             };
-            // The `agena.terminal.*` contributions are internal terminal
+            // The `agena.notifications.*` contributions are internal terminal
             // signals (window-title/activity like `interrupted`, `running`, `idle`).
-            if contribution.contribution.id.starts_with("agena.terminal.") {
+            if contribution
+                .contribution
+                .id
+                .starts_with("agena.notifications.")
+            {
                 continue;
             }
             // Plan progress has a dedicated composer bottom-left chip; keeping

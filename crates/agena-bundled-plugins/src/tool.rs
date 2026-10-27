@@ -5,8 +5,8 @@ use std::sync::Arc;
 pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
-    agent, code, commands, cron, fs, interaction, lsp, mcp, monitor, notebook, planning, report,
-    session, settings, shell, terminal,
+    agent, code, commands, cron, fs, interaction, lsp, mcp, monitor, notebook, notifications,
+    planning, report, session, settings, shell,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -97,20 +97,20 @@ pub fn new_interaction_plugin() -> impl agena_plugin_host::sdk::Plugin {
     interaction::InteractionPlugin::new()
 }
 
-pub fn terminal_plugin_id() -> &'static str {
-    terminal::TERMINAL_PLUGIN_ID
+pub fn notifications_plugin_id() -> &'static str {
+    notifications::NOTIFICATIONS_PLUGIN_ID
 }
 
-pub fn new_terminal_plugin() -> impl agena_plugin_host::sdk::Plugin {
-    terminal::TerminalPlugin::new()
+pub fn new_notifications_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    notifications::NotificationsPlugin::new()
 }
 
-pub use terminal::NotificationSource as TerminalNotificationSource;
+pub use notifications::NotificationSource;
 
-pub fn new_terminal_plugin_with_notifications(
-    source: Option<TerminalNotificationSource>,
+pub fn new_notifications_plugin_with_source(
+    source: Option<NotificationSource>,
 ) -> impl agena_plugin_host::sdk::Plugin {
-    terminal::TerminalPlugin::new().with_notifications(source)
+    notifications::NotificationsPlugin::new().with_notifications(source)
 }
 
 pub fn plan_plugin_id() -> &'static str {

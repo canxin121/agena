@@ -54,7 +54,7 @@ cdylib ABI 版本为 2，`cancel(request_id)` 独立于 dispatch 队列。原生
 | `agena.agent` | 创建子会话、传递消息、等待、取消和继续 | 宿主按活动调用、代理可见性、归属与预算处理；子会话执行实际工具时继续经过权限执行器。 |
 | `agena.plan` | 计划的会话私有状态与用户评审 | 宿主作用域存储、版本检查和显式评审交互；不是任意磁盘写入。工作流 hook 复用这些受作用域约束的能力。 |
 | `agena.interaction` | 请求用户输入、通知 | 使用当前活动工具的持久交互/会话通知能力。提问本身不应再额外弹出“允许提问”的确认。取消或超时不是批准。 |
-| `agena.terminal` | TUI 活动状态、展示贡献与通知 | 更新宿主展示状态，不执行终端命令。贡献归属与清理由插件 effect scope 管理。 |
+| `agena.notifications` | 浏览器与终端的 AI 完成、提问和审批通知，以及终端活动状态 | 从内核事实生成统一的宿主通知，由浏览器和终端分别投递；不执行终端命令。展示贡献归属与清理由插件 effect scope 管理。旧配置 ID `agena.terminal` 自动映射到此插件。 |
 | `agena.report` | 生成结构化发现和展示结果 | 无文件、网络或进程副作用；工具名策略仍适用。 |
 
 `agena.chatgpt`、`agena.claude`、`agena.gemini` 在每次调用时复用当前会话的 provider 连接，包括认证、协议路径、适配器请求头和网络超时。插件不再提供独立的 API key、base URL、超时或默认模型配置，也不读取插件专用的模型/密钥环境变量。凭证只通过内置插件的宿主回调取得，不开放到外部插件 RPC，不进入工具输出。三组工具均使用简短名称，例如 `chatgpt.web_search`、`claude.web_fetch`、`gemini.image_generation`；云端执行与输入传输在简介和帮助中说明。

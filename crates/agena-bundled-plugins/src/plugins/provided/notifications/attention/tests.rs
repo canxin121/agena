@@ -267,13 +267,13 @@ async fn plugin_host(
         ..Default::default()
     };
     let config = PluginsConfig {
-        list: [("agena.terminal".into(), configured)].into(),
+        list: [("agena.notifications".into(), configured)].into(),
         ..Default::default()
     };
     PluginHost::new(PluginHostBuildConfig {
         static_plugins: vec![StaticPluginRegistration::new(
-            "agena.terminal".parse().unwrap(),
-            super::super::TerminalPlugin::new().with_notifications(Some(source)),
+            "agena.notifications".parse().unwrap(),
+            super::super::NotificationsPlugin::new().with_notifications(Some(source)),
         )],
         config,
         workspace_root: std::env::temp_dir(),
@@ -281,7 +281,7 @@ async fn plugin_host(
         callback_base_url: None,
         host_client: Some(recording),
         previous_plugins: if previous.is_some() {
-            [("agena.terminal".into(), ConfiguredPlugin::default())].into()
+            [("agena.notifications".into(), ConfiguredPlugin::default())].into()
         } else {
             Default::default()
         },
@@ -315,7 +315,7 @@ async fn real_plugin_host_owns_attention_across_reload_disable_and_shutdown() {
     wait_for(|| recording.invalidations.load(Ordering::SeqCst) > 0).await;
     let notifications = host.host_notifications();
     assert_eq!(notifications.len(), 1);
-    assert_eq!(notifications[0].plugin_id, "agena.terminal");
+    assert_eq!(notifications[0].plugin_id, "agena.notifications");
     assert_eq!(notifications[0].session_id, Some(sid.get()));
     let first_id = notifications[0].attention.as_ref().unwrap().id.clone();
 
@@ -445,7 +445,7 @@ async fn answered_requests_replace_the_pending_intent_and_persist_resolution() {
 async fn host_queue_does_not_resurrect_a_resolved_request_during_replay() {
     let (_kernel, observer, recording) = fixture().await;
     let host = plugin_host(observer.source, true, None, recording).await;
-    let client = host.host_handle().scoped_host_client("agena.terminal");
+    let client = host.host_handle().scoped_host_client("agena.notifications");
     let mut request = notification(
         "request:7:test".into(),
         AttentionKind::Question,

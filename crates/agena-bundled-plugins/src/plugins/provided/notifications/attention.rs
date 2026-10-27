@@ -1,4 +1,4 @@
-//! Canonical attention policy owned by `agena.terminal`. Both delivery
+//! Canonical attention policy owned by `agena.notifications`. Both delivery
 //! adapters consume the same persisted, plugin-emitted `host.notify` events.
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},

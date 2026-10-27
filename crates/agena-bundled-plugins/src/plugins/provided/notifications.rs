@@ -1,4 +1,4 @@
-//! `agena.terminal`: shared attention policy and terminal activity display.
+//! `agena.notifications`: shared attention policy and terminal activity display.
 //!
 //! Canonical kernel execution and interaction facts produce persisted
 //! `host.notify` intents, shared by the terminal and browser delivery adapters.
@@ -25,11 +25,11 @@ use agena_plugin_host::sdk::{
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 
-pub(crate) const TERMINAL_PLUGIN_ID: &str = "agena.terminal";
+pub(crate) const NOTIFICATIONS_PLUGIN_ID: &str = "agena.notifications";
 
 /// Display contribution id published by this plugin. The TUI reads exactly
 /// this id to reconstruct the terminal activity state.
-pub(crate) const ACTIVITY_CONTRIBUTION_ID: &str = "agena.terminal.activity";
+pub(crate) const ACTIVITY_CONTRIBUTION_ID: &str = "agena.notifications.terminal.activity";
 
 /// Display priority for the activity contribution. One-shot attention uses
 /// the unified `host.notify` entry; the activity state rides the declarative
@@ -50,7 +50,7 @@ pub(crate) enum TerminalActivity {
     Blocked,
 }
 
-pub(crate) struct TerminalPlugin {
+pub(crate) struct NotificationsPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     activity: Arc<RwLock<TerminalActivity>>,
     notification_source: Option<NotificationSource>,
@@ -64,7 +64,7 @@ fn recover_read<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLockR
             tracing::error!(
                 operation = context,
                 error = %error,
-                "recovering poisoned terminal plugin read lock"
+                "recovering poisoned notifications plugin read lock"
             );
             error.into_inner()
         }
@@ -78,7 +78,7 @@ fn recover_write<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLock
             tracing::error!(
                 operation = context,
                 error = %error,
-                "recovering poisoned terminal plugin write lock"
+                "recovering poisoned notifications plugin write lock"
             );
             error.into_inner()
         }
@@ -87,23 +87,23 @@ fn recover_write<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLock
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
-    name = "terminal",
+    name = "notifications",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Shared terminal/browser attention notifications and terminal window titles.",
+    summary = "AI completion, question and approval notifications for browsers and terminals, with terminal window titles.",
     translations(
-        locale("zh-CN", summary = "统一终端和浏览器的提醒通知，并集成终端窗口标题。"),
-        locale("zh-TW", summary = "統一終端機和瀏覽器的提醒通知，並整合終端機視窗標題。"),
-        locale("ja-JP", summary = "ターミナルのウィンドウタイトル設定と注意喚起通知を連携します。"),
-        locale("ko-KR", summary = "터미널 창 제목 설정과 주의 알림을 연동합니다."),
-        locale("fr-FR", summary = "Intégration du titre de la fenêtre du terminal et des notifications d’attention."),
-        locale("de-DE", summary = "Integration von Terminalfenstertiteln und Aufmerksamkeitshinweisen."),
-        locale("es-ES", summary = "Integra el título de la ventana del terminal y las notificaciones de atención."),
-        locale("hi-IN", summary = "टर्मिनल विंडो का शीर्षक और ध्यान-सूचनाएँ एकीकृत करता है।"),
-        locale("ar-SA", summary = "تكامل عنوان نافذة الطرفية مع إشعارات التنبيه."),
-        locale("pt-BR", summary = "Integra o título da janela do terminal e notificações de atenção.")
+        locale("zh-CN", summary = "统一浏览器和终端的 AI 完成、提问与审批通知，并同步终端窗口标题。"),
+        locale("zh-TW", summary = "統一瀏覽器和終端機的 AI 完成、提問與審批通知，並同步終端機視窗標題。"),
+        locale("ja-JP", summary = "ブラウザーとターミナルで AI の完了・質問・承認通知を共有し、ターミナルのウィンドウタイトルを同期します。"),
+        locale("ko-KR", summary = "브라우저와 터미널에서 AI 완료, 질문 및 승인 알림을 통합하고 터미널 창 제목을 동기화합니다."),
+        locale("fr-FR", summary = "Notifications de fin de réponse, de question et d’approbation de l’IA pour les navigateurs et terminaux, avec synchronisation du titre du terminal."),
+        locale("de-DE", summary = "Benachrichtigungen zu KI-Abschlüssen, Fragen und Genehmigungen für Browser und Terminals sowie Synchronisierung des Terminalfenstertitels."),
+        locale("es-ES", summary = "Notificaciones de respuestas completadas, preguntas y aprobaciones de la IA para navegadores y terminales, con sincronización del título del terminal."),
+        locale("hi-IN", summary = "ब्राउज़र और टर्मिनल के लिए AI के कार्य पूर्ण होने, प्रश्नों और अनुमोदनों की सूचनाएँ तथा टर्मिनल विंडो शीर्षक का समन्वयन।"),
+        locale("ar-SA", summary = "إشعارات اكتمال ردود الذكاء الاصطناعي والأسئلة وطلبات الموافقة في المتصفح والطرفية، مع مزامنة عنوان نافذة الطرفية."),
+        locale("pt-BR", summary = "Notificações de respostas concluídas, perguntas e aprovações da IA para navegadores e terminais, com sincronização do título do terminal.")
     ),
 )]
-impl TerminalPlugin {
+impl NotificationsPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: RwLock::new(None),
@@ -130,9 +130,9 @@ impl TerminalPlugin {
     }
 
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
-        recover_read(&self.host, "read terminal plugin host")
+        recover_read(&self.host, "read notifications plugin host")
             .clone()
-            .ok_or_else(|| PluginError::internal("terminal plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("notifications plugin invoked before init"))
     }
 
     /// Record the current activity
@@ -193,7 +193,7 @@ impl TerminalPlugin {
 
     #[hook(init)]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *recover_write(&self.host, "initialize terminal plugin host") = Some(host.clone());
+        *recover_write(&self.host, "initialize notifications plugin host") = Some(host.clone());
         if let Some(source) = self.notification_source.clone() {
             let task = attention::start(source, host)
                 .await
@@ -269,7 +269,7 @@ impl TerminalPlugin {
     }
 }
 
-impl Drop for TerminalPlugin {
+impl Drop for NotificationsPlugin {
     fn drop(&mut self) {
         if let Some(task) = self
             .notification_task

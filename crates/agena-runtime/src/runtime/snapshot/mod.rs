@@ -205,12 +205,12 @@ impl RuntimeSnapshot {
                 callback_dispatcher: callback_server.dispatcher.clone(),
                 host_client: host_client.clone(),
             },
-            session_kernel.as_ref().map(|kernel| {
-                agena_bundled_plugins::tool::TerminalNotificationSource {
+            session_kernel
+                .as_ref()
+                .map(|kernel| agena_bundled_plugins::tool::NotificationSource {
                     reader: kernel.ports.reader.clone(),
                     state: kernel.instance_state.clone(),
-                }
-            }),
+                }),
         )
         .await?;
         // Own successful plugin initialization across every later service

@@ -109,7 +109,7 @@ function event(
   createdAt = Date.now() + 1,
 ): PluginAttentionNotification {
   return {
-    plugin_id: 'agena.terminal',
+    plugin_id: 'agena.notifications',
     session_id: 7,
     title: 'Session 7',
     attention: { id, kind, created_at_ms: createdAt, resolved: false },
@@ -203,7 +203,7 @@ test('separate replies with identical text notify once for each stable plugin id
 
 test('the browser renders only explicit plugin attention, without inferring AI state', async () => {
   const client = notifier()
-  await client.applyNotifications([{ plugin_id: 'agena.terminal', title: 'running', session_id: 7 }])
+  await client.applyNotifications([{ plugin_id: 'agena.notifications', title: 'running', session_id: 7 }])
   assert.equal(shown.length, 0)
   await client.applyNotifications([event('failed', 'failed'), event('cancelled', 'cancelled')])
   assert.deepEqual(

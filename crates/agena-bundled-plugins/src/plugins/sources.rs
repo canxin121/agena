@@ -76,7 +76,7 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::terminal_plugin_id().to_string(),
+            crate::tool::notifications_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -123,7 +123,7 @@ fn localized_static_plugin<P: Plugin>(
 
 pub fn static_plugin_registrations(
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
-    notification_source: Option<crate::tool::TerminalNotificationSource>,
+    notification_source: Option<crate::tool::NotificationSource>,
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
         localized_static_plugin(
@@ -183,8 +183,8 @@ pub fn static_plugin_registrations(
             crate::tool::new_interaction_plugin(),
         ),
         localized_static_plugin(
-            plugin_key(crate::tool::terminal_plugin_id()),
-            crate::tool::new_terminal_plugin_with_notifications(notification_source),
+            plugin_key(crate::tool::notifications_plugin_id()),
+            crate::tool::new_notifications_plugin_with_source(notification_source),
         ),
         localized_static_plugin(
             plugin_key(crate::tool::plan_plugin_id()),

@@ -1,5 +1,5 @@
 //! Web Push delivery adapter for plugin-owned attention notifications.
-//! Event policy and recovery live in `agena.terminal`, shared with the TUI.
+//! Event policy and recovery live in `agena.notifications`, shared with the TUI.
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Arc,

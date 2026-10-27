@@ -129,12 +129,16 @@ mod notification_dispatch_tests {
     fn retained_notification_history_does_not_realert_after_more_than_sixty_four_events() {
         let mut state = crate::app_types::TerminalIntegrationState::default();
         for index in 0..1024 {
-            assert!(state.notify_consumed_once(&format!("agena.terminal:execution:{index}:1")));
+            assert!(
+                state.notify_consumed_once(&format!("agena.notifications:execution:{index}:1"))
+            );
         }
         // A reloaded host replays its bounded recent history, including
         // identical summaries from many distinct completed executions.
         for index in 512..1024 {
-            assert!(!state.notify_consumed_once(&format!("agena.terminal:execution:{index}:1")));
+            assert!(
+                !state.notify_consumed_once(&format!("agena.notifications:execution:{index}:1"))
+            );
         }
     }
 

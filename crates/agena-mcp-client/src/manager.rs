@@ -15,15 +15,16 @@ use std::time::Duration;
 use http::{HeaderName, HeaderValue};
 use rmcp::model::{
     ClientCapabilities, ClientInfo, ContentBlock as RmcpContentBlock, GetPromptRequestParams,
-    Implementation, ListRootsResult, PaginatedRequestParams, ReadResourceRequestParams,
-    ResourceContents as RmcpResourceContents, Role, Root, RootsCapabilities, Tool,
+    Implementation, ListRootsResult, PaginatedRequestParams, ProtocolVersion,
+    ReadResourceRequestParams, ResourceContents as RmcpResourceContents, Role, Root,
+    RootsCapabilities, ServerNotification, SubscriptionFilter, Tool,
 };
 use rmcp::service::{NotificationContext, Peer, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{
     AuthClient, AuthorizationManager, StreamableHttpClientTransport, TokioChildProcess,
 };
-use rmcp::{ClientHandler, ServiceExt};
+use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
@@ -37,7 +38,10 @@ use crate::protocol::{
     ListResourcesResult, ReadResourceResult, ResourceContents, ResourceDescriptor,
     ResourceTemplateDescriptor, ToolDescriptor,
 };
-use crate::{FileOAuthCredentialStore, OAuthCredentialHealth};
+use crate::{
+    FileOAuthCredentialStore, McpOAuthRegistration, OAuthCredentialHealth, credential_store_name,
+    oauth_credential_binding,
+};
 
 static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -158,14 +162,26 @@ impl ServerSpec {
         }
     }
 
+    fn credential_name(&self, server: &str) -> String {
+        match self {
+            Self::Http { url, .. } => credential_store_name(server, url),
+            Self::Stdio { .. } => server.to_owned(),
+        }
+    }
+
     fn oauth_health(&self, server: &str) -> Option<OAuthCredentialHealth> {
+        let server = self.credential_name(server);
         match self {
             Self::Http {
-                auth: Some(HttpAuth::OAuth { .. }),
+                auth:
+                    Some(HttpAuth::OAuth {
+                        scopes,
+                        registration,
+                    }),
                 ..
             } => Some(
-                FileOAuthCredentialStore::new(server)
-                    .map(|store| store.health())
+                FileOAuthCredentialStore::new(&server)
+                    .map(|store| store.with_binding(oauth_credential_binding(scopes, registration)).health())
                     // Server names are validated when specifications are
                     // installed. If that invariant is ever violated, report
                     // a deliberately opaque unreadable projection instead of
@@ -184,13 +200,17 @@ impl ServerSpec {
         &self,
         server: &str,
         token_store: Option<Arc<dyn TokenStore>>,
-    ) -> (Option<OAuthCredentialHealth>, Option<McpCredentialConflict>) {
+    ) -> (
+        Option<OAuthCredentialHealth>,
+        Option<McpCredentialConflict>,
+        bool,
+    ) {
         let mode = self.auth_mode();
         if !matches!(
             mode,
             McpServerAuthMode::OAuth | McpServerAuthMode::BearerFromStore
         ) {
-            return (None, None);
+            return (None, None, false);
         }
         let spec = self.clone();
         let name = server.to_owned();
@@ -199,6 +219,7 @@ impl ServerSpec {
                 (
                     spec.oauth_health(&name),
                     spec.credential_conflict(&name, token_store.as_deref()),
+                    spec.legacy_credentials_present(&name, token_store.as_deref()),
                 )
             })
             .await
@@ -213,8 +234,33 @@ impl ServerSpec {
                         refresh_available: None,
                     }),
                     None,
+                    false,
                 )
             }
+        }
+    }
+
+    fn legacy_credentials_present(
+        &self,
+        server: &str,
+        token_store: Option<&dyn TokenStore>,
+    ) -> bool {
+        let key = self.credential_name(server);
+        match self.auth_mode() {
+            McpServerAuthMode::BearerFromStore => token_store.is_some_and(|store| {
+                store.credential_state(&key) == McpCredentialState::Missing
+                    && store.credential_state(server) != McpCredentialState::Missing
+            }),
+            McpServerAuthMode::OAuth => {
+                let state = |name: &str| {
+                    FileOAuthCredentialStore::new(name)
+                        .map(|store| store.health().credential_state)
+                        .unwrap_or(crate::OAuthCredentialState::Unreadable)
+                };
+                state(&key) == crate::OAuthCredentialState::Missing
+                    && state(server) != crate::OAuthCredentialState::Missing
+            }
+            _ => false,
         }
     }
 
@@ -223,6 +269,7 @@ impl ServerSpec {
         server: &str,
         token_store: Option<&dyn TokenStore>,
     ) -> Option<McpCredentialConflict> {
+        let server = self.credential_name(server);
         match self {
             // OAuth transport never reads the bearer store (see
             // `connect_http`).  A remaining manual bearer record is therefore
@@ -232,7 +279,7 @@ impl ServerSpec {
                 auth: Some(HttpAuth::OAuth { .. }),
                 ..
             } => match token_store
-                .map(|store| store.credential_state(server))
+                .map(|store| store.credential_state(&server))
                 .unwrap_or(McpCredentialState::Missing)
             {
                 McpCredentialState::Configured => {
@@ -249,7 +296,7 @@ impl ServerSpec {
             Self::Http {
                 auth: Some(HttpAuth::BearerFromStore),
                 ..
-            } => match FileOAuthCredentialStore::new(server)
+            } => match FileOAuthCredentialStore::new(&server)
                 .map(|store| store.health().credential_state)
                 .unwrap_or(crate::OAuthCredentialState::Unreadable)
             {
@@ -272,7 +319,10 @@ pub enum HttpAuth {
     Bearer(String),
     BearerFromEnv(String),
     BearerFromStore,
-    OAuth { scopes: Vec<String> },
+    OAuth {
+        scopes: Vec<String>,
+        registration: McpOAuthRegistration,
+    },
     Custom(HashMap<String, String>),
 }
 
@@ -442,6 +492,34 @@ impl ClientHandler for AgenaMcpClientHandler {
     }
 
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
+        self.queue_tool_refresh(context.peer);
+    }
+
+    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.events
+            .resource_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.events
+            .prompt_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn on_resource_updated(
+        &self,
+        _params: rmcp::model::ResourceUpdatedNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        self.events
+            .resource_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl AgenaMcpClientHandler {
+    fn queue_tool_refresh(&self, peer: Peer<RoleClient>) {
         loop {
             let previous = self
                 .events
@@ -471,7 +549,10 @@ impl ClientHandler for AgenaMcpClientHandler {
         let tool_policy = self.tool_policy.clone();
         tokio::spawn(async move {
             loop {
-                let refresh = tokio::time::timeout(timeout, context.peer.list_all_tools());
+                let refresh = tokio::time::timeout(timeout, async {
+                    peer.clear_response_cache().await;
+                    peer.list_all_tools().await
+                });
                 tokio::select! {
                     biased;
                     _ = events.shutdown.cancelled() => return,
@@ -483,7 +564,7 @@ impl ClientHandler for AgenaMcpClientHandler {
                                     *events.last_refresh_failure.write().await = None;
                                 }
                                 Err(error) => {
-                                    warn!(%error, server = %server_name, "MCP tool catalog projection failed");
+                                    warn!(category = %error.user_message(), server = %server_name, "MCP tool catalog projection failed");
                                     *events.last_refresh_failure.write().await = Some(mcp_failure(&error));
                                 }
                             }
@@ -491,7 +572,7 @@ impl ClientHandler for AgenaMcpClientHandler {
                         Ok(Err(error)) => {
                             let error = McpError::from(error);
                             let failure = mcp_failure(&error);
-                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh failed");
+                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, category = %error.user_message(), "MCP tool list refresh failed");
                             *events.last_refresh_failure.write().await = Some(failure);
                         }
                         Err(timeout_error) => {
@@ -503,7 +584,7 @@ impl ClientHandler for AgenaMcpClientHandler {
                                 &timeout_error,
                             );
                             let failure = mcp_failure(&error);
-                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh timed out");
+                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, category = %error.user_message(), "MCP tool list refresh timed out");
                             *events.last_refresh_failure.write().await = Some(failure);
                         }
                     }
@@ -540,28 +621,6 @@ impl ClientHandler for AgenaMcpClientHandler {
             }
         });
     }
-
-    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        self.events
-            .resource_generation
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        self.events
-            .prompt_generation
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    async fn on_resource_updated(
-        &self,
-        _params: rmcp::model::ResourceUpdatedNotificationParam,
-        _context: NotificationContext<RoleClient>,
-    ) {
-        self.events
-            .resource_generation
-            .fetch_add(1, Ordering::Relaxed);
-    }
 }
 
 /// A connected MCP server.
@@ -573,6 +632,7 @@ pub struct ConnectedServer {
     network_target: Option<String>,
     instructions: Option<String>,
     tool_policy: McpToolPolicy,
+    request_timeout: Duration,
 }
 
 impl ConnectedServer {
@@ -584,6 +644,7 @@ impl ConnectedServer {
         network_target: Option<String>,
         instructions: Option<String>,
         tool_policy: McpToolPolicy,
+        request_timeout: Duration,
     ) -> Self {
         Self {
             name,
@@ -593,6 +654,7 @@ impl ConnectedServer {
             network_target,
             instructions,
             tool_policy,
+            request_timeout,
         }
     }
 }
@@ -615,13 +677,21 @@ pub struct McpConnectionManager {
     server_operations: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
     lifecycle: RwLock<()>,
     reconnect_supervisor: std::sync::Mutex<Option<ReconnectSupervisor>>,
+    oauth_sessions: crate::oauth::McpOAuthSessionManager,
 }
 
 #[derive(Default)]
 struct Inner {
     servers: BTreeMap<String, Arc<ConnectedServer>>,
-    specs: BTreeMap<String, ServerSpec>,
+    specs: BTreeMap<String, StoredServerSpec>,
     last_failures: BTreeMap<String, agena_failure::Failure>,
+}
+
+#[derive(Clone)]
+struct StoredServerSpec {
+    spec: ServerSpec,
+    connect_timeout: Duration,
+    request_timeout: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -629,6 +699,9 @@ struct Inner {
 pub struct McpServerStatus {
     pub name: String,
     pub connected: bool,
+    pub protocol_version: Option<String>,
+    pub server_info: Option<Value>,
+    pub capabilities: Option<Value>,
     pub tool_count: usize,
     pub network_target: Option<String>,
     pub last_failure: Option<agena_failure::Failure>,
@@ -646,6 +719,9 @@ pub struct McpServerStatus {
     /// coexist across an explicit auth-mode boundary.  It never changes the
     /// selected credential or changes the selected credential.
     pub credential_conflict: Option<McpCredentialConflict>,
+    /// Old name-only credentials are retained but require explicit sign-in or
+    /// token entry to bind them to the current HTTP endpoint.
+    pub legacy_credentials_present: bool,
 }
 
 impl Default for McpConnectionManager {
@@ -667,6 +743,7 @@ impl McpConnectionManager {
             server_operations: Mutex::new(BTreeMap::new()),
             lifecycle: RwLock::new(()),
             reconnect_supervisor: std::sync::Mutex::new(None),
+            oauth_sessions: Default::default(),
         }
     }
 
@@ -674,6 +751,10 @@ impl McpConnectionManager {
         self.connect_timeout = connect_timeout.max(Duration::from_millis(1));
         self.request_timeout = request_timeout.max(Duration::from_millis(1));
         self
+    }
+
+    pub fn oauth_sessions(&self) -> &crate::oauth::McpOAuthSessionManager {
+        &self.oauth_sessions
     }
 
     pub fn set_token_store(&mut self, store: Arc<dyn TokenStore>) {
@@ -695,6 +776,7 @@ impl McpConnectionManager {
             .await
             .servers
             .values()
+            .filter(|server| !server.peer.is_transport_closed())
             .map(|server| server.peer.clone())
             .collect::<Vec<_>>();
         for peer in peers {
@@ -749,6 +831,17 @@ impl McpConnectionManager {
     }
 
     pub async fn add_server(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
+        self.add_server_with_timeouts(name, spec, self.connect_timeout, self.request_timeout)
+            .await
+    }
+
+    pub async fn add_server_with_timeouts(
+        &self,
+        name: &str,
+        spec: ServerSpec,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> McpResult<()> {
         let name = name.trim();
         if name.is_empty() {
             return Err(McpError::Malformed(
@@ -756,29 +849,41 @@ impl McpConnectionManager {
             ));
         }
         let _lifecycle_guard = self.lifecycle.read().await;
-        self.add_server_in_lifecycle(name, spec).await
+        let operation_lock = self.server_operation_lock(name).await;
+        let _operation_guard = operation_lock.lock().await;
+        self.connect_server_locked(
+            name,
+            StoredServerSpec {
+                spec,
+                connect_timeout: connect_timeout.max(Duration::from_millis(1)),
+                request_timeout: request_timeout.max(Duration::from_millis(1)),
+            },
+        )
+        .await
     }
 
-    /// Add or replace one server while the caller holds a lifecycle read
-    /// permit. This split lets reconnect read its stored spec and connect it
-    /// in the same transaction without recursively acquiring the fair Tokio
-    /// `RwLock` (which can deadlock behind a queued shutdown writer).
-    async fn add_server_in_lifecycle(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
-        let operation_lock = {
-            let mut operations = self.server_operations.lock().await;
-            operations.retain(|_, lock| lock.strong_count() > 0);
-            if let Some(lock) = operations.get(name).and_then(Weak::upgrade) {
-                lock
-            } else {
-                let lock = Arc::new(Mutex::new(()));
-                operations.insert(name.to_string(), Arc::downgrade(&lock));
-                lock
-            }
-        };
-        let _operation_guard = operation_lock.lock().await;
+    async fn server_operation_lock(&self, name: &str) -> Arc<Mutex<()>> {
+        let mut operations = self.server_operations.lock().await;
+        operations.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = operations.get(name).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            operations.insert(name.to_string(), Arc::downgrade(&lock));
+            lock
+        }
+    }
+
+    /// The lifecycle read guard and per-server operation guard must already be
+    /// held. Reconnect resolves its stored definition under the same guard, so
+    /// a concurrent removal cannot resurrect a deleted connection.
+    async fn connect_server_locked(&self, name: &str, stored: StoredServerSpec) -> McpResult<()> {
+        let connect_timeout = stored.connect_timeout;
+        let request_timeout = stored.request_timeout;
+        let spec = stored.spec.clone();
         if let Some(existing) = {
             let mut inner = self.inner.write().await;
-            inner.specs.insert(name.to_string(), spec.clone());
+            inner.specs.insert(name.to_string(), stored);
             inner.last_failures.remove(name);
             inner.servers.remove(name)
         } {
@@ -787,7 +892,12 @@ impl McpConnectionManager {
 
         let events = Arc::new(ServerEventState::default());
         let tool_policy = spec.tool_policy().clone();
-        let client_handler = self.client_handler(name, Arc::clone(&events), tool_policy.clone());
+        let client_handler = self.client_handler(
+            name,
+            Arc::clone(&events),
+            tool_policy.clone(),
+            request_timeout,
+        );
         let connection = async {
             match spec {
                 ServerSpec::Stdio {
@@ -818,7 +928,7 @@ impl McpConnectionManager {
             }
         };
         let (running, network_target) =
-            match tokio::time::timeout(self.connect_timeout, connection).await {
+            match tokio::time::timeout(connect_timeout, connection).await {
                 Ok(Ok(connected)) => connected,
                 Ok(Err(error)) => {
                     self.record_error(name, &error).await;
@@ -828,7 +938,7 @@ impl McpConnectionManager {
                     let error = McpError::timeout_error(
                         format!(
                             "MCP connection timed out after {}ms",
-                            self.connect_timeout.as_millis()
+                            connect_timeout.as_millis()
                         ),
                         &error,
                     );
@@ -842,26 +952,31 @@ impl McpConnectionManager {
             .peer_info()
             .and_then(|info| info.instructions.clone())
             .filter(|value| !value.trim().is_empty());
-        let tools_result =
-            match tokio::time::timeout(self.request_timeout, peer.list_all_tools()).await {
+        let tools_result = if peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.tools.is_some())
+        {
+            match tokio::time::timeout(request_timeout, peer.list_all_tools()).await {
                 Ok(Ok(tools)) => prepare_tools(tools, tool_policy.clone()).await,
                 Ok(Err(error)) => Err(McpError::from(error)),
                 Err(timeout_error) => Err(McpError::timeout_error(
                     format!(
                         "initial MCP tool listing timed out after {}ms",
-                        self.request_timeout.as_millis()
+                        request_timeout.as_millis()
                     ),
                     &timeout_error,
                 )),
-            };
+            }
+        } else {
+            Ok(Arc::new(Vec::new()))
+        };
         let tools = match tools_result {
             Ok(tools) => tools,
             Err(error) => {
                 self.record_error(name, &error).await;
-                if let Err(cancel_error) = running.cancel().await {
+                if running.cancel().await.is_err() {
                     tracing::warn!(
                         server = name,
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&cancel_error),
                         "failed to cancel an MCP connection after tool catalog initialization failed"
                     );
                 }
@@ -870,9 +985,14 @@ impl McpConnectionManager {
         };
         let retired = {
             let mut cache = events.tools.write().await;
-            std::mem::replace(&mut *cache, tools)
+            if events.tool_generation.load(Ordering::Relaxed) == 0 {
+                std::mem::replace(&mut *cache, tools)
+            } else {
+                tools
+            }
         };
         release_tools(retired).await;
+        start_catalog_subscription(running.service().clone(), peer.clone());
         let connected = Arc::new(ConnectedServer::new(
             name.to_string(),
             peer,
@@ -881,6 +1001,7 @@ impl McpConnectionManager {
             network_target,
             instructions,
             tool_policy,
+            request_timeout,
         ));
 
         let mut inner = self.inner.write().await;
@@ -891,6 +1012,8 @@ impl McpConnectionManager {
 
     pub async fn reconnect(&self, name: &str) -> McpResult<()> {
         let _lifecycle_guard = self.lifecycle.read().await;
+        let operation_lock = self.server_operation_lock(name).await;
+        let _operation_guard = operation_lock.lock().await;
         let spec = self
             .inner
             .read()
@@ -899,22 +1022,12 @@ impl McpConnectionManager {
             .get(name)
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))?;
-        self.add_server_in_lifecycle(name, spec).await
+        self.connect_server_locked(name, spec).await
     }
 
     pub async fn remove_server(&self, name: &str) -> McpResult<()> {
         let _lifecycle_guard = self.lifecycle.read().await;
-        let operation_lock = {
-            let mut operations = self.server_operations.lock().await;
-            operations.retain(|_, lock| lock.strong_count() > 0);
-            if let Some(lock) = operations.get(name).and_then(Weak::upgrade) {
-                lock
-            } else {
-                let lock = Arc::new(Mutex::new(()));
-                operations.insert(name.to_string(), Arc::downgrade(&lock));
-                lock
-            }
-        };
+        let operation_lock = self.server_operation_lock(name).await;
         let _operation_guard = operation_lock.lock().await;
         let removed = {
             let mut inner = self.inner.write().await;
@@ -941,26 +1054,48 @@ impl McpConnectionManager {
         drop(inner);
         let mut statuses = Vec::with_capacity(specs.len());
         let reconnect_supervisor_running = self.reconnect_supervisor_running();
-        for (name, spec) in specs {
+        for (name, stored) in specs {
+            let spec = stored.spec;
             let server = servers.get(name.as_str()).cloned();
-            let tool_count = match server.as_ref() {
-                Some(server) => server.events.tools.read().await.len(),
-                None => 0,
+            let connected = server
+                .as_ref()
+                .is_some_and(|server| !server.peer.is_transport_closed());
+            let peer_info = server.as_ref().and_then(|server| server.peer.peer_info());
+            let tool_count = if connected {
+                server
+                    .as_ref()
+                    .expect("connected server exists")
+                    .events
+                    .tools
+                    .read()
+                    .await
+                    .len()
+            } else {
+                0
             };
             let last_refresh_failure = match server.as_ref() {
                 Some(server) => server.events.last_refresh_failure.read().await.clone(),
                 None => None,
             };
-            let (oauth_health, credential_conflict) = spec
+            let (oauth_health, credential_conflict, legacy_credentials_present) = spec
                 .credential_projection(&name, self.token_store.clone())
                 .await;
             statuses.push(McpServerStatus {
                 name: name.clone(),
-                connected: server.is_some(),
-                tool_count,
-                network_target: server
+                connected,
+                protocol_version: peer_info
                     .as_ref()
-                    .and_then(|server| server.network_target.clone()),
+                    .map(|info| info.protocol_version.to_string()),
+                server_info: peer_info
+                    .as_ref()
+                    .and_then(|info| serialize_optional(info.server_info.clone())),
+                capabilities: peer_info
+                    .as_ref()
+                    .and_then(|info| serde_json::to_value(&info.capabilities).ok()),
+                tool_count,
+                network_target: server.as_ref().and_then(|server| {
+                    server.network_target.as_deref().and_then(redacted_endpoint)
+                }),
                 last_failure: failures.get(name.as_str()).cloned(),
                 instructions: server
                     .as_ref()
@@ -979,6 +1114,7 @@ impl McpConnectionManager {
                 auth_mode: spec.auth_mode(),
                 oauth_health,
                 credential_conflict,
+                legacy_credentials_present,
             });
         }
         statuses
@@ -987,7 +1123,12 @@ impl McpConnectionManager {
     pub async fn all_tools(&self) -> Vec<(String, ToolDescriptor)> {
         let servers = {
             let inner = self.inner.read().await;
-            inner.servers.values().cloned().collect::<Vec<_>>()
+            inner
+                .servers
+                .values()
+                .filter(|server| !server.peer.is_transport_closed())
+                .cloned()
+                .collect::<Vec<_>>()
         };
         let mut snapshots = Vec::with_capacity(servers.len());
         for server in servers {
@@ -1020,6 +1161,9 @@ impl McpConnectionManager {
             return McpToolRisk::Medium;
         };
         drop(inner);
+        if server.peer.is_transport_closed() {
+            return McpToolRisk::Medium;
+        }
         let Ok(tools) = server.events.tools.try_read() else {
             return McpToolRisk::Medium;
         };
@@ -1035,7 +1179,7 @@ impl McpConnectionManager {
         inner
             .specs
             .iter()
-            .filter_map(|(name, spec)| match spec {
+            .filter_map(|(name, stored)| match &stored.spec {
                 ServerSpec::Http { url, .. } => Some((name.clone(), url.to_string())),
                 ServerSpec::Stdio { .. } => None,
             })
@@ -1044,14 +1188,22 @@ impl McpConnectionManager {
 
     pub async fn refresh_tools(&self, name: &str) -> McpResult<Vec<ToolDescriptor>> {
         let server = self.get(name).await?;
+        if !server
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.tools.is_some())
+        {
+            return Ok(Vec::new());
+        }
+        server.peer.clear_response_cache().await;
         let tools = prepare_tools(
-            tokio::time::timeout(self.request_timeout, server.peer.list_all_tools())
+            tokio::time::timeout(server.request_timeout, server.peer.list_all_tools())
                 .await
                 .map_err(|error| {
                     McpError::timeout_error(
                         format!(
                             "MCP tool-list refresh timed out after {}ms",
-                            self.request_timeout.as_millis()
+                            server.request_timeout.as_millis()
                         ),
                         &error,
                     )
@@ -1074,6 +1226,7 @@ impl McpConnectionManager {
         arguments: Option<Value>,
     ) -> McpResult<CallToolResult> {
         let server = self.get(server).await?;
+        require_capability(&server, "tools")?;
         if !server.tool_policy.permits(tool) {
             return Err(McpError::ToolDisallowed {
                 server: server.name.clone(),
@@ -1084,13 +1237,13 @@ impl McpConnectionManager {
         if let Some(arguments) = value_to_json_object(arguments).await? {
             params.arguments = Some(arguments);
         }
-        let result = tokio::time::timeout(self.request_timeout, server.peer.call_tool(params))
+        let result = tokio::time::timeout(server.request_timeout, server.peer.call_tool(params))
             .await
             .map_err(|error| {
                 McpError::timeout_error(
                     format!(
                         "MCP tool call timed out after {}ms",
-                        self.request_timeout.as_millis()
+                        server.request_timeout.as_millis()
                     ),
                     &error,
                 )
@@ -1104,8 +1257,15 @@ impl McpConnectionManager {
         cursor: Option<String>,
     ) -> McpResult<ListResourcesResult> {
         let server = self.get(server).await?;
+        if !server
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.resources.is_some())
+        {
+            return Ok(ListResourcesResult::default());
+        }
         let result = tokio::time::timeout(
-            self.request_timeout,
+            server.request_timeout,
             server.peer.list_resources(pagination_params(cursor)),
         )
         .await
@@ -1113,7 +1273,7 @@ impl McpConnectionManager {
             McpError::timeout_error(
                 format!(
                     "MCP resource listing timed out after {}ms",
-                    self.request_timeout.as_millis()
+                    server.request_timeout.as_millis()
                 ),
                 &error,
             )
@@ -1135,8 +1295,15 @@ impl McpConnectionManager {
         cursor: Option<String>,
     ) -> McpResult<ListResourceTemplatesResult> {
         let server = self.get(server).await?;
+        if !server
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.resources.is_some())
+        {
+            return Ok(ListResourceTemplatesResult::default());
+        }
         let result = tokio::time::timeout(
-            self.request_timeout,
+            server.request_timeout,
             server
                 .peer
                 .list_resource_templates(pagination_params(cursor)),
@@ -1146,7 +1313,7 @@ impl McpConnectionManager {
             McpError::timeout_error(
                 format!(
                     "MCP resource-template listing timed out after {}ms",
-                    self.request_timeout.as_millis()
+                    server.request_timeout.as_millis()
                 ),
                 &error,
             )
@@ -1164,8 +1331,9 @@ impl McpConnectionManager {
 
     pub async fn read_resource(&self, server: &str, uri: &str) -> McpResult<ReadResourceResult> {
         let server = self.get(server).await?;
+        require_capability(&server, "resources")?;
         let result = tokio::time::timeout(
-            self.request_timeout,
+            server.request_timeout,
             server
                 .peer
                 .read_resource(ReadResourceRequestParams::new(uri.to_string())),
@@ -1175,7 +1343,7 @@ impl McpConnectionManager {
             McpError::timeout_error(
                 format!(
                     "MCP resource read timed out after {}ms",
-                    self.request_timeout.as_millis()
+                    server.request_timeout.as_millis()
                 ),
                 &error,
             )
@@ -1196,8 +1364,15 @@ impl McpConnectionManager {
         cursor: Option<String>,
     ) -> McpResult<ListPromptsResult> {
         let server = self.get(server).await?;
+        if !server
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.prompts.is_some())
+        {
+            return Ok(ListPromptsResult::default());
+        }
         let result = tokio::time::timeout(
-            self.request_timeout,
+            server.request_timeout,
             server.peer.list_prompts(pagination_params(cursor)),
         )
         .await
@@ -1205,7 +1380,7 @@ impl McpConnectionManager {
             McpError::timeout_error(
                 format!(
                     "MCP prompt listing timed out after {}ms",
-                    self.request_timeout.as_millis()
+                    server.request_timeout.as_millis()
                 ),
                 &error,
             )
@@ -1228,6 +1403,7 @@ impl McpConnectionManager {
         arguments: Option<BTreeMap<String, String>>,
     ) -> McpResult<GetPromptResult> {
         let server = self.get(server).await?;
+        require_capability(&server, "prompts")?;
         let mut params = GetPromptRequestParams::new(name.to_string());
         if let Some(arguments) = arguments {
             params.arguments = Some(
@@ -1237,13 +1413,13 @@ impl McpConnectionManager {
                     .collect(),
             );
         }
-        let result = tokio::time::timeout(self.request_timeout, server.peer.get_prompt(params))
+        let result = tokio::time::timeout(server.request_timeout, server.peer.get_prompt(params))
             .await
             .map_err(|error| {
                 McpError::timeout_error(
                     format!(
                         "MCP prompt read timed out after {}ms",
-                        self.request_timeout.as_millis()
+                        server.request_timeout.as_millis()
                     ),
                     &error,
                 )
@@ -1261,6 +1437,7 @@ impl McpConnectionManager {
 
     pub async fn shutdown_all(&self) {
         self.stop_reconnect_supervisor();
+        self.oauth_sessions.shutdown().await;
         // Wait for in-flight add/remove transactions before draining. Without
         // this gate an add could finish after the drain and leave a live MCP
         // process in a manager that had already reported shutdown complete.
@@ -1285,6 +1462,7 @@ impl McpConnectionManager {
         inner
             .servers
             .get(name)
+            .filter(|server| !server.peer.is_transport_closed())
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))
     }
@@ -1294,7 +1472,12 @@ impl McpConnectionManager {
         inner
             .specs
             .keys()
-            .filter(|name| !inner.servers.contains_key(*name))
+            .filter(|name| {
+                inner
+                    .servers
+                    .get(*name)
+                    .is_none_or(|server| server.peer.is_transport_closed())
+            })
             .cloned()
             .collect()
     }
@@ -1304,6 +1487,7 @@ impl McpConnectionManager {
         server_name: &str,
         events: Arc<ServerEventState>,
         tool_policy: McpToolPolicy,
+        request_timeout: Duration,
     ) -> AgenaMcpClientHandler {
         let mut roots = RootsCapabilities::default();
         roots.list_changed = Some(true);
@@ -1316,7 +1500,7 @@ impl McpConnectionManager {
             ),
             roots: Arc::clone(&self.roots),
             events,
-            request_timeout: self.request_timeout,
+            request_timeout,
             server_name: server_name.to_string(),
             tool_policy,
         }
@@ -1328,7 +1512,7 @@ impl McpConnectionManager {
             target: "agena_mcp_client::manager",
             failure_id = %failure.id,
             server = %name,
-            diagnostic = %error,
+            category = %error.user_message(),
             "MCP connection failed"
         );
         self.inner
@@ -1370,7 +1554,7 @@ fn mcp_failure(error: &McpError) -> agena_failure::Failure {
             RecoveryDirective::RestartPlugin,
             "The MCP server returned an invalid response.",
         ),
-        McpError::ToolDisallowed { .. } => (
+        McpError::ToolDisallowed { .. } | McpError::PermissionDenied => (
             "mcp.permission_denied",
             FailureCategory::PermissionDenied,
             FailureResponsibility::Policy,
@@ -1391,7 +1575,7 @@ fn mcp_failure(error: &McpError) -> agena_failure::Failure {
             RecoveryDirective::RestartPlugin,
             "The MCP server is unavailable. Reconnect it and try again.",
         ),
-        McpError::SamplingUnsupported => (
+        McpError::SamplingUnsupported | McpError::CapabilityUnavailable { .. } => (
             "mcp.unsupported",
             FailureCategory::NotFound,
             FailureResponsibility::Dependency,
@@ -1409,6 +1593,158 @@ fn mcp_failure(error: &McpError) -> agena_failure::Failure {
         FailureImpact::RuntimeDegraded,
         UserPresentation::new(code, fallback),
     )
+}
+
+fn require_capability(server: &ConnectedServer, capability: &str) -> McpResult<()> {
+    let supported = server
+        .peer
+        .peer_info()
+        .is_some_and(|info| match capability {
+            "tools" => info.capabilities.tools.is_some(),
+            "resources" => info.capabilities.resources.is_some(),
+            "prompts" => info.capabilities.prompts.is_some(),
+            _ => false,
+        });
+    if supported {
+        Ok(())
+    } else {
+        Err(McpError::CapabilityUnavailable {
+            server: server.name.clone(),
+            capability: capability.to_owned(),
+        })
+    }
+}
+
+fn client_lifecycle() -> ClientLifecycleMode {
+    ClientLifecycleMode::Auto {
+        preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+    }
+}
+
+/// Modern peers deliver catalog changes through subscriptions/listen; legacy
+/// peers continue using the ordinary ClientHandler notification callbacks.
+fn start_catalog_subscription(handler: AgenaMcpClientHandler, peer: Peer<RoleClient>) {
+    let Some(info) = peer.peer_info() else {
+        return;
+    };
+    if info.protocol_version < ProtocolVersion::V_2026_07_28 {
+        return;
+    }
+    let mut filter = SubscriptionFilter::default();
+    filter.tools_list_changed = info
+        .capabilities
+        .tools
+        .as_ref()
+        .and_then(|value| value.list_changed)
+        .filter(|value| *value);
+    filter.resources_list_changed = info
+        .capabilities
+        .resources
+        .as_ref()
+        .and_then(|value| value.list_changed)
+        .filter(|value| *value);
+    filter.prompts_list_changed = info
+        .capabilities
+        .prompts
+        .as_ref()
+        .and_then(|value| value.list_changed)
+        .filter(|value| *value);
+    if filter.tools_list_changed.is_none()
+        && filter.resources_list_changed.is_none()
+        && filter.prompts_list_changed.is_none()
+    {
+        return;
+    }
+    drop(info);
+    tokio::spawn(async move {
+        let mut retry_delay = Duration::from_secs(1);
+        loop {
+            if peer.is_transport_closed() {
+                return;
+            }
+            let opened = tokio::select! {
+                biased;
+                _ = handler.events.shutdown.cancelled() => return,
+                result = tokio::time::timeout(handler.request_timeout, peer.listen(filter.clone())) => result,
+            };
+            let failure = match opened {
+                Ok(Ok(mut subscription)) => {
+                    retry_delay = Duration::from_secs(1);
+                    // Reconcile any changes between initial discovery and the
+                    // subscription acknowledgment, or during a dropped stream.
+                    if filter.tools_list_changed == Some(true) {
+                        handler.queue_tool_refresh(peer.clone());
+                    }
+                    if filter.resources_list_changed == Some(true) {
+                        handler
+                            .events
+                            .resource_generation
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if filter.prompts_list_changed == Some(true) {
+                        handler
+                            .events
+                            .prompt_generation
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    loop {
+                        let next = tokio::select! {
+                            biased;
+                            _ = handler.events.shutdown.cancelled() => return,
+                            next = subscription.next() => next,
+                        };
+                        match next {
+                            Ok(Some(ServerNotification::ToolListChangedNotification(_))) => {
+                                handler.queue_tool_refresh(peer.clone())
+                            }
+                            Ok(Some(
+                                ServerNotification::ResourceListChangedNotification(_)
+                                | ServerNotification::ResourceUpdatedNotification(_),
+                            )) => {
+                                handler
+                                    .events
+                                    .resource_generation
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            Ok(Some(ServerNotification::PromptListChangedNotification(_))) => {
+                                handler
+                                    .events
+                                    .prompt_generation
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            Ok(Some(_)) => {}
+                            Ok(None) => break None,
+                            Err(error) => break Some(McpError::from(error)),
+                        }
+                    }
+                }
+                Ok(Err(error)) => Some(McpError::from(error)),
+                Err(error) => Some(McpError::timeout_error(
+                    "MCP catalog subscription timed out",
+                    &error,
+                )),
+            };
+            if let Some(error) = failure {
+                *handler.events.last_refresh_failure.write().await = Some(mcp_failure(&error));
+            }
+            tokio::select! {
+                biased;
+                _ = handler.events.shutdown.cancelled() => return,
+                _ = tokio::time::sleep(retry_delay) => {}
+            }
+            retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+        }
+    });
+}
+
+fn redacted_endpoint(value: &str) -> Option<String> {
+    let mut url = Url::parse(value).ok()?;
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
 }
 
 async fn run_reconnect_supervisor(
@@ -1449,7 +1785,8 @@ async fn run_reconnect_supervisor(
                         server = %name,
                         failures = attempt.failures,
                         retry_after_ms = delay.as_millis(),
-                        "MCP reconnect supervisor attempt failed: {error}"
+                        category = %error.user_message(),
+                        "MCP reconnect supervisor attempt failed"
                     );
                 }
             }
@@ -1502,7 +1839,9 @@ async fn connect_stdio(
         cmd.current_dir(cwd);
     }
     let transport = TokioChildProcess::new(agena_process::wrap_command(cmd))?;
-    Ok(client_handler.serve(transport).await?)
+    Ok(client_handler
+        .serve_with_lifecycle(transport, client_lifecycle())
+        .await?)
 }
 
 async fn connect_http(
@@ -1513,29 +1852,33 @@ async fn connect_http(
     auth: Option<HttpAuth>,
     token_store: Option<Arc<dyn TokenStore>>,
 ) -> McpResult<RunningClient> {
+    let credential_name = credential_store_name(server_name, &url);
     let has_authorization = headers
         .keys()
         .any(|key| key.eq_ignore_ascii_case("authorization"));
-    let oauth_scopes = match auth.as_ref() {
-        Some(HttpAuth::OAuth { scopes }) => Some(scopes.clone()),
+    let oauth_binding = match auth.as_ref() {
+        Some(HttpAuth::OAuth {
+            scopes,
+            registration,
+        }) => Some(oauth_credential_binding(scopes, registration)),
         _ => None,
     };
-    if oauth_scopes.is_none()
+    if oauth_binding.is_none()
         && let Some(auth) = auth
     {
         // TokenStore is a synchronous port and may access the private secret store.
         // Its wait must be outside Tokio workers for connect_timeout to work.
         if matches!(auth, HttpAuth::BearerFromStore) {
-            let server_name = server_name.to_owned();
+            let credential_name = credential_name.clone();
             headers = crate::token_store::SECRET_STORE_WORKERS
                 .run(move || {
-                    apply_http_auth(&server_name, auth, &mut headers, token_store.as_deref());
-                    headers
+                    apply_http_auth(&credential_name, auth, &mut headers, token_store.as_deref())?;
+                    Ok::<_, McpError>(headers)
                 })
                 .await
-                .map_err(|error| McpError::auth_error(&error))?;
+                .map_err(|error| McpError::auth_error(&error))??;
         } else {
-            apply_http_auth(server_name, auth, &mut headers, token_store.as_deref());
+            apply_http_auth(&credential_name, auth, &mut headers, token_store.as_deref())?;
         }
     }
 
@@ -1555,14 +1898,15 @@ async fn connect_http(
     let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
         .custom_headers(custom_headers)
         .reinit_on_expired_session(true);
-    if let Some(_scopes) = oauth_scopes {
+    if let Some(binding) = oauth_binding {
         if bearer.is_some() || has_authorization {
             return Err(McpError::Auth(
                 "OAuth MCP configuration must not also supply an Authorization header".to_owned(),
             ));
         }
-        let store = FileOAuthCredentialStore::new(server_name)
-            .map_err(|error| McpError::auth_error(&error))?;
+        let store = FileOAuthCredentialStore::new(&credential_name)
+            .map_err(|error| McpError::auth_error(&error))?
+            .with_binding(binding);
         let mut manager = AuthorizationManager::new(url.clone())
             .await
             .map_err(|error| McpError::auth_error(&error))?;
@@ -1573,7 +1917,7 @@ async fn connect_http(
             .map_err(|error| McpError::auth_error(&error))?
         {
             return Err(McpError::Auth(format!(
-                "OAuth authorization is required for MCP server '{server_name}'; configure its OAuth credential in the configured MCP client credential store before starting Agena"
+                "OAuth authorization is required for MCP server '{server_name}'; sign in from MCP connections settings"
             )));
         }
         let http_client = reqwest::Client::builder()
@@ -1587,7 +1931,9 @@ async fn connect_http(
             AuthClient::new(http_client, manager),
             config,
         );
-        return Ok(client_handler.serve(transport).await?);
+        return Ok(client_handler
+            .serve_with_lifecycle(transport, client_lifecycle())
+            .await?);
     }
     let config = match bearer {
         Some(token) => config.auth_header(token),
@@ -1598,7 +1944,9 @@ async fn connect_http(
         .build()
         .map_err(|error| McpError::http_error(&error))?;
     let transport = StreamableHttpClientTransport::with_client(http_client, config);
-    Ok(client_handler.serve(transport).await?)
+    Ok(client_handler
+        .serve_with_lifecycle(transport, client_lifecycle())
+        .await?)
 }
 
 async fn shutdown_server(server: Arc<ConnectedServer>) {
@@ -1611,10 +1959,9 @@ async fn shutdown_server(server: Arc<ConnectedServer>) {
     if let Some(running) = running {
         match tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, running.cancel()).await {
             Ok(Ok(_reason)) => {}
-            Ok(Err(error)) => {
+            Ok(Err(_error)) => {
                 tracing::warn!(
                     server = %server.name,
-                    diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
                     "failed to shut down an MCP connection"
                 );
             }
@@ -1649,55 +1996,35 @@ fn apply_http_auth(
     auth: HttpAuth,
     headers: &mut HashMap<String, String>,
     token_store: Option<&dyn TokenStore>,
-) {
-    match auth {
-        HttpAuth::Bearer(token) => {
-            headers
-                .entry("Authorization".to_string())
-                .or_insert_with(|| format!("Bearer {token}"));
-        }
-        HttpAuth::BearerFromEnv(env_name) => match std::env::var(&env_name) {
-            Ok(token) if !token.trim().is_empty() => {
-                headers
-                    .entry("Authorization".to_string())
-                    .or_insert_with(|| format!("Bearer {token}"));
-            }
-            _ => warn!(
-                target: "agena_mcp_client::manager",
-                server,
-                env = %env_name,
-                "missing bearer token env for MCP server"
-            ),
-        },
-        HttpAuth::BearerFromStore => {
-            let Some(token_store) = token_store else {
-                warn!(
-                    target: "agena_mcp_client::manager",
-                    server,
-                    "no token store configured for MCP bearer lookup"
-                );
-                return;
-            };
-            match token_store.bearer(server) {
-                Some(token) => {
-                    headers
-                        .entry("Authorization".to_string())
-                        .or_insert_with(|| format!("Bearer {token}"));
-                }
-                None => warn!(
-                    target: "agena_mcp_client::manager",
-                    server,
-                    "no bearer token found in token store for MCP server"
-                ),
-            }
-        }
+) -> McpResult<()> {
+    let token = match auth {
+        HttpAuth::Bearer(token) => Some(token),
+        HttpAuth::BearerFromEnv(env_name) => Some(std::env::var(&env_name)
+            .ok().filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| McpError::Auth("The MCP bearer environment variable is missing or empty.".into()))?),
+        HttpAuth::BearerFromStore => Some(token_store.and_then(|store| store.bearer(server))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| McpError::Auth("No bearer credential is configured for this MCP endpoint. Enter a token in connection settings; legacy name-only credentials are not reused.".into()))?),
         HttpAuth::OAuth { .. } => unreachable!("OAuth is handled before bearer header setup"),
         HttpAuth::Custom(custom_headers) => {
             for (key, value) in custom_headers {
                 headers.entry(key).or_insert(value);
             }
+            None
+        }
+    };
+    if let Some(token) = token {
+        if token.trim().is_empty() {
+            return Err(McpError::Auth("The MCP bearer token is empty.".into()));
+        }
+        if !headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("authorization"))
+        {
+            headers.insert("Authorization".into(), format!("Bearer {token}"));
         }
     }
+    Ok(())
 }
 
 fn parse_header_name(name: &str) -> McpResult<HeaderName> {

@@ -39,6 +39,7 @@ pub mod commands;
 pub mod content;
 pub mod error;
 pub mod live;
+pub mod mcp_connections;
 pub mod notifications;
 pub mod pagination;
 pub mod part;

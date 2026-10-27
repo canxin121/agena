@@ -34,6 +34,9 @@ pub enum McpError {
     #[error("request timed out: {0}")]
     Timeout(String),
 
+    #[error("permission for an MCP authentication endpoint was not granted")]
+    PermissionDenied,
+
     #[error("client shutting down")]
     Shutdown,
 
@@ -43,11 +46,47 @@ pub enum McpError {
     #[error("server '{0}' not connected")]
     ServerNotConnected(String),
 
+    #[error("MCP server '{server}' does not advertise {capability}")]
+    CapabilityUnavailable { server: String, capability: String },
+
     #[error("MCP tool '{tool}' is disallowed by configured policy for server '{server}'")]
     ToolDisallowed { server: String, tool: String },
 }
 
 impl McpError {
+    /// Public status and management surfaces use this projection rather than
+    /// source diagnostics, which may contain credential-bearing endpoint URLs.
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::PermissionDenied => {
+                "Permission for an MCP authentication endpoint was not granted.".into()
+            }
+            Self::Auth(_) => {
+                "The MCP connection requires valid credentials or OAuth sign-in.".into()
+            }
+            Self::Timeout(_) => {
+                "The MCP server did not respond before the configured timeout.".into()
+            }
+            Self::ServerNotConnected(_) | Self::TransportClosed => {
+                "The MCP connection is disconnected.".into()
+            }
+            Self::Transport(_) | Self::Io(_) | Self::Http(_) => {
+                "Could not communicate with the MCP server. Check its process or endpoint settings."
+                    .into()
+            }
+            Self::Malformed(_) | Self::Serde(_) | Self::Rpc { .. } => {
+                "The MCP server returned an incompatible protocol response.".into()
+            }
+            Self::Shutdown => "The MCP client is shutting down.".into(),
+            Self::SamplingUnsupported | Self::CapabilityUnavailable { .. } => {
+                "The MCP connection does not support this capability.".into()
+            }
+            Self::ToolDisallowed { .. } => {
+                "The MCP tool is disabled by the connection's tool filters.".into()
+            }
+        }
+    }
+
     pub fn transport_error(error: &(dyn std::error::Error + 'static)) -> Self {
         Self::Transport(agena_failure::diagnostic::format_error_chain(error))
     }

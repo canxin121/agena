@@ -6,6 +6,9 @@ use serde_json::json;
 struct PermissionHost {
     queries: std::sync::atomic::AtomicUsize,
     requirements: std::sync::atomic::AtomicUsize,
+    mcp_authorizations: std::sync::atomic::AtomicUsize,
+    mcp_starts: std::sync::atomic::AtomicUsize,
+    allow_mcp: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -57,6 +60,36 @@ impl HostClient for PermissionHost {
     async fn require_network_permission(&self, _: String) -> crate::sdk::Result<()> {
         self.require_path_permission(PathPermissionQuery::read("unused"))
             .await
+    }
+
+    async fn require_mcp_server_permission(
+        &self,
+        _: crate::sdk::host_api::HostMcpServerSpec,
+    ) -> crate::sdk::Result<()> {
+        let context = host_api::current_host_callback_context().unwrap();
+        assert_eq!(
+            (context.session_id, context.call_id),
+            (Some(78135), Some(12))
+        );
+        self.mcp_authorizations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.allow_mcp.load(std::sync::atomic::Ordering::Relaxed) {
+            Ok(())
+        } else {
+            Err(PluginError::from_kind(
+                PluginErrorKind::UserDeclined,
+                "review declined",
+            ))
+        }
+    }
+
+    async fn mcp_add_server(
+        &self,
+        _: crate::sdk::host_api::HostMcpAddServerRequest,
+    ) -> crate::sdk::Result<()> {
+        self.mcp_starts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -193,4 +226,48 @@ async fn permission_rpc_requires_live_exact_authority_and_forwards_the_enforcing
         2
     );
     assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn native_mcp_authorization_preserves_approval_and_never_starts_a_server() {
+    use crate::sdk::host_api::HostMcpServerSpec;
+    use std::sync::atomic::Ordering;
+
+    let inner = Arc::new(PermissionHost::default());
+    let handle = Arc::new(HostHandle::new(inner.clone()));
+    let plugin: PluginKey = "test.mcp".parse().unwrap();
+    handle.begin_plugin_instance(plugin.clone());
+    let scoped = handle.scoped_host_client(plugin.to_string());
+    let spec = HostMcpServerSpec::Stdio {
+        command: "must-not-be-executed".into(),
+        args: Vec::new(),
+        env: Default::default(),
+        cwd: Some("/workspace".into()),
+    };
+    // Native lifecycle callbacks may have plugin-only context. A callback
+    // claiming session authority still needs a live host-issued lease.
+    let denied = host_api::run_in_host_callback_context(
+        context(),
+        scoped.require_mcp_server_permission(spec.clone()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(denied.kind, PluginErrorKind::PolicyDenied);
+    assert_eq!(inner.mcp_authorizations.load(Ordering::Relaxed), 0);
+    handle
+        .run_in_authorized_callback_context(&plugin, context(), async {
+            assert_eq!(
+                scoped
+                    .require_mcp_server_permission(spec.clone())
+                    .await
+                    .unwrap_err()
+                    .kind,
+                PluginErrorKind::UserDeclined
+            );
+            inner.allow_mcp.store(true, Ordering::Relaxed);
+            scoped.require_mcp_server_permission(spec).await.unwrap();
+        })
+        .await;
+    assert_eq!(inner.mcp_authorizations.load(Ordering::Relaxed), 2);
+    assert_eq!(inner.mcp_starts.load(Ordering::Relaxed), 0);
 }

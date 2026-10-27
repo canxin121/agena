@@ -68,6 +68,8 @@ mod invocation_guard;
 mod live_signal;
 mod lsp_config;
 mod mcp_runtime;
+pub use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig, mcp_connections};
+pub use mcp_runtime::mcp_server_spec;
 mod model_catalog_cache;
 mod model_catalog_composition;
 mod model_catalog_curation;

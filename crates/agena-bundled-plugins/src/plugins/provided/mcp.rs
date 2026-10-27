@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+mod connections;
+use connections::*;
 
 use crate::{
     MCP_PLUGIN_ID,
@@ -716,6 +718,215 @@ impl McpPlugin {
         ))
     }
 
+    #[tool(
+        tags(query, mcp, read_only),
+        name = "connections.list",
+        summary = "List saved global and server-workspace MCP connections with live status."
+    )]
+    async fn invoke_connection_list(
+        &self,
+        _input: &ConnectionListInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_list().await
+    }
+
+    #[tool(
+        tags(query, mcp, read_only),
+        name = "connections.get",
+        summary = "Read a connection, its revision and redacted configuration."
+    )]
+    async fn invoke_connection_get(
+        &self,
+        input: &ConnectionIdInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_get(&input.id).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.create",
+        summary = "Create a persistent external MCP connection and queue activation."
+    )]
+    async fn invoke_connection_create(
+        &self,
+        input: &ConnectionCreateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_create(input.request.clone()).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.update",
+        summary = "Replace connection configuration using its revision; explicitly preserve returned secret paths."
+    )]
+    async fn invoke_connection_update(
+        &self,
+        input: &ConnectionUpdateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_update(input.id.clone(), input.request.clone())
+            .await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.delete",
+        summary = "Delete a connection from its scope using its current revision."
+    )]
+    async fn invoke_connection_delete(
+        &self,
+        input: &ConnectionDeleteInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_delete(input.id.clone(), input.expected_revision.clone())
+            .await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.set_enabled",
+        summary = "Enable or disable a saved MCP connection and queue activation."
+    )]
+    async fn invoke_connection_set_enabled(
+        &self,
+        input: &ConnectionEnabledInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_set_enabled(input.id.clone(), input.request.clone())
+            .await
+    }
+
+    #[tool(
+        tags(query, mcp, read_only),
+        name = "connections.import_preview",
+        summary = "Validate native servers or mcpServers JSON and preview redacted candidates without saving."
+    )]
+    async fn invoke_connection_import_preview(
+        &self,
+        input: &ConnectionImportPreviewInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_import_preview(input.request.clone()).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.import",
+        summary = "Atomically import selected connections using the preview revision and original document."
+    )]
+    async fn invoke_connection_import(
+        &self,
+        input: &ConnectionImportInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_import(input.request.clone()).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.test",
+        summary = "Test an isolated connection and close it; disabled and shadowed copies can be tested."
+    )]
+    async fn invoke_connection_test(
+        &self,
+        input: &ConnectionIdInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_test(&input.id).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.reconnect",
+        summary = "Reconnect the effective enabled connection and refresh capabilities."
+    )]
+    async fn invoke_connection_reconnect(
+        &self,
+        input: &ConnectionIdInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_reconnect(&input.id).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.credential.set",
+        summary = "Store an encrypted bearer credential for this connection endpoint."
+    )]
+    async fn invoke_connection_credential_set(
+        &self,
+        input: &ConnectionCredentialInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_credential(&input.id, Some(input.token.clone()))
+            .await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.credential.delete",
+        summary = "Delete the stored bearer credential for this connection endpoint."
+    )]
+    async fn invoke_connection_credential_delete(
+        &self,
+        input: &ConnectionIdInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_credential(&input.id, None).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.auth.start",
+        summary = "Start OAuth sign-in and return the authorization URL and pending flow ID."
+    )]
+    async fn invoke_connection_auth_start(
+        &self,
+        input: &ConnectionAuthStartInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_auth_start(input).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.auth.complete",
+        summary = "Finish a pending OAuth sign-in using the exact returned callback URL."
+    )]
+    async fn invoke_connection_auth_complete(
+        &self,
+        input: &ConnectionAuthCompleteInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_auth_complete(input).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.auth.cancel",
+        summary = "Cancel the pending OAuth flow for this connection."
+    )]
+    async fn invoke_connection_auth_cancel(
+        &self,
+        input: &ConnectionAuthCancelInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_auth_clear(&input.id, Some(&input.flow_id))
+            .await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.auth.logout",
+        summary = "Remove stored OAuth credentials while preserving any bearer credential."
+    )]
+    async fn invoke_connection_auth_logout(
+        &self,
+        input: &ConnectionIdInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_auth_clear(&input.id, None).await
+    }
+
+    #[tool(
+        tags(mcp, mutating),
+        name = "connections.bridge.set_enabled",
+        summary = "Enable or disable the built-in external MCP bridge in a configuration scope."
+    )]
+    async fn invoke_connection_bridge_set_enabled(
+        &self,
+        input: &ConnectionBridgeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.connection_bridge(input.request.clone()).await
+    }
+
     #[hook(tool.definition)]
     async fn tool_definition_patch(
         &self,
@@ -723,6 +934,13 @@ impl McpPlugin {
     ) -> SdkResult<Option<ToolDefinitionPatch>> {
         if input.plugin_key().to_string() != MCP_PLUGIN_ID {
             return Ok(None);
+        }
+        if input.tool_name().starts_with("connections.") {
+            return Ok(Some(ToolDefinitionPatch {
+                summary: None,
+                help: Some("Manage Agena connections to external MCP servers. Use connections.list and connections.get before editing; pass returned opaque IDs and current revisions. Global and server-workspace scopes are distinct; workspace copies override complete same-name global definitions. Native configs use transport=stdio with process={command,args,env,cwd}, or transport=http with endpoint={url,headers} and optional auth. Return config secrets are [REDACTED]; preserve only unchanged secret_paths explicitly, or replace/remove them. Import mcpServers or native servers JSON with import_preview, then import selected names using the original document and preview revision. Saved changes queue a runtime reload after the originating call; check status after it completes. Use connections.test for an isolated probe, including disabled copies. Use auth.start then auth.complete for OAuth; never infer sign-in success from opening a URL. These tools manage the running server workspace, independently of the selected chat directory.".into()),
+                input_schema: None,
+            }));
         }
         let servers = self.manager.server_names().await;
         let statuses = self.manager.statuses().await;

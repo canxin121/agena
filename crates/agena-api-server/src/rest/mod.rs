@@ -64,6 +64,7 @@ mod conversations;
 mod file_changes;
 mod git;
 mod marketplace;
+mod mcp_connections;
 mod memory;
 mod model_catalog;
 pub(crate) mod notifications;
@@ -79,6 +80,7 @@ mod skills;
 mod workspaces;
 
 pub use file_changes::*;
+pub use mcp_connections::*;
 pub use permissions::*;
 pub use runs::*;
 pub use sessions::*;

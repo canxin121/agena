@@ -489,7 +489,20 @@ fn merge_project_plugin_config(
     if merge_keys.plugins_host {
         merge_project_plugin_host(&mut base.host, overlay.host, merge_keys);
     }
-    base.list.extend(overlay.list);
+    for (id, mut entry) in overlay.list {
+        if id == crate::MCP_PLUGIN_ID
+            && matches!(entry.package, agena_plugin_host::PluginPackage::Static {})
+            && let Some(previous) = base.list.get(&id)
+            && matches!(
+                previous.package,
+                agena_plugin_host::PluginPackage::Static {}
+            )
+        {
+            entry.settings =
+                crate::mcp_connections::merge_mcp_settings(&previous.settings, &entry.settings);
+        }
+        base.list.insert(id, entry);
+    }
 }
 
 fn merge_project_plugin_host(

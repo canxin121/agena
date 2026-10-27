@@ -95,6 +95,7 @@ mod user_input;
 mod user_input_events;
 
 pub mod activity_view;
+pub mod mcp_connections;
 pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use activity::{

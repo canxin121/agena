@@ -18,6 +18,7 @@ pub mod config_override;
 pub mod config_values;
 pub mod lsp_config;
 pub mod mcp_config;
+pub mod mcp_connections;
 pub mod runtime_config_settings_service;
 pub mod runtime_configuration_service;
 

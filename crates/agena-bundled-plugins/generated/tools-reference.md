@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 186 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 203 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -24,7 +24,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
-- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
+- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (26 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
 - [`agena.monitor`](#agenamonitor) — WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring. (2 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
@@ -13917,9 +13917,637 @@ LSP read-only observability and navigation tools.
 
 ## agena.mcp
 
-**Version** `0.1.0` · **Tools** 9 · **Condition** `runtime:mcp-manager`
+**Version** `0.1.0` · **Tools** 26 · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
+
+### connections.auth.cancel
+
+`agena.mcp.connections.auth.cancel` · **Summary**: Cancel the pending OAuth flow for this connection.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `flow_id` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "flow_id": {
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id",
+    "flow_id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.auth.complete
+
+`agena.mcp.connections.auth.complete` · **Summary**: Finish a pending OAuth sign-in using the exact returned callback URL.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `callback_url` | `string` | ✓ | — |  |
+| `flow_id` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "callback_url": {
+      "type": "string",
+      "x-agena-order": "000002"
+    },
+    "flow_id": {
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id",
+    "flow_id",
+    "callback_url"
+  ],
+  "type": "object"
+}
+```
+
+### connections.auth.logout
+
+`agena.mcp.connections.auth.logout` · **Summary**: Remove stored OAuth credentials while preserving any bearer credential.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — | Opaque ID returned by connections.list or connections.get. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Opaque ID returned by connections.list or connections.get.",
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.auth.start
+
+`agena.mcp.connections.auth.start` · **Summary**: Start OAuth sign-in and return the authorization URL and pending flow ID.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — |  |
+| `redirect_uri` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "redirect_uri": {
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "id",
+    "redirect_uri"
+  ],
+  "type": "object"
+}
+```
+
+### connections.bridge.set_enabled
+
+`agena.mcp.connections.bridge.set_enabled` · **Summary**: Enable or disable the built-in external MCP bridge in a configuration scope.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | `boolean` | ✓ | — |  |
+| `scope` | `McpConnectionScope` | — | `workspace` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "McpConnectionScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    }
+  },
+  "required": [
+    "enabled"
+  ],
+  "type": "object"
+}
+```
+
+### connections.create
+
+`agena.mcp.connections.create` · **Summary**: Create a persistent external MCP connection and queue activation.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `config` | `any` | ✓ | — |  |
+| `name` | `string` | ✓ | — |  |
+| `scope` | `McpConnectionScope` | — | `workspace` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "McpConnectionScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "config": true,
+    "name": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    }
+  },
+  "required": [
+    "name",
+    "config"
+  ],
+  "type": "object"
+}
+```
+
+### connections.credential.delete
+
+`agena.mcp.connections.credential.delete` · **Summary**: Delete the stored bearer credential for this connection endpoint.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — | Opaque ID returned by connections.list or connections.get. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Opaque ID returned by connections.list or connections.get.",
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.credential.set
+
+`agena.mcp.connections.credential.set` · **Summary**: Store an encrypted bearer credential for this connection endpoint.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — |  |
+| `token` | `string` | ✓ | — | Bearer credential to store. Never returned by this tool. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "token": {
+      "description": "Bearer credential to store. Never returned by this tool.",
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "id",
+    "token"
+  ],
+  "type": "object"
+}
+```
+
+### connections.delete
+
+`agena.mcp.connections.delete` · **Summary**: Delete a connection from its scope using its current revision.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_revision": {
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### connections.get
+
+`agena.mcp.connections.get` · **Summary**: Read a connection, its revision and redacted configuration.
+
+**Tags**: `query` `mcp` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — | Opaque ID returned by connections.list or connections.get. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Opaque ID returned by connections.list or connections.get.",
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.import
+
+`agena.mcp.connections.import` · **Summary**: Atomically import selected connections using the preview revision and original document.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `any` | ✓ | — |  |
+| `expected_revision` | `string` | ✓ | — |  |
+| `replace` | `boolean` | — | `false` |  |
+| `scope` | `McpConnectionScope` | — | `workspace` |  |
+| `selected` | `array<string>` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "McpConnectionScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "document": true,
+    "expected_revision": {
+      "type": "string"
+    },
+    "replace": {
+      "default": false,
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    },
+    "selected": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "document",
+    "selected",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### connections.import_preview
+
+`agena.mcp.connections.import_preview` · **Summary**: Validate native servers or mcpServers JSON and preview redacted candidates without saving.
+
+**Tags**: `query` `mcp` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `any` | ✓ | — |  |
+| `scope` | `McpConnectionScope` | — | `workspace` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "McpConnectionScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "document": true,
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    }
+  },
+  "required": [
+    "document"
+  ],
+  "type": "object"
+}
+```
+
+### connections.list
+
+`agena.mcp.connections.list` · **Summary**: List saved global and server-workspace MCP connections with live status.
+
+**Tags**: `query` `mcp` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+```
+
+### connections.reconnect
+
+`agena.mcp.connections.reconnect` · **Summary**: Reconnect the effective enabled connection and refresh capabilities.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — | Opaque ID returned by connections.list or connections.get. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Opaque ID returned by connections.list or connections.get.",
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.set_enabled
+
+`agena.mcp.connections.set_enabled` · **Summary**: Enable or disable a saved MCP connection and queue activation.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | `boolean` | ✓ | — |  |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id",
+    "enabled",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### connections.test
+
+`agena.mcp.connections.test` · **Summary**: Test an isolated connection and close it; disabled and shadowed copies can be tested.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — | Opaque ID returned by connections.list or connections.get. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Opaque ID returned by connections.list or connections.get.",
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### connections.update
+
+`agena.mcp.connections.update` · **Summary**: Replace connection configuration using its revision; explicitly preserve returned secret paths.
+
+**Tags**: `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `config` | `any` | ✓ | — |  |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+| `preserve_secrets` | `array<string>` | — | `[]` |  |
+
+**Input schema**:
+```json
+{
+  "properties": {
+    "config": true,
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "preserve_secrets": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "config",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
 
 ### prompts.get
 

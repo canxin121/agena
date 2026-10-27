@@ -44,6 +44,7 @@ use crate::ws::SubscriptionEvent;
 
 mod archive;
 mod content;
+mod mcp_connections;
 mod skills;
 #[cfg(test)]
 mod tests;
@@ -1804,17 +1805,35 @@ impl AgenaClient {
         dry_run: bool,
         reload: bool,
     ) -> Result<serde_json::Value, ClientError> {
+        self.set_settings_layer_value_if_revision(layer, path, value, dry_run, reload, None)
+            .await
+    }
+
+    /// Replace a layer value only if the file still matches the revision read
+    /// by the caller, preserving concurrent edits made through other clients.
+    pub async fn set_settings_layer_value_if_revision(
+        &self,
+        layer: &str,
+        path: &str,
+        value: serde_json::Value,
+        dry_run: bool,
+        reload: bool,
+        expected_revision: Option<&str>,
+    ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(layer);
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "path": path,
             "value": value,
             "dry_run": dry_run,
             "validate": true,
             "reload": reload,
         });
+        if let Some(revision) = expected_revision {
+            body["expected_revision"] = serde_json::Value::String(revision.to_owned());
+        }
         let response = self
             .send_request(reqwest::Method::PUT, url, Some(&body), None)
             .await?;

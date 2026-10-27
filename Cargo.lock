@@ -254,6 +254,7 @@ dependencies = [
  "agena-async",
  "agena-domain",
  "agena-failure",
+ "agena-mcp-client",
  "agena-notification",
  "agena-plugin-host",
  "agena-process",
@@ -279,6 +280,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -533,10 +535,12 @@ name = "agena-mcp-client"
 version = "0.1.0"
 dependencies = [
  "agena-async",
+ "agena-domain",
  "agena-failure",
  "agena-process",
  "agena-secret-store",
  "async-trait",
+ "chrono",
  "http 1.5.0",
  "oauth2",
  "portable-atomic",
@@ -545,6 +549,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -892,6 +897,7 @@ dependencies = [
  "agena-storage-layout",
  "async-trait",
  "hex",
+ "http 1.5.0",
  "merge",
  "portable-atomic",
  "schemars",

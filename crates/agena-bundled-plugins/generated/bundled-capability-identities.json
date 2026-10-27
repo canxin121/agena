@@ -93,7 +93,7 @@
   "counts": {
     "bundled_commands": 14,
     "plugins": 22,
-    "tools": 186
+    "tools": 203
   },
   "plugins": [
     {
@@ -1469,6 +1469,196 @@
       ],
       "id": "agena.mcp",
       "tools": [
+        {
+          "canonical_name": "agena.mcp.connections.auth.cancel",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "7134c52ab79303a70a0eb6175a093e2de91e9d5f7bf867454527cb8ac011a289",
+          "input_schema_sha256": "4dfe697f35f11f784fce8a16e1da965748919bafb38382e65d4b899268c1bd60",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.auth.complete",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "c534831f4445663d3b3bf4ee0f3754925c06732ea36c659f24e2b4910aefdf45",
+          "input_schema_sha256": "5c2fb288f7163667e59b4ced6e2a6359d42ceef8a44aa34cf55c3a44b371fd76",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.auth.logout",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "89cbd9f4e0a5b479b15428b01927b4d44e6269b8a36dd95d1771aa578253c55e",
+          "input_schema_sha256": "7b3463d232b421769128e403127fd57eb01bcc1bcf0302b0e7436a24fb3f37bc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.auth.start",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "9c6ef71e8da7ec83ea9c8bd8a152f0214c414e3b4e53e8e1dc0a09eea4e5c995",
+          "input_schema_sha256": "3c773654aa826ef5867ec77ff6b4ff2cd07489485211ad1f32a89fd29c363b27",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.bridge.set_enabled",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "9cd34a2d748fe6fe2e4ba894b2f2fee0382dd865eecd41080e6bc03d4d4961e0",
+          "input_schema_sha256": "ffb3af48869430d7f48849d5c41b6b48f7f85cfa34b80f3d63d998ee0f3729c2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.create",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "2f8b1651460bbebfea81fb545a2845abc35523662b410921e804c78be533afc1",
+          "input_schema_sha256": "19df7f8bb3d96959ec774b5d843d4849ae3d6e3e86cd1475e2ba9a056abc126f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.credential.delete",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "15450381f3555c953003180a437312a9747abf5824798418310e6ad5a1278710",
+          "input_schema_sha256": "7b3463d232b421769128e403127fd57eb01bcc1bcf0302b0e7436a24fb3f37bc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.credential.set",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "7652a89963411dcd701652b69d415136322a0c9855455d45d6c82bc0078c9464",
+          "input_schema_sha256": "44d0de44b0313177c2de81392f71bd7938e7b6e00f6ed674201ea1b3e7321796",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.delete",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "09732562238cfb0b13d6ec4e0be6e9721551a22d36e285b6e180117c22a6d859",
+          "input_schema_sha256": "13ad9e2045f940e7083bfa0e0f70c489c9a440c440cee7aadf4d651a048cbab3",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.get",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "b15b33bde1927071bf1a833fb0294d4298a7449fe0b03fb812ef3d7c0307ae64",
+          "input_schema_sha256": "7b3463d232b421769128e403127fd57eb01bcc1bcf0302b0e7436a24fb3f37bc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.import",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "f568650f4c4a7b7603eda6397a917454a667239ea17b57ab098bc03a9fb72f3a",
+          "input_schema_sha256": "b1f7528d839b6cf75e61d4de61d07b78309195b9b7cb2d15d22f3f89f3b26b34",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.import_preview",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "bd48ef82262036caa3c3091ff75aa62c3d9275817f4e04cc63a7919125c4e1ac",
+          "input_schema_sha256": "c05be0cd5f27d68a91e7174a6f2f88934c595c0bf16dbb2837202b076abda61f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.list",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "2d4f275b09925cd6c5b6aacf3a66441dbc69cd8194518ba01075341482de7f02",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.reconnect",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "b310ed879d8e828366ef6cc5e83cbb0309aa007019a91d84dc7c612215a0c6fe",
+          "input_schema_sha256": "7b3463d232b421769128e403127fd57eb01bcc1bcf0302b0e7436a24fb3f37bc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.set_enabled",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "477c6cb53d31d5d3e3e90c6278b2aa7e976905a419e411c94889c9268962dfa4",
+          "input_schema_sha256": "ed05174b149ea0b13c9974290d08a7d64ad0c1b96a7271260257dcee4aa9a831",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.test",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "b05d5dab94993c67ced94dc52f5285c2b1bb5dfe2510f0ba60d334af54f4dcbf",
+          "input_schema_sha256": "7b3463d232b421769128e403127fd57eb01bcc1bcf0302b0e7436a24fb3f37bc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.connections.update",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "8469966179a1266f2490f600ef17d55bc507bbd7eeb95389f2f134030e9c5464",
+          "input_schema_sha256": "c770e87f7e53af8fdfd2c060e90ff55540462822be4b3c691edb2166cdf239a8",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mcp",
+            "mutate"
+          ]
+        },
         {
           "canonical_name": "agena.mcp.prompts.get",
           "conditional": "runtime:mcp-manager",

@@ -1,8 +1,8 @@
 //! Thin one-shot session commands backed by the long-lived server.
 //!
-//! This module deliberately depends only on the public API/client contracts.
-//! It never opens the session database, creates an Application, or starts a
-//! scheduler/plugin host.
+//! Server operations use the public API/client contracts; request construction
+//! reuses neutral configuration validation. This module never opens the session
+//! database, creates an Application, or starts a scheduler/plugin host.
 
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
@@ -36,6 +36,7 @@ use agena_api::{
         ReplacePermissionRuleParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
         SubmitRunParams, UpsertPermissionRuleParams,
     },
+    mcp_connections::{McpConnectionCatalog, McpConnectionDetail, McpConnectionSummary},
     queries::{ListPermissionRulesParams, ListSessionsParams, Query, QueryResult},
     resource::{
         ModelRef as WireModelRef, PermissionMode as WirePermissionMode, PermissionReply,
@@ -502,48 +503,29 @@ impl AgenaCli {
         &self,
         args: McpReconnectArgs,
     ) -> Result<String, AppError> {
-        let server = args.server.trim();
-        if server.is_empty() {
-            return Err(AppError::Config(
-                "MCP server name must not be empty".to_owned(),
-            ));
-        }
+        let server = normalized_mcp_server_name(args.server.as_str())?;
         let client = connect_server_client(self).await?;
-        let status = client.runtime_status().await.map_err(|error| {
-            client_error("failed to resolve the server operator workspace", error)
-        })?;
-        let workspace = client
-            .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
-                path: status.workspace_root,
-                create_if_missing: true,
-            }))
+        let catalog = client
+            .list_mcp_connections()
+            .await
+            .map_err(|error| client_error("failed to read saved MCP connections", error))?;
+        let connection = effective_mcp_connection(&catalog, &server)?;
+        let detail = client
+            .reconnect_mcp_connection(&connection.id)
             .await
             .map_err(|error| {
-                client_error("failed to resolve the server operator workspace", error)
+                client_error("failed to reconnect the effective MCP connection", error)
             })?;
-        let CommandResult::Workspace(workspace) = workspace else {
-            return Err(AppError::Internal(
-                "server returned the wrong operator workspace result".to_owned(),
-            ));
-        };
-        let value = client
-            .invoke_operator_tool(
-                workspace.id,
-                "agena.mcp.servers.reconnect",
-                Some(serde_json::json!({ "server": server })),
-            )
-            .await
-            .map_err(|error| {
-                client_error("failed to reconnect MCP server through server", error)
-            })?;
-        let summary: agena_tool::ToolExecutionSummary =
-            decode_server_resource(value, "operator-tool-result")?;
         render_serialized(
             args.format,
             &McpReconnectOutput {
-                title: summary.title,
-                output_text: summary.output_text,
-                payload: summary.payload,
+                title: "MCP connection refreshed".to_owned(),
+                output_text: format!(
+                    "MCP connection '{}' is {}.",
+                    detail.summary.name,
+                    detail.summary.state.replace('_', " ")
+                ),
+                payload: Some(mcp_detail_output(detail)?),
             },
         )
     }
@@ -617,21 +599,46 @@ impl AgenaCli {
             .settings_layer_value(layer, MCP_PLUGIN_SETTINGS_PATH)
             .await
             .map_err(|error| client_error("failed to read server MCP settings", error))?;
+        let revision = current
+            .get("revision")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                AppError::Internal(
+                    "server returned MCP settings without a file revision".to_owned(),
+                )
+            })?
+            .to_owned();
         let current = current.get("value").cloned().ok_or_else(|| {
             AppError::Internal("server returned an invalid settings-layer response".to_owned())
         })?;
-        let mut record = mcp_plugin_record(current)?;
+        let inherited_enabled = if layer == "workspace" && current.is_null() {
+            let global = client
+                .settings_layer_value("global", MCP_PLUGIN_SETTINGS_PATH)
+                .await
+                .map_err(|error| {
+                    client_error("failed to read global MCP bridge settings", error)
+                })?;
+            global
+                .pointer("/value/enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        let mut record = mcp_plugin_record(current, inherited_enabled)?;
         apply_mcp_config_mutation(&mut record, mutation)?;
-        let response = client
-            .set_settings_layer_value(
+        let mut response = client
+            .set_settings_layer_value_if_revision(
                 layer,
                 MCP_PLUGIN_SETTINGS_PATH,
                 serde_json::Value::Object(record),
                 dry_run,
                 reload,
+                Some(&revision),
             )
             .await
             .map_err(|error| client_error("failed to update server MCP settings", error))?;
+        redact_mcp_settings_edit(&mut response);
         render_serialized(format, &response)
     }
 
@@ -726,23 +733,22 @@ impl AgenaCli {
         server: Option<String>,
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let runtime = client
-            .runtime_status()
+        let catalog = client
+            .list_mcp_connections()
             .await
-            .map_err(|error| client_error("failed to read MCP status from server", error))?;
-        let mcp = runtime.operator.mcp;
+            .map_err(|error| client_error("failed to read saved MCP connections", error))?;
         match server {
             Some(server) => {
-                let server = mcp
-                    .servers
-                    .into_iter()
-                    .find(|entry| entry.name == server)
-                    .ok_or_else(|| {
-                        AppError::Config(format!("MCP server not configured: {server}"))
+                let connection = effective_mcp_connection(&catalog, &server)?;
+                let detail = client
+                    .get_mcp_connection(&connection.id)
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to read MCP connection details", error)
                     })?;
-                render_serialized(args.format, &server)
+                render_serialized(args.format, &mcp_detail_output(detail)?)
             }
-            None => render_serialized(args.format, &mcp),
+            None => render_serialized(args.format, &mcp_catalog_output(catalog)?),
         }
     }
 
@@ -2061,6 +2067,54 @@ const fn permission_reply_kind(kind: PermissionReplyKindArg) -> WirePermissionRe
 
 const MCP_PLUGIN_SETTINGS_PATH: &str = r#"plugins.list."agena.mcp""#;
 
+fn effective_mcp_connection<'a>(
+    catalog: &'a McpConnectionCatalog,
+    name: &str,
+) -> Result<&'a McpConnectionSummary, AppError> {
+    catalog
+        .connections
+        .iter()
+        .find(|entry| entry.name == name && entry.effective)
+        .ok_or_else(|| AppError::Config(format!("MCP server not configured: {name}")))
+}
+
+fn mcp_catalog_output(catalog: McpConnectionCatalog) -> Result<serde_json::Value, AppError> {
+    let servers = catalog
+        .connections
+        .into_iter()
+        .map(|summary| {
+            let connected = summary.state == "connected";
+            let mut value = serde_json::to_value(summary)?;
+            value["connected"] = serde_json::Value::Bool(connected);
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    Ok(
+        serde_json::json!({"servers":servers,"bridge_enabled":catalog.bridge_enabled,"workspace_root":catalog.workspace_root}),
+    )
+}
+
+fn mcp_detail_output(detail: McpConnectionDetail) -> Result<serde_json::Value, AppError> {
+    let connected = detail.summary.state == "connected";
+    let mut value = serde_json::to_value(detail)?;
+    value["connected"] = serde_json::Value::Bool(connected);
+    Ok(value)
+}
+
+fn redact_mcp_settings_edit(response: &mut serde_json::Value) {
+    for field in ["previous", "current"] {
+        if let Some(servers) = response
+            .get_mut(field)
+            .and_then(|record| record.pointer_mut("/settings/servers"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for config in servers.values_mut() {
+                *config = agena_runtime::mcp_connections::redact_connection_config(config).0;
+            }
+        }
+    }
+}
+
 enum McpConfigMutation {
     Add {
         server: String,
@@ -2091,7 +2145,7 @@ fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
 }
 
 fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppError> {
-    match (args.url.as_deref(), args.command.as_deref()) {
+    let value = match (args.url.as_deref(), args.command.as_deref()) {
         (Some(url), None) => {
             if !args.args.is_empty() || !args.env.is_empty() || args.cwd.is_some() {
                 return Err(AppError::Config(
@@ -2166,7 +2220,7 @@ fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppEr
                         .map(|scope| scope.trim())
                         .filter(|scope| !scope.is_empty())
                         .collect::<Vec<_>>();
-                    Some(serde_json::json!({ "kind": "oauth", "scopes": scopes }))
+                    Some(serde_json::json!({ "kind": "o_auth", "scopes": scopes }))
                 }
             };
             if !matches!(args.auth, McpHttpAuthArg::OAuth) && !args.scopes.is_empty() {
@@ -2203,12 +2257,10 @@ fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppEr
             if !args.headers.is_empty()
                 || !matches!(args.auth, McpHttpAuthArg::None)
                 || !args.scopes.is_empty()
-                || !args.include_tools.is_empty()
-                || !args.exclude_tools.is_empty()
                 || args.auth_env.is_some()
             {
                 return Err(AppError::Config(
-                    "--header, --auth, --scope, --include-tool, --exclude-tool, and --auth-env are valid only with --url"
+                    "--header, --auth, --scope, and --auth-env are valid only with --url"
                         .to_owned(),
                 ));
             }
@@ -2227,12 +2279,17 @@ fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppEr
                     "env": env,
                     "cwd": args.cwd,
                 },
+                "tools": {"include":args.include_tools,"exclude":args.exclude_tools},
             }))
         }
         (Some(_), Some(_)) | (None, None) => Err(AppError::Config(
             "mcp add requires exactly one of --url or --command".to_owned(),
         )),
-    }
+    }?;
+    let name = normalized_mcp_server_name(&args.server)?;
+    let config = agena_runtime::mcp_connections::validate_connection(&name, value)
+        .map_err(|error| AppError::Config(error.message))?;
+    serde_json::to_value(config).map_err(AppError::from)
 }
 
 fn parse_mcp_key_value_pairs(
@@ -2241,9 +2298,9 @@ fn parse_mcp_key_value_pairs(
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut values = BTreeMap::new();
     for pair in pairs {
-        let (name, value) = pair.split_once('=').ok_or_else(|| {
-            AppError::Config(format!("{option_name} requires KEY=VALUE, got `{pair}`"))
-        })?;
+        let (name, value) = pair
+            .split_once('=')
+            .ok_or_else(|| AppError::Config(format!("{option_name} requires KEY=VALUE")))?;
         let name = name.trim();
         if name.is_empty() {
             return Err(AppError::Config(format!(
@@ -2261,10 +2318,11 @@ fn parse_mcp_key_value_pairs(
 
 fn mcp_plugin_record(
     current: serde_json::Value,
+    inherited_enabled: bool,
 ) -> Result<serde_json::Map<String, serde_json::Value>, AppError> {
     let mut record = match current {
         serde_json::Value::Null => serde_json::json!({
-            "enabled": true,
+            "enabled": inherited_enabled,
             "package": { "kind": "static" },
             "settings": {},
         })
@@ -2443,3 +2501,6 @@ fn expect_execution(
     };
     Ok(execution)
 }
+
+#[cfg(test)]
+mod mcp_tests;

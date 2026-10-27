@@ -1542,7 +1542,47 @@ impl HostClient for RuntimeHostClient {
         Ok(HostMcpListServersResponse { servers })
     }
 
+    async fn require_mcp_server_permission(
+        &self,
+        spec: HostMcpServerSpec,
+    ) -> Result<(), PluginError> {
+        match spec {
+            HostMcpServerSpec::Stdio {
+                command, args, cwd, ..
+            } => {
+                let shell_command = join_monitor_command(
+                    &std::iter::once(command).chain(args).collect::<Vec<_>>(),
+                )?;
+                self.require_callback_invocation(
+                    "agena.shell.spawn",
+                    serde_json::json!({
+                        "command": shell_command, "workdir": cwd,
+                        "reads": [], "writes": [], "network": [],
+                    }),
+                )
+                .await
+            }
+            HostMcpServerSpec::Http { url, .. } => {
+                let parsed = url::Url::parse(&url).map_err(|_| {
+                    PluginError::invalid_params("MCP endpoint must be an absolute HTTP(S) URL")
+                })?;
+                if !matches!(parsed.scheme(), "http" | "https")
+                    || parsed.host_str().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                    || parsed.fragment().is_some()
+                {
+                    return Err(PluginError::invalid_params(
+                        "MCP endpoint must be an absolute HTTP(S) URL without user information or a fragment",
+                    ));
+                }
+                self.require_network_permission(url).await
+            }
+        }
+    }
+
     async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> Result<(), PluginError> {
+        self.require_mcp_server_permission(req.spec.clone()).await?;
         let manager = self.snapshot_feature(
             |snapshot| snapshot.mcp_manager(),
             "mcp manager is not enabled in this runtime",
@@ -1553,27 +1593,18 @@ impl HostClient for RuntimeHostClient {
                 args,
                 env,
                 cwd,
-            } => {
-                let shell_command = join_monitor_command(
-                    &std::iter::once(command.clone())
-                        .chain(args.iter().cloned())
-                        .collect::<Vec<_>>(),
-                )?;
-                self.require_callback_invocation("agena.shell.spawn", serde_json::json!({"command":shell_command,"workdir":cwd,"reads":[],"writes":[],"network":[]})).await?;
-                agena_mcp_client::ServerSpec::Stdio {
-                    command,
-                    args,
-                    env: env.into_iter().collect(),
-                    cwd: cwd.map(std::path::PathBuf::from),
-                    tool_policy: Default::default(),
-                }
-            }
+            } => agena_mcp_client::ServerSpec::Stdio {
+                command,
+                args,
+                env: env.into_iter().collect(),
+                cwd: cwd.map(std::path::PathBuf::from),
+                tool_policy: Default::default(),
+            },
             HostMcpServerSpec::Http {
                 url,
                 bearer,
                 headers,
             } => {
-                self.require_network_permission(url.clone()).await?;
                 let url = url::Url::parse(&url)
                     .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
                 let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
@@ -1585,12 +1616,10 @@ impl HostClient for RuntimeHostClient {
                 }
             }
         };
-        manager.add_server(&req.name, spec).await.map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "mcp.add_server failed",
-                &error,
-            ))
-        })
+        manager
+            .add_server(&req.name, spec)
+            .await
+            .map_err(|error| PluginError::internal(error.user_message()))
     }
 
     async fn mcp_remove_server(

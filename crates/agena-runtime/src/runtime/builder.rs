@@ -1792,6 +1792,12 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
         agena_runtime::runtime_metrics_snapshot()
     }
 
+    fn mcp_connection_manager(
+        &self,
+    ) -> Option<std::sync::Arc<agena_mcp_client::McpConnectionManager>> {
+        self.current_snapshot().mcp_manager()
+    }
+
     fn start_runtime_reload_task(
         &self,
         cause: agena_runtime::RuntimeReloadCause,

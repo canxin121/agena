@@ -8,9 +8,11 @@ rust-version.workspace = true
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 agena-failure = { workspace = true }
+agena-domain = { workspace = true }
 agena-secret-store = { workspace = true }
 agena-process = { workspace = true }
 async-trait.workspace = true
+chrono.workspace = true
 http = { workspace = true }
 oauth2 = { workspace = true }
 reqwest.workspace = true
@@ -26,3 +28,6 @@ url = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

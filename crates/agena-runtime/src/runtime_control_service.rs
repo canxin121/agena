@@ -53,6 +53,13 @@ impl RuntimeControlServiceError {
 #[async_trait]
 /// Service for controlling the runtime.
 pub trait RuntimeControlService: Send + Sync {
+    /// The active client bridge, absent when the built-in MCP plugin is disabled.
+    fn mcp_connection_manager(
+        &self,
+    ) -> Option<std::sync::Arc<agena_mcp_client::McpConnectionManager>> {
+        None
+    }
+
     async fn reload(&self) -> Result<RuntimeReloadReport, RuntimeControlServiceError>;
 
     /// Fetches provider client-version data through the Runtime-owned network

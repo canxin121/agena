@@ -661,6 +661,21 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn require_mcp_server_permission(
+        &self,
+        spec: crate::sdk::host_api::HostMcpServerSpec,
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                crate::sdk::permission_wait::waiting(inner.require_mcp_server_permission(spec)),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::sdk::Result<()> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();

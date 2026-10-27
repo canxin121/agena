@@ -409,6 +409,14 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Authorize a configured MCP process or endpoint without starting it,
+    /// connecting, saving configuration, or requiring the bridge to be enabled.
+    /// Native host callback only; remote plugin transports do not expose this
+    /// capability. Call before persisting an enabled connection or testing it.
+    async fn require_mcp_server_permission(&self, _spec: HostMcpServerSpec) -> Result<()> {
+        Err(unavailable())
+    }
+
     /// MCP registry — register or replace a server.
     async fn mcp_add_server(&self, _req: HostMcpAddServerRequest) -> Result<()> {
         Err(unavailable())

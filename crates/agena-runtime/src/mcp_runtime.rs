@@ -36,53 +36,39 @@ pub async fn build_mcp_manager(
     }
 
     let manager = Arc::new(manager);
+    let mut connections = tokio::task::JoinSet::new();
     for (name, server_config) in &config.servers {
-        let manager = Arc::clone(&manager);
-        let name = name.clone();
-        let spec = match server_config {
-            McpServerConfig::Stdio { process, tools } => ServerSpec::Stdio {
-                command: process.command.clone(),
-                args: process.args.clone(),
-                env: process
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect(),
-                cwd: process.cwd.clone(),
-                tool_policy: agena_mcp_client::McpToolPolicy {
-                    include: tools.include.clone(),
-                    exclude: tools.exclude.clone(),
-                },
-            },
-            McpServerConfig::Http {
-                endpoint,
-                auth,
-                tools,
-            } => {
-                let Some(url) = parse_server_url(name.as_str(), endpoint.url.as_str()) else {
-                    continue;
-                };
-                ServerSpec::Http {
-                    url,
-                    headers: endpoint
-                        .headers
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect(),
-                    auth: mcp_http_auth(auth.as_ref()),
-                    tool_policy: agena_mcp_client::McpToolPolicy {
-                        include: tools.include.clone(),
-                        exclude: tools.exclude.clone(),
-                    },
-                }
+        if !server_config.enabled() {
+            continue;
+        }
+        let spec = match mcp_server_spec(name, server_config, workspace_root) {
+            Ok(spec) => spec,
+            Err(error) => {
+                tracing::warn!(target: "agena::mcp", server = %name, %error, "invalid MCP connection configuration");
+                continue;
             }
         };
-        if let Err(error) = manager.add_server(&name, spec).await {
-            tracing::warn!(target: "agena::mcp", "failed to connect MCP server '{name}': {error}");
-        } else {
-            tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
+        let manager = Arc::clone(&manager);
+        let name = name.clone();
+        let timeouts = server_config.timeouts().clone();
+        connections.spawn(async move {
+            let result = manager.add_server_with_timeouts(
+                &name,
+                spec,
+                std::time::Duration::from_millis(timeouts.connect_ms),
+                std::time::Duration::from_millis(timeouts.request_ms),
+            ).await;
+            if let Err(error) = result {
+                tracing::warn!(target: "agena::mcp", server = %name, category = %error.user_message(), "failed to connect MCP server");
+            } else {
+                tracing::info!(target: "agena::mcp", server = %name, "connected MCP server");
+            }
+        });
+        if connections.len() >= 4 {
+            let _ = connections.join_next().await;
         }
     }
+    while connections.join_next().await.is_some() {}
     if config.runtime.reconnect.enabled {
         manager.start_reconnect_supervisor(ReconnectPolicy::new(
             std::time::Duration::from_millis(config.runtime.reconnect.initial_delay_ms),
@@ -109,14 +95,53 @@ pub async fn build_configured_mcp_manager(
     ))
 }
 
-fn parse_server_url(name: &str, value: &str) -> Option<url::Url> {
-    match url::Url::parse(value) {
-        Ok(url) => Some(url),
-        Err(error) => {
-            tracing::warn!(target: "agena::mcp", "skipping mcp server '{name}': invalid url '{value}': {error}");
-            None
-        }
-    }
+/// Validate and resolve a server definition without starting a process or
+/// connecting to the endpoint. Relative working directories use this runtime's
+/// workspace, never the process-wide current directory.
+pub fn mcp_server_spec(
+    name: &str,
+    config: &McpServerConfig,
+    workspace_root: &std::path::Path,
+) -> Result<ServerSpec, String> {
+    config.validate(name)?;
+    Ok(match config {
+        McpServerConfig::Stdio { process, tools, .. } => ServerSpec::Stdio {
+            command: process.command.clone(),
+            args: process.args.clone(),
+            env: process
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            cwd: Some(match process.cwd.as_ref() {
+                Some(path) if path.is_absolute() => path.clone(),
+                Some(path) => workspace_root.join(path),
+                None => workspace_root.to_owned(),
+            }),
+            tool_policy: agena_mcp_client::McpToolPolicy {
+                include: tools.include.clone(),
+                exclude: tools.exclude.clone(),
+            },
+        },
+        McpServerConfig::Http {
+            endpoint,
+            auth,
+            tools,
+            ..
+        } => ServerSpec::Http {
+            url: url::Url::parse(&endpoint.url).map_err(|_| "Invalid MCP HTTP endpoint.")?,
+            headers: endpoint
+                .headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            auth: mcp_http_auth(auth.as_ref()),
+            tool_policy: agena_mcp_client::McpToolPolicy {
+                include: tools.include.clone(),
+                exclude: tools.exclude.clone(),
+            },
+        },
+    })
 }
 
 fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client::HttpAuth> {
@@ -126,8 +151,18 @@ fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client:
             agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
         }
         McpHttpAuthConfig::BearerFromStore => agena_mcp_client::HttpAuth::BearerFromStore,
-        McpHttpAuthConfig::OAuth { scopes } => agena_mcp_client::HttpAuth::OAuth {
+        McpHttpAuthConfig::OAuth {
+            scopes,
+            client_id,
+            client_secret,
+            client_metadata_url,
+        } => agena_mcp_client::HttpAuth::OAuth {
             scopes: scopes.clone(),
+            registration: agena_mcp_client::McpOAuthRegistration {
+                client_id: client_id.clone(),
+                client_secret: client_secret.clone(),
+                client_metadata_url: client_metadata_url.clone(),
+            },
         },
         McpHttpAuthConfig::Custom { headers } => agena_mcp_client::HttpAuth::Custom(
             headers

@@ -57,6 +57,8 @@ pub(super) fn build_or_prepare_session_manager(
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
         auxiliary_selection: build_config.auxiliary_selection.clone(),
+        additional_system_prompt: build_config.additional_system_prompt.clone(),
+        model_additional_system_prompts: build_config.model_additional_system_prompts.clone(),
         auto_title: build_config.auto_title.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,

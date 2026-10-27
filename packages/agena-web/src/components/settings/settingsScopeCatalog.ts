@@ -83,6 +83,30 @@ const LAYER_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   },
 ]
 
+const PROMPT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
+  {
+    id: 'effective',
+    label: () => st('Effective settings'),
+    description: () =>
+      st('Resolved additional instructions for the selected session. Built-in instructions are not shown here.'),
+  },
+  {
+    id: 'global',
+    label: () => st('Global layer'),
+    description: () => st('Baseline for every workspace.'),
+  },
+  {
+    id: 'workspace',
+    label: () => st('Workspace layer'),
+    description: () => st('Overrides for this workspace.'),
+  },
+  {
+    id: 'session',
+    label: () => st('Current session'),
+    description: () => st('Applies only to the selected session.'),
+  },
+]
+
 const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, readonly SettingsScopeSource[]>>> = {
   permissions: {
     filesystem: PERMISSION_SCOPE_SOURCES,
@@ -91,6 +115,9 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
   },
   'models-providers': {
     'model-settings': MODEL_SCOPE_SOURCES,
+  },
+  'runtime-session': {
+    'additional-system-prompt': PROMPT_SCOPE_SOURCES,
   },
   diagnostics: {
     'advanced-settings': LAYER_SCOPE_SOURCES,

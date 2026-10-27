@@ -378,6 +378,14 @@ impl App {
                 self.open_settings_field_editor(field, "");
                 false
             }
+            SettingsPickerAction::EditSessionAdditionalSystemPrompt(session_id) => {
+                self.open_session_additional_system_prompt_editor(session_id);
+                false
+            }
+            SettingsPickerAction::InheritSessionAdditionalSystemPrompt(session_id) => {
+                self.save_session_additional_system_prompt(session_id, None);
+                false
+            }
             SettingsPickerAction::ToggleMcpServer => {
                 self.dispatch_backend_operation(
                     |application| async move { application.toggle_mcp_server().await },

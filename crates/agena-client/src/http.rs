@@ -1282,6 +1282,19 @@ impl AgenaClient {
         .await
     }
 
+    /// Set a session override, or restore inheritance with None.
+    pub async fn set_session_additional_system_prompt(
+        &self,
+        session_id: i64,
+        additional_system_prompt: Option<String>,
+    ) -> Result<SessionResource, ClientError> {
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}"),
+            serde_json::json!({ "additional_system_prompt": additional_system_prompt }),
+        )
+        .await
+    }
+
     /// Update the independent durable navigation pin.
     pub async fn set_session_pinned(
         &self,

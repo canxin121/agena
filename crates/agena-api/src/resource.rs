@@ -1045,6 +1045,12 @@ pub struct ActiveExecutionResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
+    /// The session override. Null inherits; an empty string disables inheritance.
+    #[serde(default)]
+    pub additional_system_prompt: Option<String>,
+    /// Selected session/model/project/global value, excluding per-request overrides.
+    #[serde(default)]
+    pub effective_additional_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_retry: Option<agena_domain::ProviderRetryStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1201,6 +1207,7 @@ pub struct RunOptions {
     pub speed_mode: Option<String>,
     #[serde(default)]
     pub verbosity: Option<String>,
+    /// Temporary additional instructions; an empty string overrides inherited values.
     #[serde(default)]
     pub system: Option<String>,
     #[serde(default)]

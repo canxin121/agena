@@ -2,6 +2,10 @@ use super::*;
 use crate::SessionExecutionControl;
 
 async fn fixture() -> (SessionManager, SessionId) {
+    fixture_with_config(RuntimeSessionManagerConfig::default()).await
+}
+
+async fn fixture_with_config(config: RuntimeSessionManagerConfig) -> (SessionManager, SessionId) {
     let kernel = Arc::new(
         agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
             .await
@@ -49,7 +53,7 @@ async fn fixture() -> (SessionManager, SessionId) {
         ContextGovernor::new(Default::default()),
         SessionProcessor::new(plugins),
         executor,
-        RuntimeSessionManagerConfig::default(),
+        config,
     );
     (manager, session)
 }
@@ -67,6 +71,77 @@ async fn send(manager: &SessionManager, session: SessionId) -> ExecutionId {
         .unwrap()
         .value
         .id
+}
+
+#[tokio::test]
+async fn prompt_projection_preserves_overrides_without_a_usable_provider() {
+    let (manager, session) = fixture_with_config(RuntimeSessionManagerConfig {
+        additional_system_prompt: Some("Inherited instructions".into()),
+        ..Default::default()
+    })
+    .await;
+    for model in [
+        None,
+        Some(agena_domain::ModelRef::new(
+            "missing-provider",
+            "missing-model",
+        )),
+    ] {
+        manager
+            .kernel()
+            .sessions
+            .update_selection(RequestId::new(), session, SelectionChange::Model(model))
+            .await
+            .unwrap();
+        for raw in [
+            None,
+            Some(String::new()),
+            Some("Session instructions".to_owned()),
+        ] {
+            manager
+                .kernel()
+                .sessions
+                .configure(
+                    RequestId::new(),
+                    session,
+                    SessionConfigurationChange {
+                        additional_system_prompt: Some(raw.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let snapshot = manager
+                .kernel()
+                .reader
+                .control_snapshot(session, 1)
+                .await
+                .unwrap();
+            let context =
+                crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+            assert_eq!(context.additional_system_prompt, raw);
+            assert_eq!(
+                context.effective_additional_system_prompt,
+                raw.clone()
+                    .or_else(|| Some("Inherited instructions".into()))
+            );
+            assert_eq!(
+                manager
+                    .execution_context_value(session)
+                    .await
+                    .unwrap()
+                    .additional_system_prompt,
+                raw
+            );
+        }
+    }
+    manager
+        .kernel_runtime
+        .ports
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

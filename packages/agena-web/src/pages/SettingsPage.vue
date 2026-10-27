@@ -875,6 +875,7 @@ const dirtyHint = computed(
           <RuntimeSessionPanel
             ref="runtimeSessionPanel"
             :active-page="activeView"
+            :scope="activeScope"
             v-else-if="activeSection === 'runtime-session'"
           />
 

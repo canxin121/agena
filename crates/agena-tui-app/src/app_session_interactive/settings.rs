@@ -202,6 +202,20 @@ impl App {
             &sources,
             SettingsStudioSectionId::RuntimeSession,
         ));
+        if let Some(session_id) = self.current_or_selected_session_id() {
+            runtime_session_items.push(SettingsStudioItem::new(
+                "Session additional system prompt",
+                format!("Session {session_id}"),
+                "Edit instructions for this session. Saving an empty value disables inherited additional instructions.",
+                SettingsPickerAction::EditSessionAdditionalSystemPrompt(session_id),
+            ));
+            runtime_session_items.push(SettingsStudioItem::new(
+                "Restore session prompt inheritance",
+                "Use inherited instructions",
+                "Remove this session's override and use the model, project, or global additional system prompt.",
+                SettingsPickerAction::InheritSessionAdditionalSystemPrompt(session_id),
+            ));
+        }
         let permission_items = settings_studio_permission_items(
             &self.i18n,
             &sources,

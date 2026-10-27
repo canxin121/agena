@@ -57,12 +57,13 @@ pub(super) async fn apply(
             let mut metadata = reads::metadata(connection, *session).await?;
             let original = metadata.clone();
             let mut config = lifecycle::configuration(connection, *session).await?;
-            let original_state = config.title_state.clone();
+            let original_config = config.clone();
             if let Some(update) = &change.automatic_title {
                 if change.title.is_some()
                     || change.favorite.is_some()
                     || change.pinned.is_some()
                     || change.auto_title.is_some()
+                    || change.additional_system_prompt.is_some()
                 {
                     return Err(invalid(
                         "automatic title cannot be combined with manual metadata",
@@ -134,7 +135,10 @@ pub(super) async fn apply(
                     SessionTitleState::default()
                 };
             }
-            if metadata != original || config.title_state != original_state {
+            if let Some(value) = &change.additional_system_prompt {
+                config.additional_system_prompt.clone_from(value);
+            }
+            if metadata != original || config != original_config {
                 let configuration = encode(&config)?;
                 if configuration.len() > 65536 {
                     return Err(invalid("session configuration exceeds 64 KiB"));

@@ -89,6 +89,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   'runtime-session': [
     {
+      id: 'additional-system-prompt',
+      label: () => st('Additional system prompt'),
+      description: () => st('Add instructions globally, for a workspace, or for the current session.'),
+      keywords: ['system', 'prompt', 'instructions', 'inherit', 'global', 'workspace', 'session'],
+    },
+    {
       id: 'client-versions',
       label: () => st('Provider client versions'),
       description: () =>

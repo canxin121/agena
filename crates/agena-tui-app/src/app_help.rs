@@ -171,6 +171,7 @@ impl App {
             }
             Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
+            Overlay::SessionPromptEdit(dialog) => self.help_for_editor(dialog.title.clone(), true),
             Overlay::TranscriptFoldLoad(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)
             }

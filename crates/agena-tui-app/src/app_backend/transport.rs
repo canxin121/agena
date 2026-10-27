@@ -1878,6 +1878,17 @@ impl TuiBackend {
         Ok(session)
     }
 
+    pub async fn set_session_additional_system_prompt(
+        &self,
+        session_id: i64,
+        value: Option<String>,
+    ) -> Result<SessionResource> {
+        Ok(self
+            .client()
+            .set_session_additional_system_prompt(session_id, value)
+            .await?)
+    }
+
     pub async fn set_session_favorite(
         &self,
         session_id: i64,

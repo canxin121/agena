@@ -95,6 +95,7 @@ impl ApplicationService {
     ) -> ApplicationResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
         let configuration = agena_storage::kernel::SessionConfiguration {
+            additional_system_prompt: request.session.additional_system_prompt,
             title_state: if request.session.auto_title {
                 agena_storage::kernel::SessionTitleState::automatic()
             } else {
@@ -137,9 +138,10 @@ impl ApplicationService {
             && request.favorite.is_none()
             && request.pinned.is_none()
             && request.auto_title.is_none()
+            && request.additional_system_prompt.is_none()
         {
             return Err(ApplicationError::bad_request(
-                "Include title, favorite, pinned, or auto_title in a metadata update.",
+                "Include title, favorite, pinned, auto_title, or additional_system_prompt in a session update.",
             ));
         }
         self.session_kernel
@@ -152,6 +154,7 @@ impl ApplicationService {
                     favorite: request.favorite,
                     pinned: request.pinned,
                     auto_title: request.auto_title,
+                    additional_system_prompt: request.additional_system_prompt,
                     ..Default::default()
                 },
             )

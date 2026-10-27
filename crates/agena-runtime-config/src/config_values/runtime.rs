@@ -55,6 +55,9 @@ impl Default for ProviderClientVersionSettings {
 #[serde(default)]
 /// Resolved session configuration.
 pub struct SessionConfig {
+    /// Default additional instructions, preserving an explicit empty override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_system_prompt: Option<String>,
     pub compaction: SessionCompactionConfig,
     pub auto_title: SessionAutoTitleConfig,
     /// Cap on model turns within one stable run. `0` means unlimited;

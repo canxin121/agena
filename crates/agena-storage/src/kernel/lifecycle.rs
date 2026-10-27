@@ -19,6 +19,8 @@ pub struct SessionConfiguration {
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: SessionRelationKind,
     pub conversation: Option<SessionConversation>,
+    /// None inherits; an empty string disables inherited additional instructions.
+    pub additional_system_prompt: Option<String>,
     pub permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
     pub capability_denied_tool_names: BTreeSet<String>,
@@ -88,6 +90,12 @@ pub struct SessionConfigurationChange {
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: Option<SessionRelationKind>,
     pub conversation: Option<Option<SessionConversation>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::deserialize_optional_string_update"
+    )]
+    pub additional_system_prompt: Option<Option<String>>,
     pub permission: Option<PermissionConfig>,
     pub permission_ceiling: Option<PermissionConfig>,
     pub capability_denied_tool_names: Option<BTreeSet<String>>,

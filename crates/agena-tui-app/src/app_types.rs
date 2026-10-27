@@ -1019,6 +1019,7 @@ pub(super) enum Overlay {
     SessionRename(LineInputOverlay),
     HubProject(crate::app_hub::HubProjectDialog),
     SettingsValueEdit(SettingsValueEditOverlay),
+    SessionPromptEdit(SessionPromptEditOverlay),
     Choice(ChoiceOverlay),
     QueueEditor(crate::app_queue_editor::QueueEditorOverlay),
     PathBrowser(PathBrowserOverlay),

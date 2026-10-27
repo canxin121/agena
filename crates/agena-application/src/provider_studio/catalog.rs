@@ -758,7 +758,7 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     existing_adapter: Option<JsonValue>,
     adapter_id: &str,
     model_id: &str,
-    model_value: JsonValue,
+    mut model_value: JsonValue,
 ) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
     let mut adapter = match existing_adapter {
         Some(JsonValue::Object(object)) => object,
@@ -774,6 +774,13 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     let Some(models_object) = models.as_object_mut() else {
         return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
     };
+    // A complete model edit omits this key to inherit. The settings merge patch
+    // needs an explicit null to remove an existing override.
+    if let Some(model) = model_value.as_object_mut() {
+        model
+            .entry("additional_system_prompt".to_owned())
+            .or_insert(JsonValue::Null);
+    }
     models_object.insert(
         canonical_provider_model_id(adapter_id, model_id),
         model_value,
@@ -820,4 +827,87 @@ pub(crate) fn optional_non_empty(value: &str) -> Option<&str> {
 /// message otherwise.
 pub(crate) fn required_trimmed<'a>(value: &'a str, field: &str) -> anyhow::Result<&'a str> {
     optional_non_empty(value).ok_or_else(|| anyhow!("{field} is required"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_provider_model_adapter_patch_for_save, provider_model_overlay_to_json};
+    use agena_provider::ResolvedProviderModelConfig;
+    use agena_runtime::{
+        ConfigSettingsEditOptions, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+        patch_runtime_file_settings,
+    };
+    use serde_json::{Value, json};
+
+    #[test]
+    fn model_prompt_save_disable_and_inherit_persist_through_merge_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({"providers": {"local": {
+                "adapters": {"openai_chat_completions": {
+                    "models": {
+                        "model": {
+                            "display_name": "Existing name",
+                            "additional_system_prompt": "Previous instructions"
+                        },
+                        "other": {"additional_system_prompt": "Other instructions"}
+                    }
+                }}
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+
+        for prompt in [Some("Updated instructions"), Some(""), None] {
+            let before: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut value = json!({});
+            if let Some(prompt) = prompt {
+                value["additional_system_prompt"] = json!(prompt);
+            }
+            let model: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
+            let adapter_patch = merge_provider_model_adapter_patch_for_save(
+                Some(before["providers"]["local"]["adapters"]["openai_chat_completions"].clone()),
+                "openai_chat_completions",
+                "model",
+                provider_model_overlay_to_json(model).unwrap(),
+            )
+            .unwrap();
+            patch_runtime_file_settings(
+                &path,
+                ConfigSettingsPatchInput {
+                    target: ConfigSettingsPathInput {
+                        path: Some("providers".to_owned()),
+                    },
+                    changes: json!({"local": {"adapters": {
+                        "openai_chat_completions": adapter_patch
+                    }}}),
+                    options: ConfigSettingsEditOptions {
+                        validate: false,
+                        reload: false,
+                        ..Default::default()
+                    },
+                },
+                None,
+            )
+            .unwrap();
+
+            let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let models =
+                &saved["providers"]["local"]["adapters"]["openai_chat_completions"]["models"];
+            assert_eq!(
+                models["model"].get("additional_system_prompt"),
+                prompt.map(|value| json!(value)).as_ref()
+            );
+            assert_eq!(models["model"]["display_name"], json!("Existing name"));
+            assert_eq!(
+                models["other"]["additional_system_prompt"],
+                json!("Other instructions")
+            );
+            let configured: ResolvedProviderModelConfig =
+                serde_json::from_value(models["model"].clone()).unwrap();
+            assert_eq!(configured.additional_system_prompt.as_deref(), prompt);
+        }
+    }
 }

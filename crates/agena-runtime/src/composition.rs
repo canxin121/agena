@@ -69,6 +69,9 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 32;
 pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) default_selection: agena_domain::ExecutionSelection,
     pub(crate) auxiliary_selection: agena_domain::ExecutionSelection,
+    pub(crate) additional_system_prompt: Option<String>,
+    pub(crate) model_additional_system_prompts:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
@@ -106,6 +109,24 @@ pub(crate) fn session_build_config_from_resolved(
                 selection
             })
             .unwrap_or_default(),
+        additional_system_prompt: config.session.additional_system_prompt.clone(),
+        model_additional_system_prompts: config
+            .providers
+            .iter()
+            .filter_map(|(provider_id, provider)| {
+                let models = provider
+                    .models
+                    .iter()
+                    .filter_map(|(route, model)| {
+                        model
+                            .additional_system_prompt
+                            .as_ref()
+                            .map(|prompt| (route.clone(), prompt.clone()))
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                (!models.is_empty()).then(|| (provider_id.clone(), models))
+            })
+            .collect(),
         auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
         auto_compaction: agena_domain::SessionAutoCompactionConfig {

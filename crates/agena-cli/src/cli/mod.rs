@@ -1102,6 +1102,8 @@ pub enum MemorySubcommand {
 /// Sessions subcommands.
 pub enum SessionsSubcommand {
     List(SessionListArgs),
+    /// Read or change a session's additional system prompt.
+    SystemPrompt(SessionSystemPromptArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -1109,6 +1111,23 @@ pub enum SessionsSubcommand {
     Import(SessionImportArgs),
     /// Print every session sharing the given tree root, in (depth, id) order.
     Tree(SessionTreeArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for a session's additional instructions.
+pub struct SessionSystemPromptArgs {
+    pub session_id: i64,
+    /// Set an explicit override. Pass an empty string to disable inherited instructions.
+    #[arg(long, conflicts_with_all = ["file", "inherit"])]
+    pub text: Option<String>,
+    /// Read the exact prompt text from a UTF-8 file.
+    #[arg(long, conflicts_with_all = ["text", "inherit"])]
+    pub file: Option<PathBuf>,
+    /// Remove the session override and resume model/project/global inheritance.
+    #[arg(long, conflicts_with_all = ["text", "file"])]
+    pub inherit: bool,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]

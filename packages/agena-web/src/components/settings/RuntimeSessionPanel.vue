@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { RiRefreshLine, RiRefreshFill, RiCpuLine, RiStackLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
+import AdditionalSystemPromptPanel from './AdditionalSystemPromptPanel.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
@@ -19,6 +20,7 @@ const autoUpdateField = ref<InstanceType<typeof ServerSettingField> | null>(null
 const autoCompactionField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
+const promptPanel = ref<InstanceType<typeof AdditionalSystemPromptPanel> | null>(null)
 const titleOptions = computed(() => [
   {
     path: 'session.auto_title.enabled',
@@ -71,6 +73,7 @@ async function refresh() {
       autoUpdateField.value,
       autoCompactionField.value,
       tokensField.value,
+      promptPanel.value,
     ].map((field) => field?.refresh()),
   )
 }
@@ -91,7 +94,7 @@ async function refreshClientVersions() {
     refreshBusy.value = false
   }
 }
-defineProps<{ activePage: string }>()
+defineProps<{ activePage: string; scope: string }>()
 </script>
 
 <template>
@@ -99,6 +102,8 @@ defineProps<{ activePage: string }>()
     section="runtime-session"
     :pages="pages"
     :active-page="activePage"
+    :active-scope="scope"
+    scope-layout="toolbar"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['runtime-session']"
     v-slot="{ activePage }"
   >
@@ -143,6 +148,11 @@ defineProps<{ activePage: string }>()
         />
       </SettingsCard>
     </div>
+    <AdditionalSystemPromptPanel
+      v-else-if="activePage === 'additional-system-prompt'"
+      ref="promptPanel"
+      :scope="scope"
+    />
     <div v-else class="space-y-4">
       <SettingsCard :title="$st('Automatic session titles')" :icon="RiCpuLine">
         <ServerSettingField v-for="field in titleOptions" :key="field.path" ref="titleFields" v-bind="field" compact />

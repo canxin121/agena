@@ -28,6 +28,7 @@ impl SessionManager {
             scope_session_id: Some(id),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
+            additional_system_prompt: configuration.additional_system_prompt.clone(),
             selection,
             effective_permission: state
                 .config
@@ -87,6 +88,7 @@ impl SessionManager {
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
+            additional_system_prompt: configuration.additional_system_prompt.clone(),
             selection: state
                 .config
                 .default_selection
@@ -593,6 +595,23 @@ impl SessionQueryService for SessionManager {
         let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
             conversation: configuration.conversation.clone(),
+            additional_system_prompt: configuration.additional_system_prompt.clone(),
+            effective_additional_system_prompt: {
+                let model = state
+                    .providers
+                    .resolve_default_model_selection(&selection)
+                    .ok()
+                    .flatten();
+                super::session_prompt::resolve_additional_system_prompt(
+                    None,
+                    configuration.additional_system_prompt.as_deref(),
+                    model.as_ref().and_then(|model| {
+                        super::session_prompt::model_additional_system_prompt(&state, model)
+                    }),
+                    state.config.additional_system_prompt.as_deref(),
+                )
+                .map(str::to_owned)
+            },
             workflow_state: if snapshot.pending_interactions.interactions.is_empty() {
                 WorkflowState::Quiescent
             } else {

@@ -280,6 +280,9 @@ impl App {
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
+            Overlay::SessionPromptEdit(dialog) => {
+                self.handle_session_prompt_edit_overlay_key(key, dialog)
+            }
             Overlay::QueueEditor(dialog) => self.handle_queue_editor_key(key, dialog),
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
             Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),

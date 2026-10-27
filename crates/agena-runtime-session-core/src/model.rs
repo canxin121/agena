@@ -58,6 +58,8 @@ pub struct SessionExecutionContext {
     #[serde(default)]
     pub relation_kind: SessionRelationKind,
     pub conversation: Option<SessionConversation>,
+    #[serde(default)]
+    pub additional_system_prompt: Option<String>,
     pub selection: ExecutionSelection,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,

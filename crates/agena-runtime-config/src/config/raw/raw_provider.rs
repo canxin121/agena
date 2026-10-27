@@ -74,6 +74,7 @@ impl ProviderOverlayExt for ProviderOverlay {
                     ResolvedProviderModelConfig {
                         enabled: configured.enabled,
                         native_compaction: configured.native_compaction,
+                        additional_system_prompt: configured.additional_system_prompt.clone(),
                         agena_tools: configured.agena_tools.clone(),
                         definition: configured.definition.clone(),
                     },

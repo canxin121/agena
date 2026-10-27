@@ -3,12 +3,42 @@
 
 use std::collections::BTreeMap;
 
-use agena_domain::SessionRelationKind;
+use agena_domain::{ExecutionSelection, ModelRef, SessionRelationKind};
 
 use crate::merge_system_prompts;
 use crate::tool::ToolExecutor;
 
-use super::SessionManager;
+use super::{ExecutionState, SessionManager};
+
+/// Resolve inheritance before trimming: an explicit empty value blocks fallback.
+/// The project/global default has already been merged by configuration loading.
+pub(super) fn resolve_additional_system_prompt<'a>(
+    request: Option<&'a str>,
+    session: Option<&'a str>,
+    model: Option<&'a str>,
+    default: Option<&'a str>,
+) -> Option<&'a str> {
+    request.or(session).or(model).or(default)
+}
+
+/// Use the same adapter resolution as execution, including implicit selections.
+pub(super) fn model_additional_system_prompt<'a>(
+    state: &'a ExecutionState,
+    model: &ModelRef,
+) -> Option<&'a str> {
+    let selection = ExecutionSelection {
+        provider: Some(model.provider_id.to_string()),
+        adapter: model.adapter_id.as_ref().map(ToString::to_string),
+        model: Some(model.model_id.to_string()),
+        ..Default::default()
+    };
+    let adapter_id = state.providers.tool_execution_adapter(&selection).ok()?;
+    let resolved = ModelRef {
+        adapter_id,
+        ..model.clone()
+    };
+    state.config.model_additional_system_prompt(&resolved)
+}
 
 /// Canonical tool identities mapped to the names advertised by this catalog.
 type AvailableTools = BTreeMap<String, String>;
@@ -379,6 +409,91 @@ mod tests {
                 "{base}\n\nUser-specific instructions.\n\nConversation-specific instructions.\n\nRoot project instructions."
             )
         );
+    }
+
+    #[test]
+    fn additional_prompt_precedence_and_explicit_empty_values() {
+        let cases = [
+            ([None, None, None, None], None),
+            (
+                [None, None, None, Some("global/project")],
+                Some("global/project"),
+            ),
+            (
+                [None, None, Some("model"), Some("global/project")],
+                Some("model"),
+            ),
+            (
+                [None, Some("session"), Some("model"), Some("global/project")],
+                Some("session"),
+            ),
+            (
+                [
+                    Some("request"),
+                    Some("session"),
+                    Some("model"),
+                    Some("global/project"),
+                ],
+                Some("request"),
+            ),
+            ([None, None, None, Some("")], Some("")),
+            ([None, None, Some(""), Some("global/project")], Some("")),
+            (
+                [None, Some(""), Some("model"), Some("global/project")],
+                Some(""),
+            ),
+            (
+                [
+                    Some(""),
+                    Some("session"),
+                    Some("model"),
+                    Some("global/project"),
+                ],
+                Some(""),
+            ),
+            (
+                [None, Some(" \n\t"), Some("model"), Some("global/project")],
+                Some(" \n\t"),
+            ),
+        ];
+        for ([request, session, model, default], expected) in cases {
+            assert_eq!(
+                resolve_additional_system_prompt(request, session, model, default),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn disabling_additional_instructions_preserves_each_role_and_boundary() {
+        for role in [SessionRelationKind::Root, SessionRelationKind::Subagent] {
+            for empty in ["", " \n\t"] {
+                let base = assemble_system_prompt(
+                    role,
+                    false,
+                    &AvailableTools::new(),
+                    None,
+                    Some("Conversation boundary."),
+                    "Project guidance.",
+                );
+                let selected = resolve_additional_system_prompt(
+                    None,
+                    None,
+                    Some(empty),
+                    Some("Inherited global instructions."),
+                );
+                let actual = assemble_system_prompt(
+                    role,
+                    false,
+                    &AvailableTools::new(),
+                    selected,
+                    Some("Conversation boundary."),
+                    "Project guidance.",
+                );
+                assert_eq!(actual, base);
+                assert!(!actual.contains("Inherited global instructions."));
+            }
+        }
     }
 
     #[test]

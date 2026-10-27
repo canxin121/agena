@@ -105,6 +105,7 @@ pub(crate) enum PermissionStudioTextTarget {
 }
 
 pub(crate) type SettingsValueEditOverlay = InputDialogState<SettingsFieldSpec>;
+pub(crate) type SessionPromptEditOverlay = EditorDialogState<i64>;
 
 pub(crate) use agena_tui::choice::ChoicePickerItem as ChoiceItem;
 
@@ -199,6 +200,8 @@ pub(crate) enum SettingsFieldKind {
 #[derive(Debug, Clone)]
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
+    EditSessionAdditionalSystemPrompt(i64),
+    InheritSessionAdditionalSystemPrompt(i64),
     ToggleMcpServer,
     EditMcpServerUrl,
     OpenGlobalDefaultModelChooser,
@@ -497,6 +500,7 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
     pub(crate) native_compaction: bool,
+    pub(crate) additional_system_prompt: Option<String>,
     pub(crate) manual_overrides: bool,
     pub(crate) agena_tool_mode: AgenaToolMode,
     pub(crate) agena_tool_mode_configured: bool,

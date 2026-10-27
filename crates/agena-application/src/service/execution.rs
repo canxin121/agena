@@ -221,7 +221,7 @@ impl ApplicationService {
             ),
             thinking,
             request_override,
-            system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
+            system: request.system.clone(),
             temperature,
             max_output_tokens: request.max_output_tokens,
         })
@@ -343,6 +343,8 @@ impl ApplicationService {
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
+                additional_system_prompt: context.additional_system_prompt,
+                effective_additional_system_prompt: context.effective_additional_system_prompt,
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
                 agent_id: context.agent_id,

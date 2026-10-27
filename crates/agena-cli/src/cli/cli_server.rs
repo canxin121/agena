@@ -1511,6 +1511,44 @@ impl AgenaCli {
                 let sessions = paginate_session_summaries(summaries, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
+            SessionsSubcommand::SystemPrompt(args) => {
+                let update = if args.inherit {
+                    Some(None)
+                } else if let Some(path) = args.file {
+                    Some(Some(tokio::fs::read_to_string(&path).await.map_err(
+                        |error| {
+                            AppError::Internal(format!(
+                                "read system prompt {}: {error}",
+                                path.display()
+                            ))
+                        },
+                    )?))
+                } else {
+                    args.text.map(Some)
+                };
+                if let Some(value) = update {
+                    server
+                        .client
+                        .set_session_additional_system_prompt(args.session_id, value)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to update session system prompt", error)
+                        })?;
+                }
+                let execution = server
+                    .client
+                    .get_session_state(args.session_id)
+                    .await
+                    .map_err(|error| client_error("failed to read session system prompt", error))?;
+                render_serialized(
+                    args.format,
+                    &serde_json::json!({
+                        "session_id": args.session_id,
+                        "additional_system_prompt": execution.execution.additional_system_prompt,
+                        "effective_additional_system_prompt": execution.execution.effective_additional_system_prompt,
+                    }),
+                )
+            }
             SessionsSubcommand::Export(args) => {
                 let mut output = tokio::io::stdout();
                 server

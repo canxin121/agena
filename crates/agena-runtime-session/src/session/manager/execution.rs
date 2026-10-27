@@ -365,7 +365,8 @@ impl SessionManager {
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref(),!bindings.is_empty());
+                let additional_system=super::session_prompt::resolve_additional_system_prompt(options.system.as_deref(),context.additional_system_prompt.as_deref(),super::session_prompt::model_additional_system_prompt(&state,&options.model),state.config.additional_system_prompt.as_deref());
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,additional_system,!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
@@ -1295,11 +1296,14 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
-        let mut system = self.assemble_session_system_prompt_with_executor(
-            &executor,
+        let additional_system = super::session_prompt::resolve_additional_system_prompt(
             options.system.as_deref(),
-            false,
+            context.additional_system_prompt.as_deref(),
+            super::session_prompt::model_additional_system_prompt(state, &options.model),
+            state.config.additional_system_prompt.as_deref(),
         );
+        let mut system =
+            self.assemble_session_system_prompt_with_executor(&executor, additional_system, false);
         system.push_str(&self.agent_roster(control.session).await?);
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state

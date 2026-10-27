@@ -16,6 +16,16 @@ use serde::{Deserialize, Serialize};
 use crate::backend::kernel::{Command, KernelBackend, Mutation, Scope};
 
 pub use crate::backend::kernel::KernelPorts as SessionKernel;
+
+fn deserialize_optional_string_update<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
 mod import;
 mod lifecycle;
 pub use lifecycle::*;
@@ -175,6 +185,13 @@ pub struct MetadataChange {
     pub title: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
+    /// Absent leaves the override unchanged; null restores inheritance.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string_update"
+    )]
+    pub additional_system_prompt: Option<Option<String>>,
     /// Explicitly resume or lock automatic naming. Enabling resets its schedule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_title: Option<bool>,

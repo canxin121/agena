@@ -72,3 +72,30 @@ pub fn drive_editor_dialog_key<TAction: Clone>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn multiline_save_submits_empty_and_exact_text() {
+        for text in ["", "  first line\nsecond line\n"] {
+            let mut editor = EditorDialogState::new(
+                String::new(),
+                String::new(),
+                String::new(),
+                true,
+                Editor::from_text(text.to_owned()),
+                7,
+            );
+            assert_eq!(
+                drive_editor_dialog_key(
+                    &mut editor,
+                    KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+                ),
+                EditorDialogKeyResult::Submit(7, text.to_owned())
+            );
+        }
+    }
+}

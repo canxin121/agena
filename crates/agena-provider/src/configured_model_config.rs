@@ -23,6 +23,10 @@ pub struct ResolvedProviderModelConfig {
     /// endpoint before falling back to Agena's text summarizer.
     #[serde(skip_serializing_if = "is_true")]
     pub native_compaction: bool,
+    /// Additional instructions for this route. Omitted inherits; an empty string
+    /// disables inherited additional instructions without changing Agena's prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_system_prompt: Option<String>,
     /// Transport mode for the fixed five-function Agena Tool API.
     #[serde(skip_serializing_if = "AgenaToolsConfig::is_inherited")]
     pub agena_tools: AgenaToolsConfig,
@@ -41,6 +45,7 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
         const CURRENT_MODEL_FIELDS: &[&str] = &[
             "enabled",
             "native_compaction",
+            "additional_system_prompt",
             "agena_tools",
             "lifecycle",
             "context_window_tokens",
@@ -92,6 +97,12 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => AgenaToolsConfig::default(),
         };
+        let additional_system_prompt: Option<String> = fields
+            .remove("additional_system_prompt")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(D::Error::custom)?
+            .flatten();
         let definition: ConfiguredModelDefinition =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
         if agena_tools.is_inherited() {
@@ -104,6 +115,7 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
         Ok(Self {
             enabled,
             native_compaction,
+            additional_system_prompt,
             agena_tools,
             definition,
         })
@@ -115,6 +127,7 @@ impl Default for ResolvedProviderModelConfig {
         Self {
             enabled: true,
             native_compaction: true,
+            additional_system_prompt: None,
             agena_tools: AgenaToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }
@@ -123,4 +136,46 @@ impl Default for ResolvedProviderModelConfig {
 
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResolvedProviderModelConfig;
+    use serde_json::json;
+
+    #[test]
+    fn additional_system_prompt_preserves_inheritance_empty_and_text() {
+        for (input, expected) in [
+            (json!({}), None),
+            (json!({"additional_system_prompt": null}), None),
+            (json!({"additional_system_prompt": ""}), Some("")),
+            (
+                json!({"additional_system_prompt": "  keep formatting\n"}),
+                Some("  keep formatting\n"),
+            ),
+        ] {
+            let configured: ResolvedProviderModelConfig = serde_json::from_value(input).unwrap();
+            assert_eq!(configured.additional_system_prompt.as_deref(), expected);
+            let serialized = serde_json::to_value(&configured).unwrap();
+            assert_eq!(
+                serialized.get("additional_system_prompt"),
+                expected.map(|value| json!(value)).as_ref()
+            );
+            let round_trip: ResolvedProviderModelConfig =
+                serde_json::from_value(serialized).unwrap();
+            assert_eq!(round_trip.additional_system_prompt.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn additional_system_prompt_rejects_non_string_values() {
+        for value in [json!(false), json!(42), json!([]), json!({})] {
+            assert!(
+                serde_json::from_value::<ResolvedProviderModelConfig>(
+                    json!({"additional_system_prompt": value})
+                )
+                .is_err()
+            );
+        }
+    }
 }

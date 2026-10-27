@@ -86,6 +86,18 @@ impl App {
                 );
             }
 
+            Overlay::SessionPromptEdit(dialog) => {
+                agena_tui_components::render_workbench_editor_dialog(
+                    frame,
+                    area,
+                    SurfaceMode::Overlay,
+                    sanitize_display_text(dialog.title.as_str()).into(),
+                    sanitize_display_text(dialog.prompt.as_str()).into(),
+                    sanitize_display_text(dialog.footer.as_str()).into(),
+                    true,
+                    &dialog.input,
+                );
+            }
             Overlay::QueueEditor(dialog) => self.render_queue_editor(frame, area, dialog),
             Overlay::Choice(dialog) => {
                 agena_tui::choice::render_overlay(frame, area, &dialog.presentation, &self.i18n);

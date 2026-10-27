@@ -13,6 +13,7 @@ import {
 } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
+import AdditionalSystemPromptEditor from './AdditionalSystemPromptEditor.vue'
 import SettingsDisclosureRow from '@/components/settings/SettingsDisclosureRow.vue'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import ProviderModelCatalogPicker from '@/components/settings/ProviderModelCatalogPicker.vue'
@@ -23,6 +24,12 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { apiJson } from '@/lib/api'
+import {
+  additionalSystemPromptDraft,
+  additionalSystemPromptIsValid,
+  additionalSystemPromptValue,
+  type AdditionalSystemPromptDraft,
+} from '@/lib/additionalSystemPrompt'
 import { mutateModelConfiguration } from '@/lib/modelConfigurationApi'
 import { effectiveProviderToolMode } from '@/lib/providerToolMode'
 import { confirmAction } from '@/lib/appConfirm'
@@ -120,6 +127,15 @@ const authMessage = ref('')
 
 const editingModel = ref<{ adapterId: string; modelId: string } | null>(null)
 const modelValue = ref<LooseRecord | null>(null)
+const modelPromptDraft = ref(additionalSystemPromptDraft(null))
+const modelPromptValid = computed(() => additionalSystemPromptIsValid(modelPromptDraft.value))
+watch(
+  [() => editingModel.value, () => modelValue.value?.additional_system_prompt],
+  () => {
+    modelPromptDraft.value = additionalSystemPromptDraft(modelValue.value?.additional_system_prompt)
+  },
+  { flush: 'sync' },
+)
 const modelJson = ref('')
 const modelJsonDirty = ref(false)
 const modelLoading = ref(false)
@@ -1399,6 +1415,10 @@ async function saveDraft() {
       return
     }
   }
+  if (!modelPromptValid.value) {
+    error.value = st('Enter instructions or choose Disabled.')
+    return
+  }
   const draftSnapshot = clone(draft.value)
   const submittedDraftJson = JSON.stringify(draftSnapshot)
   const submittedDraftGeneration = draftRequestGeneration
@@ -1691,6 +1711,10 @@ function closeModelEditor(discardPending = false) {
     applyModelJson()
     if (modelJsonDirty.value) return false
   }
+  if (!modelPromptValid.value && !discardPending) {
+    modelError.value = st('Enter instructions or choose Disabled.')
+    return false
+  }
   ++modelEditorGeneration
   ++catalogApplyGeneration
   catalogApplying.value = false
@@ -1907,12 +1931,34 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   modelError.value = ''
 }
 
+function setModelAdditionalSystemPrompt(prompt: AdditionalSystemPromptDraft) {
+  if (!modelValue.value || catalogApplying.value) return
+  let base: LooseRecord
+  try {
+    base = modelJsonDirty.value ? syncModelValueFromJson() : modelValue.value
+  } catch (reason) {
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+    return
+  }
+  const next = { ...base }
+  const value = additionalSystemPromptValue(prompt)
+  if (value === null) delete next.additional_system_prompt
+  else next.additional_system_prompt = value
+  modelValue.value = next
+  modelPromptDraft.value = { ...prompt }
+  modelJsonDirty.value = false
+  scheduleModelJsonSync()
+  stageCurrentModelValue(next, false)
+  modelError.value = ''
+}
+
 function syncModelValueFromJson(): LooseRecord {
   const parsed = JSON.parse(modelJson.value) as JsonValue
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
     throw new Error(st('Model config must be a JSON object.'))
   const next = canonicalizeModelConfig(parsed)
   modelValue.value = next
+  modelPromptDraft.value = additionalSystemPromptDraft(next.additional_system_prompt)
   return next
 }
 
@@ -2801,6 +2847,19 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                             </div>
                           </div>
                         </section>
+                        <section class="min-w-0">
+                          <h3 class="mb-3 border-b border-border/60 pb-2 text-sm font-medium">
+                            {{ $st('Additional system prompt') }}
+                          </h3>
+                          <p class="mb-3 text-xs text-muted-foreground">
+                            {{ $st('Applies only to this model. A session override takes precedence.') }}
+                          </p>
+                          <AdditionalSystemPromptEditor
+                            :model-value="modelPromptDraft"
+                            :disabled="catalogApplying || saving"
+                            @update:model-value="setModelAdditionalSystemPrompt"
+                          />
+                        </section>
                         <details class="min-w-0 rounded-lg border border-border/60" :open="modelJsonDirty || undefined">
                           <summary class="cursor-pointer px-3 py-2.5 text-xs font-medium">
                             {{ $st('Advanced model JSON') }}
@@ -2912,7 +2971,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
       :dirty="providerDirty"
       :saving="saving"
       :disabled="mutationBusy || loading || listingModels || catalogApplying"
-      :save-disabled="!draft.provider_id.trim()"
+      :save-disabled="!draft.provider_id.trim() || (!modelJsonDirty && !modelPromptValid)"
       :error="error"
       :save-label="$st('Save provider changes')"
       sticky

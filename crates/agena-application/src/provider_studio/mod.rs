@@ -51,3 +51,31 @@ pub fn apply_catalog_template_to_model_value(
         catalog::catalog_model_to_catalog_definition(catalog_model).into_configured_definition();
     serde_json::to_value(configured)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::apply_catalog_template_to_model_value;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_refresh_preserves_additional_system_prompt() {
+        let catalog = serde_json::from_value(json!({
+            "model_id": "catalog-model",
+            "source": "generated",
+            "display_name": "Refreshed name"
+        }))
+        .unwrap();
+        for prompt in [None, Some(""), Some("  keep formatting\n")] {
+            let mut value = json!({"display_name": "Previous name"});
+            if let Some(prompt) = prompt {
+                value["additional_system_prompt"] = json!(prompt);
+            }
+            let refreshed = apply_catalog_template_to_model_value(value, &catalog).unwrap();
+            assert_eq!(refreshed["display_name"], json!("Refreshed name"));
+            assert_eq!(
+                refreshed.get("additional_system_prompt"),
+                prompt.map(|value| json!(value)).as_ref()
+            );
+        }
+    }
+}

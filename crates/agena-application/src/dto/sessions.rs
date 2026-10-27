@@ -40,11 +40,14 @@ pub struct SessionHierarchyRequest {
     pub auto_title: bool,
     #[serde(default)]
     pub parent_id: Option<i64>,
+    /// None inherits; an empty string disables inherited additional instructions.
+    #[serde(default)]
+    pub additional_system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Request to update session metadata.
+/// Request to update session metadata and additional instructions.
 pub struct SessionUpdateRequest {
     #[serde(default)]
     pub title: Option<String>,
@@ -56,6 +59,21 @@ pub struct SessionUpdateRequest {
     /// next user turn; assigning a title alone always locks it.
     #[serde(default)]
     pub auto_title: Option<bool>,
+    /// Omit to keep the current value, use null to inherit, or a string to override.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_additional_system_prompt_update"
+    )]
+    pub additional_system_prompt: Option<Option<String>>,
+}
+
+fn deserialize_additional_system_prompt_update<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,4 +166,55 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for SessionReplyRequestBody<T> {
 /// Body of a session rewind request.
 pub struct SessionRewindRequestBody {
     pub at_message_id: i64,
+}
+
+#[cfg(test)]
+mod additional_system_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn update_preserves_missing_null_empty_and_text() {
+        let cases = [
+            (serde_json::json!({}), None),
+            (
+                serde_json::json!({"additional_system_prompt": null}),
+                Some(None),
+            ),
+            (
+                serde_json::json!({"additional_system_prompt": ""}),
+                Some(Some(String::new())),
+            ),
+            (
+                serde_json::json!({"additional_system_prompt": "  Keep this spacing.\n"}),
+                Some(Some("  Keep this spacing.\n".to_owned())),
+            ),
+        ];
+        for (json, expected) in cases {
+            let request: SessionUpdateRequest = serde_json::from_value(json).unwrap();
+            assert_eq!(request.additional_system_prompt, expected);
+        }
+        assert!(
+            serde_json::from_value::<SessionUpdateRequest>(
+                serde_json::json!({"additional_system_prompt": false})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn creation_and_per_request_system_preserve_empty_strings() {
+        let request: SessionCreateRequest = serde_json::from_value(serde_json::json!({
+            "workspace_id": 1,
+            "title": "Test",
+            "additional_system_prompt": ""
+        }))
+        .unwrap();
+        assert_eq!(
+            request.session.additional_system_prompt.as_deref(),
+            Some("")
+        );
+        let run: SessionRunRequestBody =
+            serde_json::from_value(serde_json::json!({"system": ""})).unwrap();
+        assert_eq!(run.options.system.as_deref(), Some(""));
+    }
 }

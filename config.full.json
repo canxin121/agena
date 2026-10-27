@@ -36,6 +36,7 @@
     "auxiliary_model": null
   },
   "session": {
+    "additional_system_prompt": null,
     "compaction": {
       "auto": true,
       "reserved_tokens": 12000

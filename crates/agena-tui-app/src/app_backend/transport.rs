@@ -227,7 +227,7 @@ struct RemoteBackend {
     /// contention as an empty directory.
     workspace_directory_cache:
         std::sync::RwLock<HashMap<String, Vec<agena_application::dto::WorkspaceFileNode>>>,
-    workspace_image_data_urls: tokio::sync::RwLock<HashMap<String, String>>,
+    workspace_image_data_urls: tokio::sync::RwLock<HashMap<(i64, String, String), Arc<str>>>,
     /// Server-side credential environment metadata.
     aws_profiles: tokio::sync::RwLock<Vec<String>>,
     /// Cached model-catalog page fetched from the server. The settings studio
@@ -269,7 +269,68 @@ fn collect_workspace_file_paths(
     }
 }
 
-fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<(String, String)>) {
+type ImageReference = (String, String, String); // reference, MIME, immutable revision
+const MAX_LOCALIZED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
+fn image_reference(object: &serde_json::Map<String, serde_json::Value>) -> Option<ImageReference> {
+    let text = |key: &str| object.get(key).and_then(serde_json::Value::as_str);
+    let mime = text("mime")
+        .or_else(|| text("mime_type"))
+        .or_else(|| text("media_type"));
+    if text("kind") != Some("image") && !mime.is_some_and(|mime| mime.starts_with("image/")) {
+        return None;
+    }
+    let source = object.get("source").and_then(serde_json::Value::as_object);
+    if source
+        .and_then(|source| source.get("source"))
+        .and_then(serde_json::Value::as_str)
+        == Some("unavailable")
+    {
+        return None;
+    }
+    let artifact = object
+        .get("artifact")
+        .and_then(serde_json::Value::as_object);
+    let reference = object
+        .get("reference")
+        .and_then(serde_json::Value::as_object);
+    let value = source
+        .and_then(|s| s.get("path").or_else(|| s.get("url")))
+        .or_else(|| artifact.and_then(|a| a.get("uri")))
+        .or_else(|| reference.and_then(|r| r.get("uri").or_else(|| r.get("path"))))
+        .or_else(|| object.get("uri"))?
+        .as_str()?;
+    let path = value.strip_prefix("file://").unwrap_or(value);
+    if path.is_empty()
+        || path.starts_with("data:")
+        || path.starts_with("http:")
+        || path.starts_with("https:")
+        || path.starts_with("blob:")
+    {
+        return None;
+    }
+    let hash = text("sha256")
+        .or_else(|| {
+            artifact
+                .and_then(|a| a.get("sha256"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            reference
+                .and_then(|r| r.get("sha256"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or_default();
+    Some((
+        path.to_owned(),
+        mime.filter(|m| m.starts_with("image/"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| image_mime_from_path(path)),
+        hash.to_owned(),
+    ))
+}
+
+fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<ImageReference>) {
     match value {
         serde_json::Value::Array(values) => {
             for value in values {
@@ -277,25 +338,8 @@ fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<(Strin
             }
         }
         serde_json::Value::Object(object) => {
-            let is_image = object
-                .get("kind")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind == "image");
-            if is_image
-                && let Some(source) = object.get("source").and_then(serde_json::Value::as_object)
-                && source
-                    .get("source")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|source| source == "local_path")
-                && let Some(path) = source.get("path").and_then(serde_json::Value::as_str)
-            {
-                let mime = object
-                    .get("mime")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|mime| mime.starts_with("image/"))
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| image_mime_from_path(path));
-                output.push((path.to_owned(), mime));
+            if let Some(reference) = image_reference(object) {
+                output.push(reference);
             }
             for value in object.values() {
                 workspace_image_references(value, output);
@@ -307,40 +351,70 @@ fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<(Strin
 
 fn replace_workspace_image_references(
     value: &mut serde_json::Value,
-    images: &HashMap<String, String>,
+    images: &HashMap<String, Arc<str>>,
+    remaining: &mut usize,
 ) {
     match value {
         serde_json::Value::Array(values) => {
             for value in values {
-                replace_workspace_image_references(value, images);
+                replace_workspace_image_references(value, images, remaining);
             }
         }
         serde_json::Value::Object(object) => {
-            let replacement = object
-                .get("source")
-                .and_then(serde_json::Value::as_object)
-                .filter(|source| {
-                    source
-                        .get("source")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|source| source == "local_path")
-                })
-                .and_then(|source| source.get("path"))
-                .and_then(serde_json::Value::as_str)
-                .and_then(|path| images.get(path))
+            let replacement = image_reference(object)
+                .and_then(|(path, _, _)| images.get(&path))
                 .cloned();
-            if let Some(url) = replacement {
-                object.insert(
-                    "source".to_owned(),
-                    serde_json::json!({ "source": "data_url", "url": url }),
-                );
+            if let Some(url) = replacement.filter(|url| url.len() <= *remaining) {
+                *remaining -= url.len();
+                if object.contains_key("source") {
+                    object.insert(
+                        "source".into(),
+                        serde_json::json!({"source":"data_url","url":url.as_ref()}),
+                    );
+                } else if let Some(artifact) = object
+                    .get_mut("artifact")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    artifact.insert("uri".into(), serde_json::json!(url.as_ref()));
+                } else if let Some(reference) = object
+                    .get_mut("reference")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    if reference.contains_key("uri") {
+                        reference.insert("uri".into(), serde_json::json!(url.as_ref()));
+                    } else {
+                        *reference = serde_json::json!({"reference_type":"url","url":url.as_ref()})
+                            .as_object()
+                            .unwrap()
+                            .clone();
+                    }
+                } else {
+                    object.insert("uri".into(), serde_json::json!(url.as_ref()));
+                }
             }
             for value in object.values_mut() {
-                replace_workspace_image_references(value, images);
+                replace_workspace_image_references(value, images, remaining);
             }
         }
         _ => {}
     }
+}
+
+fn cache_localized_image(
+    cache: &mut HashMap<(i64, String, String), Arc<str>>,
+    key: (i64, String, String),
+    value: Arc<str>,
+) {
+    // Mutable file paths without a content revision must be re-read. Never
+    // reuse a session's authorization result for a different conversation.
+    if key.2.is_empty() || value.len() > MAX_LOCALIZED_IMAGE_BYTES {
+        return;
+    }
+    let used: usize = cache.values().map(|v| v.len()).sum();
+    if used.saturating_add(value.len()) > MAX_LOCALIZED_IMAGE_BYTES {
+        cache.clear();
+    }
+    cache.insert(key, value);
 }
 
 fn image_mime_from_path(path: &str) -> String {
@@ -1069,6 +1143,14 @@ impl TuiBackend {
         session_id: i64,
         path: &str,
     ) -> Result<(String, Vec<u8>)> {
+        if path.starts_with("agena:media:") {
+            return self
+                .inner
+                .client
+                .download_session_media_file(session_id, path)
+                .await
+                .context("failed to download session-owned immutable image");
+        }
         let requested = Path::new(path);
         let workspace_relative = if requested.is_absolute() {
             requested.strip_prefix(self.workspace_root()).ok()
@@ -1115,30 +1197,61 @@ impl TuiBackend {
             return;
         }
 
-        let mut localized = self.inner.workspace_image_data_urls.read().await.clone();
-        for (path, mime) in references {
-            if localized.contains_key(path.as_str()) {
+        let mut localized = HashMap::<String, Arc<str>>::new();
+        let mut batch_bytes = 0usize;
+        for (path, mime, revision) in references {
+            if localized.contains_key(&path) {
                 continue;
             }
-            if self
-                .workspace_path_metadata(Path::new(path.as_str()))
-                .and_then(|metadata| metadata.size)
-                .is_some_and(|size| size > MAX_IMAGE_BYTES)
-            {
-                continue;
-            }
-            let Ok((_, bytes)) = self.download_server_image(session_id, path.as_str()).await else {
-                continue;
+            let key = (session_id, path.clone(), revision);
+            let cached = self
+                .inner
+                .workspace_image_data_urls
+                .read()
+                .await
+                .get(&key)
+                .cloned();
+            let value = if let Some(value) = cached {
+                value
+            } else {
+                if self
+                    .workspace_path_metadata(Path::new(&path))
+                    .and_then(|m| m.size)
+                    .is_some_and(|size| size > MAX_IMAGE_BYTES)
+                {
+                    continue;
+                }
+                let Ok((_, bytes)) = self.download_server_image(session_id, &path).await else {
+                    continue;
+                };
+                if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                    continue;
+                }
+                let value: Arc<str> = format!(
+                    "data:{mime};base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )
+                .into();
+                cache_localized_image(
+                    &mut *self.inner.workspace_image_data_urls.write().await,
+                    key,
+                    Arc::clone(&value),
+                );
+                value
             };
-            if bytes.len() as u64 > MAX_IMAGE_BYTES {
-                continue;
+            if batch_bytes.saturating_add(value.len()) > MAX_LOCALIZED_IMAGE_BYTES {
+                break;
             }
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-            localized.insert(path, format!("data:{mime};base64,{encoded}"));
+            batch_bytes += value.len();
+            localized.insert(path, value);
         }
-        *self.inner.workspace_image_data_urls.write().await = localized.clone();
+        let mut presentation_bytes = MAX_LOCALIZED_IMAGE_BYTES;
         for part in parts.iter_mut() {
-            replace_workspace_image_references(&mut part.content, &localized);
+            replace_workspace_image_references(
+                &mut part.content,
+                &localized,
+                &mut presentation_bytes,
+            );
         }
     }
 
@@ -2907,4 +3020,73 @@ fn provider_studio_transport_error(
         presentation,
     );
     agena_application::provider_studio::ProviderStudioSaveError::Other(failure.into())
+}
+
+#[cfg(test)]
+mod attachment_localization_tests {
+    use super::*;
+    #[test]
+    fn finds_and_replaces_immutable_generated_and_local_images() {
+        let mut value = serde_json::json!([
+            {"kind":"image","mime":"image/png","source":{"source":"local_path","path":"/upload/a.png"},"sha256":"a"},
+            {"type":"media","mime_type":"image/png","artifact":{"uri":"file:///generated/b.png","mime":"image/png","sha256":"b"}},
+            {"activity_type":"resource","kind":"image","media_type":"image/png","reference":{"reference_type":"artifact","uri":"agena:media:v1:abcd","sha256":"c"}},
+            {"kind":"image","source":{"source":"unavailable","reason":"missing"}}
+        ]);
+        let mut refs = Vec::new();
+        workspace_image_references(&value, &mut refs);
+        refs.sort();
+        refs.dedup();
+        assert_eq!(refs.len(), 3);
+        let images = refs
+            .iter()
+            .map(|(path, _, _)| (path.clone(), Arc::<str>::from("data:image/png;base64,AAAA")))
+            .collect();
+        let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
+        replace_workspace_image_references(&mut value, &images, &mut budget);
+        assert_eq!(value[0]["source"]["source"], "data_url");
+        assert!(
+            value[1]["artifact"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:")
+        );
+        assert!(
+            value[2]["reference"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:")
+        );
+        assert_eq!(value[3]["source"]["source"], "unavailable");
+    }
+    #[test]
+    fn repeated_presentation_copies_share_one_byte_budget() {
+        let item = serde_json::json!({"kind":"image","mime":"image/png","source":{"source":"local_path","path":"/a.png"}});
+        let mut value = serde_json::json!([item.clone(), item]);
+        let url: Arc<str> = Arc::from("data:image/png;base64,AAAA");
+        let mut budget = url.len();
+        let images = HashMap::from([("/a.png".into(), url)]);
+        replace_workspace_image_references(&mut value, &images, &mut budget);
+        assert_eq!(budget, 0);
+        assert_eq!(value[0]["source"]["source"], "data_url");
+        assert_eq!(value[1]["source"]["source"], "local_path");
+    }
+
+    #[test]
+    fn cache_is_revision_and_session_scoped_and_skips_mutable_paths() {
+        let mut cache = HashMap::new();
+        cache_localized_image(
+            &mut cache,
+            (43, "/image.png".into(), "hash-a".into()),
+            Arc::from("first"),
+        );
+        assert!(!cache.contains_key(&(44, "/image.png".into(), "hash-a".into())));
+        assert!(!cache.contains_key(&(43, "/image.png".into(), "hash-b".into())));
+        cache_localized_image(
+            &mut cache,
+            (43, "/mutable.png".into(), String::new()),
+            Arc::from("uncacheable"),
+        );
+        assert_eq!(cache.len(), 1);
+    }
 }

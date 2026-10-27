@@ -23,6 +23,8 @@ pub enum ManagedGeneratedImageError {
     TooLarge { limit_mib: usize },
     #[error("invalid generated image payload: {0}")]
     InvalidBase64(#[from] base64::DecodeError),
+    #[error("invalid generated image content: {0}")]
+    InvalidImage(String),
     #[error("failed to persist generated image artifact: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -136,8 +138,8 @@ fn persist_generated_image_artifact_sync(
 
     // Base64 expands a payload by roughly 4/3. Reject before decoding when
     // the lower-bound decoded size already exceeds the artifact limit.
-    let decoded_lower_bound = encoded.len().saturating_mul(3) / 4;
-    if decoded_lower_bound > MAX_GENERATED_IMAGE_BYTES {
+    let max_encoded = 4 * MAX_GENERATED_IMAGE_BYTES.div_ceil(3);
+    if encoded.len() > max_encoded {
         return Err(ManagedGeneratedImageError::TooLarge {
             limit_mib: MAX_GENERATED_IMAGE_BYTES / (1024 * 1024),
         });
@@ -148,7 +150,10 @@ fn persist_generated_image_artifact_sync(
             limit_mib: MAX_GENERATED_IMAGE_BYTES / (1024 * 1024),
         });
     }
-    let extension = generated_media_extension(filename_hint, effective_mime);
+    validate_generated_image(&bytes, effective_mime)?;
+    // Provider filenames are hints, never authority for the stored format.
+    let _ = filename_hint;
+    let extension = generated_media_extension(None, effective_mime);
     let artifact_id = if media_index == 0 {
         artifact_id.to_owned()
     } else {
@@ -172,7 +177,15 @@ fn persist_generated_image_artifact_sync(
         )
         .into());
     }
-    crate::atomic_write_file(&path, bytes.as_slice())?;
+    // A retry can verify an already published artifact, but may not replace
+    // its bytes. This also keeps the filename stable across commit retries.
+    match crate::atomic_create_file(&path, bytes.as_slice(), None) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            crate::verify_file_contents(&path, bytes.as_slice())?;
+        }
+        Err(error) => return Err(error.into()),
+    }
     agena_storage_layout::secure_file(&path)?;
 
     let filename = path
@@ -186,6 +199,56 @@ fn persist_generated_image_artifact_sync(
         size_bytes,
         sha256,
     }))
+}
+
+/// Validate both the actual raster format and bounded decompression before
+/// publishing provider bytes as a trusted image attachment.
+fn validate_generated_image(
+    bytes: &[u8],
+    declared_mime: &str,
+) -> Result<(), ManagedGeneratedImageError> {
+    let invalid = |message: &str| ManagedGeneratedImageError::InvalidImage(message.into());
+    let format = image::guess_format(bytes).map_err(|_| invalid("unrecognized raster image"))?;
+    let actual = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::Gif => "image/gif",
+        image::ImageFormat::WebP => "image/webp",
+        _ => return Err(invalid("unsupported generated raster format")),
+    };
+    let declared = if declared_mime == "image/jpg" {
+        "image/jpeg"
+    } else {
+        declared_mime
+    };
+    if declared != actual {
+        return Err(invalid("declared MIME does not match image bytes"));
+    }
+    let size = imagesize::blob_size(bytes).map_err(|_| invalid("invalid image dimensions"))?;
+    if size.width == 0
+        || size.height == 0
+        || size.width > 16384
+        || size.height > 16384
+        || (size.width as u64).saturating_mul(size.height as u64)
+            > crate::media_input::MAX_IMAGE_PIXELS
+    {
+        return Err(invalid("image exceeds the 40 megapixel/16384 pixel limit"));
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(crate::media_input::MAX_IMAGE_PIXELS * 4);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|_| invalid("corrupt image or decoded-memory limit exceeded"))?;
+    if u64::from(decoded.width()) * u64::from(decoded.height())
+        > crate::media_input::MAX_IMAGE_PIXELS
+    {
+        return Err(invalid("image exceeds the 40 megapixel limit"));
+    }
+    Ok(())
 }
 
 pub fn parse_base64_image_data_url(url: &str) -> Option<(String, String)> {
@@ -258,5 +321,69 @@ fn sanitize_extension(value: &str) -> String {
         "png".to_string()
     } else {
         sanitized
+    }
+}
+
+#[cfg(test)]
+mod generated_attachment_tests {
+    use super::*;
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4/5/hPwAH/QL+ppTFtAAAAABJRU5ErkJggg==";
+    #[test]
+    fn generated_bytes_must_be_a_real_image_of_the_declared_mime() {
+        let bytes = STANDARD.decode(PNG).unwrap();
+        assert!(validate_generated_image(&bytes, "image/png").is_ok());
+        assert!(validate_generated_image(&bytes, "image/jpeg").is_err());
+        assert!(validate_generated_image(b"<html>not a PNG</html>", "image/png").is_err());
+        assert!(validate_generated_image(&bytes[..20], "image/png").is_err());
+    }
+    #[tokio::test]
+    async fn repeated_publication_never_overwrites_a_completed_image() {
+        let workspace = std::env::temp_dir().join(format!(
+            "agena-generated-attachment-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let url = format!("data:image/png;base64,{PNG}");
+        let first = persist_generated_image_artifact(
+            &workspace,
+            43,
+            "call",
+            0,
+            "image/png",
+            Some("wrong.html"),
+            &url,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(first.path.ends_with(".png"));
+        let same =
+            persist_generated_image_artifact(&workspace, 43, "call", 0, "image/png", None, &url)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(same, first);
+        let mut changed = STANDARD.decode(PNG).unwrap();
+        changed.push(1);
+        let changed_url = format!("data:image/png;base64,{}", STANDARD.encode(&changed));
+        assert!(
+            persist_generated_image_artifact(
+                &workspace,
+                43,
+                "call",
+                0,
+                "image/png",
+                None,
+                &changed_url
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(&first.path).unwrap(),
+            STANDARD.decode(PNG).unwrap()
+        );
+        std::fs::remove_dir_all(project_state_dir(&workspace)).unwrap();
+        std::fs::remove_dir_all(workspace).unwrap();
     }
 }

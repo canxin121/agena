@@ -10,15 +10,16 @@ import {
   RiVolumeUpLine,
 } from '@remixicon/vue'
 
-import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
+import { attachmentPreviewUrl, attachmentDownloadUrl } from '@/lib/attachmentLinks'
 import type { AttachmentPresentation } from '@/pages/chat/transcriptPartPresentation'
 
 const props = withDefaults(
   defineProps<{
     attachment: AttachmentPresentation
     workspaceRoot?: string
+    sessionId?: string | null
   }>(),
-  { workspaceRoot: '' },
+  { workspaceRoot: '', sessionId: null },
 )
 
 const { t } = useI18n()
@@ -27,24 +28,19 @@ const emit = defineEmits<{
   (event: 'open', path: string, url: string): void
 }>()
 
-function isBrowserUrl(value: string): boolean {
-  return /^(?:https?:|data:|blob:)/i.test(value.trim())
-}
-
-const href = computed(() => {
-  if (props.attachment.unavailable) return ''
-  const url = props.attachment.url.trim()
-  const path = props.attachment.path.trim()
-  if (isBrowserUrl(url)) return url
-  if (path && props.workspaceRoot.trim()) return buildWorkspaceRawFileUrl(props.workspaceRoot.trim(), path)
-  return ''
-})
+const linkInput = computed(() => ({
+  ...props.attachment,
+  sessionId: props.sessionId,
+  workspaceRoot: props.workspaceRoot,
+}))
+const href = computed(() => attachmentPreviewUrl(linkInput.value))
+const downloadHref = computed(() => attachmentDownloadUrl(linkInput.value))
 
 const displayMime = computed(() => props.attachment.mime || props.attachment.kind)
-const isImage = computed(
-  () =>
-    props.attachment.mime.startsWith('image/') ||
-    /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?)$/i.test(props.attachment.label),
+const isImage = computed(() =>
+  props.attachment.mime && props.attachment.mime !== 'application/octet-stream'
+    ? props.attachment.mime.startsWith('image/')
+    : /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?)$/i.test(props.attachment.label),
 )
 const isVideo = computed(
   () => props.attachment.mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|ogv)$/i.test(props.attachment.label),
@@ -152,6 +148,17 @@ function openAttachment() {
       </div>
     </div>
 
+    <a
+      v-if="downloadHref && !unavailable"
+      :href="downloadHref"
+      :download="attachment.label"
+      :target="downloadHref.startsWith('/api/') ? undefined : '_blank'"
+      class="part-link text-xs"
+      rel="noopener noreferrer"
+    >
+      {{ t('common.save') }}
+    </a>
+
     <button
       tabindex="0"
       v-if="isImage && href"
@@ -160,7 +167,14 @@ function openAttachment() {
       :aria-label="`${t('common.open')}: ${attachment.label}`"
       @click="openAttachment"
     >
-      <img :src="href" alt="" aria-hidden="true" class="max-h-96 max-w-full cursor-zoom-in object-contain" />
+      <img
+        :src="href"
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        decoding="async"
+        class="max-h-96 max-w-full cursor-zoom-in object-contain"
+      />
       <span
         class="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded border border-border bg-background/90 px-1.5 py-1 text-[11px]"
         aria-hidden="true"

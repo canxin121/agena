@@ -14,11 +14,13 @@ import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { durablePartContent, transcriptPartText } from '@/pages/chat/transcriptProjection'
 import {
   attachmentPresentations,
+  type AttachmentPresentation,
   errorPresentation,
   partStatusPresentation,
   prettyJson,
   commandPresentations,
 } from '@/pages/chat/transcriptPartPresentation'
+import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import { useChatStore } from '@/stores/chat'
@@ -65,13 +67,18 @@ function toggle() {
   emit('toggle')
 }
 
-function openAttachment(path: string, url: string) {
-  const workspace = String(directory.currentDirectory || '').trim()
-  if (workspace && path) {
-    ui.requestWorkspaceDockFile(path, 'open')
+function openAttachment(attachment: AttachmentPresentation, path: string, url: string) {
+  if (attachment.mime.startsWith('image/') && url) {
+    ui.openImageViewer([{ src: url, alt: attachment.label, title: attachment.label, key: attachment.key }])
     return
   }
-  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  const dockPath = workspaceAttachmentPath(
+    path,
+    appDirectory.value || directory.currentDirectory || '',
+    directory.currentDirectory || '',
+  )
+  if (dockPath) ui.requestWorkspaceDockFile(dockPath, 'open')
+  else if (url) window.open(url, '_blank', 'noopener,noreferrer')
 }
 </script>
 
@@ -250,8 +257,9 @@ function openAttachment(path: string, url: string) {
           v-for="attachment in attachments"
           :key="attachment.key"
           :attachment="attachment"
-          :workspace-root="String(directory.currentDirectory || '')"
-          @open="openAttachment"
+          :session-id="sessionId"
+          :workspace-root="appDirectory || String(directory.currentDirectory || '')"
+          @open="(path, url) => openAttachment(attachment, path, url)"
         />
       </div>
 

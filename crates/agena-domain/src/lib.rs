@@ -111,7 +111,9 @@ pub use activity_kind::{
     ActivityKindCategory, ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
 pub use activity_view::{ActivityView, DeltaMode, PartDocument, RawOutput, RenderDelta, ViewBlock};
-pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
+pub use attachment::{
+    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, safe_attachment_filename,
+};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,

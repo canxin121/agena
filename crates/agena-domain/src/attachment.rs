@@ -234,3 +234,81 @@ pub struct AttachmentPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
 }
+
+/// A portable attachment basename. Preserve human Unicode names, remove path
+/// and control syntax, and bound UTF-8 bytes (not characters) so a UUID prefix
+/// still fits ordinary filesystem component limits.
+pub fn safe_attachment_filename(value: &str) -> String {
+    const MAX_BYTES: usize = 200;
+    let base = value.rsplit(['/', '\\']).next().unwrap_or_default().trim();
+    if base.is_empty() || matches!(base, "." | "..") {
+        return String::new();
+    }
+    let name: String = base
+        .chars()
+        .map(|ch| {
+            if ch.is_control()
+                || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*'
+            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let mut name = name.trim_matches(' ').trim_end_matches('.').to_owned();
+    if name.is_empty() {
+        return String::new();
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+    {
+        name.insert(0, '_');
+    }
+    if name.len() > MAX_BYTES {
+        let extension = name
+            .rsplit_once('.')
+            .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty() && ext.len() <= 32)
+            .map(|(_, ext)| format!(".{ext}"))
+            .unwrap_or_default();
+        let mut end = MAX_BYTES - extension.len();
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name.truncate(end);
+        name.push_str(&extension);
+    }
+    name
+}
+
+#[cfg(test)]
+mod filename_tests {
+    use super::safe_attachment_filename as safe;
+    #[test]
+    fn unicode_names_are_not_destroyed_and_limits_count_bytes() {
+        assert_eq!(safe("目录/向日葵 报告.pdf"), "向日葵 报告.pdf");
+        assert_eq!(safe(r"C:\temp\向日葵.png"), "向日葵.png");
+        let name = safe(&format!("{}.png", "向日葵".repeat(100)));
+        assert!(name.len() <= 200 && name.ends_with(".png"));
+        assert!(name.is_char_boundary(name.len()));
+    }
+    #[test]
+    fn filenames_cannot_traverse_inject_or_name_devices() {
+        for value in ["", ".", "..", "/tmp/..", "dir/"] {
+            assert!(safe(value).is_empty(), "{value}");
+        }
+        assert_eq!(safe("../../file.txt"), "file.txt");
+        assert_eq!(safe("file\r\n\".txt"), "file___.txt");
+        assert_eq!(safe("NUL.txt"), "_NUL.txt");
+        assert_eq!(safe("LPT1"), "_LPT1");
+        assert_eq!(safe("file.png. "), "file.png");
+    }
+}

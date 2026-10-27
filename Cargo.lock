@@ -232,6 +232,7 @@ dependencies = [
  "blake3",
  "chrono",
  "futures-util",
+ "infer",
  "lru",
  "portable-atomic",
  "semver",

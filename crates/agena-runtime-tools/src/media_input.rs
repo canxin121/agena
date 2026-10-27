@@ -114,14 +114,12 @@ pub fn from_bytes(
     if bytes.is_empty() || bytes.len() > MAX_MEDIA_BYTES {
         return Err("media input must be nonempty and at most 20 MiB".into());
     }
-    let filename = Path::new(filename)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("input")
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(240)
-        .collect::<String>();
+    let filename = agena_domain::safe_attachment_filename(filename);
+    let filename = if filename.is_empty() {
+        "input".into()
+    } else {
+        filename
+    };
     let raster = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if bytes.starts_with(b"\xff\xd8\xff") {

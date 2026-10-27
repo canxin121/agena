@@ -79,3 +79,6 @@ pub use session_requests::*;
 pub use session_tool_execution::*;
 pub use task_control::TaskControl;
 pub use usage_stats::{UsageStatRecord, summarize_usage_records};
+
+// Session-authorized immutable attachment reads for API presentation.
+pub use session::kernel::media::{authorized_tool_attachment, read_managed_attachment};

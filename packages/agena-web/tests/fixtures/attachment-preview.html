@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Attachment preview regression</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from 'vue'
+      import { createI18n } from 'vue-i18n'
+      import Preview from '../../src/components/chat/AgenaAttachmentPreview.vue'
+      const common = {
+        kind: 'image',
+        mime: 'image/png',
+        label: '向日葵.png',
+        sizeBytes: 70,
+        width: 1,
+        height: 1,
+        durationMs: null,
+        pageCount: null,
+        unavailable: false,
+        unavailableReason: '',
+      }
+      const items = [
+        {
+          ...common,
+          key: 'generated',
+          path: '/private/state/generated_images/43/provider-hosted-image-491.png',
+          url: '',
+        },
+        { ...common, key: 'immutable', path: '', url: 'agena:media:v1:7b7d' },
+        {
+          ...common,
+          key: 'unavailable',
+          path: '/not-available.png',
+          url: '',
+          unavailable: true,
+          unavailableReason: 'removed',
+        },
+      ]
+      window.attachmentOpened = []
+      createApp({
+        render: () =>
+          h(
+            'main',
+            items.map((item) =>
+              h('section', { 'data-case': item.key, style: 'margin:24px;max-width:720px' }, [
+                h('h2', item.key),
+                h(Preview, {
+                  attachment: item,
+                  sessionId: '43',
+                  workspaceRoot: '/repo',
+                  onOpen: (path, url) => window.attachmentOpened.push({ path, url }),
+                }),
+              ]),
+            ),
+          ),
+      })
+        .use(
+          createI18n({
+            legacy: false,
+            locale: 'en',
+            messages: {
+              en: {
+                common: { open: 'Open', save: 'Save' },
+                chat: { attachments: { unavailable: 'Unavailable: {reason}', unavailableUnknown: 'missing' } },
+              },
+            },
+          }),
+        )
+        .mount('#app')
+    </script>
+  </body>
+</html>

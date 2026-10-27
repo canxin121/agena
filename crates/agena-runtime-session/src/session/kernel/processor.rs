@@ -181,6 +181,7 @@ enum Action {
         slot: usize,
         result: ToolResult,
         blocks: Arc<Vec<ProviderNativeToolOutputBlock>>,
+        _media_lease: Option<ReadLease>,
     },
     Finish {
         state: Value,
@@ -720,10 +721,34 @@ impl KernelRoundRun {
             result.value["blocks"] = serde_json::to_value(compact_hosted_blocks(&blocks))
                 .map_err(|e| protocol(e.to_string()))?;
             check_envelope(&result)?;
+            let inline_bytes = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ProviderNativeToolOutputBlock::Media { artifact, .. }
+                        if is_inline_hosted_image(block) =>
+                    {
+                        Some(artifact.uri.len())
+                    }
+                    _ => None,
+                })
+                .sum::<usize>();
+            let media_lease = if inline_bytes == 0 {
+                None
+            } else {
+                Some(
+                    RUN_BUDGET
+                        .get_or_init(ReadBudget::default)
+                        .reserve_view(self.round.session_id(), inline_bytes.saturating_mul(2))
+                        .map_err(|e| {
+                            protocol(format!("provider image allocation budget exhausted: {e}"))
+                        })?,
+                )
+            };
             self.steps.push_back(Step::new(Action::CompleteHosted {
                 slot,
                 result,
                 blocks: Arc::new(blocks),
+                _media_lease: media_lease,
             }));
         }
         Ok(())
@@ -775,6 +800,7 @@ impl KernelRoundRun {
                             value: json!({"failure":self.failure}),
                         },
                         blocks: Arc::new(Vec::new()),
+                        _media_lease: None,
                     }));
                 }
             }
@@ -1016,6 +1042,7 @@ impl KernelRoundRun {
                 slot,
                 result,
                 blocks,
+                ..
             } => {
                 let tool = self.hosted[*slot]
                     .handle
@@ -1083,6 +1110,7 @@ fn is_inline_hosted_image(block: &ProviderNativeToolOutputBlock) -> bool {
 fn check_provider_event_budget(event: &CompletionStreamEvent) -> std::result::Result<(), AppError> {
     let mut inline_count = 0usize;
     let mut encoded_bytes = 0usize;
+    let mut decoded_bytes = 0usize;
     if let CompletionStreamEvent::ProviderNativeToolCallCompleted { blocks, .. } = event {
         for block in blocks {
             if is_inline_hosted_image(block) {
@@ -1090,6 +1118,25 @@ fn check_provider_event_budget(event: &CompletionStreamEvent) -> std::result::Re
                     unreachable!("checked inline image block");
                 };
                 inline_count += 1;
+                let Some((_, encoded)) = artifact.uri.split_once(',') else {
+                    return Err(protocol("provider image data URL is malformed"));
+                };
+                let padding = encoded
+                    .as_bytes()
+                    .iter()
+                    .rev()
+                    .take_while(|b| **b == b'=')
+                    .count()
+                    .min(2);
+                let decoded_len = (encoded.len() / 4)
+                    .saturating_mul(3)
+                    .saturating_sub(padding);
+                decoded_bytes = decoded_bytes.saturating_add(decoded_len);
+                if decoded_bytes > MAX_HOSTED_IMAGE_DECODED_BYTES {
+                    return Err(protocol(
+                        "provider hosted image exceeds the 20 MiB media budget",
+                    ));
+                }
                 encoded_bytes = encoded_bytes.saturating_add(artifact.uri.len());
             }
         }
@@ -1133,6 +1180,23 @@ fn compact_hosted_blocks(
         .collect()
 }
 
+fn hosted_media_error(error: agena_runtime_tools::ManagedGeneratedImageError) -> KernelError {
+    use agena_runtime_tools::ManagedGeneratedImageError;
+    // Invalid provider bytes and permanent local I/O failures cannot become
+    // infinite kernel-persistence retries. Only retry genuinely transient I/O.
+    match &error {
+        ManagedGeneratedImageError::Io(io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            KernelError::Storage(format!("persist provider image: {error}"))
+        }
+        _ => KernelError::Invalid(format!("persist provider image: {error}")),
+    }
+}
+
 /// Save provider-hosted image bytes using the same managed-artifact store as
 /// direct image tools. The tool's persisted value contains only durable file
 /// paths and metadata; re-running a pending completion writes the same bytes
@@ -1164,7 +1228,7 @@ async fn persist_hosted_media(
                 &artifact.uri,
             )
             .await
-            .map_err(|e| KernelError::Storage(format!("persist provider image: {e}")))?
+            .map_err(hosted_media_error)?
             .ok_or_else(|| {
                 KernelError::Invalid("provider returned an unsupported image data URL".into())
             })?;
@@ -1287,7 +1351,8 @@ mod hosted_image_persistence_tests {
         let workspace =
             std::env::temp_dir().join(format!("agena-hosted-image-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).unwrap();
-        let bytes = vec![0x89; 650 * 1024];
+        let mut bytes = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4/5/hPwAH/QL+ppTFtAAAAABJRU5ErkJggg==").unwrap();
+        bytes.resize(650 * 1024, 0);
         let encoded = STANDARD.encode(&bytes);
         let blocks = blocks(&encoded);
         let result = ToolResult {
@@ -1356,5 +1421,31 @@ mod hosted_image_persistence_tests {
             serde_json::to_value(&blocks).unwrap()
         );
         assert!(completed.value.get("raw_output").is_none());
+    }
+}
+
+#[cfg(test)]
+mod hosted_media_failure_tests {
+    use super::*;
+    #[test]
+    fn permanent_image_errors_are_not_storage_retry_requests() {
+        use agena_runtime_tools::ManagedGeneratedImageError as E;
+        for error in [
+            E::InvalidImage("corrupt".into()),
+            E::TooLarge { limit_mib: 20 },
+            E::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            )),
+        ] {
+            assert!(matches!(hosted_media_error(error), KernelError::Invalid(_)));
+        }
+        assert!(matches!(
+            hosted_media_error(E::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "retry"
+            ))),
+            KernelError::Storage(_)
+        ));
     }
 }

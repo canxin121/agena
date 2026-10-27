@@ -4,13 +4,16 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
 
-use agena_domain::{ModelRef, ToolInvocation};
+use agena_domain::{
+    AttachmentItem, AttachmentKind, AttachmentSource, ModelRef, RawOutput, ToolInvocation,
+};
 use agena_provider::{
-    CompletionRequest, CompletionStreamEvent, CompletionUsage, merge_provider_metadata,
-    normalize_optional_text,
+    CompletionRequest, CompletionStreamEvent, CompletionUsage, ProviderNativeToolOutputBlock,
+    merge_provider_metadata, normalize_optional_text,
 };
 use agena_storage::kernel::*;
 use futures_util::{StreamExt, future::BoxFuture};
@@ -31,6 +34,10 @@ const MAX_STREAMS: usize = 256;
 const MAX_ALIASES: usize = 2048;
 const MAX_ARGUMENT_BYTES: usize = 512 * 1024;
 const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HOSTED_IMAGE_COUNT: usize = 8;
+// The session media download endpoint serves at most 20 MiB per artifact.
+const MAX_HOSTED_IMAGE_DECODED_BYTES: usize = 20 * 1024 * 1024;
+const MAX_HOSTED_IMAGE_ENCODED_BYTES: usize = MAX_HOSTED_IMAGE_DECODED_BYTES * 4 / 3 + 16 * 1024;
 static RUN_BUDGET: OnceLock<ReadBudget> = OnceLock::new();
 type CompletionEventStream = std::pin::Pin<
     Box<
@@ -173,6 +180,7 @@ enum Action {
     CompleteHosted {
         slot: usize,
         result: ToolResult,
+        blocks: Arc<Vec<ProviderNativeToolOutputBlock>>,
     },
     Finish {
         state: Value,
@@ -200,6 +208,7 @@ pub struct KernelRoundRun {
     round: RoundHandle,
     reader: KernelReader,
     model: ModelRef,
+    workspace_root: PathBuf,
     _prompt: KernelPrompt,
     _lease: ReadLease,
     cancel: Option<CancellationToken>,
@@ -239,6 +248,7 @@ impl SessionProcessor {
         request: KernelRoundRequest,
         reader: KernelReader,
         providers: Arc<ProviderRegistry>,
+        workspace_root: PathBuf,
     ) -> Result<KernelRoundRun> {
         let session = request.prompt.facts().metadata.id;
         let lease = RUN_BUDGET
@@ -289,6 +299,7 @@ impl SessionProcessor {
             round,
             reader,
             model,
+            workspace_root,
             _prompt: prompt,
             _lease: lease,
             cancel,
@@ -472,11 +483,7 @@ impl KernelRoundRun {
     }
 
     fn queue_event(&mut self, event: CompletionStreamEvent) -> std::result::Result<(), AppError> {
-        if modeled_read_bytes(&event).map_err(|e| protocol(e.to_string()))? > MAX_STATE_BYTES {
-            return Err(protocol(
-                "provider event exceeds the round allocation budget",
-            ));
-        }
+        check_provider_event_budget(&event)?;
         match event {
             CompletionStreamEvent::TextDelta { delta, .. } => self.text_delta(delta, false)?,
             CompletionStreamEvent::ThinkingDelta { delta, .. } => self.text_delta(delta, true)?,
@@ -523,9 +530,9 @@ impl KernelRoundRun {
                 };
                 let result = ToolResult {
                     phase,
-                    value: json!({"title":title,"summary":summary,"failure":failure,"output_text":output_text,"blocks":blocks,"details":details}),
+                    value: json!({"title":title,"summary":summary,"failure":failure,"output_text":output_text,"details":details}),
                 };
-                self.hosted_update(stream_key, id, invocation, raw, Some(result))?;
+                self.hosted_update(stream_key, id, invocation, raw, Some((result, blocks)))?;
             }
             CompletionStreamEvent::Completed {
                 finish_reason,
@@ -649,7 +656,7 @@ impl KernelRoundRun {
         id: Option<String>,
         invocation: ToolInvocation,
         raw: Option<Value>,
-        result: Option<ToolResult>,
+        result: Option<(ToolResult, Vec<ProviderNativeToolOutputBlock>)>,
     ) -> std::result::Result<(), AppError> {
         self.seal_active();
         if self.native_aliases.len() >= MAX_ALIASES {
@@ -704,13 +711,20 @@ impl KernelRoundRun {
         if self.hosted[slot].completed {
             return Ok(());
         }
-        if let Some(mut result) = result {
+        if let Some((mut result, blocks)) = result {
             result.value["invocation"] =
                 serde_json::to_value(invocation).map_err(|e| protocol(e.to_string()))?;
             result.value["provider_metadata"] = pending.raw.clone().unwrap_or(Value::Null);
+            // The persisted envelope is control data, not a container for
+            // inline base64 media. Materialize hosted images before completion.
+            result.value["blocks"] = serde_json::to_value(compact_hosted_blocks(&blocks))
+                .map_err(|e| protocol(e.to_string()))?;
             check_envelope(&result)?;
-            self.steps
-                .push_back(Step::new(Action::CompleteHosted { slot, result }));
+            self.steps.push_back(Step::new(Action::CompleteHosted {
+                slot,
+                result,
+                blocks: Arc::new(blocks),
+            }));
         }
         Ok(())
     }
@@ -760,6 +774,7 @@ impl KernelRoundRun {
                             },
                             value: json!({"failure":self.failure}),
                         },
+                        blocks: Arc::new(Vec::new()),
                     }));
                 }
             }
@@ -997,14 +1012,29 @@ impl KernelRoundRun {
                     ))
                 })
             }
-            Action::CompleteHosted { slot, result } => {
+            Action::CompleteHosted {
+                slot,
+                result,
+                blocks,
+            } => {
                 let tool = self.hosted[*slot]
                     .handle
                     .clone()
                     .ok_or_else(missing_handle)?;
                 let slot = *slot;
                 let result = result.clone();
+                let blocks = Arc::clone(blocks);
+                let workspace_root = self.workspace_root.clone();
+                let session_id = self.round.session_id().get();
                 Box::pin(async move {
+                    let result = persist_hosted_media(
+                        &workspace_root,
+                        session_id,
+                        tool.id().get(),
+                        result,
+                        &blocks,
+                    )
+                    .await?;
                     tool.complete(request, result).await?;
                     Ok(Applied::CompleteHosted(slot))
                 })
@@ -1038,4 +1068,293 @@ fn check_envelope(value: &impl serde::Serialize) -> std::result::Result<(), AppE
         ));
     }
     Ok(())
+}
+
+fn is_inline_hosted_image(block: &ProviderNativeToolOutputBlock) -> bool {
+    matches!(
+        block,
+        ProviderNativeToolOutputBlock::Media { mime_type, artifact }
+            if mime_type.starts_with("image/") && artifact.uri.starts_with("data:")
+    )
+}
+
+/// Inline images are not provider control data. Budget their encoded bytes
+/// separately while retaining the normal 8 MiB limit for all other event data.
+fn check_provider_event_budget(event: &CompletionStreamEvent) -> std::result::Result<(), AppError> {
+    let mut inline_count = 0usize;
+    let mut encoded_bytes = 0usize;
+    if let CompletionStreamEvent::ProviderNativeToolCallCompleted { blocks, .. } = event {
+        for block in blocks {
+            if is_inline_hosted_image(block) {
+                let ProviderNativeToolOutputBlock::Media { artifact, .. } = block else {
+                    unreachable!("checked inline image block");
+                };
+                inline_count += 1;
+                encoded_bytes = encoded_bytes.saturating_add(artifact.uri.len());
+            }
+        }
+    }
+    if inline_count > MAX_HOSTED_IMAGE_COUNT || encoded_bytes > MAX_HOSTED_IMAGE_ENCODED_BYTES {
+        return Err(protocol("provider hosted images exceed their media budget"));
+    }
+    // The estimator charges twice the length of a string (decoded capacity).
+    let estimated = modeled_read_bytes(event).map_err(|e| protocol(e.to_string()))?;
+    if estimated.saturating_sub(encoded_bytes.saturating_mul(2)) > MAX_STATE_BYTES {
+        return Err(protocol(
+            "provider event exceeds the round allocation budget",
+        ));
+    }
+    Ok(())
+}
+
+/// Preserve the order and metadata of provider-native blocks, but never place
+/// image base64 in a persistable JSON envelope, even transiently.
+fn compact_hosted_blocks(
+    blocks: &[ProviderNativeToolOutputBlock],
+) -> Vec<ProviderNativeToolOutputBlock> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ProviderNativeToolOutputBlock::Media {
+                mime_type,
+                artifact,
+            } if is_inline_hosted_image(block) => ProviderNativeToolOutputBlock::Media {
+                mime_type: mime_type.clone(),
+                artifact: agena_provider::ProviderNativeToolArtifact {
+                    uri: String::new(),
+                    mime: artifact.mime.clone(),
+                    name: artifact.name.clone(),
+                    size_bytes: artifact.size_bytes,
+                    sha256: artifact.sha256.clone(),
+                },
+            },
+            _ => block.clone(),
+        })
+        .collect()
+}
+
+/// Save provider-hosted image bytes using the same managed-artifact store as
+/// direct image tools. The tool's persisted value contains only durable file
+/// paths and metadata; re-running a pending completion writes the same bytes
+/// to the same call-scoped path before retrying its kernel commit.
+async fn persist_hosted_media(
+    workspace_root: &Path,
+    session_id: i64,
+    tool_id: i64,
+    mut result: ToolResult,
+    blocks: &[ProviderNativeToolOutputBlock],
+) -> Result<ToolResult> {
+    let mut compact = Vec::with_capacity(blocks.len());
+    let mut attachments = Vec::new();
+    let artifact_id = format!("provider-hosted-image-{tool_id}");
+    for (index, block) in blocks.iter().enumerate() {
+        if let ProviderNativeToolOutputBlock::Media {
+            mime_type,
+            artifact,
+        } = block
+            && is_inline_hosted_image(block)
+        {
+            let saved = agena_runtime_tools::persist_generated_image_artifact(
+                workspace_root,
+                session_id,
+                &artifact_id,
+                index,
+                mime_type,
+                artifact.name.as_deref(),
+                &artifact.uri,
+            )
+            .await
+            .map_err(|e| KernelError::Storage(format!("persist provider image: {e}")))?
+            .ok_or_else(|| {
+                KernelError::Invalid("provider returned an unsupported image data URL".into())
+            })?;
+            compact.push(ProviderNativeToolOutputBlock::Media {
+                mime_type: mime_type.clone(),
+                artifact: agena_provider::ProviderNativeToolArtifact {
+                    uri: format!("file://{}", saved.path),
+                    mime: mime_type.clone(),
+                    name: Some(saved.filename.clone()),
+                    size_bytes: Some(saved.size_bytes),
+                    sha256: Some(saved.sha256.clone()),
+                },
+            });
+            attachments.push(AttachmentItem {
+                kind: AttachmentKind::Image,
+                mime: mime_type.clone(),
+                source: AttachmentSource::LocalPath { path: saved.path },
+                filename: Some(saved.filename),
+                title: None,
+                size_bytes: Some(saved.size_bytes),
+                sha256: Some(saved.sha256),
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            });
+        } else {
+            compact.push(block.clone());
+        }
+    }
+    result.value["blocks"] =
+        serde_json::to_value(compact).map_err(|e| KernelError::Invalid(e.to_string()))?;
+    if !attachments.is_empty() {
+        let raw = RawOutput::from_parts(
+            None,
+            result.value["output_text"].as_str().unwrap_or_default(),
+            attachments,
+            Vec::new(),
+            false,
+        );
+        result.value["raw_output"] =
+            serde_json::to_value(raw).map_err(|e| KernelError::Invalid(e.to_string()))?;
+    }
+    check_envelope(&result).map_err(|e| KernelError::Invalid(e.to_string()))?;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod hosted_image_persistence_tests {
+    use super::*;
+    use agena_domain::{StructuredObject, ToolOutput};
+    use agena_provider::ProviderNativeToolArtifact;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use sha2::Digest as _;
+
+    fn blocks(payload: &str) -> Vec<ProviderNativeToolOutputBlock> {
+        vec![
+            ProviderNativeToolOutputBlock::Text {
+                text: "other hosted output".into(),
+            },
+            ProviderNativeToolOutputBlock::Media {
+                mime_type: "image/png".into(),
+                artifact: ProviderNativeToolArtifact {
+                    uri: format!("data:image/png;base64,{payload}"),
+                    mime: "image/png".into(),
+                    name: Some("sunflower.png".into()),
+                    size_bytes: None,
+                    sha256: None,
+                },
+            },
+        ]
+    }
+
+    fn completed_event(blocks: Vec<ProviderNativeToolOutputBlock>) -> CompletionStreamEvent {
+        CompletionStreamEvent::ProviderNativeToolCallCompleted {
+            provider_id: agena_domain::ProviderId::new("test"),
+            model: agena_domain::ModelId::new("test-model"),
+            stream_key: "idx:0".into(),
+            id: Some("ig_test".into()),
+            invocation: ToolInvocation::new("image_generation", StructuredObject::default()),
+            title: "Image generation".into(),
+            summary: "1 image".into(),
+            failure: None,
+            output_text: "sunflower".into(),
+            blocks,
+            details: ToolOutput::default(),
+            raw: Some(json!({"type":"image_generation_call","status":"completed"})),
+        }
+    }
+
+    #[test]
+    fn large_inline_image_is_media_not_provider_control_data() {
+        let encoded = STANDARD.encode(vec![42u8; 1024 * 1024]);
+        let blocks = blocks(&encoded);
+        let event = completed_event(blocks.clone());
+        assert!(check_provider_event_budget(&event).is_ok());
+        assert!(check_envelope(&json!({"blocks":blocks})).is_err());
+        let preview = compact_hosted_blocks(match &event {
+            CompletionStreamEvent::ProviderNativeToolCallCompleted { blocks, .. } => blocks,
+            _ => unreachable!(),
+        });
+        assert!(check_envelope(&json!({"blocks":preview})).is_ok());
+        assert!(
+            !serde_json::to_string(&preview)
+                .unwrap()
+                .contains(&encoded[..256])
+        );
+        // Large non-media control fields still obey the existing limit.
+        let mut invalid = event.clone();
+        if let CompletionStreamEvent::ProviderNativeToolCallCompleted { output_text, .. } =
+            &mut invalid
+        {
+            *output_text = "text".repeat(3 * 1024 * 1024);
+        }
+        assert!(check_provider_event_budget(&invalid).is_err());
+    }
+
+    #[tokio::test]
+    async fn hosted_image_is_durable_and_has_no_inline_base64_in_result() {
+        let workspace =
+            std::env::temp_dir().join(format!("agena-hosted-image-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let bytes = vec![0x89; 650 * 1024];
+        let encoded = STANDARD.encode(&bytes);
+        let blocks = blocks(&encoded);
+        let result = ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: json!({"title":"image generation","output_text":"sunflower"}),
+        };
+        let completed = persist_hosted_media(&workspace, 43, 491, result.clone(), &blocks)
+            .await
+            .unwrap();
+        assert_eq!(completed.phase, ToolPhase::Succeeded);
+        let persisted_json = serde_json::to_string(&completed).unwrap();
+        assert!(persisted_json.len() < MAX_ARGUMENT_BYTES);
+        assert!(!persisted_json.contains(&encoded[..256]));
+        let raw: RawOutput = serde_json::from_value(completed.value["raw_output"].clone()).unwrap();
+        assert_eq!(raw.attachments.len(), 1);
+        let attachment = &raw.attachments[0];
+        let AttachmentSource::LocalPath { path } = &attachment.source else {
+            panic!("hosted image must be a managed local attachment");
+        };
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+        assert_eq!(
+            attachment.sha256,
+            Some(hex::encode(sha2::Sha256::digest(&bytes)))
+        );
+        assert_eq!(
+            completed.value["blocks"][1]["artifact"]["uri"],
+            format!("file://{path}")
+        );
+        assert_eq!(completed.value["blocks"][0]["text"], "other hosted output");
+        // Retrying the same persistence step reuses a stable path and result.
+        let repeated = persist_hosted_media(&workspace, 43, 491, result, &blocks)
+            .await
+            .unwrap();
+        assert_eq!(completed, repeated);
+        std::fs::remove_dir_all(agena_runtime_tools::project_state_dir(&workspace)).unwrap();
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_hosted_media_is_not_persisted_as_a_successful_tool() {
+        let block = blocks("this-is-not-base64");
+        let result = ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: json!({}),
+        };
+        let err = persist_hosted_media(Path::new("/tmp"), 43, 491, result, &block)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid generated image payload"));
+    }
+
+    #[tokio::test]
+    async fn hosted_non_image_blocks_remain_unchanged() {
+        let blocks = vec![ProviderNativeToolOutputBlock::Text {
+            text: "searched the web".into(),
+        }];
+        let result = ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: json!({"title":"web search","summary":"success"}),
+        };
+        let completed = persist_hosted_media(Path::new("/tmp"), 43, 491, result, &blocks)
+            .await
+            .unwrap();
+        assert_eq!(
+            completed.value["blocks"],
+            serde_json::to_value(&blocks).unwrap()
+        );
+        assert!(completed.value.get("raw_output").is_none());
+    }
 }

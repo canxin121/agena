@@ -393,7 +393,11 @@ impl SessionManager {
                 }
                 let completion=completion_request(&options,system,Vec::new(),bindings);
                 let request=KernelRoundRequest::new(round,prompt,completion,Some(control.cancel.clone())).map_err(kernel_error)?;
-                let mut run=state.processor.kernel_round(request,self.kernel().reader.clone(),state.providers.clone()).map_err(kernel_error)?;
+                // Managed image artifacts use the owning workspace root: the
+                // session-media download route resolves this same workspace
+                // regardless of a child session's effective working directory.
+                let workspace_root=state.executor.workspace_root().to_path_buf();
+                let mut run=state.processor.kernel_round(request,self.kernel().reader.clone(),state.providers.clone(),workspace_root).map_err(kernel_error)?;
                 provider_calls+=1;
                 control.phase(agena_domain::ExecutionPhase::StreamingModel);
                 let outcome=self.drive_round(&mut run).await.map_err(kernel_error)?;

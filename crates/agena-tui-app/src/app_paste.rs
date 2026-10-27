@@ -28,6 +28,7 @@ impl App {
             | Route::Hub(_) => false,
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
+            Route::McpWorkbench(dialog) => dialog.accepts_text_input(),
             Route::SkillsWorkbench(dialog) => dialog.accepts_text_input(),
             // Results own command keys such as p/f. Treating them as text
             // coalesces fast key presses into a paste and edits the query.
@@ -141,6 +142,10 @@ impl App {
                 }
                 Route::PluginWorkbench(dialog) => {
                     Self::paste_plugin_workbench(dialog, text.as_str());
+                    handled_route = true;
+                }
+                Route::McpWorkbench(dialog) => {
+                    dialog.paste(text.as_str());
                     handled_route = true;
                 }
                 Route::SkillsWorkbench(dialog) => {

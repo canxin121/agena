@@ -71,6 +71,7 @@ pub enum SettingsStudioSectionId {
     Permissions,
     PluginsTools,
     Skills,
+    McpConnections,
     McpServer,
     RuntimeSession,
     ProviderClientVersions,
@@ -85,6 +86,7 @@ pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> Str
         | SettingsStudioSectionId::Permissions
         | SettingsStudioSectionId::PluginsTools
         | SettingsStudioSectionId::Skills
+        | SettingsStudioSectionId::McpConnections
         | SettingsStudioSectionId::McpServer => "overlay-settings-group-core",
         SettingsStudioSectionId::RuntimeSession
         | SettingsStudioSectionId::ProviderClientVersions

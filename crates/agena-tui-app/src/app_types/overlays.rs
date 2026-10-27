@@ -223,6 +223,7 @@ pub(crate) enum SettingsPickerAction {
     OpenCurrentSessionPermissionWorkbench,
     OpenSessionEffectivePermissionView(i64),
     OpenPluginWorkbench,
+    OpenMcpWorkbench,
     OpenSkillsWorkbench,
     OpenConfigFile,
     OpenTerminalDiagnostics,

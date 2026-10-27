@@ -202,6 +202,9 @@ impl App {
             Route::PluginWorkbench(dialog) => {
                 self.render_plugin_workbench(frame, area, dialog, SurfaceMode::Route);
             }
+            Route::McpWorkbench(dialog) => {
+                self.render_mcp_workbench(frame, area, dialog);
+            }
             Route::SkillsWorkbench(dialog) => {
                 self.render_skills_workbench(frame, area, dialog);
             }

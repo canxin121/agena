@@ -355,6 +355,10 @@ impl App {
                 false
             }
             Route::ProviderStudio(dialog) => focus_provider_list(dialog, panel),
+            Route::McpWorkbench(dialog) => {
+                dialog.focus_list(panel);
+                true
+            }
             Route::SkillsWorkbench(dialog) => {
                 dialog.focus_list(panel);
                 true

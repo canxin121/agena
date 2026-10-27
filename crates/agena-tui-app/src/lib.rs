@@ -153,6 +153,7 @@ mod app_types;
 mod app_usage;
 mod app_user_input;
 mod composer_state_impls;
+mod mcp_workbench;
 mod notifications;
 mod plugin_workbench;
 mod provider_studio;

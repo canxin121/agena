@@ -497,6 +497,11 @@ impl App {
                 }
                 false
             }
+            SettingsPickerAction::OpenMcpWorkbench => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_mcp_workbench();
+                false
+            }
             SettingsPickerAction::OpenSkillsWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_skills_workbench();

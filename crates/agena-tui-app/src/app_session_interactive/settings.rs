@@ -261,6 +261,18 @@ impl App {
                 items: plugin_items,
             },
             SettingsStudioSection {
+                id: SettingsStudioSectionId::McpConnections,
+                label: "MCP connections".to_owned(),
+                summary: "Connect external MCP services".to_owned(),
+                description: "Manage the MCP services Agena connects to, their credentials, and available capabilities.".to_owned(),
+                items: vec![SettingsStudioItem::new(
+                    "External services",
+                    "Open workbench",
+                    "Add or edit stdio and HTTP connections, inspect capabilities, and manage connection health.",
+                    SettingsPickerAction::OpenMcpWorkbench,
+                )],
+            },
+            SettingsStudioSection {
                 id: SettingsStudioSectionId::McpServer,
                 label: ui_text::t(&self.i18n, "settings-mcp-server-label"),
                 summary: ui_text::t(&self.i18n, "settings-mcp-server-detail"),

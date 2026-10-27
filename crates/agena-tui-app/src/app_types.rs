@@ -1053,6 +1053,7 @@ pub(super) enum Route {
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
     PluginWorkbench(Box<PluginWorkbenchOverlay>),
+    McpWorkbench(Box<crate::mcp_workbench::McpWorkbench>),
     SkillsWorkbench(Box<crate::skills_workbench::SkillsWorkbench>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),

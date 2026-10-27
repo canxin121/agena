@@ -47,6 +47,35 @@ pub(crate) fn render_tool_execution_with_sections(
     i18n: &I18n,
     expanded: bool,
 ) -> ToolExecutionRender {
+    if let Some(document) = tool
+        .presentation
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            ViewBlock::InlineUi { document, .. } => Some(document),
+            _ => None,
+        })
+    {
+        let start = out.len();
+        let copy_text = document.to_markdown();
+        push_expanded_markdown(out, "", &copy_text, width, i18n);
+        return ToolExecutionRender {
+            headline_end: (start + 1).min(out.len()),
+            presentation: Some(ToolExecutionSectionRender {
+                start_line: start,
+                end_line: out.len(),
+                copy_text: copy_text.clone(),
+                expanded: true,
+            }),
+            details: None,
+            render_data: None,
+            metadata: None,
+            input: None,
+            output: None,
+            visible_copy_text: copy_text,
+        };
+    }
+
     if part.status == PartExecutionStatusResource::Completed && is_interaction_notification(tool) {
         render_interaction_notification(part, tool, out, width, expanded, i18n);
         let headline_end = out.len();
@@ -931,6 +960,9 @@ pub(crate) fn render_operation_blocks<'a>(
                 } else {
                     push_collapsible_text(out, DETAIL_PREFIX, text, style, width, i18n);
                 }
+            }
+            ViewBlock::InlineUi { document, .. } => {
+                push_expanded_markdown(out, BODY_PREFIX, &document.to_markdown(), width, i18n);
             }
             ViewBlock::Custom { presentation, .. } => {
                 // Object payloads (e.g. a plugin's `presentation` map) read

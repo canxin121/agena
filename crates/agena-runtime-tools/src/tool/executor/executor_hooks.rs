@@ -268,9 +268,13 @@ impl ToolExecutor {
             Default::default()
         };
 
-        rendered
-            .model
-            .get_or_insert_with(|| raw_model_fallback(output));
+        rendered.model.get_or_insert_with(|| {
+            crate::tool::human_view::BuiltinHumanRenderer::inline_reply_model(
+                &invocation.name,
+                output,
+            )
+            .unwrap_or_else(|| raw_model_fallback(output))
+        });
         let plugin_human = rendered.human.take();
         let needs_runtime_human_fallback = plugin_human.as_ref().is_none_or(|human| {
             human.blocks.is_empty()

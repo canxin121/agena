@@ -39,6 +39,7 @@ mod execution_selection;
 mod execution_status;
 mod finish_reason;
 mod ids;
+mod inline_ui;
 mod interaction_notification;
 mod json_path;
 mod message_activity;
@@ -235,4 +236,11 @@ pub use user_input_events::UserInputRequestedEvent;
 mod availability_outcome;
 pub use availability_outcome::{
     CapabilitySourceKind, CapabilityUnavailableResult, ToolUnavailableResult,
+};
+
+// Semantic, immutable rich passages embedded in assistant replies.
+pub use inline_ui::{
+    INLINE_UI_MAX_BLOCKS, INLINE_UI_MAX_BYTES, INLINE_UI_TOOL, INLINE_UI_VERSION, InlineBlock,
+    InlineChartType, InlineComparisonRow, InlineDocument, InlineIcon, InlineMetric, InlineSeries,
+    InlineStep, InlineTone, is_inline_ui_tool,
 };

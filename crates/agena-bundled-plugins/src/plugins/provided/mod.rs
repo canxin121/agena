@@ -4,6 +4,7 @@ pub mod code;
 pub mod commands;
 pub mod cron;
 pub mod fs;
+pub mod inline_ui;
 pub mod interaction;
 pub mod lsp;
 pub mod mcp;

@@ -19,6 +19,7 @@ Deployment guides:
 Engineering guides:
 
 - [Development validation](docs/development.md)
+- [Inline Generative UI / 富内容回复](docs/inline-generative-ui.md)
 - [Git workflow and file recovery](docs/git-workflow.md)
 - [Automatic session titles and auxiliary models](docs/session-titles.md)
 - [Additional system prompts and inheritance](docs/system-prompts.md)

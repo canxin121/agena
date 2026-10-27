@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 186 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 189 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -22,6 +22,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
+- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and present. (3 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
@@ -13514,6 +13515,124 @@ Model-based tools default to the current session model. Use a Google Gemini mode
   "required": [
     "inputs",
     "prompt"
+  ],
+  "type": "object"
+}
+```
+
+## agena.inline_ui
+
+**Version** `0.1.0` · **Tools** 3
+
+Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and present.
+
+### guide
+
+`agena.inline_ui.guide` · **Summary**: Learn Inline Generative UI progressively: overview or one kind's schema and example.
+
+**Tags**: `read_only` `discovery`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read overview once, then only the needed topic. Results are instructions, not a published UI. Use present for the actual reply; validate is an optional dry run.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `topic` | `GuideTopic` | — | `overview` | Start with overview; request only the content kind needed for this answer. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "GuideTopic": {
+      "description": "Start with overview; request only the content kind needed for this answer.",
+      "enum": [
+        "overview",
+        "paragraph",
+        "callout",
+        "steps",
+        "comparison",
+        "metrics",
+        "table",
+        "details",
+        "chart"
+      ],
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "topic": {
+      "$ref": "#/$defs/GuideTopic",
+      "default": "overview",
+      "description": "Start with overview; request only the content kind needed for this answer."
+    }
+  },
+  "type": "object"
+}
+```
+
+### present
+
+`agena.inline_ui.present` · **Summary**: Include a semantic rich passage directly in the answer, readable in Web and TUI. Not an app.
+
+**Tags**: `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read guide for the needed kinds. Publishes one immutable passage in conversation order. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do not repeat the passage in final prose. Validation failures publish nothing.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `any` | ✓ | — | Bounded semantic document: version=1, optional title, ordered blocks.<br>Read guide(topic) for exact schemas. No HTML, commands or executable code. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nRead guide(topic) for exact schemas. No HTML, commands or executable code.",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "document"
+  ],
+  "type": "object"
+}
+```
+
+### validate
+
+`agena.inline_ui.validate` · **Summary**: Check an inline reply document without publishing it; reports precise validation errors.
+
+**Tags**: `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `any` | ✓ | — | Bounded semantic document: version=1, optional title, ordered blocks.<br>Read guide(topic) for exact schemas. No HTML, commands or executable code. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nRead guide(topic) for exact schemas. No HTML, commands or executable code.",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "document"
   ],
   "type": "object"
 }

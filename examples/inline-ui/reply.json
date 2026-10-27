@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "title": "让回答更容易理解",
+  "blocks": [
+    {"type":"paragraph","id":"intro","text":"富内容直接属于回答。普通解释用文字，只有结构能帮助理解时才使用图形表达。"},
+    {"type":"steps","id":"roadmap","title":"建议的实施顺序","items":[
+      {"label":"P0","title":"先统一内容契约","text":"让文字与富内容按顺序出现在同一条回复中，不创建独立应用。","icon":"shield"},
+      {"label":"P1","title":"做好 Web 与终端表达","text":"Web 使用清晰的间距与层次；终端保留相同的信息、标题和数据。","icon":"layers"},
+      {"label":"P2","title":"按需了解，适度使用","text":"先读简短指南，再查询具体内容块的结构与示例。","icon":"sparkles"}
+    ]},
+    {"type":"comparison","id":"choices","title":"两种能力，各司其职","columns":["Inline Generative UI","Web Preview"],"rows":[
+      {"label":"目标","values":["帮助理解 AI 的回答","查看与验证真实项目"]},
+      {"label":"内容","values":["步骤、对比、表格与图表","项目源码和开发服务器"]},
+      {"label":"执行","values":["不运行模型生成的代码","经过授权后运行项目"]}
+    ]},
+    {"type":"callout","id":"principle","tone":"tip","title":"内容优先","text":"不是每句话都需要卡片。让排版服务于解释，而不是增加界面负担。"},
+    {"type":"metrics","id":"coverage","title":"这份示例包含","items":[
+      {"label":"内容类型","value":"8 种","detail":"展示完整的受控内容目录"},
+      {"label":"展示端","value":"Web + TUI","detail":"同一内容，不同布局"}
+    ]},
+    {"type":"table","id":"acceptance","title":"验收重点","columns":["场景","要求"],"rows":[
+      ["窄屏与长中文","自动换行，不挤出消息容器"],
+      ["复制与导出","保留标题、说明与完整数据"],
+      ["历史回放","不发起写入，不重新启动服务"]
+    ]},
+    {"type":"details","id":"extra","title":"为什么不直接生成 HTML？","text":"受控内容块更容易保持样式一致、安全性与终端可读性。复杂可执行页面仍由独立的预览能力处理。"},
+    {"type":"chart","id":"chart-example","title":"图表结构示例（演示数据，非实测）","chart_type":"bar","labels":["A","B","C"],"series":[{"name":"演示值","values":[3,7,5]}],"x_label":"类别","y_label":"演示单位"}
+  ]
+}

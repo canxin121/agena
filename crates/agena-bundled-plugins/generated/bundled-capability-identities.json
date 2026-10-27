@@ -92,8 +92,8 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "plugins": 22,
-    "tools": 186
+    "plugins": 23,
+    "tools": 189
   },
   "plugins": [
     {
@@ -1348,6 +1348,47 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.inline_ui",
+      "tools": [
+        {
+          "canonical_name": "agena.inline_ui.guide",
+          "conditional": null,
+          "definition_identity": "d8d736042e60f457db881350c3f5f88da0558d0777a6d035d091c42339c45352",
+          "input_schema_sha256": "a33134c49b7a6148a8e3ba56643f55c040e096a2016f49b031f2153d5222b2b9",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.inline_ui.present",
+          "conditional": null,
+          "definition_identity": "6ec8c76b25d793b295184bf2288589f1ae4b855f581cdf51639700c2c1641092",
+          "input_schema_sha256": "3fb2bfc73cb844ae51bb62162b8d48bddaa34407e9e47c632c04be8a501105eb",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.inline_ui.validate",
+          "conditional": null,
+          "definition_identity": "883ee9dad5a80ad5b235a0389ae44c2dfb41c9b539cc1cc008a49787ab2da11d",
+          "input_schema_sha256": "3fb2bfc73cb844ae51bb62162b8d48bddaa34407e9e47c632c04be8a501105eb",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
           ]
         }
       ],

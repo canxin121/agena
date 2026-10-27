@@ -1,4 +1,17 @@
 export default {
+  inlineUi: {
+    "label": "富内容回复",
+    "comparison": "方案对比",
+    "dimension": "对比维度",
+    "table": "数据表格",
+    "loading": "正在组织富内容…",
+    "unavailable": "暂时无法显示这段内容，可以查看原始结果或重试。",
+    "copy": "复制这段内容",
+    "copied": "已复制",
+    "copyFailed": "复制失败，请选择文本复制。",
+    "retry": "重试",
+    "inspect": "查看原始结果"
+},
   browserNotifications: {
     "title": "浏览器通知",
     "description": "AI 完成回复、提问、请求审批或执行失败时，通过系统通知提醒你。设置保存在当前浏览器。",

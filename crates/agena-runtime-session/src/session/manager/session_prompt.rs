@@ -87,6 +87,13 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
     }
 
     if !subagent {
+        let inline_ui = plugin_tools(tools, "agena.inline_ui", &["guide", "validate", "present"]);
+        if has("agena.inline_ui.present") && !inline_ui.is_empty() {
+            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Published passages are already part of the reply on Web and TUI; do not repeat them or print their JSON. This is explanation, not an app or task-progress system."));
+        }
+    }
+
+    if !subagent {
         let interaction = plugin_tools(tools, "agena.interaction", &["ask", "notify"]);
         if !interaction.is_empty() {
             let mut text = format!(
@@ -136,7 +143,7 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
             .into_iter()
             .any(has)
             {
-                text.push_str(" Include the necessary context, constraints, and output contracts in delegated tasks; child agents receive Markdown guidance by default and do not inherit this conversation. Supply the relevant chart or UI protocol when assigning or updating rich-output work.");
+                text.push_str(" Include the necessary context, constraints, and output contracts in delegated tasks; child agents receive Markdown guidance by default and do not inherit this conversation. For rich-output assignments, direct the child to the available agena.inline_ui guide; do not forward legacy fenced-JSON UI instructions.");
             }
         }
         paragraphs.push(text);
@@ -239,6 +246,9 @@ mod tests {
         "memory.search",
         "memory.get",
         "memory.write",
+        "inline_ui.guide",
+        "inline_ui.validate",
+        "inline_ui.present",
     ];
 
     fn catalog(names: &[&str]) -> AvailableTools {
@@ -263,10 +273,12 @@ mod tests {
         assert!(prompt.contains("output contracts in delegated tasks"));
         assert_eq!(prompt.matches("- **").count(), 9);
         assert_eq!(prompt.matches("# Presentation\n").count(), 1);
-        assert!(prompt.contains("```agena-chart"));
-        assert!(prompt.contains("```agena-ui"));
-        assert!(prompt.contains("await window.agena.ready"));
-        assert!(prompt.contains("await agena.fetch"));
+        assert!(prompt.contains("## Inline Generative UI"));
+        assert!(prompt.contains("Start with guide"));
+        assert!(!prompt.contains("```agena-chart"));
+        assert!(!prompt.contains("```agena-ui"));
+        assert!(!prompt.contains("await window.agena.ready"));
+        assert!(!prompt.contains("await agena.fetch"));
     }
 
     #[test]
@@ -387,8 +399,32 @@ mod tests {
             let prompt = prompt(role, true, &[]);
             assert!(prompt.contains("# Main session"), "{role:?}");
             assert!(!prompt.contains("# Subagent role"), "{role:?}");
-            assert!(prompt.contains("```agena-ui"), "{role:?}");
+            assert!(prompt.contains("## Inline Generative UI"), "{role:?}");
+            assert!(!prompt.contains("```agena-ui"), "{role:?}");
         }
+    }
+
+    #[test]
+    fn inline_ui_discovery_is_progressive_and_uses_only_available_tools() {
+        let prompt = prompt(
+            SessionRelationKind::Root,
+            true,
+            &["inline_ui.guide", "inline_ui.present"],
+        );
+        assert!(prompt.contains("`inline_ui.guide`"));
+        assert!(prompt.contains("`inline_ui.present`"));
+        assert!(!prompt.contains("`inline_ui.validate`"));
+        assert!(prompt.contains("read only the needed content kind"));
+        assert!(!prompt.contains("\"blocks\":"));
+        let missing_publisher = assemble_system_prompt(
+            SessionRelationKind::Root,
+            true,
+            &catalog(&["inline_ui.guide"]),
+            None,
+            None,
+            "",
+        );
+        assert!(!missing_publisher.contains("Use Inline Generative UI ("));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import { inlineDocumentFromPresentation, inlineDocumentMarkdown, isInlineUiTool } from '../../features/inlineUi/model'
 import { computed, shallowRef, type ComputedRef, type ShallowRef } from 'vue'
 import type {
   MessageLike,
@@ -200,6 +201,8 @@ function operationSummary(part: MessagePartLike): string {
 }
 
 function operationCopyText(part: MessagePartLike): string {
+  const inline = inlineDocumentFromPresentation(part.agenaPresentation)
+  if (inline) return inlineDocumentMarkdown(inline)
   const content = durablePartContent(part)
   const operation = toolCallView(part)
   const invocation = record(operation.invocation)
@@ -353,6 +356,8 @@ function displayFields(
     }
   }
   if (kind === 'operation') {
+    const inline = inlineDocumentFromPresentation(part.agenaPresentation)
+    if (inline) return { title: inline.title || 'Inline Generative UI', summary: '', copyText: inlineDocumentMarkdown(inline) }
     return { title: operationTitle(part, presentationLabels), summary: operationSummary(part), copyText: '' }
   }
   if (kind === 'resource') {
@@ -437,7 +442,8 @@ function projectPart(
   const id = String(part.id || '')
   const kind = classifyPart(part, answerPartId, role === 'assistant')
   const fields = displayFields(part, kind, labels)
-  const toggleable = !['text', 'lifecycle'].includes(kind)
+  const inlineReply = kind === 'operation' && isInlineUiTool(durablePartContent(part).name || part.tool)
+  const toggleable = !inlineReply && !['text', 'lifecycle'].includes(kind)
   const result: TranscriptDisplayPart = {
     key: `part:${id || compactJson(part).slice(0, 48)}`,
     id,
@@ -447,7 +453,7 @@ function projectPart(
     source: part,
     ...fields,
     toggleable,
-    defaultExpanded: kind === 'answer' || kind === 'text' || partHasInteraction(part),
+    defaultExpanded: inlineReply || kind === 'answer' || kind === 'text' || partHasInteraction(part),
   }
   if (kind === 'operation') {
     const copy = computed(() => operationCopyText(part))

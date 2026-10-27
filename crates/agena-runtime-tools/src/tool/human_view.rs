@@ -42,6 +42,22 @@ impl BuiltinHumanRenderer {
     const GENERIC_MAX_VALUE_CHARS: usize = 1_200;
     const HUMAN_TEXT_MAX_CHARS: usize = 12_000;
 
+    /// A published passage is already visible. A compact acknowledgement avoids
+    /// repeating the full document into the model context; raw facts stay stored.
+    pub fn inline_reply_model(tool_name: &str, raw: &RawOutput) -> Option<String> {
+        if !agena_domain::is_inline_ui_tool(tool_name) {
+            return None;
+        }
+        let value = raw.payload.as_ref()?.get("inline_ui")?;
+        let document = agena_domain::InlineDocument::from_value(value.clone()).ok()?;
+        Some(serde_json::json!({
+            "published": true,
+            "title": document.title,
+            "blocks": document.blocks.len(),
+            "message": "This passage is already visible inside the answer on Web and TUI. Continue only with useful additional prose; do not repeat the passage or print its JSON."
+        }).to_string())
+    }
+
     pub fn new(tool_name: impl Into<String>) -> Self {
         Self {
             tool_name: tool_name.into(),
@@ -5859,6 +5875,18 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
         _ctx: &RenderContext,
         raw: &RawOutput,
     ) -> Result<Vec<ViewBlock>, RenderError> {
+        if agena_domain::is_inline_ui_tool(&self.tool_name)
+            && let Some(value) = raw
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("inline_ui"))
+            && let Ok(document) = agena_domain::InlineDocument::from_value(value.clone())
+        {
+            return Ok(vec![ViewBlock::InlineUi {
+                id: Some("inline-reply".into()),
+                document,
+            }]);
+        }
         let output = match ToolOutput::from_json_payload(raw.payload.as_ref()) {
             Ok(output) => output,
             Err(_) => return Ok(Self::compact_blocks(Self::fallback(raw))),
@@ -5926,5 +5954,37 @@ mod terminal_output_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(logs, vec!["1\n2"]);
+    }
+}
+
+#[cfg(test)]
+mod inline_ui_tests {
+    use super::*;
+    #[test]
+    fn inline_ui_projection_is_typed_and_only_owned_by_the_publishing_tool() {
+        let document: Value =
+            serde_json::from_str(include_str!("../../../../examples/inline-ui/reply.json"))
+                .unwrap();
+        let raw = RawOutput {
+            payload: Some(json!({"inline_ui": document})),
+            ..Default::default()
+        };
+        let blocks = BuiltinHumanRenderer::new("inline_ui.present")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        assert!(matches!(blocks.as_slice(), [ViewBlock::InlineUi { .. }]));
+        let acknowledgement =
+            BuiltinHumanRenderer::inline_reply_model("inline_ui.present", &raw).unwrap();
+        assert!(acknowledgement.contains("\"published\":true"));
+        assert!(acknowledgement.len() < 1024);
+        assert!(BuiltinHumanRenderer::inline_reply_model("some_other.tool", &raw).is_none());
+        let other = BuiltinHumanRenderer::new("some_other.tool")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        assert!(
+            !other
+                .iter()
+                .any(|block| matches!(block, ViewBlock::InlineUi { .. }))
+        );
     }
 }

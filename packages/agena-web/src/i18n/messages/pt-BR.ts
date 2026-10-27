@@ -1,4 +1,17 @@
 export default {
+  inlineUi: {
+    "label": "Resposta enriquecida",
+    "comparison": "Comparação",
+    "dimension": "Critério",
+    "table": "Tabela de dados",
+    "loading": "Preparando o conteúdo…",
+    "unavailable": "Não foi possível exibir. Consulte o resultado original ou tente novamente.",
+    "copy": "Copiar conteúdo",
+    "copied": "Copiado",
+    "copyFailed": "Falha ao copiar. Selecione o texto.",
+    "retry": "Tentar novamente",
+    "inspect": "Ver resultado original"
+},
   browserNotifications: {
     "title": "Notificações do navegador",
     "description": "Receba uma notificação quando a IA terminar, fizer uma pergunta, precisar de aprovação ou falhar. Salvo neste navegador.",

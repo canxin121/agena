@@ -3,7 +3,7 @@ import Markdown from '@/components/Markdown.vue'
 import { computed, defineAsyncComponent } from 'vue'
 import { splitReplySegments } from '@/features/interactive/model'
 const InteractiveAppCard = defineAsyncComponent(() => import('@/features/interactive/InteractiveAppCard.vue'))
-const ReplyChart = defineAsyncComponent(() => import('@/features/interactive/ReplyChart.vue'))
+const ReplyChart = defineAsyncComponent(() => import('@/features/inlineUi/InlineChart.vue'))
 
 const props = withDefaults(
   defineProps<{

@@ -114,6 +114,12 @@ pub enum ViewBlock {
         total: Option<u64>,
         unit: Option<String>,
     },
+    /// A semantic rich passage, rendered directly in the assistant transcript.
+    InlineUi {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        document: crate::InlineDocument,
+    },
     Custom {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
@@ -139,7 +145,8 @@ impl ViewBlock {
             | Self::Diff { id, .. }
             | Self::SearchResults { id, .. }
             | Self::Media { id, .. }
-            | Self::Custom { id, .. } => id.as_deref(),
+            | Self::Custom { id, .. }
+            | Self::InlineUi { id, .. } => id.as_deref(),
             Self::Content { id, .. } | Self::Progress { id, .. } => Some(id),
         }
     }

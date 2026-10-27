@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import InlineReplyPart from '@/features/inlineUi/InlineReplyPart.vue'
+import { isInlineUiTool } from '@/features/inlineUi/model'
+
 import { computed, toRef } from 'vue'
 import { RiArrowRightSLine } from '@remixicon/vue'
 
@@ -76,8 +79,13 @@ function openAttachment(path: string, url: string) {
 </script>
 
 <template>
+  <InlineReplyPart
+    v-if="part.kind === 'operation' && isInlineUiTool(content.name || part.source.tool)"
+    :part="part"
+    :session-id="sessionId"
+  />
   <AgenaOperationPart
-    v-if="part.kind === 'operation'"
+    v-else-if="part.kind === 'operation'"
     :part="part"
     :expanded="expanded"
     :collapse-signal="collapseSignal"

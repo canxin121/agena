@@ -24,3 +24,7 @@ __pycache__/
 
 # Local worktrees
 .claude/worktrees/
+
+# Inline Generative UI browser regression artifacts
+artifacts/inline-ui/
+packages/agena-web/.inline-ui-probe-*/

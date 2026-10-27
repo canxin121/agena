@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiTableLine, RiCodeLine, RiDownloadLine } from '@remixicon/vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
-import type { ChartSpec } from './model'
+import type { ChartSpec } from './charts'
 const props = defineProps<{ spec: ChartSpec; source: string }>()
 const { t } = useI18n()
 const hidden = ref(new Set<number>())
@@ -133,6 +133,7 @@ function download() {
       </button>
       <button
         class="chart-action"
+        v-if="source"
         :aria-label="t('interactive.source')"
         :title="t('interactive.source')"
         :aria-pressed="showSource"

@@ -1,3 +1,4 @@
+import { replyTextWithInline } from '@/features/inlineUi/model'
 import { i18n } from '@/i18n'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
@@ -15,6 +16,7 @@ type ToastKind = 'info' | 'success' | 'error'
 type ToastsStore = { push: (kind: ToastKind, message: string) => void }
 
 type MessagePartLike = {
+  agenaPresentation?: JsonValue
   type?: string
   text?: string
   filename?: string
@@ -92,10 +94,11 @@ export function useChatMessageActions(opts: {
 
   async function handleCopyMessage(message: MessageLike) {
     const id = typeof message?.info?.id === 'string' ? message.info.id : ''
-    const text = getTextParts(Array.isArray(message?.parts) ? message.parts : [])
-      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-      .filter((t) => t.trim())
-      .join('\n\n')
+    const text = replyTextWithInline(Array.isArray(message?.parts) ? message.parts : [], (part) =>
+      getTextParts([part])
+        .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+        .join('\n\n'),
+    )
     if (!text) return
     try {
       await copyToClipboard(text)

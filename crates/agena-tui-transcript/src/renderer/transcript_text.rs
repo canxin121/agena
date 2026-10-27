@@ -27,6 +27,7 @@ pub(crate) fn transcript_part_content<'a>(
 
 pub(crate) fn operation_block_copy_text(block: &ViewBlock, i18n: &I18n) -> String {
     match block {
+        ViewBlock::InlineUi { document, .. } => document.to_markdown(),
         ViewBlock::Content { .. } => String::new(),
         ViewBlock::Progress {
             phase,

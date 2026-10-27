@@ -27,6 +27,9 @@ pub use provider_state::PartProviderState;
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.
 pub trait ToolSessionContext {
+    fn relation_kind(&self) -> agena_domain::SessionRelationKind {
+        agena_domain::SessionRelationKind::Root
+    }
     fn conversation(&self) -> Option<&agena_domain::SessionConversation> {
         None
     }

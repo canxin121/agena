@@ -166,7 +166,7 @@ Agent communication and delegation.
 | `max_cost_microusd` | `integer / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — | Per-execution token budget, retained for followup executions. |
 | `name` | `string` | ✓ | — | Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved. |
-| `prompt` | `string` | ✓ | — | Scope, constraints and expected final result. Parent history is not copied. |
+| `prompt` | `string` | ✓ | — | Scope, constraints, required context and output contracts, and expected final result.<br>Parent history is not copied; include any chart or UI contract the task needs. |
 | `selection` | `AgentModelSelection / null` | — | — |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 
@@ -267,7 +267,7 @@ Agent communication and delegation.
       "x-agena-order": "000000"
     },
     "prompt": {
-      "description": "Scope, constraints and expected final result. Parent history is not copied.",
+      "description": "Scope, constraints, required context and output contracts, and expected final result.\nParent history is not copied; include any chart or UI contract the task needs.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000001"

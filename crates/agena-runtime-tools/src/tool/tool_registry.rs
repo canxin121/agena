@@ -516,6 +516,7 @@ pub(super) struct CloudToolAdapterGate {
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
     pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
+    pub(super) session_relation_kind: agena_domain::SessionRelationKind,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,

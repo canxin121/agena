@@ -26,6 +26,7 @@ impl SessionManager {
             .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default());
         let context = ToolContext {
             scope_session_id: Some(id),
+            relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             selection,
             effective_permission: state
@@ -84,6 +85,7 @@ impl SessionManager {
         .map_err(kernel_error)?;
         Ok(ToolContext {
             scope_session_id: Some(id.get()),
+            relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             selection: state
                 .config

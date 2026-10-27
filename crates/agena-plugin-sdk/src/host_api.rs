@@ -779,7 +779,8 @@ pub struct AskUserResponse {
 pub struct AgentSpawnRequest {
     /// Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.
     pub name: String,
-    /// Scope, constraints and expected final result. Parent history is not copied.
+    /// Scope, constraints, required context and output contracts, and expected final result.
+    /// Parent history is not copied; include any chart or UI contract the task needs.
     pub prompt: String,
     /// Command instructions attached to the initial message.
     #[serde(default)]

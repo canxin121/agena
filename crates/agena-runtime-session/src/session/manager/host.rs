@@ -6,6 +6,20 @@ use agena_domain::{
 };
 use agena_plugin_host::sdk::host_api::AskUserResponse;
 
+pub(super) fn parent_interaction_required(
+    reason: &str,
+) -> Box<agena_domain::CapabilityUnavailableResult> {
+    Box::new(agena_domain::CapabilityUnavailableResult {
+        capability: "user_interaction".into(),
+        tool_name: None,
+        reason: format!(
+            "Subagents cannot request user decisions directly. {reason} Report the blocked operation and required decision or authorization to the parent agent."
+        ),
+        source: agena_domain::CapabilitySourceKind::AgentProfile,
+        retryable: false,
+    })
+}
+
 impl SessionManager {
     pub async fn execute_unscoped_tool(
         &self,
@@ -157,6 +171,19 @@ impl SessionManager {
         input: crate::part::AskUserToolInput,
     ) -> Result<AskUserResponse, AppError> {
         let (tool, control) = self.live_tool(session, call)?;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(control.session)
+            .await
+            .map_err(kernel_error)?;
+        if configuration.relation_kind.is_subagent() {
+            return Err(AppError::CapabilityUnavailable(
+                parent_interaction_required(
+                    "The parent handles user questions and approval workflows.",
+                ),
+            ));
+        }
         let sequence = {
             let mut sequences = self
                 .host_sequences

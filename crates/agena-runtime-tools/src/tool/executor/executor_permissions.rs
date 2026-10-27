@@ -340,3 +340,285 @@ mod snapshot_contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod session_role_tests {
+    use super::*;
+    use crate::authorization::ExecutionPrincipal;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+    use agena_domain::{PermissionConfig, SessionRelationKind};
+    use agena_plugin_host::sdk::{ToolDefinition, ToolTag};
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    const PARENT_TOOLS: &[(&str, &str)] = &[
+        ("agena.interaction", "ask"),
+        ("agena.interaction", "notify"),
+        ("agena.plan", "set"),
+        ("agena.plan", "review"),
+        ("agena.plan", "phase"),
+        ("agena.plan", "clear"),
+        ("agena.agent", "spawn"),
+        ("agena.agent", "followup"),
+        ("agena.agent", "cancel"),
+    ];
+
+    fn tool(plugin: &str, name: &str, tags: Vec<ToolTag>) -> RegisteredTool {
+        RegisteredTool::new(
+            plugin.parse().unwrap(),
+            ToolDefinition {
+                name: name.into(),
+                contract: Default::default(),
+                docs: Default::default(),
+                runtime: Default::default(),
+                tags,
+            },
+        )
+        .unwrap()
+    }
+
+    fn executor(tools: Vec<RegisteredTool>) -> ToolExecutor {
+        let mut executor = ToolExecutor::new(
+            std::env::temp_dir(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        );
+        executor.definition_catalog = Some(Arc::new(tools));
+        executor
+    }
+
+    fn catalog() -> Vec<RegisteredTool> {
+        // Role restrictions follow tool identity, even without interactive tags.
+        let mut tools = PARENT_TOOLS
+            .iter()
+            .map(|(plugin, name)| tool(plugin, name, vec![ToolTag::Mutate]))
+            .collect::<Vec<_>>();
+        tools.extend([
+            tool("agena.plan", "get", vec![ToolTag::ReadOnly]),
+            tool("agena.plan", "edit", vec![ToolTag::Mutate]),
+            tool("agena.agent", "message", vec![ToolTag::Agent]),
+            tool("agena.agent", "wait", vec![ToolTag::Agent]),
+            tool(
+                "agena.shell",
+                "open",
+                vec![ToolTag::Shell, ToolTag::Interactive, ToolTag::Mutate],
+            ),
+            tool(
+                "agena.web",
+                "browser_open",
+                vec![ToolTag::Network, ToolTag::Interactive],
+            ),
+            tool("agena.fs", "read", vec![ToolTag::ReadOnly]),
+        ]);
+        tools
+    }
+
+    fn available_names(executor: &ToolExecutor) -> BTreeSet<String> {
+        executor
+            .available_execution_tools()
+            .into_iter()
+            .map(|tool| tool.canonical_name())
+            .collect()
+    }
+
+    #[test]
+    fn subagent_catalog_and_invocation_share_role_restrictions() {
+        let mut executor = executor(catalog());
+        executor.session_relation_kind = SessionRelationKind::Subagent;
+        assert_eq!(
+            available_names(&executor),
+            [
+                "agena.plan.get",
+                "agena.plan.edit",
+                "agena.agent.message",
+                "agena.agent.wait",
+                "agena.shell.open",
+                "agena.web.browser_open",
+                "agena.fs.read",
+            ]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+        );
+
+        for (plugin, name) in PARENT_TOOLS {
+            let canonical = format!("{plugin}.{name}");
+            let compact = format!("{}.{name}", plugin.strip_prefix("agena.").unwrap());
+            for alias in [&canonical, &compact] {
+                let result =
+                    executor.authorize_invocation(&ToolInvocation::new(alias, Default::default()));
+                assert!(
+                    matches!(result, Err(ToolError::CapabilityUnavailable(_))),
+                    "{alias} must be rejected by the role capability policy"
+                );
+            }
+            // Underscore spellings are not execution-tool aliases.
+            assert!(matches!(
+                executor.authorize_invocation(&ToolInvocation::new(
+                    canonical.replace('.', "_"),
+                    Default::default(),
+                )),
+                Err(ToolError::ToolUnavailable(_))
+            ));
+        }
+        for name in available_names(&executor) {
+            assert!(
+                executor
+                    .authorize_invocation(&ToolInvocation::new(&name, Default::default()))
+                    .is_ok(),
+                "{name} must remain usable by subagents"
+            );
+        }
+    }
+
+    #[test]
+    fn user_facing_relations_keep_parent_workflow_tools() {
+        let tools = catalog();
+        let expected: BTreeSet<_> = tools.iter().map(RegisteredTool::canonical_name).collect();
+        for relation in [
+            SessionRelationKind::Root,
+            SessionRelationKind::Child,
+            SessionRelationKind::Fork,
+            SessionRelationKind::Rewind,
+        ] {
+            let mut executor = executor(tools.clone());
+            executor.session_relation_kind = relation;
+            assert_eq!(available_names(&executor), expected, "{relation:?}");
+            for name in available_names(&executor) {
+                assert!(
+                    executor
+                        .authorize_invocation(&ToolInvocation::new(&name, Default::default()))
+                        .is_ok(),
+                    "{relation:?} must retain {name}"
+                );
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct SessionContext {
+        relation: SessionRelationKind,
+        permission: PermissionConfig,
+        denied: BTreeSet<String>,
+    }
+
+    impl crate::ToolSessionContext for SessionContext {
+        fn relation_kind(&self) -> SessionRelationKind {
+            self.relation
+        }
+
+        fn effective_workspace_root(&self) -> Option<&Path> {
+            None
+        }
+
+        fn effective_permission(&self) -> &PermissionConfig {
+            &self.permission
+        }
+
+        fn permission_ceiling(&self) -> &PermissionConfig {
+            &self.permission
+        }
+
+        fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
+            &self.denied
+        }
+
+        fn selected_model(&self) -> Option<&str> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_executor_derives_subagent_role_without_persisted_denials() {
+        let executor = executor(Vec::new());
+        let handle = executor.plugin_manager().host_handle();
+        let registry = handle.scoped_tool_registry();
+        let mut owners = Vec::new();
+        let mut registrations = Vec::new();
+        for tool in [
+            tool("agena.interaction", "ask", vec![ToolTag::Interactive]),
+            tool("agena.agent", "message", vec![ToolTag::Agent]),
+            tool(
+                "agena.shell",
+                "open",
+                vec![ToolTag::Shell, ToolTag::Interactive, ToolTag::Mutate],
+            ),
+        ] {
+            let owner = handle.begin_plugin_instance(tool.plugin_key().clone());
+            registrations.push(
+                registry
+                    .register(
+                        &owner,
+                        None,
+                        tool.tool_key().clone(),
+                        tool,
+                        "session role test",
+                    )
+                    .unwrap(),
+            );
+            owners.push(owner);
+        }
+
+        let child = executor
+            .for_session_context_async(&SessionContext {
+                relation: SessionRelationKind::Subagent,
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(child.session_relation_kind(), SessionRelationKind::Subagent);
+        assert_eq!(executor.session_relation_kind(), SessionRelationKind::Root);
+        assert_eq!(
+            available_names(&child),
+            ["agena.agent.message", "agena.shell.open"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        );
+        assert!(matches!(
+            child.authorize_invocation(&ToolInvocation::new("interaction.ask", Default::default())),
+            Err(ToolError::CapabilityUnavailable(_))
+        ));
+        assert!(
+            child
+                .authorize_invocation(&ToolInvocation::new("shell.open", Default::default()))
+                .is_ok()
+        );
+
+        let restricted = executor
+            .for_session_context_async(&SessionContext {
+                relation: SessionRelationKind::Subagent,
+                denied: BTreeSet::from(["agent.message".into()]),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(
+            available_names(&restricted),
+            BTreeSet::from(["agena.shell.open".into()])
+        );
+        assert!(matches!(
+            restricted
+                .authorize_invocation(&ToolInvocation::new("agent.message", Default::default())),
+            Err(ToolError::CapabilityUnavailable(_))
+        ));
+
+        let fork = executor
+            .for_session_context_async(&SessionContext {
+                relation: SessionRelationKind::Fork,
+                ..Default::default()
+            })
+            .await;
+        assert!(available_names(&fork).contains("agena.interaction.ask"));
+        assert!(
+            fork.authorize_invocation(&ToolInvocation::new("interaction.ask", Default::default()))
+                .is_ok()
+        );
+        drop(registrations);
+        drop(owners);
+    }
+}

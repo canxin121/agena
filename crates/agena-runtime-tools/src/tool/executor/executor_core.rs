@@ -8,6 +8,7 @@ impl ToolExecutor {
     ) -> Self {
         Self {
             read_path_authorizer: None,
+            session_relation_kind: agena_domain::SessionRelationKind::Root,
             conversation: None,
             workspace_root: workspace_root.into(),
             principal,
@@ -55,6 +56,7 @@ impl ToolExecutor {
         session_context: &C,
     ) -> Self {
         let mut scoped = self.clone();
+        scoped.session_relation_kind = session_context.relation_kind();
         scoped.conversation = session_context.conversation().cloned();
         scoped.plugin_scope = session_context
             .session_id()
@@ -321,6 +323,19 @@ impl ToolExecutor {
     }
 
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
+        // Derive role restrictions from live session identity so existing agents
+        // are covered without copying parent-only restrictions into user forks.
+        // Interactive terminals and browsers remain eligible.
+        if self.session_relation_kind.is_subagent()
+            && matches!(
+                (entry.namespace(), entry.plugin_name(), entry.tool_name()),
+                ("agena", "interaction", "ask" | "notify")
+                    | ("agena", "plan", "set" | "review" | "phase" | "clear")
+                    | ("agena", "agent", "spawn" | "followup" | "cancel")
+            )
+        {
+            return false;
+        }
         (!self
             .conversation
             .as_ref()
@@ -336,6 +351,10 @@ impl ToolExecutor {
         self.conversation
             .as_ref()
             .map(|context| context.instruction())
+    }
+
+    pub fn session_relation_kind(&self) -> agena_domain::SessionRelationKind {
+        self.session_relation_kind
     }
 
     pub async fn detailed_tools_async(&self) -> Vec<RegisteredTool> {

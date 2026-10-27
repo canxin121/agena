@@ -55,6 +55,8 @@ impl Session {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionExecutionContext {
     pub scope_session_id: Option<i64>,
+    #[serde(default)]
+    pub relation_kind: SessionRelationKind,
     pub conversation: Option<SessionConversation>,
     pub selection: ExecutionSelection,
     pub effective_permission: PermissionConfig,
@@ -63,6 +65,9 @@ pub struct SessionExecutionContext {
     pub effective_workspace_root: Option<PathBuf>,
 }
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
+    fn relation_kind(&self) -> SessionRelationKind {
+        self.relation_kind
+    }
     fn conversation(&self) -> Option<&SessionConversation> {
         self.conversation.as_ref()
     }

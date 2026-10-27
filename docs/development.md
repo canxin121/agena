@@ -584,10 +584,35 @@ where they sit next to the code and can be built with `cargo doc`. The
 generated tool reference is embedded into rustdoc from
 `crates/agena-bundled-plugins/generated/tools-reference.md`.
 
-The runtime's Git behavior is defined in
-`crates/agena-runtime-contracts/src/identity/git_workflow.md` and included in
-the system prompt at compile time. The explanation for people is
-[the Git workflow guide](git-workflow.md).
+Shared system rules and main/subagent responsibilities are defined in
+`crates/agena-runtime-contracts/src/identity/mod.rs`. Both roles receive the
+adjacent `markdown.md`; user-facing sessions also receive `rich_output.md`
+with chart and interactive reply contracts. Delegated tasks must include any
+additional output contracts they need, since parent history is not copied.
+
+`crates/agena-runtime-session/src/session/manager/session_prompt.rs` selects
+brief workflow guidance from the scoped executor's available tool catalog,
+then appends user instructions, conversation instructions, and root project
+guidance. Requests without the Tool API omit tool discovery and workflows.
+Only `SessionRelationKind::Subagent` selects the delegated role; ordinary
+children, forks, rewinds, and side conversations retain their user-facing
+role and applicable conversation boundaries. The Agent roster carries
+routing and state, not a second set of tool instructions.
+
+Subagents report user decisions and authorization needs to the parent.
+The scoped executor excludes direct user interaction, plan creation,
+approval, phase changes and clearing, and nested agent management. Existing
+plan inspection/progress, agent messaging/waiting, terminals, and browsers
+remain subject to ordinary capability and permission checks. Host input
+callbacks and permission requests enforce the same user-interaction
+boundary: allowed actions and automatic review still work, but an action
+requiring a human decision returns a blocker without creating a child
+interaction or granting permission.
+
+Execution contracts are supplied by live tool help. Detailed Git procedures
+remain in `identity/git_workflow.md` as reference material, outside the
+default prompt. See [the Git workflow guide](git-workflow.md) for recovery
+and authorization details.
 
 ## Before committing
 

@@ -365,7 +365,7 @@ impl SessionManager {
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref());
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,options.system.as_deref(),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
@@ -796,6 +796,11 @@ impl SessionManager {
                     )));
                 }
                 PermissionDecision::Ask { reason } | PermissionDecision::Auto { reason } => {
+                    if executor.session_relation_kind().is_subagent() {
+                        return Err(ToolError::CapabilityUnavailable(
+                            super::host::parent_interaction_required(&reason),
+                        ));
+                    }
                     let command = RequestId::new();
                     let request = InteractionRequest::Permission {
                         action_key: action_key.clone(),
@@ -1290,8 +1295,11 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
-        let mut system =
-            self.assemble_session_system_prompt_with_executor(&executor, options.system.as_deref());
+        let mut system = self.assemble_session_system_prompt_with_executor(
+            &executor,
+            options.system.as_deref(),
+            false,
+        );
         system.push_str(&self.agent_roster(control.session).await?);
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state

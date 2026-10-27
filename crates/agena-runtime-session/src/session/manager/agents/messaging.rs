@@ -408,9 +408,6 @@ impl SessionManager {
             caller.get(),
             owner.get()
         );
-        if caller != owner {
-            text.push_str("Use target `parent` to message the parent. You may message/wait; only the parent may spawn/followup/cancel.\n");
-        }
         for member in &page.sessions {
             text.push_str(&format!(
                 "{} agent_id={} status={}{}\n",

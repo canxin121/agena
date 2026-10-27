@@ -1,10 +1,10 @@
 # Git 工作流程与文件恢复
 
-Agena 使用项目自己的普通 Git 仓库保存检查和恢复点。模型通过 shell 工具执行 Git，通过 `interaction.ask` 请求需要用户决定的操作，通过 `plan.review` 处理计划审批。Agena 没有隐藏的快照仓库、自动提交服务、工作区撤销日志或 Git 命令拦截层。
+Agena uses the project's ordinary Git repository for checkpoints and recovery. The model runs Git through available shell tools. User-facing sessions use available `agena.interaction` and `agena.plan` workflows for user decisions and plan approval; subagents report these needs to their parent. Agena has no hidden snapshot repository, automatic commit service, workspace undo log, or Git command interception layer.
 
 会话的 rewind（回退）和 fork（分叉）只影响对话，不会还原磁盘文件。Git 也不能保证恢复未记录、未跟踪、被忽略或位于仓库之外的内容；模型不应承诺一个通用的“撤销一切”能力。
 
-本页解释当前行为，方便使用者理解和审查模型的操作。行为规则的唯一来源是 [`crates/agena-runtime-contracts/src/identity/git_workflow.md`](../crates/agena-runtime-contracts/src/identity/git_workflow.md)。该文件通过 `include_str!` 编译进 `AGENA_GIT_WORKFLOW_PROMPT`，再由 `identity::system_prompt_with_sections` 注入每个会话的系统提示词。规则与本页冲突时，以源文件为准。
+This page and [`identity/git_workflow.md`](../crates/agena-runtime-contracts/src/identity/git_workflow.md) provide detailed Git reference material. Shared rules and main/subagent responsibilities are defined in [`identity/mod.rs`](../crates/agena-runtime-contracts/src/identity/mod.rs). Both roles receive [`identity/markdown.md`](../crates/agena-runtime-contracts/src/identity/markdown.md); user-facing sessions also receive [`identity/rich_output.md`](../crates/agena-runtime-contracts/src/identity/rich_output.md). Workflow guidance reflects the current role and available tools. The detailed Git reference remains available through `AGENA_GIT_WORKFLOW_PROMPT` but is not automatically added to sessions. User instructions, conversation boundaries, and root project guidance are appended separately; execution contracts come from live tool help.
 
 ## 为什么需要区分三棵树
 
@@ -105,17 +105,17 @@ Git 的恢复能力取决于内容到底在哪一层：
 历史替换需要单独授权。优先使用显式 refspec 和
 `--force-with-lease=<ref>:<observed-old-oid>`。不要自动 force 受保护或默认分支；push 被拒绝时，先重新评估，不把拒绝自动升级为 force。结果不确定时，先核对远端状态再重试。squash merge 后，下一项任务应从更新后的基线开始，避免复用已经集成的旧 topic 分支。
 
-## 用户决策与工具
+## User decisions and plugin workflows
 
-运行时要求模型通过工具询问用户，而不是在回复末尾用纯文本提问后等待：
+User-facing sessions use the relevant plugins and their available tools for user decisions and planning. References to questions and approvals in this guide apply to those sessions. Subagents report missing decisions or authorization to the parent and continue independent authorized work; they do not open their own user-interaction or plan-approval workflow.
 
-- 需要用户做出选择时使用 `interaction.ask`，通过 `tools_help` 和 `tools_call` 调用。
-- 计划审批使用 `plan.review`。
-- 危险 Git 操作的范围和 squash 选择使用 `interaction.ask`。
-- 询问应给出具体后果和可区分的选项，包括拒绝或延后。
-- 询问超时、取消、空答案或建议的默认值都不是同意。
-- 依赖该答案的操作必须等待结果；独立的已授权工作可以继续。
-- 工具不可用时，应报告限制并保留依赖操作，不能假装已经获得批准。
+- `agena.interaction` provides `interaction.ask` for user choices, authorization for specific dangerous Git operations, and squash decisions. Use `interaction.notify` for non-blocking notices when useful.
+- `agena.plan` combines tools such as `plan.get`, `plan.set`, `plan.edit`, `plan.review`, and `plan.phase` for plan management, required approval, and phase transitions. Plan approval belongs to this workflow.
+- Consult current contracts through `tools_help` and invoke available tools through `tools_call`.
+- Questions should show concrete consequences and distinct options, including declining or deferring.
+- Timeout, cancellation, an empty answer, or a suggested default is not consent.
+- Dependent actions must wait for the answer; independent, authorized work may continue.
+- If required tools are unavailable, report the limitation and keep dependent actions pending rather than assuming approval.
 
 ## 交付报告
 
@@ -130,16 +130,16 @@ Git 的恢复能力取决于内容到底在哪一层：
 
 用于交付的分支、worktree 和 recovery ref 不应为了“看起来干净”而自动合并回原目录或删除。恢复任务时也应保留任务基线、内容归属、进行中的 Git 操作和已授权的精确范围。
 
-## 当前验证范围
+## Validation scope
 
-规则由系统提示词约束，Git 操作由模型通过普通 shell 执行。Agena 没有运行时层验证每条 Git 命令是否符合规则，也没有隐藏的恢复机制。当前仓库也没有针对模型 Git 行为的自动化评测；编译、格式化和 lint 通过不能证明模型会遵守这些规则。
+The model executes Git through ordinary shell tools. The core prompt supplies general task, authorization, and work-protection guidance; detailed Git procedures are reference material, and live tool help describes current contracts. Agena does not validate every Git command against these procedures or provide hidden recovery. The repository has no automated evaluation of model Git behavior; passing compilation, formatting, or lint checks does not demonstrate model compliance.
 
-修改规则时必须先修改
-[`git_workflow.md`](../crates/agena-runtime-contracts/src/identity/git_workflow.md)，再运行至少以下检查，确认源文件仍能编译进运行时：
+Update [`identity/mod.rs`](../crates/agena-runtime-contracts/src/identity/mod.rs) for shared rules and session roles, [`identity/markdown.md`](../crates/agena-runtime-contracts/src/identity/markdown.md) for shared presentation, [`identity/rich_output.md`](../crates/agena-runtime-contracts/src/identity/rich_output.md) for user-facing output contracts, and [`session_prompt.rs`](../crates/agena-runtime-session/src/session/manager/session_prompt.rs) for capability-aware assembly. Keep this guide and the detailed Git reference aligned when their guidance changes. Run the prompt, capability, and interaction regression tests and the standard Rust checks:
 
 ```sh
 cargo fmt --all -- --check
+cargo test -p agena-runtime-session -p agena-runtime-tools --lib --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-本页只负责解释源规则。需要调整行为时，不要只改本页。
+Documentation alone does not change the runtime prompt or tool behavior.

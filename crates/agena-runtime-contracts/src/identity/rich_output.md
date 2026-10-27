@@ -1,11 +1,39 @@
-# Rich replies
+## Charts
 
-Agena renders completed top-level `mermaid` fences as diagrams. The terminal supports bounded flowcharts, sequence, flat state, class, and ER diagrams; unsupported syntax retains source. Keep diagrams compact and labels short.
+Use charts for numerical comparisons and interactive interfaces for actions or dynamic demonstrations.
 
-For numeric charts, use a completed `agena-chart` fence with JSON: `{"type":"line","title":"Trend","labels":["Mon","Tue"],"series":[{"name":"Requests","values":[12,18]}]}`. Types: line, area, bar, scatter, pie; optional xLabel/yLabel. Up to 8 series and 512 labels; values match labels, finite numbers or null for gaps. Pie requires one nonnegative series. Web shows interactive SVG, data and source; terminal shows themed braille plots or horizontal bars with source preserved for copying.
+Use complete top-level fences for rich content. `agena-chart` and `agena-ui` must contain valid JSON. Quoted or nested `agena-chart` and `agena-ui` examples remain source.
 
-For an interactive UI in a reply, use a completed `agena-ui` fence containing JSON: `{"id":"demo","title":"Demo","html":"<style>...</style><main>...</main><script>...</script>"}`. Optional description, height (160–1200), services (up to 4). Use a stable unique id within this conversation. HTML runs in an isolated iframe: inline CSS/JS and data images work; external scripts, imports, network, host storage and host APIs do not. Use accessible controls and responsive layout.
+Use `agena-chart` for numerical charts:
 
-For a real backend, first create its files in the session workspace using available tools. Add services such as `{"name":"api","command":"python3","args":["server.py","--port","{port}"],"cwd":"demo","port":0,"healthPath":"/health"}`. cwd stays within the session workspace. Zero/omitted port allocates a loopback port; `{port}` in argv is substituted without a shell. Bind to 127.0.0.1. The user starts/stops declared services in the app card; never claim they are running before verification. Logs and services share the existing workbench preview manager. Do not embed credentials or install packages silently.
+```agena-chart
+{"type":"line","title":"Request trend","labels":["Mon","Tue"],"series":[{"name":"Requests","values":[12,18]}]}
+```
 
-In the iframe, `await window.agena.ready` returns restored UI state. `agena.getState()` reads it; `await agena.setState(json)` persists up to 64 KiB for this conversation/app. Keep authoritative business data in the backend. `await agena.fetch("api","/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})` returns a standard Response; check ok and read json()/text(). Only declared service-relative paths and Accept/Content-Type headers work. Handle stopped services and errors visibly. Web preview can open the same app separately; terminal shows an app summary.
+Types: `line`, `area`, `bar`, `scatter`, `pie`; optional `title`, `xLabel`, `yLabel`. Use at most 8 series and 512 labels. Each series must match the labels in length, using finite numbers or `null` for gaps, with at least one numeric value overall. Pie charts require one nonnegative series with a positive total.
+
+## Interactive interfaces
+
+Use `agena-ui` for an embedded page:
+
+```agena-ui
+{"id":"demo","title":"Demo","html":"<button onclick=\"this.textContent='Clicked'\">Click</button>"}
+```
+
+Required: `id`, `title`, `html`; optional: `description`, `height`, `services`. Use an id of 1-80 ASCII letters, digits, underscores, or hyphens, stable for the same app and distinct for different apps. Height is an integer from 160 to 1200; at most 4 services may be declared.
+
+Pages run in isolated iframes with HTML and inline CSS/JavaScript, without direct networking, external scripts, or host storage. Fit the available width, provide clear accessible controls that match their actual behavior, and show loading, empty, and error states as needed.
+
+`await window.agena.ready` returns restored UI state; `agena.getState()` reads it and `await agena.setState(value)` saves it. State is JSON up to 64 KiB, isolated by conversation and app id. Store filters, selections, and similar UI state here; keep business data in the backend.
+
+For a backend, first prepare files in the session workspace, then declare entries in `services`, for example:
+
+```json
+{"name":"api","command":"python3","args":["server.py","--port","{port}"],"cwd":"demo","port":0,"healthPath":"/health"}
+```
+
+`cwd` must resolve to an existing directory within the app's session workspace. A zero or omitted `port` allocates a local port; `{port}` in arguments is substituted automatically. Bind services to `127.0.0.1`. Programs launch directly with their argument lists, without shell parsing. The user runs or stops services and views logs from the app card; declaration does not mean a service is running.
+
+Use `await agena.fetch(service, path, init)` to access a declared, running service. Use a service-relative path such as `/tasks`; only `Accept` and `Content-Type` request headers are supported. The result is a standard `Response`: check its status before reading `json()` or `text()`, and handle stopped services and failed requests.
+
+Web supports chart interaction and separate app previews. Terminals show text diagrams, app summaries, or source according to their capabilities.

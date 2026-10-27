@@ -1,5 +1,5 @@
 use super::*;
-use agena_domain::{StructuredObject, ToolApiCall, ToolApiFunction};
+use agena_domain::{PermissionDecision, StructuredObject, ToolApiCall, ToolApiFunction};
 use agena_provider::CompletionInputPart;
 use serde_json::Value;
 
@@ -8,10 +8,128 @@ struct Fixture {
     session: SessionId,
     attempt: AttemptHandle,
     model: ModelRef,
+    workspace_root: std::path::PathBuf,
 }
 
 impl Fixture {
+    async fn new_subagent() -> Self {
+        let mut fixture = Self::new().await;
+        let workspace = fixture.manager.current_workspace_id().await.unwrap();
+        let session = fixture
+            .manager
+            .kernel()
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                workspace,
+                "Subagent interaction tests".into(),
+                SessionConfiguration {
+                    parent_session_id: Some(fixture.session),
+                    relation_kind: agena_domain::SessionRelationKind::Subagent,
+                    agent: Some(SessionAgentConfiguration {
+                        name: "child".into(),
+                        status: agena_domain::AgentStatus::Created,
+                        started_at_ms: None,
+                        finished_at_ms: None,
+                        failure: None,
+                        limits: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = fixture
+            .manager
+            .kernel()
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Complete the delegated task.".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        fixture.attempt = fixture
+            .manager
+            .kernel()
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        fixture.session = session;
+        fixture
+    }
+
+    fn register_live_call(&self, tool: &ToolHandle) -> Arc<RunControl> {
+        let state = self.manager.state.load_full();
+        let control = Arc::new(RunControl {
+            session: self.session,
+            execution: self.attempt.execution_id(),
+            model: self.model.clone(),
+            state,
+            cancel: CancellationToken::new(),
+            phase: StdMutex::new(agena_domain::ExecutionPhase::ExecutingTools),
+            done: Notify::new(),
+            budget: None,
+            failure: Default::default(),
+            settled: Default::default(),
+        });
+        self.manager
+            .tools
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                (self.session.get(), tool.id().get()),
+                LiveTool {
+                    tool: tool.clone(),
+                    control: control.clone(),
+                    permit: Default::default(),
+                    permissions: Default::default(),
+                },
+            );
+        control
+    }
+
+    async fn scoped_executor(&self) -> ToolExecutor {
+        let context = self
+            .manager
+            .execution_context_value(self.session)
+            .await
+            .unwrap();
+        self.manager
+            .state
+            .load_full()
+            .executor
+            .for_session_context_async(&context)
+            .await
+    }
+
+    async fn assert_no_pending_interaction(&self) {
+        assert!(
+            self.manager
+                .kernel()
+                .reader
+                .pending_interactions(self.session, None, 10)
+                .await
+                .unwrap()
+                .interactions
+                .is_empty()
+        );
+    }
+
     async fn new() -> Self {
+        let workspace_root =
+            std::env::temp_dir().join(format!("agena-tool-api-tests-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&workspace_root).await.unwrap();
+        let workspace_root = tokio::fs::canonicalize(workspace_root).await.unwrap();
         let kernel = Arc::new(
             agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
                 .await
@@ -19,7 +137,7 @@ impl Fixture {
         );
         let workspace = kernel
             .workspaces
-            .ensure_id("/tool-api-tests")
+            .ensure_id(&workspace_root.to_string_lossy())
             .await
             .unwrap();
         let session = kernel
@@ -58,7 +176,7 @@ impl Fixture {
             agena_plugin_host::PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
                 static_plugins: vec![],
                 config: Default::default(),
-                workspace_root: "/tool-api-tests".into(),
+                workspace_root: workspace_root.clone(),
                 agena_version: "test".into(),
                 callback_base_url: None,
                 host_client: None,
@@ -68,7 +186,7 @@ impl Fixture {
             .await
             .unwrap();
         let executor = ToolExecutor::new(
-            "/tool-api-tests",
+            workspace_root.clone(),
             crate::authorization::ExecutionPrincipal::new(
                 crate::permission::PermissionPolicy::allow_all(),
                 crate::permission::ToolPermissionPolicy::allow_all(),
@@ -90,6 +208,7 @@ impl Fixture {
             session,
             attempt,
             model: ModelRef::new("fixture", "model"),
+            workspace_root,
         }
     }
 
@@ -184,7 +303,163 @@ impl Fixture {
             .shutdown()
             .await
             .unwrap();
+        tokio::fs::remove_dir_all(&self.workspace_root)
+            .await
+            .unwrap();
     }
+}
+
+#[tokio::test]
+async fn subagent_host_question_does_not_create_an_interaction() {
+    let fixture = Fixture::new_subagent().await;
+    let tool = fixture.begin_call("fixture.ask", json!({})).await;
+    let control = fixture.register_live_call(&tool);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.manager.request_host_user_input(
+            fixture.session.get(),
+            tool.id().get(),
+            crate::part::AskUserToolInput {
+                title: "User decision".into(),
+                kind: "question".into(),
+                body_markdown: String::new(),
+                auto_resolution_ms: None,
+                questions: Vec::new(),
+            },
+        ),
+    )
+    .await
+    .expect("subagent input must fail without waiting for the user");
+    match result {
+        Err(AppError::CapabilityUnavailable(error)) => {
+            assert_eq!(error.capability, "user_interaction");
+            assert!(error.reason.contains("parent agent"));
+        }
+        other => panic!("expected a capability error, got {other:?}"),
+    }
+    fixture.assert_no_pending_interaction().await;
+    assert_eq!(
+        *control.phase.lock().unwrap(),
+        agena_domain::ExecutionPhase::ExecutingTools
+    );
+    fixture.shutdown().await;
+}
+
+fn permission_check(name: &str, decision: PermissionDecision) -> agena_tool::ToolPermissionCheck {
+    agena_tool::ToolPermissionCheck {
+        action: agena_domain::PermissionAction::Tool {
+            tool_name: name.into(),
+            qualifier: None,
+        },
+        decision,
+    }
+}
+
+#[tokio::test]
+async fn subagent_permission_question_does_not_create_an_interaction() {
+    let fixture = Fixture::new_subagent().await;
+    let tool = fixture.begin_call("fixture.run", json!({})).await;
+    let control = fixture.register_live_call(&tool);
+    let executor = fixture.scoped_executor().await;
+    assert!(executor.session_relation_kind().is_subagent());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.manager.authorize_checks(
+            &tool,
+            vec![permission_check(
+                "fixture.requires_approval",
+                PermissionDecision::Ask {
+                    reason: "This action requires user approval.".into(),
+                },
+            )],
+            &executor,
+            &control,
+            &control.state,
+        ),
+    )
+    .await
+    .expect("subagent approval must fail without waiting for the user");
+    match result {
+        Err(ToolError::CapabilityUnavailable(error)) => {
+            assert_eq!(error.capability, "user_interaction");
+            assert!(error.reason.contains("requires user approval"));
+            assert!(error.reason.contains("parent agent"));
+        }
+        other => panic!("expected a capability error, got {other:?}"),
+    }
+    fixture.assert_no_pending_interaction().await;
+    assert_eq!(
+        *control.phase.lock().unwrap(),
+        agena_domain::ExecutionPhase::ExecutingTools
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn subagent_permission_grants_and_denials_are_preserved() {
+    let fixture = Fixture::new_subagent().await;
+    let tool = fixture.begin_call("fixture.run", json!({})).await;
+    let control = fixture.register_live_call(&tool);
+    let executor = fixture.scoped_executor().await;
+    for decision in [
+        PermissionDecision::Allow,
+        PermissionDecision::Ask {
+            reason: "Reuse the existing grant for this action.".into(),
+        },
+    ] {
+        fixture
+            .manager
+            .authorize_checks(
+                &tool,
+                vec![permission_check("fixture.granted", decision)],
+                &executor,
+                &control,
+                &control.state,
+            )
+            .await
+            .unwrap();
+    }
+
+    let denied = fixture
+        .manager
+        .authorize_checks(
+            &tool,
+            vec![permission_check(
+                "fixture.granted",
+                PermissionDecision::Deny {
+                    reason: "A new deny must override the earlier grant.".into(),
+                },
+            )],
+            &executor,
+            &control,
+            &control.state,
+        )
+        .await;
+    assert!(matches!(denied, Err(ToolError::PolicyDenied(_))));
+
+    let other_action = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.manager.authorize_checks(
+            &tool,
+            vec![permission_check(
+                "fixture.not_granted",
+                PermissionDecision::Ask {
+                    reason: "This action has not been authorized.".into(),
+                },
+            )],
+            &executor,
+            &control,
+            &control.state,
+        ),
+    )
+    .await
+    .expect("a new action must fail without waiting for the user");
+    assert!(matches!(
+        other_action,
+        Err(ToolError::CapabilityUnavailable(_))
+    ));
+    fixture.assert_no_pending_interaction().await;
+    fixture.shutdown().await;
 }
 
 #[tokio::test]

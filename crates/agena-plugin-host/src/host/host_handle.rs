@@ -1942,24 +1942,53 @@ impl HostHandle {
     }
 
     /// Record a plugin notification intent through the unified `host.notify`
-    /// entry. The queue is bounded: oldest entries drop first so a frontend
-    /// that polls late never observes unbounded growth.
+    /// entry. The bounded queue preserves pending requests preferentially so
+    /// a late frontend can recover unanswered questions without unbounded growth.
     pub(super) fn push_host_notification(&self, plugin_id: &str, req: PluginNotifyRequest) {
-        const HOST_NOTIFICATION_QUEUE_LIMIT: usize = 64;
+        const HOST_NOTIFICATION_QUEUE_LIMIT: usize = 512;
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return;
         };
         let mut guard = recover_write(&self.host_notifications, "plugin host notification queue");
-        guard.push_back(HostNotification {
+        let notification = HostNotification {
+            attention: req.attention,
             plugin_id: plugin_id.to_string(),
             title: req.title,
             body: req.body,
             severity: req.severity,
             session_id: req.session_id,
             actions: req.actions,
-        });
+        };
+        // Stable event identities let a resolved question replace its pending
+        // intent, and prevent recovery/reload from creating duplicate alerts.
+        if let Some(event) = &notification.attention
+            && let Some(existing) = guard.iter_mut().find(|existing| {
+                existing.plugin_id == notification.plugin_id
+                    && existing
+                        .attention
+                        .as_ref()
+                        .is_some_and(|old| old.id == event.id)
+            })
+        {
+            // A predecessor replay during reload must never resurrect an
+            // already answered request with the same stable event identity.
+            if existing.attention.as_ref().is_some_and(|old| old.resolved) && !event.resolved {
+                return;
+            }
+            *existing = notification;
+            return;
+        }
+        guard.push_back(notification);
         while guard.len() > HOST_NOTIFICATION_QUEUE_LIMIT {
-            guard.pop_front();
+            let index = guard
+                .iter()
+                .position(|item| {
+                    item.attention
+                        .as_ref()
+                        .is_none_or(|event| !event.kind.is_request() || event.resolved)
+                })
+                .unwrap_or(0);
+            guard.remove(index);
         }
     }
 

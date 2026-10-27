@@ -1,20 +1,22 @@
-//! `agena.terminal` plugin: terminal window-title and notification state.
+//! `agena.terminal`: shared attention policy and terminal activity display.
 //!
-//! This plugin is intentionally **hooks-only** — it exposes no tools and is
-//! never visible to the AI. It observes the session lifecycle (run start/stop,
-//! session start/end, agent stop, user-prompt submission) and publishes a
-//! compact structured state that the TUI consumes to render the terminal
-//! window title and to raise native attention notifications.
+//! Canonical kernel execution and interaction facts produce persisted
+//! `host.notify` intents, shared by the terminal and browser delivery adapters.
+//! The observer lives with the plugin, independently of connected pages, and
+//! stops when the plugin shuts down. Lifecycle hooks publish title activity;
+//! they do not decide whether an AI execution has finished.
 //!
-//! The terminal *capability* detection (which OSC protocols the endpoint
-//! supports) lives in the TUI detection layer, not here. This plugin only
-//! decides *what state to show*; the TUI decides *how to render it*.
+//! The plugin exposes no AI tools. Terminal OSC capability detection and
+//! browser Web Push delivery remain responsibilities of the respective adapters.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+mod attention;
+pub use attention::NotificationSource;
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
-    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, PluginNotifyRequest,
+    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest,
 };
 use agena_plugin_host::sdk::{
     AgentStopInput, AgentStopPatch, ContributionKind, InitContext, InitOutcome,
@@ -34,16 +36,6 @@ pub(crate) const ACTIVITY_CONTRIBUTION_ID: &str = "agena.terminal.activity";
 /// display channel (`host.display_contribute`).
 pub(crate) const ACTIVITY_CONTRIBUTION_PRIORITY: i32 = i32::MAX - 1;
 
-/// A lifecycle event that should raise terminal attention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum TerminalNotify {
-    /// A run completed successfully.
-    Done,
-    /// A run ended with an error / blocked state.
-    Blocked,
-}
-
 /// The activity phase projected to the terminal title.
 ///
 /// The plugin observes the session lifecycle hooks, so it can only distinguish
@@ -61,25 +53,8 @@ pub(crate) enum TerminalActivity {
 pub(crate) struct TerminalPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     activity: Arc<RwLock<TerminalActivity>>,
-    notify: Arc<RwLock<Option<TerminalNotify>>>,
-}
-
-/// Build the unified notify request for a terminal lifecycle event (Phase 6).
-/// The host decides surface/priority; the TUI consumes it for terminal bells.
-fn notify_request(kind: TerminalNotify) -> PluginNotifyRequest {
-    PluginNotifyRequest {
-        title: String::new(),
-        body: match kind {
-            TerminalNotify::Done => "run completed".to_owned(),
-            TerminalNotify::Blocked => "run blocked".to_owned(),
-        },
-        severity: match kind {
-            TerminalNotify::Done => "success".to_owned(),
-            TerminalNotify::Blocked => "error".to_owned(),
-        },
-        session_id: None,
-        actions: Vec::new(),
-    }
+    notification_source: Option<NotificationSource>,
+    notification_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 fn recover_read<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLockReadGuard<'a, T> {
@@ -114,10 +89,10 @@ fn recover_write<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLock
     namespace = "agena",
     name = "terminal",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Terminal window title and attention notification integration.",
+    summary = "Shared terminal/browser attention notifications and terminal window titles.",
     translations(
-        locale("zh-CN", summary = "集成终端窗口标题和注意事项通知。"),
-        locale("zh-TW", summary = "整合終端機視窗標題與提醒通知。"),
+        locale("zh-CN", summary = "统一终端和浏览器的提醒通知，并集成终端窗口标题。"),
+        locale("zh-TW", summary = "統一終端機和瀏覽器的提醒通知，並整合終端機視窗標題。"),
         locale("ja-JP", summary = "ターミナルのウィンドウタイトル設定と注意喚起通知を連携します。"),
         locale("ko-KR", summary = "터미널 창 제목 설정과 주의 알림을 연동합니다."),
         locale("fr-FR", summary = "Intégration du titre de la fenêtre du terminal et des notifications d’attention."),
@@ -133,7 +108,24 @@ impl TerminalPlugin {
         Self {
             host: RwLock::new(None),
             activity: Arc::new(RwLock::new(TerminalActivity::Idle)),
-            notify: Arc::new(RwLock::new(None)),
+            notification_source: None,
+            notification_task: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn with_notifications(mut self, source: Option<NotificationSource>) -> Self {
+        self.notification_source = source;
+        self
+    }
+
+    fn stop_notifications(&self) {
+        if let Some(task) = self
+            .notification_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
         }
     }
 
@@ -143,13 +135,12 @@ impl TerminalPlugin {
             .ok_or_else(|| PluginError::internal("terminal plugin invoked before init"))
     }
 
-    /// Record the current activity (and optionally a one-shot notify intent)
+    /// Record the current activity
     /// and publish it through the declarative display channel so the TUI can
     /// render the terminal title. Best-effort: a missing host or a failed
     /// write is non-fatal because the TUI retains a local fallback.
-    async fn set_and_publish(&self, activity: TerminalActivity, notify: Option<TerminalNotify>) {
+    async fn set_and_publish(&self, activity: TerminalActivity) {
         *recover_write(&self.activity, "update terminal activity") = activity;
-        *recover_write(&self.notify, "update terminal notification intent") = notify;
         self.publish_display().await;
     }
 
@@ -164,17 +155,6 @@ impl TerminalPlugin {
                 return;
             }
         };
-        // One-shot attention notification via the unified notify entry. The
-        // host decides surface; the TUI consumes it for terminal bells.
-        let notify = recover_write(&self.notify, "take terminal notification intent").take();
-        if let Some(kind) = notify
-            && let Err(error) = host.notify(notify_request(kind)).await
-        {
-            tracing::warn!(
-                diagnostic = %error.diagnostic.message,
-                "failed to publish terminal attention notification"
-            );
-        }
         let activity = *recover_read(&self.activity, "read terminal activity");
         let value = match activity {
             TerminalActivity::Idle => "idle",
@@ -213,7 +193,16 @@ impl TerminalPlugin {
 
     #[hook(init)]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *recover_write(&self.host, "initialize terminal plugin host") = Some(host);
+        *recover_write(&self.host, "initialize terminal plugin host") = Some(host.clone());
+        if let Some(source) = self.notification_source.clone() {
+            let task = attention::start(source, host)
+                .await
+                .map_err(|error| PluginError::internal(error.to_string()))?;
+            *self
+                .notification_task
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+        }
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -221,24 +210,24 @@ impl TerminalPlugin {
 
     #[hook(shutdown)]
     async fn shutdown(&self) -> SdkResult<()> {
+        self.stop_notifications();
         self.clear_display().await
     }
 
     #[hook(run.pre)]
     async fn pre_run(&self, _input: PreRunInput) -> SdkResult<()> {
-        self.set_and_publish(TerminalActivity::Running, None).await;
+        self.set_and_publish(TerminalActivity::Running).await;
         Ok(())
     }
 
     #[hook(run.post)]
     async fn post_run(&self, input: PostRunInput) -> SdkResult<()> {
         if input.status.trim().starts_with("error") {
-            self.set_and_publish(TerminalActivity::Blocked, Some(TerminalNotify::Blocked))
-                .await;
+            self.set_and_publish(TerminalActivity::Blocked).await;
         } else {
             // run.post is a provider round boundary, not agent completion.
-            // Only the final normal agent.stop may send Done.
-            self.set_and_publish(TerminalActivity::Idle, None).await;
+            // Attention is emitted from committed kernel facts, not hooks.
+            self.set_and_publish(TerminalActivity::Idle).await;
         }
         Ok(())
     }
@@ -248,13 +237,13 @@ impl TerminalPlugin {
         &self,
         _input: SessionStartInput,
     ) -> SdkResult<Option<SessionStartPatch>> {
-        self.set_and_publish(TerminalActivity::Idle, None).await;
+        self.set_and_publish(TerminalActivity::Idle).await;
         Ok(None)
     }
 
     #[hook(session.end)]
     async fn session_end(&self, _input: SessionEndInput) -> SdkResult<()> {
-        self.set_and_publish(TerminalActivity::Idle, None).await;
+        self.set_and_publish(TerminalActivity::Idle).await;
         Ok(())
     }
 
@@ -265,19 +254,30 @@ impl TerminalPlugin {
     ) -> SdkResult<Option<UserPromptSubmitPatch>> {
         // The user submitted a prompt; the run will follow shortly. Mark the
         // state as running so the title reflects it before pre_run fires.
-        self.set_and_publish(TerminalActivity::Running, None).await;
+        self.set_and_publish(TerminalActivity::Running).await;
         Ok(None)
     }
 
     #[hook(agent.stop)]
     async fn agent_stop(&self, input: AgentStopInput) -> SdkResult<Option<AgentStopPatch>> {
         if input.run_error.is_some() {
-            self.set_and_publish(TerminalActivity::Blocked, Some(TerminalNotify::Blocked))
-                .await;
+            self.set_and_publish(TerminalActivity::Blocked).await;
         } else {
-            self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
-                .await;
+            self.set_and_publish(TerminalActivity::Idle).await;
         }
         Ok(None)
+    }
+}
+
+impl Drop for TerminalPlugin {
+    fn drop(&mut self) {
+        if let Some(task) = self
+            .notification_task
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
+        }
     }
 }

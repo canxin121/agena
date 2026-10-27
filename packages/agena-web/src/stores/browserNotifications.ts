@@ -4,12 +4,14 @@ import { defineStore } from 'pinia'
 import { i18n } from '@/i18n'
 import {
   browserNotificationPermission,
+  createBrowserNotifier,
   requestBrowserNotificationPermission,
   showBrowserNotification,
+  type PluginAttentionNotification,
 } from '@/lib/browserNotifications'
 import { useSettingsStore } from './settings'
 import { useToastsStore } from './toasts'
-import { ApiError, apiJson } from '@/lib/api'
+import { ApiError, apiJson, apiUrl } from '@/lib/api'
 import { browserNotificationPlatformHint, subscribeBrowserPush, supportsBrowserPush } from '@/lib/browserPush'
 
 export const useBrowserNotificationsStore = defineStore('browserNotifications', () => {
@@ -32,6 +34,34 @@ export const useBrowserNotificationsStore = defineStore('browserNotifications', 
   let resync = false
   const receipts = new Map<string, { shown: boolean; error: string }>()
   const receiptListeners = new Set<() => void>()
+  let pageTimer: ReturnType<typeof setTimeout> | undefined
+  let pollingPage = false
+  const pageNotifier = createBrowserNotifier({
+    enabled: () => enabled.value && !pushReady.value,
+    scope: () => apiUrl('/'),
+    message: (kind) => String(i18n.global.t(`browserNotifications.events.${kind}`)),
+    openSession: (sid) => window.location.assign(`/chat?sessionId=${encodeURIComponent(sid)}`),
+  })
+
+  async function pollPageNotifications() {
+    if (pollingPage || disposed || !enabled.value || pushReady.value) return
+    pollingPage = true
+    try {
+      const snapshot = await apiJson<{ notifications: PluginAttentionNotification[]; snapshot_at_ms: number }>(
+        '/api/v1/browser-notifications/events',
+        {
+          signal: AbortSignal.timeout(15_000),
+        },
+      )
+      await pageNotifier.applyNotifications(snapshot.notifications, snapshot.snapshot_at_ms)
+    } catch {
+      // Failed local delivery remains eligible on the next plugin snapshot.
+    } finally {
+      pollingPage = false
+      if (!disposed && enabled.value && !pushReady.value)
+        pageTimer = setTimeout(() => void pollPageNotifications(), 2000)
+    }
+  }
 
   function onWorkerMessage(event: MessageEvent) {
     if (!['agena:notification-shown', 'agena:notification-error'].includes(event.data?.type)) return
@@ -271,9 +301,22 @@ export const useBrowserNotificationsStore = defineStore('browserNotifications', 
     void syncPush()
   })
 
+  watch(enabled, () => pageNotifier.reset())
+
+  watch(
+    [enabled, pushReady],
+    () => {
+      clearTimeout(pageTimer)
+      if (enabled.value && !pushReady.value) void pollPageNotifications()
+    },
+    { immediate: true },
+  )
+
   onScopeDispose(() => {
     disposed = true
     clearTimeout(retryTimer)
+    clearTimeout(pageTimer)
+    pageNotifier.dispose()
     permissionStatus?.removeEventListener('change', refreshPermission)
     if (typeof window !== 'undefined') window.removeEventListener('focus', resume)
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', refreshPermission)

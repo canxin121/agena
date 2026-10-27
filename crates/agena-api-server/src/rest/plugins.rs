@@ -38,6 +38,7 @@ pub async fn get_plugin_surface_catalog(
             )
             .collect(),
         notifications: plugin_runtime.host_notifications(),
+        notifications_at_ms: chrono::Utc::now().timestamp_millis(),
         activity_kinds: state.application().activity_kind_catalog(),
         tool_registry_generation: plugin_runtime.tool_registry_generation(),
         tool_registry_last_event: plugin_runtime

@@ -257,8 +257,17 @@ of a notification object as proof of delivery.
 
 Notifications cover completed AI replies, questions (including review requests),
 permission requests, execution failures, and interruptions. Clicking a
-notification focuses Agena and opens the owning session. The server observes
-canonical kernel execution and interaction changes, independently of page SSE.
+notification focuses Agena and opens the owning session. The bundled
+`agena.terminal` notification plugin observes canonical kernel execution and
+interaction changes, independently of page SSE. It owns attention policy,
+stable event identities, request resolution, and persisted recovery history,
+and publishes those intents through the shared `host.notify` interface.
+The TUI consumes that queue and emits the terminal's supported OSC protocol;
+the server's browser adapter consumes the same queue and sends Web Push.
+Disabling `plugins.list.agena.terminal.enabled` stops AI attention generation
+for both adapters. Terminal capabilities and browser permissions/settings
+remain specific to each delivery device.
+
 VAPID-signed, encrypted Web Push wakes `/agena-notifications-sw.js`, which calls
 `ServiceWorkerRegistration.showNotification()`. There is no app-shell caching.
 This continues when Chrome suspends or discards a tab, or the tab is closed.
@@ -267,7 +276,8 @@ Repeated events and retries have stable notification identities.
 Subscriptions and a bounded retry outbox survive server restarts in the instance
 database. The stable VAPID identity lives in the encrypted secret store. Keep the
 data directory and secrets when upgrading. Temporary push-service failures are
-retried with backoff for up to 24 hours; HTTP 404/410 retires an expired browser
+retried with backoff for up to 24 hours for completed executions; unanswered
+requests remain eligible until resolved. HTTP 404/410 retires an expired browser
 subscription. Disabling notifications removes the server subscription and
 unsubscribes the browser. Opening/focusing the app restores and synchronizes
 subscriptions, including their localized messages.
@@ -288,8 +298,11 @@ notification permissions are both required. On macOS, check **System Settings â†
 Notifications â†’ Google Chrome**, and Focus / Do Not Disturb if the browser receipt
 succeeds but no banner appears. Fully quitting the browser, disconnecting the
 device, or OS background restrictions can delay delivery until it is available.
-Page notifications remain a fallback when background push is unavailable; the
-settings explicitly show that this fallback cannot notify a suspended tab.
+Page notifications remain a fallback when background push is unavailable.
+They render explicit plugin attention intents from the authenticated
+`/api/v1/browser-notifications/events` snapshot; neither browser nor TUI infers
+completion from transcript text or provider-round hooks. The settings explicitly
+show that this fallback cannot notify a suspended tab.
 
 Run the focused notification tests from `packages/agena-web`:
 
@@ -297,9 +310,10 @@ Run the focused notification tests from `packages/agena-web`:
 bun run test:notifications
 ```
 
-Run server regressions from the repository root:
+Run canonical plugin and browser transport regressions from the repository root:
 
 ```sh
+cargo test -p agena-bundled-plugins terminal::attention::tests
 cargo test -p agena --bin agena server::web_push::tests
 ```
 

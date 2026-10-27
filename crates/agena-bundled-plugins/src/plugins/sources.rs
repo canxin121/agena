@@ -123,6 +123,7 @@ fn localized_static_plugin<P: Plugin>(
 
 pub fn static_plugin_registrations(
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    notification_source: Option<crate::tool::TerminalNotificationSource>,
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
         localized_static_plugin(
@@ -183,7 +184,7 @@ pub fn static_plugin_registrations(
         ),
         localized_static_plugin(
             plugin_key(crate::tool::terminal_plugin_id()),
-            crate::tool::new_terminal_plugin(),
+            crate::tool::new_terminal_plugin_with_notifications(notification_source),
         ),
         localized_static_plugin(
             plugin_key(crate::tool::plan_plugin_id()),

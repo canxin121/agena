@@ -94,6 +94,19 @@ fn classify_session_subscription_event(
             None if signal.kind == "tool_registry_changed" => {
                 SessionSubscriptionDispatch::RefreshPluginRuntime
             }
+            None if signal.kind == "plugin"
+                && signal
+                    .payload
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("attention.changed") =>
+            {
+                // Attention can belong to any session. Refresh the shared
+                // plugin queue and wake the TUI after the producer published it.
+                SessionSubscriptionDispatch::Emit {
+                    refresh_plugin_presentation: true,
+                }
+            }
             None => SessionSubscriptionDispatch::Ignore,
             Some(signal_session_id) if signal_session_id != session_id => {
                 SessionSubscriptionDispatch::Ignore
@@ -105,6 +118,52 @@ fn classify_session_subscription_event(
         SubscriptionEvent::Lagged(_) => SessionSubscriptionDispatch::Emit {
             refresh_plugin_presentation: true,
         },
+    }
+}
+
+#[cfg(test)]
+mod notification_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn retained_notification_history_does_not_realert_after_more_than_sixty_four_events() {
+        let mut state = crate::app_types::TerminalIntegrationState::default();
+        for index in 0..1024 {
+            assert!(state.notify_consumed_once(&format!("agena.terminal:execution:{index}:1")));
+        }
+        // A reloaded host replays its bounded recent history, including
+        // identical summaries from many distinct completed executions.
+        for index in 512..1024 {
+            assert!(!state.notify_consumed_once(&format!("agena.terminal:execution:{index}:1")));
+        }
+    }
+
+    #[test]
+    fn global_attention_invalidation_refreshes_the_plugin_queue_for_any_open_session() {
+        let event = SubscriptionEvent::RuntimeSignal(agena_api::live::RuntimeSignalResource {
+            kind: "plugin".into(),
+            session_id: None,
+            payload: serde_json::json!({"kind": "attention.changed"}),
+        });
+        assert_eq!(
+            classify_session_subscription_event(&event, 7),
+            SessionSubscriptionDispatch::Emit {
+                refresh_plugin_presentation: true
+            }
+        );
+    }
+
+    #[test]
+    fn unrelated_global_plugin_signals_do_not_refresh_the_session() {
+        let event = SubscriptionEvent::RuntimeSignal(agena_api::live::RuntimeSignalResource {
+            kind: "plugin".into(),
+            session_id: None,
+            payload: serde_json::json!({"kind": "unrelated"}),
+        });
+        assert_eq!(
+            classify_session_subscription_event(&event, 7),
+            SessionSubscriptionDispatch::Ignore
+        );
     }
 }
 
@@ -151,6 +210,7 @@ struct RemoteBackend {
     permission_tools:
         tokio::sync::RwLock<Vec<agena_application::dto::PermissionToolCatalogResource>>,
     plugin_notifications: tokio::sync::RwLock<Vec<agena_plugin_host::HostNotification>>,
+    plugin_notifications_baseline: std::sync::OnceLock<i64>,
     activity_kinds: tokio::sync::RwLock<Vec<agena_domain::ActivityKind>>,
     /// Server-owned workspace inventory used by synchronous pickers/search.
     workspace_files: tokio::sync::RwLock<Option<agena_application::dto::WorkspaceFileTreeResource>>,
@@ -413,6 +473,7 @@ impl TuiBackend {
                 plugin_logs: Default::default(),
                 permission_tools: Default::default(),
                 plugin_notifications: Default::default(),
+                plugin_notifications_baseline: Default::default(),
                 activity_kinds: Default::default(),
                 workspace_files: Default::default(),
                 workspace_file_index: Default::default(),
@@ -770,6 +831,12 @@ impl TuiBackend {
             .transpose()
             .context("the server returned undecodable activity kinds")?
             .unwrap_or_else(agena_domain::builtin_activity_kinds);
+        if let Some(server_time) = catalog_response
+            .get("notifications_at_ms")
+            .and_then(serde_json::Value::as_i64)
+        {
+            let _ = self.inner.plugin_notifications_baseline.set(server_time);
+        }
         *self.inner.plugin_catalog.write().await = Some(catalog);
         *self.inner.permission_tools.write().await = permission_tools;
         *self.inner.plugin_notifications.write().await = notifications;
@@ -794,6 +861,14 @@ impl TuiBackend {
             .try_read()
             .ok()
             .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn plugin_notifications_baseline_ms(&self) -> i64 {
+        self.inner
+            .plugin_notifications_baseline
+            .get()
+            .copied()
             .unwrap_or_default()
     }
 

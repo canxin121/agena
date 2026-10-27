@@ -189,9 +189,8 @@ pub(crate) fn sync_terminal_progress(
 }
 
 /// Emits at most one attention notification, if the terminal supports them.
-/// Locally queued notifications (permission/user-input requests, flash
-/// errors) take precedence; otherwise a one-shot lifecycle notification from
-/// the `agena.terminal` plugin (run completed) is consumed.
+/// Local flash/error alerts take precedence; AI completion, question and
+/// permission alerts consume the shared `agena.terminal` plugin queue.
 /// Returns the emitted method (or `None` when nothing was queued or the
 /// capability is disabled).
 pub(crate) fn drain_terminal_notification(
@@ -199,14 +198,16 @@ pub(crate) fn drain_terminal_notification(
     terminal: &mut TerminalRuntime,
 ) -> crate::Result<Option<NotificationMethod>> {
     let local = app.terminal_integration.take_notification();
-    let plugin_notify = local.is_none().then(|| take_plugin_notify(app)).flatten();
-    let Some(method) = local.or(plugin_notify) else {
+    let notification = local
+        .map(|method| (method, notification_summary(app)))
+        .or_else(|| take_plugin_notify(app));
+    let Some((method, summary)) = notification else {
         return Ok(None);
     };
     if !notifications_operational(app) {
         return Ok(None);
     }
-    let frames = notification_frames(method, &notification_summary(app));
+    let frames = notification_frames(method, &summary);
     let owned_frames = frames
         .iter()
         .map(|frame| frame.as_slice())
@@ -219,19 +220,55 @@ pub(crate) fn drain_terminal_notification(
 /// to a terminal notification method. Each distinct intent is recorded as
 /// consumed once so a bell fires a single time even while the host keeps the
 /// bounded recent queue around.
-fn take_plugin_notify(app: &mut App) -> Option<NotificationMethod> {
-    for notification in
-        crate::app_backend::plugin_effects::plugin_host_notifications(&app.application)
-    {
-        let key = format!(
-            "{}:{}:{}",
-            notification.plugin_id, notification.severity, notification.body
-        );
+fn take_plugin_notify(app: &mut App) -> Option<(NotificationMethod, String)> {
+    let notifications =
+        crate::app_backend::plugin_effects::plugin_host_notifications(&app.application);
+    for notification in notifications {
+        if notification.attention.as_ref().is_some_and(|event| {
+            event.resolved
+                || (!event.kind.is_request()
+                    && event.created_at_ms < app.application.plugin_notifications_baseline_ms())
+        }) {
+            continue;
+        }
+        let key = notification_key(&notification);
         if app.terminal_integration.notify_consumed_once(&key) {
-            return current_notification_method(app);
+            let method = current_notification_method(app)?;
+            let body = match notification
+                .attention
+                .as_ref()
+                .map(|event| event.kind.as_str())
+            {
+                Some("permission") => app.i18n.text("terminal-notification-permission"),
+                Some("question") => app.i18n.text("terminal-notification-user-input"),
+                Some("failed" | "cancelled") => app.i18n.text("terminal-notification-interrupted"),
+                Some("completed") => String::new(),
+                _ => notification.body,
+            };
+            let summary = if body.is_empty() {
+                notification.title
+            } else if notification.title.is_empty() {
+                body
+            } else {
+                format!("{} · {body}", notification.title)
+            };
+            return Some((method, summary));
         }
     }
     None
+}
+
+fn notification_key(notification: &agena_plugin_host::HostNotification) -> String {
+    notification
+        .attention
+        .as_ref()
+        .map(|event| format!("{}:{}", notification.plugin_id, event.id))
+        .unwrap_or_else(|| {
+            format!(
+                "{}:{}:{}",
+                notification.plugin_id, notification.severity, notification.body
+            )
+        })
 }
 
 /// The localized notification summary text shown by the desktop notification

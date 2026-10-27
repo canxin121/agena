@@ -2253,8 +2253,8 @@ impl PluginHost {
     }
 
     /// Plugin-emitted notifications through the unified `host.notify` entry
-    /// (Phase 6). Bounded recent queue; frontends dedupe/consume by
-    /// `plugin_id:severity:body`.
+    /// Bounded recent queue; structured attention events carry stable IDs for
+    /// frontend consumption and request resolution.
     pub fn host_notifications(&self) -> Vec<HostNotification> {
         self._host_handle.host_notifications()
     }

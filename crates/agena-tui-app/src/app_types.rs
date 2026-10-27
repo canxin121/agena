@@ -350,9 +350,8 @@ pub(super) struct PromptHistory {
 ///
 /// The run loop compares the current session title and activity against this
 /// snapshot every frame and emits title changes through
-/// `TerminalRuntime::write_protocol`. Attention notifications are queued by
-/// session event handlers and drained one-per-frame so a burst of events
-/// produces a single alert.
+/// `TerminalRuntime::write_protocol`. AI attention consumes the shared plugin
+/// queue; local flash alerts are coalesced before the next frame.
 #[derive(Debug, Default)]
 pub(super) struct TerminalIntegrationState {
     pub(super) last_title: Option<String>,
@@ -362,10 +361,10 @@ pub(super) struct TerminalIntegrationState {
     /// Last OSC 9;4 progress state emitted; `None` before the first emission
     /// or while the terminal does not support progress.
     last_progress: Option<agena_tui_platform::terminal::integration::ProgressState>,
-    /// Content of the `agena.terminal.notify` segment already fired. The
-    /// plugin keeps the segment present across frames; this set ensures each
-    /// lifecycle intent fires exactly once.
+    /// Stable plugin attention identities already delivered by this TUI.
+    /// Retained host history must not make an event fire on every frame.
     consumed_notify: std::collections::BTreeSet<String>,
+    consumed_notify_order: std::collections::VecDeque<String>,
 }
 
 impl TerminalIntegrationState {
@@ -406,15 +405,20 @@ impl TerminalIntegrationState {
         self.pending_notifications.drain(..).next_back()
     }
 
-    /// Returns `true` when `notify_content` (from the `agena.terminal.notify`
-    /// display contribution) has not yet fired, and records it as consumed.
+    /// Records an event identity and returns whether it has not fired yet.
     pub(super) fn notify_consumed_once(&mut self, notify_content: &str) -> bool {
         if self.consumed_notify.contains(notify_content) {
             return false;
         }
         self.consumed_notify.insert(notify_content.to_owned());
-        if self.consumed_notify.len() > 64 {
-            self.consumed_notify.clear();
+        self.consumed_notify_order
+            .push_back(notify_content.to_owned());
+        // A host reload can briefly return an empty/partial queue. Keep
+        // delivered identities across that gap, rather than replaying alerts.
+        while self.consumed_notify_order.len() > 4096 {
+            if let Some(oldest) = self.consumed_notify_order.pop_front() {
+                self.consumed_notify.remove(&oldest);
+            }
         }
         true
     }

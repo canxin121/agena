@@ -1,12 +1,8 @@
-import { isRunCancelled, isRunFailureState, isRunInFlight, normalizeRunState } from './chatRunState'
-import { interactiveRequests, pendingPartInteractions, type InteractiveRequest } from './interactiveRequests'
 import { localStorageKeys } from './persistence/storageKeys'
-import type { SseEvent } from './sse'
 import { browserNotificationPlatformHint, notificationWorker } from './browserPush'
 
 export type BrowserNotificationPermission = NotificationPermission | 'unsupported' | 'insecure'
 export type BrowserNotificationKind = 'completed' | 'failed' | 'cancelled' | 'permission' | 'question'
-export type BrowserNotificationSnapshot = { parts: unknown[]; requests?: unknown[] }
 
 export function browserNotificationPermission(): BrowserNotificationPermission {
   if (typeof window === 'undefined') return 'unsupported'
@@ -79,58 +75,16 @@ export async function showBrowserNotification(
   }
 }
 
-type NotificationIntent = { key: string; sessionId: string; kind: BrowserNotificationKind }
-
-function requestIntent(request: InteractiveRequest): NotificationIntent {
-  return {
-    key: `request:${request.sessionId}:${request.requestId}`,
-    sessionId: request.sessionId,
-    kind: request.kind === 'permission' ? 'permission' : 'question',
+export type PluginAttentionNotification = {
+  plugin_id: string
+  title: string
+  session_id?: number | null
+  attention?: {
+    id: string
+    kind: BrowserNotificationKind
+    created_at_ms: number
+    resolved: boolean
   }
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
-}
-
-function notificationIntents(evt: SseEvent): NotificationIntent[] {
-  const props = evt.properties ?? {}
-  if (evt.type !== 'session_changed' || (props.kind !== 'part_added' && props.kind !== 'part_updated')) return []
-  const sid = typeof props.session_id === 'number' ? String(props.session_id) : ''
-  const part = record(props.part)
-  if (!sid || part.role !== 'assistant' || typeof part.part_id !== 'number') return []
-  // Forked/shared history belongs to its original conversation.
-  if (typeof part.origin_session_id === 'number' && String(part.origin_session_id) !== sid) return []
-  const intents: NotificationIntent[] = []
-  if (part.message_boundary === true) {
-    // A finished content stream or tool does not imply a finished AI reply.
-    const state = normalizeRunState(part.run_state || part.state)
-    const kind =
-      state === 'completed'
-        ? 'completed'
-        : isRunFailureState(state)
-          ? 'failed'
-          : isRunCancelled(state)
-            ? 'cancelled'
-            : null
-    if (kind) {
-      intents.push({
-        key: `reply:${sid}:${part.part_id}:${part.created_at_ms ?? ''}:${record(part.content).generation ?? ''}`,
-        sessionId: sid,
-        kind,
-      })
-    }
-  }
-  for (const request of pendingPartInteractions({
-    agenaKind: part.kind,
-    agenaContent: part.content,
-    partState: part.state,
-    originSessionId: part.origin_session_id,
-    sessionID: sid,
-  })) {
-    intents.push(requestIntent(request))
-  }
-  return intents
 }
 
 const DELIVERY_KEY = localStorageKeys.notifications.delivered
@@ -153,191 +107,99 @@ function deliveredNotifications(): Array<[string, number]> {
   }
 }
 
+/** Render plugin-owned intents; the browser never infers AI lifecycle events. */
 export function createBrowserNotifier(options: {
   enabled: () => boolean
   scope: () => string
-  sessionTitle: (sessionId: string) => string
   message: (kind: BrowserNotificationKind) => string
   openSession: (sessionId: string) => unknown
-  /** Undefined: pending interactions only; []: discover an existing active reply. */
-  readSession?: (sessionId: string, replyIds: number[] | undefined) => Promise<BrowserNotificationSnapshot | null>
 }) {
+  let since: number | undefined
+  let generation = 0
   const seen = new Set<string>()
-  const revisions = new Map<string, number>()
   const active = new Map<string, BrowserNotificationHandle>()
-  const pendingReplies = new Map<string, Set<number>>()
-  const changedSessions = new Set<string>()
-  const generations = new Map<string, number>()
-  let currentScope = ''
   let disposed = false
 
-  function close() {
-    for (const notification of active.values()) notification.close()
-    active.clear()
-  }
-
-  async function deliver(intent: NotificationIntent, scope: string) {
-    const key = JSON.stringify([scope, intent.key])
-    const send = async () => {
-      if (disposed || !options.enabled() || options.scope() !== scope) return false
-      const delivered = deliveredNotifications()
-      if (delivered.some(([existing]) => existing === key)) return true
-      const notification = await showBrowserNotification(
-        options.sessionTitle(intent.sessionId) || 'Agena',
-        {
-          body: options.message(intent.kind),
-          tag: `agena:${scope}:session:${intent.sessionId}`,
-          data: { url: `/chat?sessionId=${encodeURIComponent(intent.sessionId)}` },
-        },
-        () => !disposed && options.openSession(intent.sessionId),
-      )
-      if (!notification) return false
-      if (disposed || !options.enabled() || options.scope() !== scope) {
+  async function applyNotifications(notifications: PluginAttentionNotification[], snapshotAtMs = Date.now()) {
+    // Compare with the same server clock as the event. A remote device's
+    // clock can differ enough to otherwise suppress every completed reply.
+    since ??= snapshotAtMs
+    const applyingGeneration = generation
+    const current = new Set(notifications.filter((item) => !item.attention?.resolved).map((item) => item.attention?.id))
+    for (const [id, notification] of active) {
+      if (!current.has(id)) {
         notification.close()
-        return false
-      }
-      active.get(intent.sessionId)?.close()
-      active.delete(intent.sessionId)
-      active.set(intent.sessionId, notification)
-      if (active.size > 32) {
-        const oldest = active.keys().next().value!
-        active.get(oldest)?.close()
-        active.delete(oldest)
-      }
-      try {
-        localStorage.setItem(DELIVERY_KEY, JSON.stringify([...delivered, [key, Date.now()]].slice(-DELIVERY_LIMIT)))
-      } catch {
-        // In-memory deduplication and the stable tag still work without storage.
-      }
-      return true
-    }
-    // Share delivery claims across tabs. The stable notification tag also
-    // replaces duplicates on browsers without Web Locks or localStorage.
-    if (typeof navigator !== 'undefined' && navigator.locks) {
-      try {
-        return await navigator.locks.request(DELIVERY_KEY, send)
-      } catch {
-        // Private browsing and embedded contexts may disallow Web Locks.
+        active.delete(id)
       }
     }
-    return send()
-  }
-
-  async function notify(intents: NotificationIntent[], scope: string) {
-    for (const intent of intents) {
-      if (disposed || options.scope() !== scope) return
-      if (seen.has(intent.key)) continue
-      if (!options.enabled()) continue
-      if (!(await deliver(intent, scope))) throw new Error('Browser notification delivery failed')
-      seen.add(intent.key)
-      if (seen.size > 512) seen.delete(seen.values().next().value!)
-    }
-  }
-
-  async function applyEvent(evt: SseEvent) {
-    if (disposed) return
-    const scope = options.scope()
-    if (scope !== currentScope) {
-      close()
-      seen.clear()
-      revisions.clear()
-      pendingReplies.clear()
-      changedSessions.clear()
-      generations.clear()
-      currentScope = scope
-    }
-    const props = evt.properties ?? {}
-    const sid = typeof props.session_id === 'number' ? String(props.session_id) : ''
-    if (evt.type === 'session_changed' && sid) {
-      generations.set(sid, (generations.get(sid) ?? 0) + 1)
-      if (props.kind === 'session_meta_updated') changedSessions.add(sid)
-      if (changedSessions.size > 256) changedSessions.delete(changedSessions.values().next().value!)
-      if (generations.size > 512) generations.delete(generations.keys().next().value!)
-    }
-    if (evt.type === 'session_changed' && props.kind === 'session_deleted') {
-      active.get(sid)?.close()
-      active.delete(sid)
-      pendingReplies.delete(sid)
-      changedSessions.delete(sid)
-      return
-    }
-    const part = record(props.part)
-    if (typeof part.part_id === 'number' && typeof part.revision === 'number') {
-      const key = `${props.session_id}:${part.part_id}`
-      if (part.revision < (revisions.get(key) ?? -Infinity)) return
-      revisions.delete(key)
-      revisions.set(key, part.revision)
-      if (revisions.size > 512) revisions.delete(revisions.keys().next().value!)
-    }
-    if (
-      sid &&
-      part.role === 'assistant' &&
-      part.message_boundary === true &&
-      typeof part.part_id === 'number' &&
-      (part.origin_session_id == null || String(part.origin_session_id) === sid)
-    ) {
-      let ids = pendingReplies.get(sid)
-      if (!ids) pendingReplies.set(sid, (ids = new Set()))
-      ids.add(part.part_id)
-      if (pendingReplies.size > 256) pendingReplies.delete(pendingReplies.keys().next().value!)
-    }
-    await notify(notificationIntents(evt), scope)
-    if (sid && part.message_boundary === true && !isRunInFlight(part.run_state || part.state)) {
-      const ids = pendingReplies.get(sid)
-      ids?.delete(part.part_id as number)
-      if (!ids?.size) pendingReplies.delete(sid)
+    for (const notification of notifications) {
+      const event = notification.attention
+      if (!event || event.resolved || seen.has(event.id)) continue
+      if (!['completed', 'failed', 'cancelled', 'permission', 'question'].includes(event.kind)) continue
+      if (event.created_at_ms < since && !['permission', 'question'].includes(event.kind)) continue
+      if (disposed || applyingGeneration !== generation || !options.enabled()) return
+      const scope = options.scope()
+      const key = JSON.stringify([scope, event.id])
+      const deliver = async () => {
+        if (disposed || applyingGeneration !== generation || !options.enabled() || options.scope() !== scope)
+          return false
+        const delivered = deliveredNotifications()
+        if (delivered.some(([existing]) => existing === key)) return true
+        const sid = notification.session_id ? String(notification.session_id) : ''
+        const handle = await showBrowserNotification(
+          notification.title || 'Agena',
+          {
+            body: options.message(event.kind),
+            tag: `agena:push:${event.id}`,
+            data: {
+              url: sid ? `/chat?sessionId=${encodeURIComponent(sid)}` : '/settings/interface?view=web-appearance',
+            },
+          },
+          () => !disposed && options.openSession(sid),
+        )
+        if (!handle) return false
+        if (disposed || applyingGeneration !== generation || !options.enabled() || options.scope() !== scope) {
+          handle.close()
+          return false
+        }
+        active.set(event.id, handle)
+        try {
+          localStorage.setItem(DELIVERY_KEY, JSON.stringify([...delivered, [key, Date.now()]].slice(-DELIVERY_LIMIT)))
+        } catch {
+          /* Browser storage can be blocked. Stable tags still dedupe. */
+        }
+        return true
+      }
+      let delivered: boolean
+      if (typeof navigator !== 'undefined' && navigator.locks) {
+        try {
+          delivered = await navigator.locks.request(DELIVERY_KEY, deliver)
+        } catch {
+          delivered = await deliver()
+        }
+      } else {
+        delivered = await deliver()
+      }
+      if (!delivered) throw new Error('Browser notification delivery failed')
+      seen.add(event.id)
+      while (seen.size > 512) seen.delete(seen.values().next().value!)
     }
   }
 
   return {
-    applyEvent,
-    /** Seed only sessions known to be active; opening the app must not notify old replies. */
-    trackSessions(sessionIds: string[]) {
-      currentScope = options.scope()
-      for (const sid of sessionIds.slice(-256)) if (!pendingReplies.has(sid)) pendingReplies.set(sid, new Set())
-    },
-    async reconcile() {
-      if (disposed || !options.enabled() || !options.readSession) return
-      const scope = options.scope()
-      const sessions = new Set([...changedSessions, ...pendingReplies.keys()])
-      changedSessions.clear()
-      await Promise.all(
-        [...sessions].map(async (sid) => {
-          const generation = generations.get(sid) ?? 0
-          const ids = pendingReplies.get(sid)
-          try {
-            const snapshot = await options.readSession!(sid, ids ? [...ids] : undefined)
-            if (disposed || options.scope() !== scope) return
-            // A live change during the read takes precedence over that snapshot.
-            if ((generations.get(sid) ?? 0) !== generation) {
-              changedSessions.add(sid)
-              return
-            }
-            if (!snapshot) {
-              pendingReplies.delete(sid)
-              return
-            }
-            await notify(interactiveRequests(snapshot.requests || [], sid).map(requestIntent), scope)
-            for (const part of snapshot.parts)
-              await applyEvent({
-                type: 'session_changed',
-                properties: { kind: 'part_updated', session_id: Number(sid), part },
-              } as SseEvent)
-          } catch (error) {
-            if (!disposed && options.scope() === scope) changedSessions.add(sid)
-            throw error
-          }
-        }),
-      )
+    applyNotifications,
+    reset() {
+      // Enabling later must recover pending questions, not all replies that
+      // arrived while the user had disabled page notifications.
+      since = undefined
+      generation++
+      for (const notification of active.values()) notification.close()
+      active.clear()
     },
     dispose() {
       disposed = true
-      close()
-      seen.clear()
-      revisions.clear()
-      pendingReplies.clear()
-      changedSessions.clear()
-      generations.clear()
+      for (const notification of active.values()) notification.close()
+      active.clear()
     },
   }
 }

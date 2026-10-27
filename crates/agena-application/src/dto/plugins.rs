@@ -63,6 +63,9 @@ pub struct PluginSurfaceCatalogResponse {
     /// Recent plugin notification intents, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notifications: Vec<agena_plugin_host::HostNotification>,
+    /// Server clock at the notification snapshot, for remote-client baselines.
+    #[serde(default)]
+    pub notifications_at_ms: i64,
     /// Built-in and plugin-contributed transcript activity kinds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity_kinds: Vec<agena_domain::ActivityKind>,
@@ -158,3 +161,4 @@ pub struct PluginLogListQuery {
     pub limit: Option<usize>,
 }
 use super::{Deserialize, Serialize};
+pub use agena_plugin_host::HostNotification;

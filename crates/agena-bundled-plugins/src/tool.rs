@@ -105,6 +105,14 @@ pub fn new_terminal_plugin() -> impl agena_plugin_host::sdk::Plugin {
     terminal::TerminalPlugin::new()
 }
 
+pub use terminal::NotificationSource as TerminalNotificationSource;
+
+pub fn new_terminal_plugin_with_notifications(
+    source: Option<TerminalNotificationSource>,
+) -> impl agena_plugin_host::sdk::Plugin {
+    terminal::TerminalPlugin::new().with_notifications(source)
+}
+
 pub fn plan_plugin_id() -> &'static str {
     planning::PLAN_PLUGIN_ID
 }

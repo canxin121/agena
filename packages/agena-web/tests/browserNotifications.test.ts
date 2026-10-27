@@ -6,9 +6,8 @@ import {
   createBrowserNotifier,
   requestBrowserNotificationPermission,
   showBrowserNotification,
-  type BrowserNotificationSnapshot,
+  type PluginAttentionNotification,
 } from '../src/lib/browserNotifications'
-import type { SseEvent } from '../src/lib/sse'
 import { browserNotificationPlatformHint, supportsBrowserPush } from '../src/lib/browserPush'
 
 class FakeNotification {
@@ -93,50 +92,28 @@ afterEach(() => {
   descriptors.clear()
 })
 
-function notifier(
-  readSession?: (sid: string, replyIds: number[] | undefined) => Promise<BrowserNotificationSnapshot | null>,
-) {
-  const instance = createBrowserNotifier({
+function notifier() {
+  const client = createBrowserNotifier({
     enabled: () => enabled,
     scope: () => scope,
-    sessionTitle: (sid) => `Session ${sid}`,
     message: (kind) => kind,
     openSession: (sid) => opened.push(sid),
-    readSession,
   })
-  notifiers.push(instance)
-  return instance
+  notifiers.push(client)
+  return client
 }
 
-function partEvent(part: Record<string, unknown> = {}, sessionId = 7): SseEvent {
+function event(
+  id = 'execution:one:1',
+  kind: NonNullable<PluginAttentionNotification['attention']>['kind'] = 'completed',
+  createdAt = Date.now() + 1,
+): PluginAttentionNotification {
   return {
-    type: 'session_changed',
-    properties: {
-      kind: 'part_updated',
-      session_id: sessionId,
-      part: {
-        part_id: 10,
-        role: 'assistant',
-        kind: 'text',
-        origin_session_id: sessionId,
-        message_boundary: true,
-        state: 'completed',
-        run_state: 'completed',
-        created_at_ms: 1234,
-        revision: 4,
-        ...part,
-      },
-    },
-  } as SseEvent
-}
-
-function requestEvent(kind: 'permission' | 'user_input', requestId = 'request-1', part: Record<string, unknown> = {}) {
-  const request = { kind, request_id: requestId, session_id: 7 }
-  const content =
-    kind === 'permission'
-      ? { authorization: { permissions: [{ request }] } }
-      : { user_input: { requests: [{ request }] } }
-  return partEvent({ kind: 'tool_call', state: 'running', run_state: 'running', content, ...part })
+    plugin_id: 'agena.terminal',
+    session_id: 7,
+    title: 'Session 7',
+    attention: { id, kind, created_at_ms: createdAt, resolved: false },
+  }
 }
 
 test('permission prompts run only on explicit request and respect browser restrictions', async () => {
@@ -204,240 +181,146 @@ test('browser restrictions on service workers still allow a desktop page notific
   assert.equal(shown[0]!.options.body, 'AI finished')
 })
 
-test('a finished reply notifies in a background tab and clicking focuses its session', async () => {
-  await notifier().applyEvent(partEvent())
+test('a plugin completion notifies and clicking opens its owning session', async () => {
+  await notifier().applyNotifications([event()])
   assert.equal(shown.length, 1)
   assert.equal(shown[0]!.title, 'Session 7')
   assert.equal(shown[0]!.options.body, 'completed')
+  assert.equal(shown[0]!.options.tag, 'agena:push:execution:one:1')
   shown[0]!.onclick?.()
   assert.equal(focused, 1)
   assert.deepEqual(opened, ['7'])
-  assert.equal(shown[0]!.closed, true)
 })
 
-test('content completion and tool progress cannot prematurely announce a finished reply', async () => {
+test('separate replies with identical text notify once for each stable plugin identity', async () => {
   const client = notifier()
-  await client.applyEvent(partEvent({ state: 'completed', run_state: 'running' }))
-  await client.applyEvent(partEvent({ message_boundary: false, part_id: 11 }))
-  await client.applyEvent(partEvent({ role: 'user', part_id: 12 }))
-  await client.applyEvent(partEvent({ origin_session_id: 8, part_id: 13 }))
+  const events = [event('execution:one:1'), event('execution:two:1')]
+  await client.applyNotifications(events)
+  await client.applyNotifications(events)
+  assert.equal(shown.length, 2)
+  assert.notEqual(shown[0]!.options.tag, shown[1]!.options.tag)
+})
+
+test('the browser renders only explicit plugin attention, without inferring AI state', async () => {
+  const client = notifier()
+  await client.applyNotifications([{ plugin_id: 'agena.terminal', title: 'running', session_id: 7 }])
   assert.equal(shown.length, 0)
-  await client.applyEvent(partEvent({ run_state: 'completed', revision: 5 }))
-  assert.equal(shown.length, 1)
-})
-
-test('terminal failures and interruptions use distinct notification messages', async () => {
-  const client = notifier()
-  await client.applyEvent(partEvent({ run_state: 'failed' }))
-  await client.applyEvent(partEvent({ run_state: 'cancelled', part_id: 11 }))
+  await client.applyNotifications([event('failed', 'failed'), event('cancelled', 'cancelled')])
   assert.deepEqual(
     shown.map((item) => item.options.body),
     ['failed', 'cancelled'],
   )
 })
 
-test('questions and approval requests notify once per request, including parallel requests', async () => {
+test('questions and approvals have independent identities and resolved requests stop alerting', async () => {
   const client = notifier()
-  await client.applyEvent(requestEvent('user_input'))
-  await client.applyEvent(requestEvent('user_input', 'request-1', { revision: 5 }))
-  await client.applyEvent(requestEvent('permission', 'request-2', { revision: 6 }))
+  const permission = event('request:7:one', 'permission')
+  const question = event('request:7:two', 'question')
+  await client.applyNotifications([permission, question])
   assert.deepEqual(
     shown.map((item) => item.options.body),
-    ['question', 'permission'],
+    ['permission', 'question'],
   )
-})
-
-test('answered requests, completed tools, and inherited requests do not notify', async () => {
-  const client = notifier()
-  await client.applyEvent(
-    requestEvent('user_input', 'answered', {
-      content: { user_input: { requests: [{ request: { kind: 'user_input', request_id: 'answered' }, reply: {} }] } },
-    }),
-  )
-  await client.applyEvent(requestEvent('permission', 'completed', { message_boundary: false, state: 'completed' }))
-  await client.applyEvent(requestEvent('user_input', 'forked', { origin_session_id: 8 }))
-  assert.equal(shown.length, 0)
-})
-
-test('older part revisions cannot reintroduce a resolved interaction', async () => {
-  const client = notifier()
-  await client.applyEvent(partEvent({ message_boundary: false, kind: 'tool_call', run_state: 'running', revision: 10 }))
-  await client.applyEvent(requestEvent('permission', 'stale', { revision: 9 }))
-  assert.equal(shown.length, 0)
-})
-
-test('repeated events and concurrent browser tabs share one delivery claim', async () => {
-  const first = notifier()
-  const second = notifier()
-  await Promise.all([first.applyEvent(partEvent()), second.applyEvent(partEvent())])
-  await first.applyEvent(partEvent({ revision: 5 }))
-  await notifier().applyEvent(partEvent())
-  assert.equal(shown.length, 1)
-})
-
-test('different sessions and backend servers have independent notification identities', async () => {
-  const client = notifier()
-  await client.applyEvent(partEvent())
-  await client.applyEvent(partEvent({}, 8))
-  scope = 'https://other-backend.test/'
-  await client.applyEvent(partEvent())
-  assert.deepEqual(
-    shown.map((item) => item.title),
-    ['Session 7', 'Session 8', 'Session 7'],
-  )
-})
-
-test('disabling notifications prevents new alerts; disposal closes outstanding alerts', async () => {
-  const client = notifier()
-  enabled = false
-  await client.applyEvent(partEvent())
-  assert.equal(shown.length, 0)
-  enabled = true
-  await client.applyEvent(partEvent({ part_id: 11 }))
-  client.dispose()
+  permission.attention!.resolved = true
+  await client.applyNotifications([permission, question])
+  assert.equal(shown.length, 2)
   assert.equal(shown[0]!.closed, true)
-  await client.applyEvent(partEvent({ part_id: 12 }))
-  assert.equal(shown.length, 1)
+  const other = notifier()
+  await other.applyNotifications([
+    { ...permission, attention: { ...permission.attention!, id: 'resolved-before-visit' } },
+  ])
+  assert.equal(shown.length, 2)
 })
 
-test('blocked storage and unavailable locks do not prevent delivery or in-memory deduplication', async () => {
-  setGlobal('localStorage', {
-    getItem: () => {
-      throw new Error('storage blocked')
-    },
-    setItem: () => {
-      throw new Error('storage blocked')
-    },
-  })
-  setGlobal('navigator', { locks: { request: () => Promise.reject(new Error('locks blocked')) } })
+test('startup recovers pending questions without replaying old completed replies', async () => {
   const client = notifier()
-  await client.applyEvent(partEvent())
-  await client.applyEvent(partEvent())
-  assert.equal(shown.length, 1)
+  const past = Date.now() - 60_000
+  await client.applyNotifications([event('old-reply', 'completed', past), event('pending', 'question', past)])
+  assert.deepEqual(
+    shown.map((item) => item.options.body),
+    ['question'],
+  )
 })
 
-test('unavailable delivery is retryable and never claims that a notification was delivered', async () => {
+test('a remote server clock supplies the history baseline when the device clock differs', async () => {
   const client = notifier()
-  FakeNotification.permission = 'denied'
-  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
-  FakeNotification.permission = 'granted'
-  FakeNotification.fail = true
-  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
-  assert.equal(shown.length, 0)
-  assert.equal(storage.size, 0)
-  FakeNotification.fail = false
-  await client.applyEvent(partEvent())
+  const serverNow = Date.now() - 12 * 60 * 60 * 1000
+  await client.applyNotifications([event('old-remote-reply', 'completed', serverNow - 60_000)], serverNow)
+  await client.applyNotifications([event('new-remote-reply', 'completed', serverNow + 1)], serverNow + 100)
   assert.equal(shown.length, 1)
+  assert.equal(shown[0]!.options.tag, 'agena:push:new-remote-reply')
 })
 
-test('asynchronous notification errors do not poison deduplication and recovery retries the reply', async () => {
-  const client = notifier(async () => ({ parts: [partEvent().properties!.part] }))
+test('delivery errors remain retryable and do not poison deduplication', async () => {
+  const client = notifier()
+  const notifications = [event()]
   FakeNotification.asyncFail = true
-  await assert.rejects(client.applyEvent(partEvent()), /delivery failed/)
-  assert.equal(storage.size, 0)
+  await assert.rejects(client.applyNotifications(notifications), /delivery failed/)
   assert.equal(shown[0]!.closed, true)
   FakeNotification.asyncFail = false
-  await client.reconcile()
+  await client.applyNotifications(notifications)
+  await client.applyNotifications(notifications)
   assert.equal(shown.length, 2)
-  assert.equal(storage.size, 1)
-  await client.applyEvent(partEvent())
-  assert.equal(shown.length, 2)
+  assert.equal(shown[1]!.closed, false)
 })
 
-test('enabling notifications allows a still-pending request to notify after previously disabled events', async () => {
+test('concurrent tabs share delivery claims for plugin events', async () => {
+  const notification = event()
+  await Promise.all([notifier().applyNotifications([notification]), notifier().applyNotifications([notification])])
+  assert.equal(shown.length, 1)
+})
+
+test('disabling and disposing the page renderer prevents further alerts', async () => {
   const client = notifier()
   enabled = false
-  await client.applyEvent(requestEvent('user_input'))
+  const notification = event()
+  await client.applyNotifications([notification])
+  assert.equal(shown.length, 0)
   enabled = true
-  await client.applyEvent(requestEvent('user_input'))
+  await client.applyNotifications([notification])
   assert.equal(shown.length, 1)
-})
-
-test('retry generations of the same assistant boundary produce separate notifications', async () => {
-  const client = notifier()
-  await client.applyEvent(partEvent({ content: { generation: 1 } }))
-  await client.applyEvent(partEvent({ content: { generation: 2 }, revision: 20 }))
-  assert.equal(shown.length, 2)
-})
-
-test('malformed data, non-session events, and deleted sessions do not produce alerts', async () => {
-  const client = notifier()
-  await client.applyEvent({ type: 'runtime_signal', properties: { kind: 'activity' } })
-  await client.applyEvent({ type: 'session_changed', properties: { kind: 'part_added', part: null } })
-  await client.applyEvent(partEvent())
-  await client.applyEvent({ type: 'session_changed', properties: { kind: 'session_deleted', session_id: 7 } })
-  assert.equal(shown.length, 1)
+  client.dispose()
   assert.equal(shown[0]!.closed, true)
-})
-
-test('a lost completion is recovered by rereading the observed reply, including long executions', async () => {
-  const reads: Array<[string, number[] | undefined]> = []
-  const client = notifier(async (sid, ids) => {
-    reads.push([sid, ids])
-    return { parts: [partEvent().properties!.part] }
-  })
-  await client.applyEvent(partEvent({ run_state: 'running' }))
-  await client.reconcile()
-  await client.reconcile()
-  assert.deepEqual(reads, [['7', [10]]])
-  assert.equal(shown.length, 1)
-  assert.equal(shown[0]!.options.body, 'completed')
-})
-
-test('recovery finds pending questions without replaying old completed replies', async () => {
-  const reads: Array<number[] | undefined> = []
-  const client = notifier(async (_sid, ids) => {
-    reads.push(ids)
-    return { parts: [], requests: [{ kind: 'user_input', request_id: 'recovered', session_id: 7 }] }
-  })
-  await client.reconcile()
-  assert.equal(reads.length, 0)
-  await client.applyEvent({ type: 'session_changed', properties: { kind: 'session_meta_updated', session_id: 7 } })
-  await client.reconcile()
-  assert.deepEqual(reads, [undefined])
-  assert.equal(shown[0]!.options.body, 'question')
-})
-
-test('sessions already active at startup can recover completion after a stream gap', async () => {
-  const client = notifier(async (_sid, ids) => {
-    assert.deepEqual(ids, [])
-    return { parts: [partEvent().properties!.part] }
-  })
-  client.trackSessions(['7'])
-  await client.reconcile()
+  await client.applyNotifications([event('later')])
   assert.equal(shown.length, 1)
 })
 
-test('live interaction changes take precedence over an older recovery snapshot', async () => {
-  let resolveRead!: (snapshot: BrowserNotificationSnapshot) => void
-  const client = notifier(
-    () =>
-      new Promise((resolve) => {
-        resolveRead = resolve
-      }),
+test('reenabling resets reply history while still recovering an unanswered question', async () => {
+  const client = notifier()
+  const notifications = [event('reply-while-disabled'), event('pending-while-disabled', 'question')]
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  client.reset()
+  await client.applyNotifications(notifications)
+  assert.deepEqual(
+    shown.map((item) => item.options.body),
+    ['question'],
   )
-  await client.applyEvent({ type: 'session_changed', properties: { kind: 'session_meta_updated', session_id: 7 } })
-  const read = client.reconcile()
-  await client.applyEvent(partEvent({ kind: 'tool_call', run_state: 'running', message_boundary: false, revision: 10 }))
-  resolveRead({ parts: [], requests: [{ kind: 'user_input', request_id: 'obsolete', session_id: 7 }] })
-  await read
-  assert.equal(shown.length, 0)
 })
 
-test('recovery retires an active session that was deleted while disconnected', async () => {
-  let reads = 0
-  const client = notifier(async () => {
-    reads++
-    return null
+test('blocked storage and locks do not prevent delivery or in-memory deduplication', async () => {
+  setGlobal('localStorage', {
+    getItem: () => {
+      throw new Error('blocked')
+    },
+    setItem: () => {
+      throw new Error('blocked')
+    },
   })
-  client.trackSessions(['7'])
-  await client.reconcile()
-  await client.reconcile()
-  assert.equal(reads, 1)
-  assert.equal(shown.length, 0)
+  setGlobal('navigator', {
+    locks: {
+      request: async () => {
+        throw new Error('blocked')
+      },
+    },
+  })
+  const client = notifier()
+  const notifications = [event()]
+  await client.applyNotifications(notifications)
+  await client.applyNotifications(notifications)
+  assert.equal(shown.length, 1)
 })
 
-test('replacing a service-worker notification closes only the old handle, leaving the new alert visible', async () => {
+test('closing an old worker notification handle cannot close its replacement', async () => {
   const registration = {
     active: { state: 'activated' },
     showNotification: async (title: string, options: NotificationOptions) => {
@@ -448,12 +331,11 @@ test('replacing a service-worker notification closes only the old handle, leavin
       shown.filter((item) => !item.closed && item.options.tag === tag),
   }
   setGlobal('navigator', { serviceWorker: { register: async () => registration } })
-  const client = notifier()
-  await client.applyEvent(partEvent())
-  await client.applyEvent(partEvent({ part_id: 11 }))
-  assert.equal(shown.length, 2)
+  const previous = await showBrowserNotification('Old', { tag: 'same-event' })
+  const replacement = await showBrowserNotification('New', { tag: 'same-event' })
+  previous!.close()
   assert.equal(shown[0]!.closed, true)
   assert.equal(shown[1]!.closed, false)
-  client.dispose()
+  replacement!.close()
   assert.equal(shown[1]!.closed, true)
 })

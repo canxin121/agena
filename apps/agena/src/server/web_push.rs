@@ -1,18 +1,13 @@
-//! Browser-independent delivery. The kernel observer persists an outbox before
-//! the sender contacts the push service; no open page or SSE connection is needed.
+//! Web Push delivery adapter for plugin-owned attention notifications.
+//! Event policy and recovery live in `agena.terminal`, shared with the TUI.
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
     time::Duration,
 };
 
-use agena_application::Application;
-use agena_domain::ExecutionId;
+use agena_application::{Application, dto::HostNotification};
 use agena_secret_store::{FileSecretStore, SecretStore};
-use agena_storage::kernel::{
-    ChangeKind, ExecutionPhase, ExecutionView, InteractionRequest, KernelChange, KernelReader,
-    SessionId, WatchError,
-};
 use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     Json, Router,
@@ -54,6 +49,8 @@ enum EventKind {
 #[derive(Clone, Serialize, Deserialize)]
 struct Subscriber {
     subscription: SubscriptionInfo,
+    #[serde(default)]
+    since_ms: i64,
     messages: BTreeMap<EventKind, String>,
 }
 
@@ -80,9 +77,6 @@ struct PushState {
     subscribers: BTreeMap<String, Subscriber>,
     seen: VecDeque<String>,
     outbox: VecDeque<Delivery>,
-    // Track executions across watch resets and server restarts, including runs
-    // whose finish creates no assistant text or exceeds the part-event budget.
-    active: BTreeMap<ExecutionId, SessionId>,
 }
 
 pub(crate) struct WebPushService {
@@ -152,39 +146,23 @@ impl WebPushService {
     }
 
     pub(crate) fn start(self: &Arc<Self>, application: Application) -> Result<PushTasks> {
-        let reader = application
-            .session_kernel()
-            .map_err(|e| anyhow!("{e}"))?
-            .reader
-            .clone();
-        // Subscribe before returning, so a message submitted during startup is observed.
-        let mut watch = reader.watch_all(None)?;
         let observer = self.clone();
         let observer_task = tokio::spawn(async move {
-            if let Err(error) = observer.recover(&reader).await {
-                tracing::warn!(%error, "Web Push startup recovery failed");
-            }
+            let mut previous = Vec::new();
             loop {
-                match watch.recv().await {
-                    Ok(change) => {
-                        if let Err(error) = observer.observe(&reader, &change).await {
-                            tracing::warn!(%error, "Web Push event observation failed");
-                        }
-                    }
-                    Err(WatchError::Closed) => break,
-                    Err(WatchError::Reset { .. }) => {
-                        match reader.watch_all(None) {
-                            Ok(replacement) => watch = replacement,
-                            Err(error) => {
-                                tracing::error!(%error, "Web Push observer stopped");
-                                break;
-                            }
-                        }
-                        if let Err(error) = observer.recover(&reader).await {
-                            tracing::warn!(%error, "Web Push watch recovery failed");
+                let notifications = application.plugin_runtime().host_notifications();
+                if notifications != previous {
+                    match observer
+                        .sync_notifications(notifications.clone(), None)
+                        .await
+                    {
+                        Ok(()) => previous = notifications,
+                        Err(error) => {
+                            tracing::warn!(%error, "plugin Web Push notifications could not be queued")
                         }
                     }
                 }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
         });
         let sender = self.clone();
@@ -202,160 +180,82 @@ impl WebPushService {
         Ok(PushTasks(vec![observer_task, sender_task]))
     }
 
-    async fn observe(&self, reader: &KernelReader, change: &KernelChange) -> Result<()> {
-        if !change.include_in_lists
-            || !matches!(
-                change.kind,
-                ChangeKind::Execution | ChangeKind::Interaction | ChangeKind::Membership
-            )
-        {
-            return Ok(());
-        }
-        if self.state.lock().await.subscribers.is_empty() {
-            return Ok(());
-        }
-        let summary = match reader.summary(change.session).await {
-            Ok(summary) => summary,
-            Err(agena_storage::kernel::KernelError::NotFound(_)) => return Ok(()),
-            Err(error) => return Err(error.into()),
-        };
-        if summary.relation_kind == agena_domain::SessionRelationKind::Subagent {
-            return Ok(());
-        }
-        let mut events = Vec::new();
-        let mut executions = BTreeMap::new();
-        if change.kind == ChangeKind::Execution {
-            let mut ids = BTreeSet::new();
-            for id in &change.affected_entries {
-                let entry = reader.entry(change.session, *id).await?;
-                if entry.origin_session_id == change.session {
-                    ids.insert(entry.execution_id);
-                }
-            }
-            // Execution changes over 128 entries have no part identities. The
-            // authoritative control head still names the execution that finished.
-            if change.requires_snapshot || ids.is_empty() {
-                let control = reader.control_snapshot(change.session, 128).await?;
-                if let Some(execution) = &control.active_execution {
-                    ids.insert(execution.execution_id());
-                }
-                let active = self.state.lock().await.active.clone();
-                ids.extend(
-                    active
-                        .into_iter()
-                        .filter_map(|(id, sid)| (sid == change.session).then_some(id)),
-                );
-            }
-            for id in ids {
-                let execution = reader.execution(change.session, id).await?;
-                if let Some(event) = execution_event(&execution, &summary.title) {
-                    events.push(event);
-                }
-                executions.insert(
-                    id,
-                    (!execution.phase.is_terminal()).then_some(change.session),
-                );
-            }
-        }
-        // Requests are canonical kernel facts. Tool/part display projections
-        // and the presence of an open frontend never affect their delivery.
-        events.extend(pending_events(reader, change.session, &summary.title).await?);
+    async fn sync_notifications(
+        &self,
+        notifications: Vec<HostNotification>,
+        new_subscriber: Option<&str>,
+    ) -> Result<()> {
         let mut state = self.state.lock().await;
+        if state.subscribers.is_empty() {
+            return Ok(());
+        }
         let mut next = state.clone();
-        for (id, sid) in executions {
-            if let Some(sid) = sid {
-                next.active.insert(id, sid);
-            } else {
-                next.active.remove(&id);
+        let mut changed = false;
+        for notification in notifications {
+            let Some(attention) = notification.attention else {
+                continue;
+            };
+            if attention.resolved {
+                let previous_len = next.outbox.len();
+                next.outbox
+                    .retain(|delivery| delivery.event.id != attention.id);
+                changed |= next.outbox.len() != previous_len;
+                continue;
+            }
+            let kind = match attention.kind.as_str() {
+                "completed" => EventKind::Completed,
+                "failed" => EventKind::Failed,
+                "cancelled" => EventKind::Cancelled,
+                "permission" => EventKind::Permission,
+                "question" => EventKind::Question,
+                _ => continue,
+            };
+            let event = PushEvent {
+                id: attention.id,
+                session_id: notification.session_id,
+                title: notification.title,
+                kind,
+                created_at_ms: attention.created_at_ms,
+            };
+            let fresh = !next.seen.contains(&event.id);
+            for (subscriber_id, subscriber) in &next.subscribers {
+                let pending_for_new_browser =
+                    new_subscriber == Some(subscriber_id.as_str()) && attention.kind.is_request();
+                if !(fresh || pending_for_new_browser) {
+                    continue;
+                }
+                if event.created_at_ms < subscriber.since_ms && !attention.kind.is_request() {
+                    continue;
+                }
+                if next.outbox.iter().any(|delivery| {
+                    delivery.subscriber_id == *subscriber_id && delivery.event.id == event.id
+                }) {
+                    continue;
+                }
+                next.outbox.push_back(Delivery {
+                    subscriber_id: subscriber_id.clone(),
+                    event: event.clone(),
+                    attempts: 0,
+                    next_at_ms: now_ms(),
+                });
+                changed = true;
+            }
+            if fresh {
+                next.seen.push_back(event.id);
+                changed = true;
             }
         }
-        for event in events {
-            enqueue(&mut next, event);
+        if !changed {
+            return Ok(());
+        }
+        while next.seen.len() > 4096 {
+            next.seen.pop_front();
+        }
+        while next.outbox.len() > MAX_DELIVERIES {
+            next.outbox.pop_front();
         }
         self.persist(&next).await?;
         *state = next;
-        self.wake.notify_one();
-        Ok(())
-    }
-
-    async fn recover(&self, reader: &KernelReader) -> Result<()> {
-        if self.state.lock().await.subscribers.is_empty() {
-            return Ok(());
-        }
-        let mut before = None;
-        loop {
-            let page = reader
-                .query_summaries(agena_storage::kernel::SummaryQuery {
-                    states: vec![
-                        agena_domain::SessionStateKind::Running,
-                        agena_domain::SessionStateKind::AwaitingInteraction,
-                    ],
-                    exclude_subagents: true,
-                    limit: 128,
-                    before,
-                    ..Default::default()
-                })
-                .await?;
-            for summary in &page.sessions {
-                let mut cursor = None;
-                loop {
-                    let work = reader.active_executions(summary.id, cursor, 128).await?;
-                    let mut state = self.state.lock().await;
-                    let mut next = state.clone();
-                    for execution in &work.executions {
-                        next.active.insert(execution.id, summary.id);
-                    }
-                    self.persist(&next).await?;
-                    *state = next;
-                    if !work.has_more {
-                        break;
-                    }
-                    cursor = work.next;
-                }
-            }
-            if !page.has_more {
-                break;
-            }
-            before = page.next;
-        }
-        let active = self.state.lock().await.active.clone();
-        let mut sessions = BTreeSet::new();
-        for (id, sid) in active {
-            sessions.insert(sid);
-            let execution = match reader.execution(sid, id).await {
-                Ok(execution) => execution,
-                Err(agena_storage::kernel::KernelError::NotFound(_)) => {
-                    let mut state = self.state.lock().await;
-                    state.active.remove(&id);
-                    self.persist(&state).await?;
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            };
-            if let Some(event) = execution_event(&execution, &reader.summary(sid).await?.title) {
-                let mut state = self.state.lock().await;
-                let mut next = state.clone();
-                enqueue(&mut next, event);
-                next.active.remove(&id);
-                self.persist(&next).await?;
-                *state = next;
-            }
-        }
-        for sid in sessions {
-            let summary = match reader.summary(sid).await {
-                Ok(summary) => summary,
-                Err(agena_storage::kernel::KernelError::NotFound(_)) => continue,
-                Err(error) => return Err(error.into()),
-            };
-            let events = pending_events(reader, sid, &summary.title).await?;
-            let mut state = self.state.lock().await;
-            let mut next = state.clone();
-            for event in events {
-                enqueue(&mut next, event);
-            }
-            self.persist(&next).await?;
-            *state = next;
-        }
         self.wake.notify_one();
         Ok(())
     }
@@ -397,7 +297,7 @@ impl WebPushService {
     }
 
     async fn send_due(&self) -> Result<()> {
-        // One network request at a time bounds load; the kernel observer runs
+        // One network request at a time bounds load; the plugin observer runs
         // independently and can keep persisting new events during an outage.
         for _ in 0..MAX_SUBSCRIPTIONS {
             let next = {
@@ -418,7 +318,11 @@ impl WebPushService {
             let Some((delivery, subscriber)) = next else {
                 break;
             };
-            let expired = delivery.event.created_at_ms + TTL_MS < now_ms();
+            let pending_request = matches!(
+                delivery.event.kind,
+                EventKind::Permission | EventKind::Question
+            );
+            let expired = !pending_request && delivery.event.created_at_ms + TTL_MS < now_ms();
             let result = if expired {
                 Ok(reqwest::StatusCode::GONE)
             } else {
@@ -455,58 +359,7 @@ impl WebPushService {
     }
 }
 
-async fn pending_events(
-    reader: &KernelReader,
-    sid: SessionId,
-    title: &str,
-) -> Result<Vec<PushEvent>> {
-    let mut events = Vec::new();
-    let mut cursor = None;
-    loop {
-        let page = reader.pending_interactions(sid, cursor, 128).await?;
-        for request in &page.interactions {
-            if request.decision.is_some() {
-                continue;
-            }
-            events.push(PushEvent {
-                id: format!("request:{}:{}", sid.get(), request.id.get()),
-                session_id: Some(sid.get()),
-                title: short_title(title),
-                kind: match request.request {
-                    InteractionRequest::Permission { .. } => EventKind::Permission,
-                    InteractionRequest::Input { .. } => EventKind::Question,
-                },
-                created_at_ms: request.created_at_ms,
-            });
-        }
-        if !page.has_more {
-            break;
-        }
-        cursor = page.next;
-    }
-    Ok(events)
-}
-
-fn short_title(title: &str) -> String {
-    title.chars().take(120).collect()
-}
-
-fn execution_event(execution: &ExecutionView, title: &str) -> Option<PushEvent> {
-    let kind = match execution.phase {
-        ExecutionPhase::Succeeded => EventKind::Completed,
-        ExecutionPhase::Failed | ExecutionPhase::Interrupted => EventKind::Failed,
-        ExecutionPhase::Cancelled => EventKind::Cancelled,
-        _ => return None,
-    };
-    Some(PushEvent {
-        id: format!("execution:{}:{}", execution.id, execution.generation.get()),
-        session_id: Some(execution.session_id.get()),
-        title: short_title(title),
-        kind,
-        created_at_ms: now_ms(),
-    })
-}
-
+#[cfg(test)]
 fn enqueue(state: &mut PushState, event: PushEvent) {
     if state.seen.contains(&event.id) {
         return;
@@ -579,6 +432,7 @@ fn validate_subscription(subscriber: &Subscriber) -> Result<()> {
 pub(crate) fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/browser-notifications/config", get(config))
+        .route("/api/v1/browser-notifications/events", get(events))
         .route(
             "/api/v1/browser-notifications/subscriptions",
             post(subscribe).delete(unsubscribe),
@@ -587,6 +441,17 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
             "/api/v1/browser-notifications/test",
             post(test_notification),
         )
+}
+
+async fn events(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let notifications = state
+        .application
+        .plugin_runtime()
+        .host_notifications()
+        .into_iter()
+        .filter(|notification| notification.attention.is_some())
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({"notifications": notifications, "snapshot_at_ms": now_ms()}))
 }
 
 async fn config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -603,8 +468,9 @@ async fn subscribe(
     State(app): State<Arc<AppState>>,
     Json(body): Json<SubscriptionRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let subscriber = Subscriber {
+    let mut subscriber = Subscriber {
         subscription: body.subscription,
+        since_ms: now_ms(),
         messages: body.messages,
     };
     validate_subscription(&subscriber)
@@ -616,6 +482,10 @@ async fn subscribe(
             "Too many browser notification subscriptions.",
         ));
     }
+    let new_subscriber = !state.subscribers.contains_key(&id);
+    if let Some(previous) = state.subscribers.get(&id) {
+        subscriber.since_ms = previous.since_ms;
+    }
     let mut next = state.clone();
     next.subscribers.insert(id.clone(), subscriber);
     app.web_push
@@ -624,16 +494,13 @@ async fn subscribe(
         .map_err(|e| AppError::internal(e.to_string()))?;
     *state = next;
     drop(state);
-    let reader = app
-        .application
-        .session_kernel()
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .reader
-        .clone();
     app.web_push
-        .recover(&reader)
+        .sync_notifications(
+            app.application.plugin_runtime().host_notifications(),
+            new_subscriber.then_some(id.as_str()),
+        )
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(Json(serde_json::json!({ "id": id })))
 }
 

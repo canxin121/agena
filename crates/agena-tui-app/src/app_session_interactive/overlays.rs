@@ -373,7 +373,6 @@ impl App {
                 self.seen_permission_request_ids
                     .insert(request.request_id.clone());
                 self.reveal_pending_user_input_interaction(&request.request_id);
-                self.queue_permission_notification();
             }
             Some(PendingInteractiveOverlayTarget::UserInput {
                 session_id,
@@ -393,7 +392,6 @@ impl App {
                 // Auto-expand the part and focus the cursor on it on arrival,
                 // regardless of the configured default expand/collapse setting.
                 self.reveal_pending_user_input_interaction(&request_id);
-                self.queue_user_input_notification();
             }
             None => {}
         }
@@ -433,25 +431,6 @@ impl App {
                 ),
             }
         });
-    }
-
-    /// Queues a terminal attention notification for an incoming permission
-    /// request. The notification method is selected per terminal family; BEL
-    /// is the universal fallback.
-    pub(crate) fn queue_permission_notification(&mut self) {
-        use agena_tui_platform::terminal::integration::NotificationMethod;
-        if let Some(method) = crate::current_notification_method(self) {
-            self.terminal_integration.queue_notification(method);
-        } else {
-            self.terminal_integration
-                .queue_notification(NotificationMethod::Bell);
-        }
-    }
-
-    /// Queues a terminal attention notification for an incoming user-input
-    /// request.
-    pub(crate) fn queue_user_input_notification(&mut self) {
-        self.queue_permission_notification();
     }
 
     pub(crate) fn open_permission_overlay(&mut self) {

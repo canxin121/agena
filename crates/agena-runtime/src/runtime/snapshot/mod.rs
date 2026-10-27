@@ -190,20 +190,28 @@ impl RuntimeSnapshot {
             generation,
             agena_runtime::config_resolution_json_value(&resolution)?,
         );
-        let plugins = build_plugin_services(agena_runtime::PluginCompositionInputs {
-            plugin_config: resolution.config.plugins.clone(),
-            workspace_root: resolution
-                .meta
-                .config_path
-                .parent()
-                .unwrap_or_else(|| Path::new(".")),
-            previous_host,
-            previous_config,
-            mcp_manager: mcp_manager.clone(),
-            callback_base_url: callback_server.base_url.clone(),
-            callback_dispatcher: callback_server.dispatcher.clone(),
-            host_client: host_client.clone(),
-        })
+        let plugins = build_plugin_services(
+            agena_runtime::PluginCompositionInputs {
+                plugin_config: resolution.config.plugins.clone(),
+                workspace_root: resolution
+                    .meta
+                    .config_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new(".")),
+                previous_host,
+                previous_config,
+                mcp_manager: mcp_manager.clone(),
+                callback_base_url: callback_server.base_url.clone(),
+                callback_dispatcher: callback_server.dispatcher.clone(),
+                host_client: host_client.clone(),
+            },
+            session_kernel.as_ref().map(|kernel| {
+                agena_bundled_plugins::tool::TerminalNotificationSource {
+                    reader: kernel.ports.reader.clone(),
+                    state: kernel.instance_state.clone(),
+                }
+            }),
+        )
         .await?;
         // Own successful plugin initialization across every later service
         // build error and cancellation, before awaiting provider composition.

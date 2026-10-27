@@ -21,12 +21,6 @@ import { installKeyboardInsets } from '@/lib/keyboardInsets'
 import { installKeyboardTapFix } from '@/lib/keyboardTapFix'
 import { installKeyboardShortcuts } from '@/app/runtime/installKeyboardShortcuts'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
-import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
-import { createBrowserNotifier } from '@/lib/browserNotifications'
-import { ApiError, apiJson, apiUrl } from '@/lib/api'
-import { limitBackgroundReads } from '@/lib/backgroundReads'
-import { i18n } from '@/i18n'
-import { normalizeSessionState, sessionStateRequests } from '@/types/chat'
 
 export function useAppRuntime() {
   const route = useRoute()
@@ -39,44 +33,6 @@ export function useAppRuntime() {
   const directory = useDirectoryStore()
   const directorySessions = useDirectorySessionStore()
   const notifications = useBrowserNotificationsStore()
-  const navigation = useWorkspaceNavigation()
-  const notifier = createBrowserNotifier({
-    enabled: () => notifications.enabled && !notifications.pushReady,
-    scope: () => apiUrl('/'),
-    sessionTitle: (sid) => chat.getSessionById(sid)?.title || '',
-    message: (kind) => String(i18n.global.t(`browserNotifications.events.${kind}`)),
-    openSession: (sid) =>
-      navigation.openWorkspaceLocation('chat', {
-        query: { sessionId: sid },
-        title: chat.getSessionById(sid)?.title,
-        matchKeys: ['sessionId'],
-        reuseExisting: true,
-      }),
-    readSession: (sid, replyIds) =>
-      limitBackgroundReads(async () => {
-        const path = `/api/v1/sessions/${encodeURIComponent(sid)}`
-        const init = { signal: AbortSignal.timeout(15_000) }
-        try {
-          // Status shells carry canonical pending requests without loading history.
-          const status = await apiJson<{
-            session?: { state?: unknown }
-            parts?: unknown[]
-            queued_messages?: unknown[]
-          }>(`${path}/state?include_parts=false`, init)
-          const requests = sessionStateRequests(normalizeSessionState(status.session?.state))
-          if (!replyIds) return { parts: [], requests }
-          // Queued inputs follow the active reply in newest-first message windows.
-          const limit = Math.min(128, (status.queued_messages?.length || 0) + 1)
-          const query = replyIds.length ? `/parts?ids=${replyIds.join(',')}` : `/runs?limit=${limit}&part_limit=1`
-          const reply = await apiJson<{ parts?: unknown[] }>(`${path}${query}`, init)
-          return { parts: reply.parts || [], requests }
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 404) return null
-          throw error
-        }
-      }),
-  })
-
   let disposed = false
   let sse: SseClient | null = null
   let visibilityHandler: (() => void) | null = null
@@ -105,12 +61,6 @@ export function useAppRuntime() {
     },
     { intervalMs: 10_000, retryMs: 10_000, enabled: () => !disposed && isDocumentVisible() },
   )
-  const notificationRecovery = createRevalidator(() => notifier.reconcile(), {
-    intervalMs: 1000,
-    retryMs: 5000,
-    enabled: () => !disposed && notifications.enabled,
-  })
-
   let globalSseCursor = ''
 
   let lastResumeSyncAt = 0
@@ -220,9 +170,7 @@ export function useAppRuntime() {
     const state = document.visibilityState
     const visible = state === 'visible'
 
-    if (!visible && !notifications.enabled && sse) {
-      // Notifications need the live feed even while no page is visible.
-      // Without permission, retain the existing hidden-tab pause behavior.
+    if (!visible && sse) {
       sse.close()
       sse = null
     }
@@ -243,7 +191,7 @@ export function useAppRuntime() {
   }
 
   function connectActivity() {
-    if (disposed || (!isDocumentVisible() && !notifications.enabled)) return
+    if (disposed || !isDocumentVisible()) return
     sse?.close()
     sse = null
 
@@ -257,21 +205,15 @@ export function useAppRuntime() {
         },
         onOpen: () => {
           recovery.invalidate(0)
-          notificationRecovery.invalidate(0)
         },
         onSequenceGap: () => {
           recovery.invalidate(0)
-          notificationRecovery.invalidate(0)
         },
         onEvent: (evt) => {
           if (evt.type === 'lagged' || evt.type === 'subscription_closed') {
             recovery.invalidate(0)
-            notificationRecovery.invalidate(0)
             return
           }
-          void notifier.applyEvent(evt).catch(() => notificationRecovery.invalidate())
-          if (evt.type === 'session_changed' && evt.properties?.kind === 'session_meta_updated')
-            notificationRecovery.invalidate()
           activity.applyEvent(evt)
           applyResourceEvent(evt)
           chat.applyEvent(evt)
@@ -346,11 +288,6 @@ export function useAppRuntime() {
     // Keep sessions available for all views.
     await chat.refreshSessions().catch(() => {})
     if (disposed) return
-    notifier.trackSessions(
-      chat.sessions
-        .filter((session) => session.state?.kind === 'running' || session.state?.kind === 'awaiting_interaction')
-        .map((session) => session.id),
-    )
     await ensureSelectedSessionFromQuery().catch(() => {})
     if (disposed) return
 
@@ -406,7 +343,6 @@ export function useAppRuntime() {
     }
     resumeHandler = () => {
       if (isDocumentVisible()) resyncAfterResume('resume', { gapMs: 60000 })
-      else if (notifications.enabled) connectActivity()
     }
     document.addEventListener('freeze', freezeHandler as EventListener)
     document.addEventListener('resume', resumeHandler as EventListener)
@@ -443,25 +379,9 @@ export function useAppRuntime() {
     window.addEventListener('blur', blurHandler)
     onlineHandler = () => {
       if (document.visibilityState === 'visible') resyncAfterResume('online')
-      else if (notifications.enabled) connectActivity()
     }
     window.addEventListener('online', onlineHandler)
   })
-
-  watch(
-    () => notifications.enabled,
-    () => {
-      if (disposed) return
-      if (notifications.enabled) notificationRecovery.invalidate(0)
-      if (isDocumentVisible()) return
-      if (notifications.enabled) {
-        if (!sse) connectActivity()
-      } else {
-        sse?.close()
-        sse = null
-      }
-    },
-  )
 
   watch(
     () => ({ path: route.path, query: route.query }),
@@ -473,8 +393,6 @@ export function useAppRuntime() {
 
   onBeforeUnmount(() => {
     disposed = true
-    notifier.dispose()
-    notificationRecovery.dispose()
     recovery.dispose()
     cleanupResourceSync?.()
     sse?.close()

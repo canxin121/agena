@@ -179,7 +179,12 @@ fn subscribe_with_queue_capacity(
                     let signal=match signal {Some(RuntimeLiveSignalItem::Signal(signal))=>signal,
                         Some(RuntimeLiveSignalItem::Lagged(skipped))=>{if tx.send(LiveItem::Lagged(skipped)).await.is_err(){break;}continue;},None=>break};
                     let signal=project_signal(signal);
-                    let allowed=match (&scope,signal.session_id) {
+                    // Attention invalidates a runtime-wide plugin queue. A TUI
+                    // viewing one session must also learn about another
+                    // session's notification; this signal carries no transcript.
+                    let global_attention=signal.session_id.is_none()&&signal.kind=="plugin"
+                        &&signal.payload.get("kind").and_then(serde_json::Value::as_str)==Some("attention.changed");
+                    let allowed=global_attention||match (&scope,signal.session_id) {
                         (Scope::Global,_)=>true,(Scope::Session{session_id},Some(id))=>*session_id==id,
                         (Scope::Workspace{workspace_id},Some(id))=>match id.try_into(){Ok(id)=>kernel.reader.metadata(id).await.is_ok_and(|m|m.workspace_id==*workspace_id),Err(_)=>false},_=>false};
                     if allowed&&tx.send(LiveItem::RuntimeSignal(signal)).await.is_err(){break;}

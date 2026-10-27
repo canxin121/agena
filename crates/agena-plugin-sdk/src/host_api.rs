@@ -470,6 +470,9 @@ pub trait HostClient: Send + Sync + 'static {
 #[serde(default, deny_unknown_fields)]
 /// Request to notify the user from a plugin.
 pub struct PluginNotifyRequest {
+    /// Optional structured event for shared terminal/browser attention delivery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<crate::AttentionNotification>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(skip_serializing_if = "String::is_empty")]

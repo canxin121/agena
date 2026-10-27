@@ -845,6 +845,8 @@ impl StaticPluginRegistration {
 /// surface/priority/dedupe decisions stay on the host side.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HostNotification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<crate::sdk::AttentionNotification>,
     pub plugin_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,

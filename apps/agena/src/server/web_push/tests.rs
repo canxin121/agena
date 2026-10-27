@@ -1,10 +1,9 @@
 use super::*;
-use agena_domain::{ComposerDocument, ComposerNode};
-use agena_storage::kernel::{KernelWatch, RequestId, ToolStart};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn subscriber(endpoint: String) -> Subscriber {
     Subscriber {
+        since_ms: 0,
         subscription: SubscriptionInfo::new(endpoint,
             "BLMbF9ffKBiWQLCKvTHb6LO8Nb6dcUh6TItC455vu2kElga6PQvUmaFyCdykxY2nOSSL3yKgfbmFLRTUaGv4yV8".into(),
             "xS03Fi5ErfTNH_l9WHE9Ig".into()),
@@ -43,209 +42,100 @@ async fn fixture() -> (
     (kernel, service, directory)
 }
 
-async fn observe_pending(service: &WebPushService, reader: &KernelReader, watch: &mut KernelWatch) {
-    while let Some(change) = watch.try_recv().unwrap() {
-        service.observe(reader, &change).await.unwrap();
-    }
-}
-
-async fn session(kernel: &agena_storage_sqlite::SqliteKernel) -> SessionId {
-    let workspace = kernel
-        .workspaces
-        .ensure_id("/tmp/agena-web-push-test")
-        .await
-        .unwrap();
-    kernel
-        .ports
-        .sessions
-        .create(RequestId::new(), workspace, "Push test".into())
-        .await
-        .unwrap()
-        .value
-        .id
-}
-
-async fn attempt(
-    kernel: &agena_storage_sqlite::SqliteKernel,
-    sid: SessionId,
-) -> agena_storage::kernel::AttemptHandle {
-    let execution = kernel
-        .ports
-        .sessions
-        .send(
-            RequestId::new(),
-            sid,
-            ComposerDocument(vec![ComposerNode::Text {
-                text: "test".into(),
-            }]),
-        )
-        .await
-        .unwrap()
-        .value;
-    kernel
-        .ports
-        .executor
-        .claim(RequestId::new(), sid, execution.id)
-        .await
-        .unwrap()
-        .value
+fn plugin_event(id: &str, kind: &str, created_at_ms: i64, resolved: bool) -> HostNotification {
+    serde_json::from_value(serde_json::json!({
+        "plugin_id": "agena.terminal", "title": "Session title", "session_id": 7,
+        "attention": { "id": id, "kind": kind, "created_at_ms": created_at_ms, "resolved": resolved },
+    })).unwrap()
 }
 
 #[tokio::test]
-async fn real_kernel_completions_and_failures_enqueue_without_any_browser_or_sse_client() {
-    let (kernel, service, _directory) = fixture().await;
-    let sid = session(&kernel).await;
-    let mut watch = kernel.ports.reader.watch_all(None).unwrap();
-    for phase in [
-        ExecutionPhase::Succeeded,
-        ExecutionPhase::Failed,
-        ExecutionPhase::Cancelled,
-    ] {
-        let attempt = attempt(&kernel, sid).await;
-        observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-        assert!(
-            service
-                .state
-                .lock()
-                .await
-                .outbox
-                .iter()
-                .all(|item| item.event.kind != EventKind::Question)
-        );
-        attempt.finish(RequestId::new(), phase).await.unwrap();
-        observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-    }
+async fn plugin_events_share_terminal_identities_and_resolved_requests_leave_the_outbox() {
+    let (_kernel, service, _directory) = fixture().await;
+    let notifications = vec![
+        plugin_event("execution:one:1", "completed", now_ms(), false),
+        plugin_event("request:7:one", "question", now_ms(), false),
+    ];
+    service
+        .sync_notifications(notifications.clone(), None)
+        .await
+        .unwrap();
+    service
+        .sync_notifications(notifications, None)
+        .await
+        .unwrap();
+    assert_eq!(service.state.lock().await.outbox.len(), 2);
+    service
+        .sync_notifications(
+            vec![
+                plugin_event("request:7:one", "question", now_ms(), true),
+                plugin_event("execution:two:1", "completed", now_ms(), false),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
     let state = service.state.lock().await;
     assert_eq!(
         state
             .outbox
             .iter()
-            .map(|item| item.event.kind)
+            .map(|delivery| delivery.event.id.as_str())
             .collect::<Vec<_>>(),
-        vec![
-            EventKind::Completed,
-            EventKind::Failed,
-            EventKind::Cancelled
-        ]
+        vec!["execution:one:1", "execution:two:1"]
     );
-    assert!(state.active.is_empty());
 }
 
 #[tokio::test]
-async fn canonical_questions_and_permissions_enqueue_once_without_tool_display_events() {
-    let (kernel, service, _directory) = fixture().await;
-    let sid = session(&kernel).await;
-    let attempt = attempt(&kernel, sid).await;
-    let mut watch = kernel.ports.reader.watch_all(None).unwrap();
-    let round = attempt
-        .begin_current_round(RequestId::new())
+async fn newly_subscribed_browsers_receive_pending_requests_without_replaying_old_replies() {
+    let (_kernel, service, _directory) = fixture().await;
+    service
+        .state
+        .lock()
         .await
+        .subscribers
+        .get_mut("browser")
         .unwrap()
-        .value;
-    let tool = round
-        .begin_tool(
-            RequestId::new(),
-            ToolStart {
-                call_id: "call-test".into(),
-                name: "test".into(),
-                input: serde_json::json!({}),
-            },
-        )
-        .await
-        .unwrap()
-        .value;
-    tool.request_interaction(
-        RequestId::new(),
-        InteractionRequest::Permission {
-            action_key: "{}".into(),
-            description: "Approve test".into(),
-        },
-    )
-    .await
-    .unwrap();
-    observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-    let request = serde_json::from_value(serde_json::json!({
-        "request_id":"question", "session_id":sid.get(), "kind":"ask_user", "source":"host", "questions":[], "created_at":chrono::Utc::now(),
-    })).unwrap();
-    tool.request_interaction(RequestId::new(), InteractionRequest::Input { request })
+        .since_ms = now_ms();
+    let old = now_ms() - 60_000;
+    let notifications = vec![
+        plugin_event("old-completion", "completed", old, false),
+        plugin_event("pending", "permission", old, false),
+    ];
+    service
+        .sync_notifications(notifications.clone(), Some("browser"))
         .await
         .unwrap();
-    observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-    assert_eq!(
-        service
-            .state
-            .lock()
-            .await
+    let mut second = subscriber("https://fcm.googleapis.com/fcm/send/second".into());
+    second.since_ms = now_ms();
+    service
+        .state
+        .lock()
+        .await
+        .subscribers
+        .insert("second".into(), second);
+    service
+        .sync_notifications(notifications, Some("second"))
+        .await
+        .unwrap();
+    let state = service.state.lock().await;
+    assert_eq!(state.outbox.len(), 2);
+    assert!(
+        state
             .outbox
             .iter()
-            .map(|item| item.event.kind)
-            .collect::<Vec<_>>(),
-        vec![EventKind::Permission, EventKind::Question]
+            .all(|delivery| delivery.event.id == "pending")
     );
 }
 
 #[tokio::test]
-async fn enabling_push_during_an_existing_question_recovers_it_without_replaying_old_replies() {
-    let (kernel, service, _directory) = fixture().await;
-    let sid = session(&kernel).await;
-    let attempt = attempt(&kernel, sid).await;
-    let round = attempt
-        .begin_current_round(RequestId::new())
-        .await
-        .unwrap()
-        .value;
-    let tool = round
-        .begin_tool(
-            RequestId::new(),
-            ToolStart {
-                call_id: "pending-test".into(),
-                name: "test".into(),
-                input: serde_json::json!({}),
-            },
-        )
-        .await
-        .unwrap()
-        .value;
-    tool.request_interaction(
-        RequestId::new(),
-        InteractionRequest::Permission {
-            action_key: "{}".into(),
-            description: "Pending approval".into(),
-        },
-    )
-    .await
-    .unwrap();
-    // No observer has handled any of the earlier events.
-    assert!(service.state.lock().await.active.is_empty());
-    service.recover(&kernel.ports.reader).await.unwrap();
-    service.recover(&kernel.ports.reader).await.unwrap();
-    let state = service.state.lock().await;
-    assert_eq!(state.outbox.len(), 1);
-    assert_eq!(state.outbox[0].event.kind, EventKind::Permission);
-    assert!(state.active.contains_key(&attempt.execution_id()));
-}
-
-#[tokio::test]
-async fn long_executions_and_lost_finish_events_recover_after_restart_with_stable_identity() {
-    let (kernel, service, directory) = fixture().await;
-    let sid = session(&kernel).await;
-    let mut watch = kernel.ports.reader.watch_all(None).unwrap();
-    let attempt = attempt(&kernel, sid).await;
-    observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-    for _ in 0..130 {
-        attempt
-            .notice(RequestId::new(), "progress".into())
-            .await
-            .unwrap();
-        observe_pending(&service, &kernel.ports.reader, &mut watch).await;
-    }
-    attempt
-        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+async fn transport_restart_preserves_identity_and_plugin_delivery_deduplication() {
+    let (_kernel, service, directory) = fixture().await;
+    let notifications = vec![plugin_event("persisted", "completed", now_ms(), false)];
+    service
+        .sync_notifications(notifications.clone(), None)
         .await
         .unwrap();
-    let finish = watch.recv().await.unwrap();
-    assert!(finish.requires_snapshot);
-    // Simulate a crash before the observer handles the terminal change.
     let restored = WebPushService::load_with_secrets(
         service.db.clone(),
         FileSecretStore::at(directory.path(), "test.web-push"),
@@ -253,15 +143,14 @@ async fn long_executions_and_lost_finish_events_recover_after_restart_with_stabl
     .await
     .unwrap();
     assert_eq!(restored.public_key, service.public_key);
-    restored.recover(&kernel.ports.reader).await.unwrap();
     restored
-        .observe(&kernel.ports.reader, &finish)
+        .sync_notifications(notifications, None)
         .await
         .unwrap();
     let state = restored.state.lock().await;
     assert_eq!(state.subscribers.len(), 1);
     assert_eq!(state.outbox.len(), 1);
-    assert_eq!(state.outbox[0].event.kind, EventKind::Completed);
+    assert_eq!(state.outbox[0].event.id, "persisted");
 }
 
 async fn push_server(status: u16) -> (String, JoinHandle<Vec<u8>>) {
@@ -341,6 +230,35 @@ async fn encrypted_vapid_delivery_retries_failures_and_removes_expired_subscript
         }
         assert_eq!(state.subscribers.is_empty(), status == 410);
     }
+}
+
+#[tokio::test]
+async fn a_still_pending_old_question_is_delivered_to_a_new_browser() {
+    let (_kernel, service, _directory) = fixture().await;
+    let (endpoint, response) = push_server(201).await;
+    service
+        .state
+        .lock()
+        .await
+        .subscribers
+        .insert("browser".into(), subscriber(endpoint));
+    service
+        .sync_notifications(
+            vec![plugin_event(
+                "old-pending",
+                "question",
+                now_ms() - TTL_MS - 1,
+                false,
+            )],
+            Some("browser"),
+        )
+        .await
+        .unwrap();
+    service.send_due().await.unwrap();
+    assert!(!response.await.unwrap().is_empty());
+    let state = service.state.lock().await;
+    assert!(state.outbox.is_empty());
+    assert_eq!(state.subscribers.len(), 1);
 }
 
 #[test]

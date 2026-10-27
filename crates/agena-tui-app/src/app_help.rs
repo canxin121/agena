@@ -159,6 +159,13 @@ impl App {
             }
             Route::Timeline(dialog) => self.help_for(HelpPreset::Timeline, dialog.title.clone()),
             Route::PluginWorkbench(dialog) => self.help_for_plugin_workbench(dialog),
+            Route::SkillsWorkbench(dialog) => {
+                if let Some(editor) = dialog.editor.as_ref() {
+                    self.help_for_editor(editor.title.clone(), editor.multiline)
+                } else {
+                    self.help_for_skills_workbench(dialog)
+                }
+            }
             Route::ProviderStudio(dialog) => self.help_for_provider(dialog),
             Route::ModelCatalogStudio(dialog) => self.help_for_model_catalog(dialog),
         }

@@ -1113,6 +1113,7 @@ export default {
       usage: 'Utilisation',
       plugins: 'Plugins',
       pluginsTools: 'Plugins et outils',
+      skills: 'Compétences',
       mcpServer: 'Serveur MCP',
       runtimeSession: 'Runtime et session',
       interface: 'Interface',

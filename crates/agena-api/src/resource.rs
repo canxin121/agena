@@ -1352,6 +1352,8 @@ pub struct PartCommandReference {
     pub description: String,
     pub content_hash: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }

@@ -75,6 +75,7 @@ mod revisions;
 mod runs;
 mod sessions;
 mod settings;
+mod skills;
 mod workspaces;
 
 pub use file_changes::*;
@@ -82,6 +83,7 @@ pub use permissions::*;
 pub use runs::*;
 pub use sessions::*;
 pub use settings::*;
+pub use skills::*;
 pub use workspaces::*;
 
 pub use activities::*;

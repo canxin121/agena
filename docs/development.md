@@ -348,6 +348,30 @@ to verify an operating-system banner or Google's external delivery service.
 Formatting scripts are available as `bun run fmt` and `bun run fmt:check`.
 They are not part of the CI quality gate.
 
+### Skills integration checks
+
+`cargo test -p agena-skills -p agena-bundled-plugins --lib --tests` covers package
+operations, compatibility discovery, and the skill tools' permission boundaries.
+The terminal workbench and picker regressions are included in
+`cargo test -p agena-tui-app --lib`.
+
+For a real HTTP and browser check, build the application and Web assets, then run
+the isolated probe from `packages/agena-web`:
+
+```sh
+cargo build -p agena --bin agena --locked
+bun run build
+PLAYWRIGHT_MODULE=/path/to/playwright CHROME_BIN=/path/to/chrome bun run test:skills:browser
+```
+
+The probe starts its own loopback server with temporary data and workspace
+directories. It exercises scope isolation, precedence, resource and package CRUD,
+archive uploads, browser editing and folder installation, and desktop/mobile
+layouts. It retains screenshots and the server log in the reported temporary
+directory. `AGENA_BIN` can select another freshly built Agena executable.
+Set `SKILLS_PROBE_GITHUB_URL` to additionally preview and install a public GitHub
+skill through the live downloader; the default probe needs no external service.
+
 ## Verification matrix
 
 Run the same checks locally that CI runs. The exact commands are:

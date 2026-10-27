@@ -202,6 +202,9 @@ impl App {
             Route::PluginWorkbench(dialog) => {
                 self.render_plugin_workbench(frame, area, dialog, SurfaceMode::Route);
             }
+            Route::SkillsWorkbench(dialog) => {
+                self.render_skills_workbench(frame, area, dialog);
+            }
             Route::ProviderStudio(dialog) => {
                 self.render_provider_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }

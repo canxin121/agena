@@ -255,8 +255,10 @@ for (const file of overlayFiles) {
 
 const sameAsEnglishAllowlist = new Set([
   // These nouns also have this spelling in supported European languages.
+  'Archive',
   'Audio',
   'Image',
+  'Instructions',
   'Document',
   'tokens',
   'Alpha',
@@ -266,6 +268,7 @@ const sameAsEnglishAllowlist = new Set([
   'Configuration',
   'Driver',
   'Experimental',
+  'GitHub',
   'GitHub Copilot',
   'GitLab',
   'GitLab API',

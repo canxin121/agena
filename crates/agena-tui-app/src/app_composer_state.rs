@@ -338,7 +338,7 @@ impl App {
 
     pub(crate) fn stage_skill_reference(
         &mut self,
-        entry: &agena_plugin_host::CommandCatalogItem,
+        skill: &agena_api::skills::SkillSummary,
     ) -> UiResult<()> {
         let references = self
             .composer_items
@@ -357,16 +357,16 @@ impl App {
             )));
         }
 
-        let plugin_id = entry.plugin_id.to_string();
-        let definition = serde_json::to_vec(&entry.command).map_err(crate::UiFailure::internal)?;
-        let content_hash = hex::encode(Sha256::digest(definition));
+        let plugin_id = "agena.skills".to_owned();
+        let content_hash = skill.revision.clone();
         let payload = agena_domain::ActivityPayload::CommandReference(
             agena_domain::CommandReferenceActivity {
-                name: entry.command.id.clone(),
-                description: entry.command.docs.summary.clone().unwrap_or_default(),
+                name: skill.name.clone(),
+                description: skill.description.clone(),
                 content_hash: content_hash.clone(),
                 source: plugin_id.clone(),
-                aliases: entry.command.aliases.clone(),
+                skill_id: Some(skill.id.clone()),
+                aliases: Vec::new(),
             },
         );
         let placeholder =
@@ -390,7 +390,7 @@ impl App {
         self.after_composer_text_mutated();
         self.flash_success(self.i18n.text_args(
             "flash-skill-attached",
-            &agena_tui::fl_args!("name" => entry.command.title.clone()),
+            &agena_tui::fl_args!("name" => skill.name.clone()),
         ));
         Ok(())
     }
@@ -1344,8 +1344,6 @@ fn unique_composer_placeholder_text(
     }
     unreachable!("at least one numbered suffix is always available")
 }
-
-use sha2::{Digest, Sha256};
 
 use crate::Result;
 use crate::{

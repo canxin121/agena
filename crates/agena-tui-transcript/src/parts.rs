@@ -446,6 +446,7 @@ fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
                         description: command.description,
                         content_hash: command.content_hash,
                         source: command.source,
+                        skill_id: command.skill_id,
                         aliases: command.aliases,
                     }],
                 })
@@ -660,6 +661,7 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
                         content_hash: string_field(&part.content, "content_hash")
                             .unwrap_or_default(),
                         source: string_field(&part.content, "source").unwrap_or_default(),
+                        skill_id: string_field(&part.content, "skill_id"),
                         aliases: Vec::new(),
                     }],
                 },

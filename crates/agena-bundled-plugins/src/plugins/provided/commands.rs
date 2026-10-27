@@ -10,9 +10,9 @@
 //!    the web client render the same names, aliases, usage lines and
 //!    descriptions without either one keeping its own hand-copied table.
 //!
-//! 2. **Skill packages, projected as composer references.** Agena has no skills
-//!    of its own: `skill` is a vocabulary other agents use, and this is the one
-//!    place it is read. A skill package on disk — a `SKILL.md` under a skill
+//! 2. **Skill packages, projected as composer references.** Agent Skills are
+//!    parsed and managed by the shared `agena-skills` crate and `agena.skills`
+//!    plugin. This bridge publishes a `SKILL.md` under a skill
 //!    root, a plain `.md` under a command root, or a `PluginSkillDefinition`
 //!    another plugin declared in its manifest — is published in the shared
 //!    catalog without a slash spelling. The composer adds a message-scoped
@@ -801,7 +801,7 @@ fn commands_settings_metadata() -> &'static [(&'static str, &'static str, &'stat
         (
             "/additional_roots",
             "Additional Package Roots",
-            "Workspace-relative directories scanned after the standard roots.",
+            "Workspace-relative skill directories scanned before the native workspace library.",
         ),
         (
             "/additional_command_roots",
@@ -1368,22 +1368,26 @@ impl CommandsPlugin {
             Some(workspace_root.to_path_buf()).filter(|path| !path.as_os_str().is_empty());
         let mut roots = default_roots(workspace.as_deref());
         let mut command_roots = default_command_roots(workspace.as_deref());
+        let native_workspace_root = workspace_root.join(".agena/skills");
+        roots.retain(|root| root != &native_workspace_root);
         roots.extend(
             config
                 .additional_roots
                 .iter()
-                .map(|root| workspace_root.join(root)),
+                .map(|root| workspace_root.join(root))
+                .filter(|root| root != &native_workspace_root),
         );
+        roots.push(native_workspace_root);
         command_roots.extend(
             config
                 .additional_command_roots
                 .iter()
                 .map(|root| workspace_root.join(root)),
         );
-        roots.sort();
-        roots.dedup();
-        command_roots.sort();
-        command_roots.dedup();
+        let mut seen = std::collections::BTreeSet::new();
+        roots.retain(|root| seen.insert(root.clone()));
+        seen.clear();
+        command_roots.retain(|root| seen.insert(root.clone()));
         (roots, command_roots)
     }
 
@@ -1447,7 +1451,15 @@ impl CommandsPlugin {
                 },
             );
         }
-        packages.retain(|name, _| !config.disabled_name(name));
+        packages.retain(|name, entry| {
+            entry
+                .command
+                .source_path
+                .as_deref()
+                .filter(|path| path.file_name().is_some_and(|name| name == "SKILL.md"))
+                .and_then(agena_skills::package_enabled_override)
+                .unwrap_or_else(|| !config.disabled_name(name))
+        });
         let mut diagnostics = package_report.diagnostics;
         diagnostics.extend(command_report.diagnostics);
         PackageCatalog {
@@ -2171,7 +2183,7 @@ impl Plugin for CommandsPlugin {
             format!("Use `{COMMANDS_PLUGIN_ID}.get` to read one skill in full, then apply its plain-text body to the current task."),
             format!("Use `{COMMANDS_PLUGIN_ID}.read_resource` to read a bounded text resource from a skill directory."),
             format!("Use `{COMMANDS_PLUGIN_ID}.refresh` to rescan filesystem-backed skills and inspect the catalog generation."),
-            format!("Use `{COMMANDS_PLUGIN_ID}.install` and `{COMMANDS_PLUGIN_ID}.remove` only for workspace-managed `.agena/skills` documents."),
+            "Use the `agena.skills` plugin to create, edit, enable, remove, or install complete workspace and global skill packages from GitHub, archives, or folders.".to_string(),
         ];
         if !catalog.diagnostics.is_empty() {
             lines.push(format!(

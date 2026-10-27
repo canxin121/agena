@@ -92,8 +92,8 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "plugins": 21,
-    "tools": 174
+    "plugins": 22,
+    "tools": 186
   },
   "plugins": [
     {
@@ -137,8 +137,8 @@
         {
           "canonical_name": "agena.agent.spawn",
           "conditional": null,
-          "definition_identity": "2ea2fbbecbbbe9c2136ecb12d82cf0bee48b327226b48adaf75ccdc067d77bca",
-          "input_schema_sha256": "3cdd958bcfe611c9503d21fb2a5d09019538ac699e74da066eb5bec2ed102c4f",
+          "definition_identity": "e2fd1057a2107d4981820ca0fe0415fb80282c5dc504e926f4ae8c4871c2eef3",
+          "input_schema_sha256": "fe890a2fef190bc1e9c8f8eed9482ceb20949e2000fdffd5868437acd7d7190a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "agent"
@@ -2187,6 +2187,153 @@
             "interactive",
             "tty",
             "pty"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.skills",
+      "tools": [
+        {
+          "canonical_name": "agena.skills.create",
+          "conditional": null,
+          "definition_identity": "26dba04998eba6f4fd4d6a572feb5bf26a76a2a5db5693e6606659d289b53a0d",
+          "input_schema_sha256": "3ac927a5675992abe5b1251af4e536c641bb12f2215c6dc310f7f4b3d2a41fb9",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.get",
+          "conditional": null,
+          "definition_identity": "37cbd24adde4fe64327bbac32239ae555c9728bc319901606e7fd19e4a397aca",
+          "input_schema_sha256": "7717dd85c2e5ff939b47bf9369acc9c59e449e42f2f3bff74058dcd2eea9242d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.install",
+          "conditional": null,
+          "definition_identity": "6d080abba04409d4f1b9563c1cbf77883a18d0153468964803e75ab370ef4f2b",
+          "input_schema_sha256": "9dd20f4e0a991c35b4bead6318831ea6d284bf93cc9ecc3359efc7091c4ec048",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.list",
+          "conditional": null,
+          "definition_identity": "88219822a7483ac32edbf8edd10b143892135476584490916415dee594b44e3b",
+          "input_schema_sha256": "5f321cb90fb91297c89f73e4d0c386697eebd2726d3fed118e0ef8141ea927f1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.preview_install",
+          "conditional": null,
+          "definition_identity": "2e5b0270b2eae569ec6d896f9da16db12e6c0f74d156f6b33fc23909a256a4e0",
+          "input_schema_sha256": "9dd20f4e0a991c35b4bead6318831ea6d284bf93cc9ecc3359efc7091c4ec048",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.read_resource",
+          "conditional": null,
+          "definition_identity": "8b92e0980dd9e6af84d9fa0183a2849c5a49c4d1da3b49af6ebe7c0849b58bf5",
+          "input_schema_sha256": "eb5d1043a0bd19b451e662aeb7a196380433873b00aa7f212720693b24946903",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.remove",
+          "conditional": null,
+          "definition_identity": "b5be5f61948c9247ad988caaf857bbaa70e9fc2579682be9c7d1f5763ec90a27",
+          "input_schema_sha256": "ad02bab81efee75bef745896586f7bdd34d81d47aafbc8b4c43d73e4c716688b",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.remove_resource",
+          "conditional": null,
+          "definition_identity": "b9e6952b81acf503ca4f9d0d738fc6c3d688fdc6d5f2b3ccd7d53a86e7c9c1d8",
+          "input_schema_sha256": "78c2d3a5113c91e0925c30ba0b5cdad118dc579b4d91b60c6146f71d2e4184e6",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.set_enabled",
+          "conditional": null,
+          "definition_identity": "dcb911ee1c37ab9011b9a8da9d6821fc713ca89a82b6de007ff428f1ad83981e",
+          "input_schema_sha256": "2a97079c50c5b9c60ea3577d51e72970d48d0a2fbd694bdf2ab39b1f2cf9d6d2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.update",
+          "conditional": null,
+          "definition_identity": "19bfa82a1ba873bd550ee3f3615cfca8f028cd1122b80b410236080cdaad75ae",
+          "input_schema_sha256": "385f4166dc91695ff2e363e9ef4aa65029285a010fe1a8a734f7fb069a01c492",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.validate",
+          "conditional": null,
+          "definition_identity": "92b4db7950ffa25c8371e9d37510fc362a6a235df36dcda44602131e572ac70e",
+          "input_schema_sha256": "ad5e43d7b26a0be8565eecd5a437803d9e1e7f38e84d1d931a7ec7ca7cc84136",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.write_resource",
+          "conditional": null,
+          "definition_identity": "b1dba7f03c7dbed18c98d2aa2c5d97a822530136fef85dec4fe47dd46644e028",
+          "input_schema_sha256": "45df79bf30c688e39fd2fbca6f650e8486ba76e74e26b19fcdd371e669863d21",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "filesystem"
           ]
         }
       ],

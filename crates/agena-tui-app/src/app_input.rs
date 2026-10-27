@@ -293,6 +293,7 @@ impl App {
             }
             Route::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
             Route::PluginWorkbench(dialog) => self.handle_plugin_workbench_key(key, dialog),
+            Route::SkillsWorkbench(dialog) => self.handle_skills_workbench_key(key, dialog),
             Route::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
             Route::ModelCatalogStudio(dialog) => {
                 self.handle_model_catalog_studio_overlay_key(key, dialog)

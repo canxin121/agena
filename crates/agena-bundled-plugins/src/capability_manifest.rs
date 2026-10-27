@@ -106,6 +106,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_gemini_plugin());
     add!(crate::tool::new_claude_plugin());
     add!(crate::tool::new_commands_plugin());
+    add!(crate::tool::new_skills_plugin());
 
     add!(crate::tool::new_code_plugin());
     add!(crate::tool::new_cron_plugin());

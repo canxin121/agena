@@ -71,6 +71,7 @@
   "refresh": "تحديث",
   "refreshAria": "تحديث الإعدادات",
   "tabs": {
+    "skills": "المهارات",
     "diagnostics": "التشخيصات",
     "interface": "الواجهة",
     "mcpServer": "خادم MCP",

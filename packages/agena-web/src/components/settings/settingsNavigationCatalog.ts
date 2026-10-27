@@ -78,6 +78,21 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       keywords: ['marketplace', 'github', 'install', 'upgrade', 'release', 'plugins'],
     },
   ],
+  skills: [
+    {
+      id: 'library',
+      label: () => st('Skill library'),
+      description: () => st('Manage reusable instructions, supporting files, and skill availability.'),
+      keywords: ['skills', 'SKILL.md', 'instructions', 'files', 'create', 'edit', 'delete'],
+      fillsViewport: true,
+    },
+    {
+      id: 'install',
+      label: () => st('Install skills'),
+      description: () => st('Install skills from GitHub, archives, or local folders into Global or Workspace.'),
+      keywords: ['skills', 'github', 'archive', 'zip', 'tar', 'folder', 'upload', 'install'],
+    },
+  ],
   'mcp-server': [
     {
       id: 'connection',
@@ -169,6 +184,7 @@ export const SETTINGS_DEFAULT_SUBPAGE: Record<SettingsTab, string> = {
   'models-providers': 'provider-studio',
   permissions: 'filesystem',
   'plugins-tools': 'plugin-workbench',
+  skills: 'library',
   'mcp-server': 'connection',
   'runtime-session': 'client-versions',
   interface: 'tui',

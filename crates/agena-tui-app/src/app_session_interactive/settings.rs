@@ -268,6 +268,20 @@ impl App {
                 items: mcp_items,
             },
             SettingsStudioSection {
+                id: SettingsStudioSectionId::Skills,
+                label: "Skills".to_owned(),
+                summary: "Manage standard skill packages".to_owned(),
+                description:
+                    "Create, edit, enable, and install skills for this workspace or every project."
+                        .to_owned(),
+                items: vec![SettingsStudioItem::new(
+                    "Skill library",
+                    "Open workbench",
+                    "Browse metadata and resources, edit SKILL.md, or install skills from GitHub, archives, and folders.",
+                    SettingsPickerAction::OpenSkillsWorkbench,
+                )],
+            },
+            SettingsStudioSection {
                 id: SettingsStudioSectionId::RuntimeSession,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-session-label"),
                 summary: ui_text::t(

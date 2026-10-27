@@ -714,6 +714,7 @@ fn resolve_agent_command_references(
                 description: item.command.docs.summary.clone().unwrap_or_default(),
                 content_hash: hex::encode(hash),
                 source: item.plugin_id.to_string(),
+                skill_id: None,
                 aliases: item.command.aliases.clone(),
             })
         })

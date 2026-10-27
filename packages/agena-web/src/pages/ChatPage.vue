@@ -9,8 +9,7 @@ import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
-import { readPluginCommandCatalog } from '@/lib/pluginCommandRead'
-import type { PluginCommandCatalogItem } from '@/lib/pluginOperations'
+import { createSkillsClient } from '@/lib/skillsApi'
 import { promptForText } from '@/lib/appTextPrompt'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
@@ -26,7 +25,8 @@ import { useToastsStore } from '@/stores/toasts'
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
 import {
   createSkillReferenceAttachment,
-  isSkillCatalogEntry,
+  managedSkillCatalog,
+  type SkillCatalogEntry,
   skillCatalogKey,
   skillReferenceKeyFromAttachment,
 } from './chat/skillReferences'
@@ -209,32 +209,58 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
-const skillCatalog = ref<PluginCommandCatalogItem[]>([])
+const sessionDirectory = computed(() => chat.selectedSessionDirectory || directoryStore.currentDirectory || '')
+const skillCatalog = ref<SkillCatalogEntry[]>([])
 const skillCatalogLoading = ref(false)
-let skillCatalogLoaded = false
+let skillCatalogDirectory: string | null = null
 let skillCatalogLoad: Promise<void> | null = null
+let skillCatalogAbort: AbortController | null = null
+
+function clearSkillCatalog() {
+  skillCatalogAbort?.abort()
+  skillCatalogAbort = null
+  skillCatalogLoad = null
+  skillCatalogDirectory = null
+  skillCatalog.value = []
+  skillCatalogLoading.value = false
+}
+watch(sessionDirectory, clearSkillCatalog, { flush: 'sync' })
+onBeforeUnmount(clearSkillCatalog)
 
 function loadSkillCatalog(): Promise<void> {
-  if (skillCatalogLoaded) return Promise.resolve()
-  if (skillCatalogLoad) return skillCatalogLoad
+  const directory = sessionDirectory.value
+  if (skillCatalogLoad && skillCatalogDirectory === directory) return skillCatalogLoad
+  skillCatalogAbort?.abort()
+  const abort = new AbortController()
+  skillCatalogAbort = abort
+  skillCatalogDirectory = directory
+  skillCatalog.value = []
   skillCatalogLoading.value = true
-  skillCatalogLoad = readPluginCommandCatalog()
-    .then((response) => {
-      skillCatalog.value = (response.catalog?.commands || []).filter(isSkillCatalogEntry)
-      skillCatalogLoaded = true
-    })
+  skillCatalogLoad = (async () => {
+    const workspace = directory ? await chatApi.resolveWorkspace(directory) : null
+    if (abort.signal.aborted || sessionDirectory.value !== directory) return
+    const response = await createSkillsClient(workspace?.id).listSkills(abort.signal)
+    if (abort.signal.aborted || sessionDirectory.value !== directory) return
+    skillCatalog.value = managedSkillCatalog(response.skills)
+  })()
     .catch(() => {
-      toasts.push('error', String(t('chat.skills.loadFailed')))
+      if (!abort.signal.aborted && sessionDirectory.value === directory) {
+        toasts.push('error', String(t('chat.skills.loadFailed')))
+      }
     })
     .finally(() => {
+      if (skillCatalogAbort !== abort) return
       skillCatalogLoading.value = false
       skillCatalogLoad = null
+      skillCatalogAbort = null
     })
   return skillCatalogLoad
 }
 
 async function attachSkill(skillKey: string) {
   const sessionId = chat.selectedSessionId
+  const directory = sessionDirectory.value
+  if (skillCatalogDirectory !== directory || skillCatalogLoading.value) return
   const command = skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
   if (!command) return
   if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) {
@@ -249,7 +275,8 @@ async function attachSkill(skillKey: string) {
   }
   try {
     const reference = await createSkillReferenceAttachment(command)
-    if (chat.selectedSessionId !== sessionId) return
+    if (chat.selectedSessionId !== sessionId || sessionDirectory.value !== directory) return
+    if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) return
     attachedFiles.value = [...attachedFiles.value, reference]
     await nextTick()
     getComposerInput(composerRef.value)?.focus()
@@ -283,7 +310,6 @@ const editorClosing = ref(false)
 
 const attachmentsPanelOpen = ref(false)
 
-const sessionDirectory = computed(() => chat.selectedSessionDirectory || directoryStore.currentDirectory || '')
 const composerFullscreenActive = computed(() => editorFullscreen.value || editorClosing.value)
 const sessionTitle = computed(() => {
   const s = asRecord(chat.selectedSession)

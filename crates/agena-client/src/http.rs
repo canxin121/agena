@@ -44,6 +44,7 @@ use crate::ws::SubscriptionEvent;
 
 mod archive;
 mod content;
+mod skills;
 #[cfg(test)]
 mod tests;
 pub use content::ContentSubscription;

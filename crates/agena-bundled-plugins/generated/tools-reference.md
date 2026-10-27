@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **21 plugins and 174 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **22 plugins and 186 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -34,6 +34,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
+- [`agena.skills`](#agenaskills) — Discover, install, author, and manage complete Agent Skills packages. (12 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
 
 ## agena.agent
@@ -17356,6 +17357,861 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "required": [
     "process_id",
     "chars"
+  ],
+  "type": "object"
+}
+```
+
+## agena.skills
+
+**Version** `0.1.0` · **Tools** 12
+
+Discover, install, author, and manage complete Agent Skills packages.
+
+### create
+
+`agena.skills.create` · **Summary**: Create a skill in the workspace or global library.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Provide a complete SKILL.md with YAML name and description plus Markdown instructions. Validates the Agent Skills specification and refuses to replace an existing package. Add scripts, references, or assets with write_resource or install a complete package.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `string` | ✓ | — |  |
+| `scope` | `SkillScope` | — | `workspace` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "SkillScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    }
+  },
+  "required": [
+    "document"
+  ],
+  "type": "object"
+}
+```
+
+### get
+
+`agena.skills.get` · **Summary**: Read a skill's full instructions and resource inventory.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use an ID returned by list. Relative references resolve against the skill directory shown in path. Supporting resources are loaded separately with read_resource. Read-only plugin and compatibility packages can be installed into a managed scope for editing. allowed-tools is metadata and does not change existing tool permissions.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### install
+
+`agena.skills.install` · **Summary**: Install complete skill packages into the workspace or global library.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Preview first, then send selected candidate paths and expected_source_revision. Explicit replace=true is required for existing names. An empty selection installs all valid candidates. All resources and executable bits are preserved; installation never executes code. Global packages are available across projects.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_source_revision` | `string / null` | — | `null` |  |
+| `replace` | `boolean` | — | `false` |  |
+| `scope` | `SkillScope` | — | `workspace` |  |
+| `selected` | `array<string>` | — | `[]` |  |
+| `source` | `SkillInstallSource` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "SkillInstallSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "github",
+              "type": "string"
+            },
+            "reference": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subpath": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "folder",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data_base64": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "archive",
+              "type": "string"
+            },
+            "path": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "items": {
+                "$ref": "#/$defs/SkillUploadFile"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "files"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    },
+    "SkillScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    },
+    "SkillUploadFile": {
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "type": "string"
+        },
+        "executable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content_base64"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "expected_source_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "replace": {
+      "default": false,
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    },
+    "selected": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/SkillInstallSource"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "type": "object"
+}
+```
+
+### list
+
+`agena.skills.list` · **Summary**: Find available skills or inspect the skill library.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Search by name or description. By default return enabled, valid, effective entries. Set include_inactive to inspect disabled, invalid, and shadowed packages. IDs identify exact package copies; scope is global or workspace. Use get to load instructions only when relevant.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `include_inactive` | `boolean` | — | `false` | Include disabled, invalid, and shadowed entries for management. |
+| `limit` | `integer / null` | — | `null` |  |
+| `offset` | `integer` | — | `0` |  |
+| `query` | `string / null` | — | `null` |  |
+| `scope` | `SkillScope / null` | — | `null` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "SkillScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "include_inactive": {
+      "default": false,
+      "description": "Include disabled, invalid, and shadowed entries for management.",
+      "type": "boolean"
+    },
+    "limit": {
+      "default": null,
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "offset": {
+      "default": 0,
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "query": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SkillScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "type": "object"
+}
+```
+
+### preview_install
+
+`agena.skills.preview_install` · **Summary**: Preview skills in a GitHub repository, archive, or folder.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Sources: github URL (optional reference/subpath), folder path, archive path/URL/uploaded base64, or uploaded files. Supports ZIP, tar, and tar.gz. Preview lists candidates and name conflicts and returns a source revision. It does not write the library or run bundled code.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_source_revision` | `string / null` | — | `null` |  |
+| `replace` | `boolean` | — | `false` |  |
+| `scope` | `SkillScope` | — | `workspace` |  |
+| `selected` | `array<string>` | — | `[]` |  |
+| `source` | `SkillInstallSource` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "SkillInstallSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "github",
+              "type": "string"
+            },
+            "reference": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subpath": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "folder",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data_base64": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "archive",
+              "type": "string"
+            },
+            "path": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "items": {
+                "$ref": "#/$defs/SkillUploadFile"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "files"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    },
+    "SkillScope": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    },
+    "SkillUploadFile": {
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "type": "string"
+        },
+        "executable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content_base64"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "expected_source_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "replace": {
+      "default": false,
+      "type": "boolean"
+    },
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    },
+    "selected": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/SkillInstallSource"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "type": "object"
+}
+```
+
+### read_resource
+
+`agena.skills.read_resource` · **Summary**: Read a skill's UTF-8 reference, script, or other text resource.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> The path is relative to the skill directory. Use get for SKILL.md. Binary assets are retained by package installation; this tool returns text resources only.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | ✓ | — |  |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### remove
+
+`agena.skills.remove` · **Summary**: Remove a managed skill and all of its bundled files.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use the exact ID and current revision from get. Removes only that workspace or global package; other copies and read-only sources remain. Disable with set_enabled when you want to keep the package installed.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### remove_resource
+
+`agena.skills.remove_resource` · **Summary**: Delete one resource from a managed skill.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply the current package revision from get, or a text resource revision from read_resource. Package revisions also support binary and large resources without reading their contents. SKILL.md and installation metadata cannot be removed through this operation; use remove for the complete skill.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "path",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### set_enabled
+
+`agena.skills.set_enabled` · **Summary**: Enable or disable an installed skill.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use its current revision. Disabled packages remain available for management but are excluded from automatic skill discovery. Project packages override global copies; the library reports shadowed copies explicitly.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `enabled` | `boolean` | ✓ | — |  |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "enabled",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### update
+
+`agena.skills.update` · **Summary**: Edit an installed SKILL.md without discarding bundled resources.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read get first and supply its current revision. Preserve the directory-matching name and any metadata you want to keep. A stale revision fails without changing the package. Resource files remain in place.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `string` | ✓ | — |  |
+| `expected_revision` | `string` | ✓ | — |  |
+| `id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "document",
+    "expected_revision"
+  ],
+  "type": "object"
+}
+```
+
+### validate
+
+`agena.skills.validate` · **Summary**: Validate a SKILL.md document before saving or installing.
+
+**Tags**: `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Checks complete YAML frontmatter, required and optional standard fields, and name rules. Supply name to check the containing directory name. Returns actionable errors and warnings; no files are changed.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `document` | `string` | ✓ | — |  |
+| `name` | `string / null` | — | `null` |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "type": "string"
+    },
+    "name": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "document"
+  ],
+  "type": "object"
+}
+```
+
+### write_resource
+
+`agena.skills.write_resource` · **Summary**: Create or update a skill's UTF-8 resource.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use a relative path such as references/guide.md or scripts/check.py. Omit expected_revision only for a new file; use read_resource's revision to replace an existing file. Edit SKILL.md with update. This operation never executes scripts.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `content` | `string` | ✓ | — |  |
+| `expected_revision` | `string / null` | — | `null` |  |
+| `id` | `string` | ✓ | — |  |
+| `path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "content": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "path",
+    "content"
   ],
   "type": "object"
 }

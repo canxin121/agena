@@ -13,6 +13,8 @@ pub struct CommandReference {
     pub description: String,
     pub content_hash: String,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }
@@ -32,22 +34,36 @@ impl CommandReferencePart {
             .commands
             .iter()
             .map(|command| {
-                serde_json::json!({
+                let mut reference = serde_json::json!({
                     "name": command.name,
                     "description": command.description,
                     "content_hash": command.content_hash,
                     "source": command.source,
                     "aliases": command.aliases,
-                })
+                });
+                if let Some(id) = &command.skill_id {
+                    reference["skill_id"] = serde_json::json!(id);
+                }
+                reference
             })
             .collect::<Vec<_>>();
+        let mut guidance = vec![
+            "The user explicitly selected these command references for this message.",
+            "Command instructions are not embedded in this message. Before applying a selected command, read its instructions through the plugin named in `source` (`list` then `get` for the `agena.commands` plugin) and use the result as task guidance.",
+            "The reference `content_hash` identifies the catalog version selected by the user; compare it with the tool result when consistency matters.",
+        ];
+        if self
+            .commands
+            .iter()
+            .any(|command| command.source == "agena.skills" && command.skill_id.is_some())
+        {
+            guidance.push(
+                "For a reference from `agena.skills` with `skill_id`, read the selected package through that plugin's `get` tool using the exact `skill_id` value as `id`.",
+            );
+        }
         let payload = serde_json::json!({
             "semantics": "message_scoped_user_selected_command_reference",
-            "guidance": [
-                "The user explicitly selected these command references for this message.",
-                "Command instructions are not embedded in this message. Before applying a selected command, read its instructions through the plugin named in `source` (`list` then `read` for the `agena.commands` plugin) and use the result as task guidance.",
-                "The reference `content_hash` identifies the catalog version selected by the user; compare it with the tool result when consistency matters."
-            ],
+            "guidance": guidance,
             "commands": commands,
         });
         let encoded = serde_json::to_string_pretty(&payload)

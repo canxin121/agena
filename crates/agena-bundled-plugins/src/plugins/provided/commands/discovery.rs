@@ -6,9 +6,9 @@
 //! plain text; nothing here reaches the model unless a caller explicitly reads
 //! a catalog entry.
 //!
-//! The frontmatter subset is deliberately tiny — `name`, `description` and
-//! `aliases` — so the plugin needs no YAML dependency and a malformed document
-//! is rejected with a usable diagnostic instead of a parser stack trace.
+//! Skill frontmatter uses the shared Agent Skills YAML parser. The command
+//! projection retains legacy aliases and plain Markdown commands; the dedicated
+//! skill manager exposes full metadata, validation, and package operations.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 pub(crate) const MAX_COMMAND_DOCUMENT_BYTES: usize = 1_048_576;
 const MAX_DISCOVERY_ENTRIES_PER_ROOT: usize = 10_000;
-const MAX_DISCOVERY_DEPTH: usize = 8;
+const MAX_DISCOVERY_DEPTH: usize = agena_skills::MAX_PACKAGE_DEPTH;
 
 pub(crate) type DiscoveryResult<T> = Result<T, DiscoveryError>;
 
@@ -114,17 +114,14 @@ impl DiscoveredCommand {
     }
 
     fn from_raw_with_default_name(raw: &str, default_name: Option<&str>) -> DiscoveryResult<Self> {
-        // A command file without frontmatter is still a command: its whole
-        // text is the instruction body and its file name is its name. Only a
-        // document that opens a frontmatter block must close it.
-        let Some(stripped) = raw.strip_prefix("---\n") else {
+        let source = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+        if source.lines().next() != Some("---") {
             let name = default_name
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| {
                     DiscoveryError::Malformed(
-                        "a command document without frontmatter needs a file name to be named after"
-                            .into(),
+                        "a command document without frontmatter needs a file name to be named after".into(),
                     )
                 })?;
             return Ok(Self {
@@ -132,16 +129,25 @@ impl DiscoveredCommand {
                     name: name.to_string(),
                     ..CommandFrontmatter::default()
                 },
-                body: raw.trim_start_matches('\n').to_string(),
+                body: source.trim_start_matches(['\r', '\n']).to_string(),
                 source_path: None,
             });
+        }
+        // Discovery remains compatible with older command names and optional
+        // descriptions. Strict authoring validation belongs to the skill manager.
+        let parsed = agena_skills::parse_document(source, None)
+            .map_err(|error| DiscoveryError::Malformed(error.to_string()))?;
+        let mut frontmatter = CommandFrontmatter {
+            name: parsed.metadata.name,
+            description: parsed.metadata.description,
+            aliases: parsed
+                .metadata
+                .aliases
+                .into_iter()
+                .map(|alias| alias.trim().to_owned())
+                .filter(|alias| !alias.is_empty())
+                .collect(),
         };
-        let end = stripped.find("\n---").ok_or_else(|| {
-            DiscoveryError::Malformed("command frontmatter is missing its closing '---'".into())
-        })?;
-        let frontmatter = &stripped[..end];
-        let body = stripped[end + 4..].trim_start_matches('\n').to_string();
-        let mut frontmatter = parse_frontmatter(frontmatter)?;
         if frontmatter.name.trim().is_empty() {
             match default_name.map(str::trim).filter(|name| !name.is_empty()) {
                 Some(default_name) => frontmatter.name = default_name.to_string(),
@@ -154,7 +160,7 @@ impl DiscoveredCommand {
         }
         Ok(Self {
             frontmatter,
-            body,
+            body: parsed.body,
             source_path: None,
         })
     }
@@ -252,92 +258,6 @@ pub(crate) fn read_command_document(path: impl AsRef<Path>) -> DiscoveryResult<S
     read_text_file_bounded(path.as_ref(), MAX_COMMAND_DOCUMENT_BYTES)
 }
 
-/// Parse the small frontmatter subset a command document may declare.
-///
-/// Only three keys are understood. An unknown key is an error rather than a
-/// silent no-op, because a typo in `alias` or `descripton` would otherwise
-/// quietly drop metadata the author believed they had declared.
-fn parse_frontmatter(source: &str) -> DiscoveryResult<CommandFrontmatter> {
-    let mut frontmatter = CommandFrontmatter::default();
-    let mut aliases = Vec::new();
-    let mut block_aliases = false;
-    for (index, line) in source.lines().enumerate() {
-        let line_number = index + 1;
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(item) = trimmed.strip_prefix("- ") {
-            if !block_aliases {
-                return Err(DiscoveryError::Malformed(format!(
-                    "frontmatter line {line_number}: a list item must follow `aliases:`"
-                )));
-            }
-            aliases.push(unquote(item.trim()).to_string());
-            continue;
-        }
-        block_aliases = false;
-        let Some((key, value)) = trimmed.split_once(':') else {
-            return Err(DiscoveryError::Malformed(format!(
-                "frontmatter line {line_number}: expected `key: value`"
-            )));
-        };
-        let key = key.trim();
-        let value = value.trim();
-        match key {
-            "name" => frontmatter.name = unquote(value).to_string(),
-            "description" => frontmatter.description = unquote(value).to_string(),
-            "aliases" => {
-                if value.is_empty() {
-                    block_aliases = true;
-                } else {
-                    aliases.extend(parse_inline_aliases(value).map_err(|message| {
-                        DiscoveryError::Malformed(format!(
-                            "frontmatter line {line_number}: {message}"
-                        ))
-                    })?);
-                }
-            }
-            other => {
-                return Err(DiscoveryError::Malformed(format!(
-                    "frontmatter line {line_number}: unknown key `{other}`"
-                )));
-            }
-        }
-    }
-    frontmatter.aliases = aliases
-        .into_iter()
-        .map(|alias| alias.trim().to_string())
-        .filter(|alias| !alias.is_empty())
-        .collect();
-    Ok(frontmatter)
-}
-
-/// Parse `[one, two]` or a bare `one` on the `aliases:` line.
-fn parse_inline_aliases(value: &str) -> Result<Vec<String>, String> {
-    let inner = value
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-        .unwrap_or(value);
-    Ok(inner
-        .split(',')
-        .map(|alias| unquote(alias.trim()).to_string())
-        .collect())
-}
-
-/// Strip one layer of matching single or double quotes.
-fn unquote(value: &str) -> &str {
-    for quote in ['"', '\''] {
-        if let Some(inner) = value
-            .strip_prefix(quote)
-            .and_then(|rest| rest.strip_suffix(quote))
-        {
-            return inner;
-        }
-    }
-    value
-}
-
 /// One file that could not be turned into a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiscoveryDiagnostic {
@@ -356,14 +276,13 @@ pub(crate) struct DiscoveryReport {
 /// Standard skill-package roots, ordered from lower to higher precedence.
 /// Later roots replace earlier commands with the same canonical name.
 pub(crate) fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = agena_home_dir() {
-        roots.push(home.join("skills"));
-    }
-    if let Some(workspace) = workspace {
-        roots.push(workspace.join(".agena/skills"));
-    }
-    roots
+    let global = agena_storage_layout::StorageLayout::current()
+        .root()
+        .join("skills");
+    agena_skills::default_roots(workspace, &global)
+        .into_iter()
+        .map(|root| PathBuf::from(root.path))
+        .collect()
 }
 
 /// Standard command-file roots, ordered from lower to higher precedence.
@@ -391,9 +310,22 @@ pub(crate) fn scan_packages_filtered(
     roots: &[PathBuf],
     access: Option<agena_tool::path_filter::PathPredicate>,
 ) -> DiscoveryReport {
+    let state_access = access.clone();
     scan_matching(
         roots,
-        |path| path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md"),
+        |path| {
+            if path.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+                return false;
+            }
+            if let Some(access) = &state_access {
+                let state = path.parent().map(|parent| parent.join(".agena-skill.json"));
+                if !access.allows(path) || state.as_ref().is_some_and(|state| !access.allows(state))
+                {
+                    return false;
+                }
+            }
+            agena_skills::package_enabled(path)
+        },
         |path| DiscoveredCommand::from_package_path(path),
         access,
     )
@@ -432,7 +364,7 @@ fn scan_matching(
     let mut commands = Vec::new();
     let mut diagnostics = Vec::new();
     for root in roots {
-        if !root.is_dir() {
+        if root.is_symlink() || !root.is_dir() {
             continue;
         }
         let mut builder = WalkBuilder::new(root);
@@ -446,11 +378,20 @@ fn scan_matching(
             .git_exclude(false)
             .parents(false)
             .threads(1);
-        if let Some(access) = access.clone() {
-            builder.filter_entry(move |entry| {
-                !entry.file_type().is_some_and(|kind| kind.is_dir()) || access.allows(entry.path())
-            });
-        }
+        let entry_access = access.clone();
+        builder.filter_entry(move |entry| {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".agena-skill-")
+            {
+                return false;
+            }
+            !entry.file_type().is_some_and(|kind| kind.is_dir())
+                || entry_access
+                    .as_ref()
+                    .is_none_or(|access| access.allows(entry.path()))
+        });
         for (entry_index, entry) in builder.build().enumerate() {
             if entry_index >= MAX_DISCOVERY_ENTRIES_PER_ROOT {
                 diagnostics.push(discovery_diagnostic(
@@ -549,4 +490,52 @@ fn read_text_file_bounded(path: &Path, max_bytes: usize) -> DiscoveryResult<Stri
     String::from_utf8(bytes).map_err(|_| DiscoveryError::ResourceNotText {
         path: path.display().to_string(),
     })
+}
+
+#[cfg(test)]
+mod standard_skill_tests {
+    use super::*;
+
+    #[test]
+    fn command_projection_reads_standard_yaml_and_keeps_legacy_names() {
+        let command = DiscoveredCommand::from_raw(
+            "---\r\nname: legacy_name\r\ndescription: >-\r\n  Use this skill\r\n  for source reviews.\r\nlicense: MIT\r\ncompatibility: Requires Python\r\nmetadata:\r\n  author: Example\r\nallowed-tools: Read Bash(python:*)\r\naliases: [review-sources]\r\ncustom-extension: true\r\n---\r\n# Instructions\r\n",
+        ).unwrap();
+        assert_eq!(command.frontmatter.name, "legacy_name");
+        assert_eq!(
+            command.frontmatter.description,
+            "Use this skill for source reviews."
+        );
+        assert_eq!(command.frontmatter.aliases, ["review-sources"]);
+        assert!(command.body.starts_with("# Instructions"));
+        let bare = DiscoveredCommand::from_raw_with_default_name("Plain command.", Some("standup"))
+            .unwrap();
+        assert_eq!(bare.frontmatter.name, "standup");
+    }
+
+    #[test]
+    fn disabled_packages_and_temporary_install_trees_are_not_advertised() {
+        let root = tempfile::tempdir().unwrap();
+        for name in [
+            "enabled-example",
+            "disabled-example",
+            ".agena-skill-stage-example",
+        ] {
+            let package = root.path().join(name);
+            std::fs::create_dir(&package).unwrap();
+            std::fs::write(
+                package.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Example.\n---\nBody"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.path().join("disabled-example/.agena-skill.json"),
+            "{\"enabled\":false}",
+        )
+        .unwrap();
+        let report = scan_packages_filtered(&[root.path().to_path_buf()], None);
+        assert_eq!(report.commands.len(), 1);
+        assert_eq!(report.commands[0].frontmatter.name, "enabled-example");
+    }
 }

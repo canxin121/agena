@@ -71,6 +71,7 @@
   "refresh": "Atualizar",
   "refreshAria": "Atualizar configurações",
   "tabs": {
+    "skills": "Habilidades",
     "diagnostics": "Diagnósticos",
     "interface": "Interface",
     "mcpServer": "Servidor MCP",

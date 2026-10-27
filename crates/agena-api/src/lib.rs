@@ -45,6 +45,7 @@ pub mod part;
 pub mod queries;
 pub mod resource;
 pub mod scope;
+pub mod skills;
 pub mod subscribe;
 pub mod ws;
 

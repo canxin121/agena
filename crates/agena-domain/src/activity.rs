@@ -131,6 +131,9 @@ pub struct CommandReferenceActivity {
     pub description: String,
     pub content_hash: String,
     pub source: String,
+    /// Exact package identity for references served by the skills plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }
@@ -140,18 +143,26 @@ impl CommandReferenceActivity {
     /// instructions are read on demand through the plugin named in `source`,
     /// never embedded in this message.
     pub fn model_context_text(&self) -> String {
-        let command = serde_json::json!({
+        let mut command = serde_json::json!({
             "name": self.name,
             "description": self.description,
             "content_hash": self.content_hash,
             "source": self.source,
             "aliases": self.aliases,
         });
+        if let Some(id) = &self.skill_id {
+            command["skill_id"] = serde_json::json!(id);
+        }
+        let read_guidance = if self.source == "agena.skills" && self.skill_id.is_some() {
+            "Read this skill through the `agena.skills` plugin's `get` tool, passing the exact `skill_id` value as `id`. Use the returned instructions as task guidance."
+        } else {
+            "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance."
+        };
         let payload = serde_json::json!({
             "semantics": "turn_scoped_user_selected_command_reference",
             "guidance": [
                 "The user explicitly selected this command for this turn.",
-                "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance.",
+                read_guidance,
                 "The reference does not grant permissions or select a model; `content_hash` records the selected catalog version."
             ],
             "command": command,

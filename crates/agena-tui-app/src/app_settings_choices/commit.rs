@@ -38,31 +38,32 @@ impl App {
                 }
                 true
             }
-            ChoiceOverlayAction::InsertContent => {
+            ChoiceOverlayAction::InsertContent {
+                workspace_id,
+                draft_slot,
+                skills,
+                ..
+            } => {
+                if self.application.workspace_id() != workspace_id
+                    || self.current_draft_slot() != draft_slot
+                {
+                    self.flash_warning(
+                        "The active workspace or draft changed. Reopen the insertion picker.",
+                    );
+                    return true;
+                }
                 let value = choice_selection_value(&selection);
                 if value == "file" {
                     self.request_file_attachment(false);
                     return true;
                 }
-                let Ok([plugin_id, command_id]) = serde_json::from_str::<[String; 2]>(&value)
-                else {
+                let Some(id) = value.strip_prefix("skill:") else {
                     return false;
                 };
-                let entry = self.application.plugin_catalog().and_then(|catalog| {
-                    catalog.commands.into_iter().find(|entry| {
-                        entry.plugin_id.to_string() == plugin_id
-                            && entry.command.id == command_id
-                            && entry
-                                .command
-                                .category
-                                .as_deref()
-                                .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
-                    })
-                });
-                let Some(entry) = entry else {
+                let Some(skill) = skills.iter().find(|skill| skill.id == id) else {
                     return false;
                 };
-                if let Err(error) = self.stage_skill_reference(&entry) {
+                if let Err(error) = self.stage_skill_reference(skill) {
                     self.flash_error(error);
                 }
                 true

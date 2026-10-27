@@ -78,6 +78,7 @@ const PermissionsWorkbenchPanel = defineAsyncComponent(
   () => import('@/components/settings/PermissionsWorkbenchPanel.vue'),
 )
 const PluginsToolsPanel = defineAsyncComponent(() => import('@/components/settings/PluginsToolsPanel.vue'))
+const SkillsPanel = defineAsyncComponent(() => import('@/components/settings/SkillsPanel.vue'))
 const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const RuntimeSessionPanel = defineAsyncComponent(() => import('@/components/settings/RuntimeSessionPanel.vue'))
 const InterfaceSettingsPanel = defineAsyncComponent(() => import('@/components/settings/InterfaceSettingsPanel.vue'))
@@ -192,6 +193,7 @@ const runtimeSessionPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const diagnosticsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const interfacePanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const pluginsToolsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
+const skillsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const mcpServerPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const modelsProvidersPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const permissionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -230,6 +232,8 @@ async function refreshSettingsSidebar() {
   // Configuration editors refresh in place so unsaved drafts survive.
   if (activeSection.value === 'plugins-tools') {
     await pluginsToolsPanel.value?.refresh()
+  } else if (activeSection.value === 'skills') {
+    await skillsPanel.value?.refresh()
   } else if (activeSection.value === 'mcp-server') {
     await mcpServerPanel.value?.refresh()
   } else if (activeSection.value === 'models-providers') {
@@ -859,6 +863,9 @@ const dirtyHint = computed(
             :active-page="activeView"
             v-else-if="activeSection === 'plugins-tools'"
           />
+
+          <!-- Skills -->
+          <SkillsPanel v-else-if="activeSection === 'skills'" ref="skillsPanel" :active-page="activeView" />
 
           <!-- MCP Server -->
           <SettingsSectionWorkbench

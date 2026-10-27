@@ -98,6 +98,11 @@
           "kind": "static"
         }
       },
+      "agena.skills": {
+        "package": {
+          "kind": "static"
+        }
+      },
       "agena.lsp": {
         "package": {
           "kind": "static"

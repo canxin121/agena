@@ -27,6 +27,7 @@ mod application_parts;
 mod application_plugins;
 mod application_provider_studio;
 mod application_sessions;
+mod application_skills;
 mod application_tools;
 pub mod dto;
 mod error;

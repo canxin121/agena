@@ -134,61 +134,95 @@ impl App {
     /// Opens the unified, cursor-preserving insertion palette. Every option
     /// stages an atomic user message part at the current composer cursor.
     pub(crate) fn open_insert_content_picker(&mut self) {
-        let mut items = vec![ChoiceItem {
+        let workspace_id = self.application.workspace_id();
+        let draft_slot = self.current_draft_slot();
+        let request_id = uuid::Uuid::new_v4();
+        let file = ChoiceItem {
             label: ui_text::t(&self.i18n, "insert-content-file-label"),
             detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
             value: "file".to_owned(),
             search_text: "file folder path attachment document image".to_owned(),
             current: false,
-        }];
-        if let Some(catalog) = self.application.plugin_catalog() {
-            items.extend(
-                catalog
-                    .commands
-                    .into_iter()
-                    .filter(|entry| {
-                        entry
-                            .command
-                            .category
-                            .as_deref()
-                            .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
-                    })
-                    .map(|entry| {
-                        let summary = entry.command.docs.summary.clone().unwrap_or_default();
-                        let value = serde_json::json!([
-                            entry.plugin_id.to_string(),
-                            entry.command.id.clone(),
-                        ])
-                        .to_string();
-                        ChoiceItem {
-                            label: format!(
-                                "{}: {}",
-                                ui_text::t(&self.i18n, "insert-content-skill-label"),
-                                entry.command.title,
-                            ),
-                            detail: summary.clone(),
-                            value,
-                            search_text: format!(
-                                "{} {} {} {}",
-                                entry.command.id,
-                                entry.command.title,
-                                summary,
-                                entry.command.aliases.join(" "),
-                            ),
-                            current: false,
-                        }
-                    }),
-            );
-        }
-        self.open_choice_overlay(self.build_choice_overlay(
+        };
+        let mut dialog = self.build_choice_overlay(
             ui_text::t(&self.i18n, "overlay-insert-content-title"),
             ui_text::t(&self.i18n, "overlay-insert-content-prompt"),
             None,
-            items,
-            ChoiceOverlayAction::InsertContent,
+            vec![file.clone()],
+            ChoiceOverlayAction::InsertContent {
+                workspace_id,
+                draft_slot,
+                request_id,
+                skills: Vec::new(),
+            },
             false,
             agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
-        ));
+        );
+        dialog.presentation.set_loading(true);
+        self.open_choice_overlay(dialog);
+        self.dispatch_backend_operation(
+            move |application| async move {
+                Ok::<_, anyhow::Error>(application.client().list_skills(workspace_id).await?)
+            },
+            move |app, result| {
+                if app.application.workspace_id() != workspace_id
+                    || app.current_draft_slot() != draft_slot
+                {
+                    return;
+                }
+                let Some(crate::Overlay::Choice(dialog)) = &mut app.overlay else {
+                    return;
+                };
+                let ChoiceOverlayAction::InsertContent {
+                    request_id: active_request,
+                    skills,
+                    ..
+                } = &mut dialog.action
+                else {
+                    return;
+                };
+                if *active_request != request_id {
+                    return;
+                }
+                dialog.presentation.set_loading(false);
+                match result {
+                    Ok(mut catalog) => {
+                        catalog
+                            .skills
+                            .retain(|skill| skill.enabled && skill.valid && !skill.shadowed);
+                        catalog.skills.sort_by(|left, right| {
+                            left.name.cmp(&right.name).then(left.id.cmp(&right.id))
+                        });
+                        let label = ui_text::t(&app.i18n, "insert-content-skill-label");
+                        let mut items = vec![file];
+                        items.extend(catalog.skills.iter().map(|skill| {
+                            let scope = match skill.scope {
+                                agena_api::skills::SkillScope::Workspace => "Workspace",
+                                agena_api::skills::SkillScope::Global => "Global",
+                            };
+                            ChoiceItem {
+                                label: format!("{label}: {}", skill.name),
+                                detail: format!("{scope} · {}", skill.description),
+                                value: format!("skill:{}", skill.id),
+                                search_text: format!(
+                                    "{} {} {scope} {}",
+                                    skill.name, skill.description, skill.path
+                                ),
+                                current: false,
+                            }
+                        }));
+                        *skills = catalog.skills;
+                        dialog.presentation.replace_items(items);
+                    }
+                    Err(error) => dialog.presentation.set_error(
+                        format!(
+                            "Could not load skills: {error}. Close and reopen this picker to retry."
+                        ),
+                        true,
+                    ),
+                }
+            },
+        );
     }
 
     pub(crate) fn toggle_transcript_cursor_node(&mut self, reveal_count: Option<usize>) {

@@ -282,7 +282,7 @@ impl TryFrom<&Value> for PasteRefContent {
 
 /// `skill_ref` — the persisted kind of a command reference: the first command
 /// name as the named key, plus the message-scoped reference metadata under
-/// `extra["skills"]` (name/description/content_hash/source/aliases). Both
+/// `extra["skills"]` (name/description/content_hash/source/skill_id/aliases). Both
 /// spellings are the stored contract, not the internal vocabulary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CommandRefContent {

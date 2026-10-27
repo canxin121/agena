@@ -71,6 +71,7 @@
   "refresh": "ताज़ा करें",
   "refreshAria": "सेटिंग्स ताज़ा करें",
   "tabs": {
+    "skills": "कौशल",
     "diagnostics": "निदान",
     "interface": "इंटरफ़ेस",
     "mcpServer": "MCP सर्वर",

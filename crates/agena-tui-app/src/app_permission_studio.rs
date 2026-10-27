@@ -497,6 +497,11 @@ impl App {
                 }
                 false
             }
+            SettingsPickerAction::OpenSkillsWorkbench => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_skills_workbench();
+                false
+            }
             SettingsPickerAction::OpenConfigFile => {
                 self.open_runtime_config_in_editor();
                 false

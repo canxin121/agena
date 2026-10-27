@@ -6,7 +6,7 @@ pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
     agent, code, commands, cron, fs, interaction, lsp, mcp, monitor, notebook, notifications,
-    planning, report, session, settings, shell,
+    planning, report, session, settings, shell, skills,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -15,6 +15,14 @@ pub fn commands_plugin_id() -> &'static str {
 
 pub fn new_commands_plugin() -> impl agena_plugin_host::sdk::Plugin {
     commands::CommandsPlugin::new()
+}
+
+pub fn skills_plugin_id() -> &'static str {
+    skills::SKILLS_PLUGIN_ID
+}
+
+pub fn new_skills_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    skills::SkillsPlugin::new()
 }
 
 pub fn lsp_plugin_id() -> &'static str {

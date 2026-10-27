@@ -157,6 +157,7 @@ mod notifications;
 mod plugin_workbench;
 mod provider_studio;
 mod run_options_state;
+mod skills_workbench;
 mod state_store_impls;
 mod surface_selection;
 mod transcript_state;

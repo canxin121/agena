@@ -4,6 +4,7 @@ export const SETTINGS_TAB_IDS = [
   'models-providers',
   'permissions',
   'plugins-tools',
+  'skills',
   'mcp-server',
   'runtime-session',
   'interface',
@@ -16,6 +17,7 @@ export type SettingsSidebarIconKey =
   | 'models-providers'
   | 'permissions'
   | 'plugins-tools'
+  | 'skills'
   | 'mcp-server'
   | 'runtime-session'
   | 'interface'
@@ -96,6 +98,13 @@ const SETTINGS_TAB_CONFIG: Array<{
     icon: 'plugins-tools',
     group: 'core',
     keywords: ['plugin', 'plugins', 'tools', 'commands'],
+  },
+  {
+    id: 'skills',
+    labelKey: 'settings.tabs.skills',
+    icon: 'skills',
+    group: 'core',
+    keywords: ['skills', 'instructions', 'SKILL.md', 'github', 'install', 'archive'],
   },
   {
     id: 'mcp-server',

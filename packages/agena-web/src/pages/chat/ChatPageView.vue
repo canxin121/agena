@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, isRef, ref, unref, useId } from 'vue'
+import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -356,6 +356,13 @@ function setSkillPickerOpen(open: boolean) {
     skillPickerQuery.value = ''
   }
 }
+
+watch(
+  () => unref(sessionDirectory),
+  () => {
+    if (skillPickerOpen.value) void loadSkillCatalog()
+  },
+)
 
 function selectSkillOption(item: OptionMenuItem) {
   setSkillPickerOpen(false)

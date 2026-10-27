@@ -128,7 +128,12 @@ pub(crate) enum ChoiceOverlayAction {
     StoppedMessageQueue {
         session_id: i64,
     },
-    InsertContent,
+    InsertContent {
+        workspace_id: i64,
+        draft_slot: crate::DraftSlot,
+        request_id: uuid::Uuid,
+        skills: Vec<agena_api::skills::SkillSummary>,
+    },
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
     ModelSelectionMode {
@@ -218,6 +223,7 @@ pub(crate) enum SettingsPickerAction {
     OpenCurrentSessionPermissionWorkbench,
     OpenSessionEffectivePermissionView(i64),
     OpenPluginWorkbench,
+    OpenSkillsWorkbench,
     OpenConfigFile,
     OpenTerminalDiagnostics,
 }

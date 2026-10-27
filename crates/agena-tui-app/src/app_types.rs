@@ -3,7 +3,7 @@ use std::{
     future::Future,
     path::PathBuf,
     pin::Pin,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use agena_api::{
@@ -575,10 +575,10 @@ pub struct App {
     pub(super) transcript_text_object_pending: Option<(bool, bool)>,
     /// Direction selected when the transcript search overlay was opened.
     pub(super) transcript_search_forward: bool,
-    /// Last time the user pressed Ctrl+C; a second press within the window
-    /// exits the application.
-    pub(super) last_ctrl_c_at: Option<Instant>,
-    pub(super) double_esc_window: Duration,
+    /// Suspended contextual help while the Ctrl+C exit chooser is visible.
+    pub(super) exit_suspended_help: Option<HelpOverlay>,
+    /// Wait for the server to acknowledge cancellation before Stop & Exit.
+    pub(super) exit_after_cancel_session_id: Option<i64>,
     pub(super) terminal_integration: TerminalIntegrationState,
 }
 

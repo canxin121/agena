@@ -284,35 +284,6 @@ impl App {
         matches!(&self.current_route, Route::Btw(id) if Some(*id) == self.transcript.session_id)
     }
 
-    pub(crate) fn handle_btw_input(&mut self, key: KeyEvent) -> bool {
-        if !self.btw_has_focus() {
-            return false;
-        }
-        let Some(id) = self.transcript.session_id else {
-            return false;
-        };
-        match key.code {
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.close_btw(),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_btw_action("btw-stop")
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if let Some(state) = self.btw_sessions.get_mut(&id) {
-                    state.input.insert_explicit_newline();
-                }
-            }
-            KeyCode::Enter => self.handle_btw_action("btw-send"),
-            KeyCode::PageUp => self.handle_btw_action("btw-scroll-up"),
-            KeyCode::PageDown => self.handle_btw_action("btw-scroll-down"),
-            _ => {
-                if let Some(state) = self.btw_sessions.get_mut(&id) {
-                    state.input.handle_multiline_input_key(key);
-                }
-            }
-        }
-        true
-    }
-
     /// Keys owned by the full-screen BTW route. Returns `true` when the route
     /// must close so the caller can pop back to the chat surface.
     pub(crate) fn handle_btw_route_key(&mut self, key: KeyEvent) -> bool {

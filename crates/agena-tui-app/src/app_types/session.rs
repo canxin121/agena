@@ -301,10 +301,6 @@ impl SessionActivity {
             Self::Running | Self::AwaitingPermission | Self::AwaitingInteraction
         )
     }
-
-    pub(crate) fn is_running(self) -> bool {
-        self == Self::Running
-    }
 }
 
 #[derive(Debug, Clone, Default)]

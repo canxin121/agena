@@ -117,6 +117,7 @@ pub(crate) struct ChoiceOverlay {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
+    Exit,
     MessageQueue {
         session_id: i64,
     },

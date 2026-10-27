@@ -241,7 +241,16 @@ impl App {
                 }
             }
             AppMessage::RunCancelled { session_id, result } => {
-                self.handle_turn_cancelled(session_id, result)
+                let exit_after_cancel = self.exit_after_cancel_session_id == Some(session_id);
+                let cancellation_acknowledged = result.is_ok();
+                self.handle_turn_cancelled(session_id, result);
+                if exit_after_cancel {
+                    self.exit_after_cancel_session_id = None;
+                    // A failed stop must leave the TUI attached, not silently detach.
+                    if cancellation_acknowledged {
+                        self.should_quit = true;
+                    }
+                }
             }
             AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
             AppMessage::ForkCreated {

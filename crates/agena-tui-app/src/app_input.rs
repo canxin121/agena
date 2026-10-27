@@ -18,60 +18,10 @@ impl App {
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
-        // The Hub is the client's root screen. Its interrupt closes the TUI
-        // immediately, including while the catalog is loading; a hidden
-        // composer or background session must not intercept this key.
-        if global_action == Some(KeyAction::Interrupt)
-            && matches!(&self.current_route, Route::Hub(_))
-        {
-            self.last_ctrl_c_at = None;
-            self.should_quit = true;
-            return;
-        }
-        // Only the focused BTW input owns its stop key. Background questions
-        // never intercept the parent conversation's input or cancellation.
-        if global_action == Some(KeyAction::Interrupt) && self.btw_has_focus() {
-            self.last_ctrl_c_at = None;
-            self.handle_btw_input(key);
-            return;
-        }
-        if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {
-            self.handle_prompt_history_search_key(key);
-            return;
-        }
-
-        // Ctrl+C has a Composer-local meaning while the editor is actively
-        // accepting a non-empty draft. This must run before the global
-        // interrupt handler: otherwise clearing a draft would start the
-        // double-Ctrl+C quit sequence (or cancel an active run) instead.
-        if global_action == Some(KeyAction::Interrupt) && self.composer_owns_ctrl_c_to_clear() {
-            self.reset_prompt_history_recall();
-            self.clear_composer_state();
-            self.last_ctrl_c_at = None;
-            return;
-        }
-
+        // Ctrl+C is a client-level exit choice, not implicit run cancellation.
+        // Offer the same choice from the Hub, focused editors, and overlays.
         if global_action == Some(KeyAction::Interrupt) {
-            let now = Instant::now();
-            let double = self
-                .last_ctrl_c_at
-                .map(|previous| now.duration_since(previous) <= self.double_esc_window)
-                .unwrap_or(false);
-            if double {
-                // A stuck plugin-host callback cannot observe cancellation
-                // until its waiter is released. Never let that prevent a
-                // user from leaving the TUI entirely.
-                self.should_quit = true;
-                return;
-            }
-            if let Some(session_id) = self.active_run_session_id() {
-                self.request_cancel_run(session_id);
-                self.last_ctrl_c_at = Some(now);
-                self.flash_warning(ui_text::t(&self.i18n, "flash-run-cancelling-quit"));
-                return;
-            }
-            self.last_ctrl_c_at = Some(now);
-            self.flash_warning(ui_text::t(&self.i18n, "flash-quit-confirm"));
+            self.open_exit_menu();
             return;
         }
 
@@ -92,8 +42,6 @@ impl App {
         {
             return;
         }
-
-        self.last_ctrl_c_at = None;
 
         if self.handle_context_help_key(key) {
             return;
@@ -248,26 +196,12 @@ impl App {
         self.transcript_text_object_pending = None;
     }
 
-    /// In INSERT mode, Ctrl+C clears an actual Composer draft. A blank
-    /// Composer (and every non-editor surface) deliberately falls through to
-    /// the global interrupt / double-Ctrl+C quit flow.
-    fn composer_owns_ctrl_c_to_clear(&self) -> bool {
-        composer_ctrl_c_clears_input(
-            self.focus,
-            self.current_route_is_main(),
-            self.overlay.is_some(),
-            self.context_help.is_some(),
-            self.composer_item_selection.is_active(),
-            !self.composer.text().is_empty(),
-            !self.composer_items.is_empty(),
-        )
-    }
-
     pub(crate) fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
         let Some(mut overlay) = self.overlay.take() else {
             return false;
         };
 
+        let exit_menu = matches!(&overlay, Overlay::Choice(dialog) if matches!(dialog.action, crate::ChoiceOverlayAction::Exit));
         let close = match &mut overlay {
             Overlay::TranscriptSearch(dialog) => {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
@@ -296,6 +230,16 @@ impl App {
             }
         };
 
+        if close && exit_menu {
+            // Unlike other choice pickers, Ctrl+C may suspend an overlay on
+            // any route (including Hub). Always restore it on Cancel/Esc and
+            // when a Stop & Exit request fails, even outside the Main route.
+            self.context_help = self.exit_suspended_help.take();
+            if let Some(parent) = self.overlay_stack.pop() {
+                self.overlay = Some(self.refresh_restored_overlay(parent));
+            }
+            return true;
+        }
         if !close {
             if self.overlay.is_none() {
                 self.overlay = Some(overlay);
@@ -380,33 +324,7 @@ impl App {
     }
 }
 
-fn prompt_history_preempts_global_interrupt(history_open: bool, key: KeyEvent) -> bool {
-    history_open
-        && resolve_tui_key(KeyContext::Global, key) == Some(KeyAction::Interrupt)
-        && resolve_tui_key(KeyContext::PromptHistory, key) == Some(KeyAction::Close)
-}
-
-/// Keeps the Ctrl+C precedence rule testable without requiring a live backend
-/// to construct an [`App`]. A staged attachment, paste, or command makes the
-/// Composer non-empty even when its ordinary text buffer has no characters.
-fn composer_ctrl_c_clears_input(
-    focus: Focus,
-    main_route: bool,
-    overlay_open: bool,
-    context_help_open: bool,
-    composer_item_selection_active: bool,
-    composer_has_text: bool,
-    composer_has_items: bool,
-) -> bool {
-    focus == Focus::Composer
-        && main_route
-        && !overlay_open
-        && !context_help_open
-        && !composer_item_selection_active
-        && (composer_has_text || composer_has_items)
-}
-
-use crate::{App, Instant, KeyEvent, KeyEventKind, Overlay, OverlayCommit, Route, ui_text};
+use crate::{App, KeyEvent, KeyEventKind, Overlay, OverlayCommit, Route};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 use crossterm::event::{KeyCode, KeyModifiers};

@@ -5,6 +5,10 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::Exit => {
+                self.commit_exit_menu(&selection);
+                true
+            }
             ChoiceOverlayAction::MessageQueue { session_id } => {
                 let value = choice_selection_value(&selection);
                 match value.as_str() {

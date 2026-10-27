@@ -342,14 +342,6 @@ impl App {
         }
     }
 
-    pub(crate) fn active_run_session_id(&self) -> Option<i64> {
-        self.transcript.session_id.filter(|session_id| {
-            self.run_activity
-                .is_active(RunActivityTarget::Session(*session_id))
-                || self.session_activity(*session_id).is_running()
-        })
-    }
-
     pub(crate) fn session_is_busy(&self, session_id: i64) -> bool {
         self.session_activity(session_id).is_busy()
     }

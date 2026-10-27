@@ -42,7 +42,6 @@ impl App {
             };
         let keybindings = launch.tui_config.keybindings.clone();
         let status_line = StatusLinePresentation::from_config(&launch.tui_config.status_line);
-        let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
             crate::app_backend::plugin_effects::plugin_theme_palettes(&application)
                 .into_iter()
@@ -158,8 +157,8 @@ impl App {
             transcript_last_find: None,
             transcript_text_object_pending: None,
             transcript_search_forward: true,
-            last_ctrl_c_at: None,
-            double_esc_window,
+            exit_suspended_help: None,
+            exit_after_cancel_session_id: None,
             terminal_integration: TerminalIntegrationState::default(),
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {

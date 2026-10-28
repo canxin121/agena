@@ -34,3 +34,22 @@ Controls:
 
 `visible` is a boolean expression. Properties may be literals or expressions.
 All text remains plain text. Use ordinary Markdown around the panel for citations.
+
+## Compact composition
+
+Let the host own typography, theme and spacing. Prefer a plain stack as the root;
+use `gap: "md"` for normal groups, `sm` for tightly related facts, and `lg` only
+between major sections. These tokens are density-aware, not arbitrary CSS values.
+
+Use one meaningful main heading. A card should identify a real group: do not nest
+cards around every paragraph, metric or chart just for decoration. Charts inside
+a card already omit their redundant outer frame. Place related metrics in a grid;
+short metrics can remain side by side on small screens, while complex sections
+stack. Avoid duplicating a card's title in its only child. Do not add empty text,
+spacer nodes, repeated divider lines or empty cards to manufacture whitespace.
+
+Keep labels concise but complete. Long text wraps and tables scroll within their
+own region; do not truncate the actual data to fit a visual size. Touch controls
+retain their hit area, keyboard focus stays visible, and user font/density settings
+remain authoritative. Terminal content uses meaningful section boundaries rather
+than a blank line for every fact; the control list carries input labels and values.

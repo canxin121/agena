@@ -65,7 +65,7 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="root"
-    class="my-4 min-w-0"
+    class="inline-embed min-w-0"
     data-inline-embed
     :data-inline-reference="reference"
     :data-inline-revision="snapshot?.revision"
@@ -95,13 +95,15 @@ onBeforeUnmount(() => {
   </div>
 </template>
 <style scoped>
+.inline-embed {
+  margin-block: calc(0.5rem * var(--padding-scale, 1));
+}
 .inline-live-header {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  margin: 0 0 0.9rem;
-  font-size: 0.68rem;
-  letter-spacing: 0.02em;
+  gap: 0.375rem;
+  margin: 0 0 0.375rem;
+  font-size: var(--text-micro, 0.8125rem);
   color: var(--color-muted-foreground);
   min-height: 1rem;
 }
@@ -121,6 +123,5 @@ onBeforeUnmount(() => {
 .inline-live-revision {
   margin-inline-start: auto;
   font-variant-numeric: tabular-nums;
-  opacity: 0.75;
 }
 </style>

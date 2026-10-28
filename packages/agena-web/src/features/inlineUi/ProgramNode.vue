@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  RiArrowRightLine,
-  RiCheckboxCircleLine,
-  RiInformationLine,
-  RiAlertLine,
-  RiArrowUpLine,
-  RiArrowDownLine,
-} from '@remixicon/vue'
+import { RiInformationLine, RiAlertLine, RiArrowUpLine, RiArrowDownLine } from '@remixicon/vue'
 import { containerKinds, uiDisplay, type UiResolvedNode } from './program'
 import type { ChartSpec } from './charts'
 const InlineChart = defineAsyncComponent(() => import('./InlineChart.vue'))
@@ -74,6 +67,12 @@ function tabKey(event: KeyboardEvent) {
     :data-ui-node="node.id"
     :data-tone="p.tone || 'neutral'"
     :data-gap="p.gap || 'md'"
+    :data-columns="node.kind === 'grid' ? Number(p.columns || 2) : undefined"
+    :data-metrics="
+      node.kind === 'grid' && node.children.length > 0 && node.children.every((child) => child.kind === 'metric')
+        ? 'true'
+        : undefined
+    "
     :style="node.kind === 'grid' ? { '--ui-columns': Math.max(1, Math.min(4, Number(p.columns || 2))) } : undefined"
   >
     <header v-if="p.title || p.description" class="ui-section-header">
@@ -209,8 +208,7 @@ function tabKey(event: KeyboardEvent) {
     :disabled="disabled"
     @click="emit('activate', node.id)"
   >
-    <span>{{ display('label') }}</span
-    ><RiArrowRightLine aria-hidden="true" />
+    <span>{{ display('label') }}</span>
   </button>
   <div
     v-else-if="node.kind === 'progress'"
@@ -235,7 +233,7 @@ function tabKey(event: KeyboardEvent) {
     <small v-if="p.detail">{{ display('detail') }}</small>
   </div>
   <div v-else-if="node.kind === 'chart'" class="ui-chart" :data-ui-node="node.id">
-    <InlineChart v-if="chart.labels.length" :spec="chart" source="" />
+    <InlineChart v-if="chart.labels.length" :spec="chart" source="" embedded />
     <p v-else class="ui-empty">{{ t('inlineUi.noData') }}</p>
   </div>
   <section v-else-if="node.kind === 'table'" class="ui-table-section" :data-ui-node="node.id">
@@ -258,12 +256,13 @@ function tabKey(event: KeyboardEvent) {
   </section>
   <section v-else-if="node.kind === 'tasks'" class="ui-tasks" :data-ui-node="node.id">
     <h4 v-if="p.title">{{ display('title') }}</h4>
-    <label v-for="item in items" :key="String(item.id)" class="ui-task" :data-checked="checked(item.id)"
-      ><input type="checkbox" :checked="checked(item.id)" :disabled="disabled" @change="toggleTask(item.id)" /><span
-        ><strong>{{ uiDisplay(item.title) }}</strong
-        ><small v-if="item.detail">{{ uiDisplay(item.detail) }}</small></span
-      ><RiCheckboxCircleLine v-if="checked(item.id)" class="ui-task-done" aria-hidden="true"
-    /></label>
+    <label v-for="item in items" :key="String(item.id)" class="ui-task" :data-checked="checked(item.id)">
+      <input type="checkbox" :checked="checked(item.id)" :disabled="disabled" @change="toggleTask(item.id)" />
+      <span>
+        <strong>{{ uiDisplay(item.title) }}</strong>
+        <small v-if="item.detail">{{ uiDisplay(item.detail) }}</small>
+      </span>
+    </label>
     <p v-if="!items.length" class="ui-empty">{{ display('empty') || t('inlineUi.noData') }}</p>
   </section>
   <section v-else-if="node.kind === 'timeline'" class="ui-timeline" :data-ui-node="node.id">

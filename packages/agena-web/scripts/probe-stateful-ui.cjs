@@ -5,6 +5,43 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright')
 
+async function measureLayout(page) {
+  await page.evaluate(() => document.fonts.ready)
+  return page.evaluate(() => {
+    const box = (selector) => {
+      const node = document.querySelector(selector)
+      if (!node) return null
+      const bounds = node.getBoundingClientRect(),
+        style = getComputedStyle(node)
+      return {
+        width: Math.round(bounds.width),
+        height: Math.round(bounds.height),
+        gap: style.gap,
+        padding: style.padding,
+        margin: style.margin,
+        font: style.fontSize,
+        lineHeight: style.lineHeight,
+        radius: style.borderRadius,
+        columns: style.gridTemplateColumns,
+      }
+    }
+    return {
+      viewport: innerWidth,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+      panel: box('[data-interactive-panel]'),
+      embed: box('[data-inline-embed]'),
+      root: box('[data-ui-node="root"]'),
+      tabs: box('[data-ui-node="navigation"]'),
+      metric: box('.ui-metric'),
+      card: box('.ui-card'),
+      input: box('.ui-field select, .ui-field input'),
+      chart: box('.ui-chart figure'),
+      plot: box('.ui-chart svg[role="img"]'),
+      tableRow: box('.ui-table-scroll tbody tr'),
+    }
+  })
+}
+
 async function main() {
   const { createServer } = await import('vite')
   const web = path.resolve(__dirname, '..'),
@@ -19,6 +56,7 @@ async function main() {
   const connections = new Set(),
     requests = [],
     errors = []
+  const layoutMetrics = {}
   let opened = 0
   function emit(value, retain = true) {
     if (retain) snapshot = value
@@ -140,6 +178,7 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.getByLabel('渠道', { exact: true }).selectOption('paid')
     assert((await metric('revenue').innerText()).includes('39000'))
     assert.equal(await page.locator('[data-ui-node="salesTable"] tbody tr').count(), 2)
+    layoutMetrics.overview = await measureLayout(page)
     await page.screenshot({ path: path.join(output, 'live-overview-light.png'), fullPage: true })
     // Keyboard tabs and inputs operate without any model call or backend write.
     await page.getByRole('tab', { name: '经营总览', exact: true }).focus()
@@ -188,8 +227,10 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
       'snapshots never replay clipboard actions',
     )
     await page.evaluate(() => document.documentElement.classList.add('dark'))
+    layoutMetrics.simulation = await measureLayout(page)
     await page.screenshot({ path: path.join(output, 'live-simulation-dark.png'), fullPage: true })
     await page.setViewportSize({ width: 375, height: 850 })
+    layoutMetrics.mobile = await measureLayout(page)
     await page.screenshot({ path: path.join(output, 'live-mobile-dark.png'), fullPage: true })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     // Reconnect from an actual disconnected SSE stream; the latest full snapshot wins.
@@ -314,6 +355,7 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
         {
           passed: true,
           checks,
+          layoutMetrics,
           screenshots: ['live-overview-light.png', 'live-simulation-dark.png', 'live-mobile-dark.png'],
         },
         null,

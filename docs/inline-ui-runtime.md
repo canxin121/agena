@@ -247,3 +247,38 @@ charges). This prevents a small nested map or computed dependency graph from
 amplifying a bounded document into an unbounded allocation. Invalid updates and
 invalid user actions retain the last valid state rather than partially applying.
 Repeated embeds share their scoped state while retaining unique DOM identifiers.
+
+## Compact host-native presentation
+
+Web presentation uses Agena's `--text-ui-label`, `--text-ui-header`, `--text-micro`,
+`--padding-scale`, foreground/background, border, input and radius tokens. The
+normal layout rhythm is 4/8/12px before the user's padding scale. Cards have a
+10px inset by default, desktop inputs/buttons have a 32px minimum height, and
+coarse-pointer controls keep a 40px hit area. Global panel styles are explicitly
+scoped so similarly named classes in the host cannot inherit them.
+
+Card boundaries are deliberate; grids no longer stretch short content to the
+height of unrelated tall neighbors. Nested cards establish their own container
+query width. Explicit one-column grids stay one column. Short metric grids can
+remain two columns on narrow displays, while forms and complex sections stack.
+Charts inside cards omit the extra frame/margins. Their SVG coordinates follow
+the measured width: labels keep a readable size instead of shrinking from an
+800px canvas. SVG export captures resolved theme colors and fonts.
+
+The terminal work surface uses the existing modal frame, border and selection
+styles. Header/footer rows are content-sized; controls consume only the rows they
+need, not a fixed percentage of the window. A read-only result does not display
+an empty controls pane. Preview facts/metrics are compact, meaningful sections
+have separators, and input labels are not needlessly repeated in both panes.
+These changes affect presentation, not the complete copy/export representation.
+The preview scroll limit is recomputed after live updates so removed content
+cannot leave the viewport stuck in empty space.
+
+Run `bun run test:inline-ui:layout` with the same Playwright/Chrome environment as
+the other probes. It checks all 24 controlled node kinds at 320–1240px, both themes,
+large host font settings, RTL, nested grids, long Chinese/unbroken strings, style
+isolation, keyboard disclosure, theme-preserving chart export and touch targets.
+`probe-stateful-ui.cjs` records layout measurements alongside its live-state checks.
+Set `AGENA_INLINE_UI_LAYOUT_ARTIFACTS` when running terminal `stateful_ui` tests to
+save 40-, 80- and 120-column rendered buffers. Browser artifacts are ignored under
+`artifacts/inline-ui/density-after`; no screenshots or tests connect to real user data.

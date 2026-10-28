@@ -9,9 +9,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    style::Style,
+    text::Line,
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use serde_json::{Value, json};
 use std::{
@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::watch;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Default)]
 struct LiveUpdate {
@@ -180,6 +181,8 @@ pub(crate) struct InlineUiDialog {
     panel: usize,
     focused: String,
     scroll: u16,
+    // Derived viewport limit: rendering clamps it after live content shrinks.
+    scroll_limit: std::cell::Cell<u16>,
     pub(crate) editing: Option<String>,
     error: Option<String>,
 }
@@ -499,6 +502,103 @@ impl App {
     }
 }
 
+/// Compact reader projection: controls have a dedicated keyboard list, so the
+/// preview does not repeat their labels/values. Tasks retain their explanations.
+/// Copy/export still uses the full, unchanged semantic view.
+fn compact_preview(view: &UiView, width: u16) -> Vec<Line<'static>> {
+    fn content(node: &UiResolvedNode) -> Option<UiResolvedNode> {
+        if node.kind.is_control() && node.kind != UiKind::Tasks {
+            return None;
+        }
+        let mut next = node.clone();
+        next.children = node.children.iter().filter_map(content).collect();
+        if node.kind.is_container()
+            && next.children.is_empty()
+            && field(node, "title").is_empty()
+            && field(node, "description").is_empty()
+        {
+            return None;
+        }
+        Some(next)
+    }
+    let Some(root) = content(&view.root) else {
+        return Vec::new();
+    };
+    fn append(node: &UiResolvedNode, width: u16, output: &mut Vec<Line<'static>>) {
+        let mut own = node.clone();
+        own.children.clear();
+        let view = UiView {
+            root: own,
+            state: UiState::new(),
+            computed: UiState::new(),
+        };
+        let mut rendered = Vec::new();
+        agena_tui_transcript::push_markdown(&mut rendered, "", &view.to_markdown(), width.max(1));
+        let start = rendered
+            .iter()
+            .position(|line| !line.text.trim().is_empty())
+            .unwrap_or(rendered.len());
+        let end = rendered
+            .iter()
+            .rposition(|line| !line.text.trim().is_empty())
+            .map_or(start, |index| index + 1);
+        if end > start {
+            // Section boundaries get one spacer; adjacent facts/metrics do not
+            // each become a padded paragraph. Explicit text paragraphs survive.
+            if !output.is_empty()
+                && matches!(
+                    node.kind,
+                    UiKind::Heading
+                        | UiKind::Card
+                        | UiKind::Details
+                        | UiKind::Chart
+                        | UiKind::Table
+                        | UiKind::Tasks
+                        | UiKind::Timeline
+                        | UiKind::Callout
+                )
+            {
+                output.push(Line::default());
+            }
+            for line in rendered.into_iter().skip(start).take(end - start) {
+                output.push(
+                    line.rich_line
+                        .unwrap_or_else(|| Line::styled(line.text, line.style)),
+                );
+            }
+        }
+        for child in &node.children {
+            append(child, width, output);
+        }
+    }
+    let mut lines = Vec::new();
+    append(&root, width, &mut lines);
+    lines
+}
+
+fn control_row(control: &Control, focused: bool, width: u16) -> ListItem<'static> {
+    use agena_tui_components::{theme, truncate_display_text, truncate_display_text_middle};
+    let available = usize::from(width.saturating_sub(2));
+    let value_budget = control.value.width().min((available / 2).max(1));
+    let label_budget = available.saturating_sub(value_budget + 1);
+    let label = truncate_display_text(&control.label, label_budget);
+    let value = truncate_display_text_middle(&control.value, value_budget);
+    let padding = available.saturating_sub(label.width() + value.width());
+    let row = format!(
+        "{} {label}{}{value}",
+        if focused { "›" } else { " " },
+        " ".repeat(padding)
+    );
+    let style = if control.disabled {
+        theme::muted_style()
+    } else if focused {
+        theme::selection_style()
+    } else {
+        theme::modal_surface_style()
+    };
+    ListItem::new(Line::from(row)).style(style)
+}
+
 fn render_dialog(
     frame: &mut Frame,
     area: Rect,
@@ -506,179 +606,205 @@ fn render_dialog(
     read: Option<&InlineUiRead>,
     i18n: &agena_tui::i18n::I18n,
 ) {
-    let margin = if area.width > 50 { 2 } else { 0 };
-    let surface = Rect {
-        x: area.x + margin,
-        y: area.y + 1,
-        width: area.width.saturating_sub(margin * 2),
-        height: area.height.saturating_sub(2),
+    use agena_tui_components::{
+        FramedSurfaceSpec, SurfaceMode, render_framed_surface, theme, truncate_display_text,
+        truncate_display_text_middle,
     };
-    frame.render_widget(Clear, surface);
-    let border = Block::default()
-        .borders(Borders::ALL)
-        .title(i18n.text("inline-ui-title"))
-        .border_style(Style::default().fg(agena_tui_components::theme::accent_color()));
-    let inner = border.inner(surface);
-    frame.render_widget(border, surface);
-    let Some(read) = read else {
-        frame.render_widget(Paragraph::new(i18n.text("inline-ui-loading")), inner);
+    if area.width == 0 || area.height == 0 {
         return;
-    };
-    let status = read
-        .snapshot
+    }
+    let target_width = area.width.min(122);
+    let width = SurfaceMode::Overlay
+        .content_width(area, target_width)
+        .max(1);
+    let resolved = read.and_then(|read| panel(read, dialog.panel));
+    let all = resolved
         .as_ref()
-        .map(|s| {
-            format!(
-                "{} · r{} · {}",
-                s.document.title,
-                s.revision,
-                i18n.text(match s.phase {
-                    agena_domain::InlinePhase::Working => "inline-ui-working",
-                    agena_domain::InlinePhase::Complete => "inline-ui-complete",
-                    agena_domain::InlinePhase::Error => "inline-ui-error",
-                })
-            )
-        })
-        .unwrap_or_else(|| i18n.text("inline-ui-loading"));
+        .map(|(_, _, view)| controls(view))
+        .unwrap_or_default();
+    let side_by_side = width >= 90 && !all.is_empty();
+    let controls_width = if side_by_side {
+        (width / 3).clamp(28, 38)
+    } else {
+        width
+    };
+    let preview_width = if side_by_side {
+        width.saturating_sub(controls_width)
+    } else {
+        width
+    };
+    let lines = resolved
+        .as_ref()
+        .map(|(_, _, view)| compact_preview(view, preview_width))
+        .unwrap_or_else(|| {
+            vec![
+                Line::raw(
+                    read.and_then(|read| read.error.clone())
+                        .unwrap_or_else(|| i18n.text("inline-ui-loading")),
+                ),
+                Line::raw(i18n.text("inline-ui-reset-help")),
+            ]
+        });
+    let focused = all
+        .iter()
+        .position(|control| control.id == dialog.focused)
+        .unwrap_or(0);
+    let mut footer = Vec::new();
+    if let Some(value) = &dialog.editing {
+        footer.push(Line::raw(truncate_display_text_middle(
+            &format!("{}: {value}▏", i18n.text("inline-ui-edit")),
+            usize::from(width),
+        )));
+    }
+    let runtime_error = resolved
+        .as_ref()
+        .and_then(|_| read.and_then(|read| read.error.as_ref()));
+    for error in [dialog.error.as_ref(), runtime_error].into_iter().flatten() {
+        if footer.iter().any(|line| line.to_string() == *error) {
+            continue;
+        }
+        footer.push(Line::styled(
+            truncate_display_text(error, usize::from(width)),
+            Style::default().fg(theme::danger_color()),
+        ));
+    }
+    let full_help = i18n.text("inline-ui-keys");
+    footer.push(Line::styled(
+        if full_help.width() <= usize::from(width)
+            || (width >= 65 && full_help.width() <= usize::from(width) * 2)
+        {
+            full_help
+        } else {
+            i18n.text("inline-ui-keys-short")
+        },
+        theme::muted_style(),
+    ));
+    let footer_rows = agena_tui_components::text::wrapped_lines_height(&footer, width).max(1);
+    let controls_rows = if all.is_empty() {
+        0
+    } else {
+        (all.len() as u16).saturating_add(1)
+    };
+    let content_rows = if side_by_side {
+        (lines.len() as u16).max(controls_rows)
+    } else {
+        (lines.len() as u16).saturating_add(controls_rows)
+    };
+    let surface = render_framed_surface(
+        frame,
+        area,
+        SurfaceMode::Overlay,
+        &FramedSurfaceSpec {
+            title: i18n.text("inline-ui-title").into(),
+            target_width,
+            target_height: content_rows
+                .saturating_add(footer_rows)
+                .saturating_add(3)
+                .max(6),
+        },
+    );
+    let inner = surface.inner;
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
-            Constraint::Min(1),
-            Constraint::Length(if dialog.editing.is_some() || dialog.error.is_some() {
-                4
-            } else {
-                2
-            }),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(footer_rows.min(inner.height.saturating_sub(2).max(1))),
         ])
         .split(inner);
+    let status = read
+        .and_then(|read| read.snapshot.as_ref())
+        .map(|snapshot| {
+            let phase = i18n.text(match snapshot.phase {
+                agena_domain::InlinePhase::Working => "inline-ui-working",
+                agena_domain::InlinePhase::Complete => "inline-ui-complete",
+                agena_domain::InlinePhase::Error => "inline-ui-error",
+            });
+            let suffix = format!("r{} · {phase}", snapshot.revision);
+            let title = truncate_display_text(
+                &snapshot.document.title,
+                usize::from(inner.width).saturating_sub(suffix.width() + 3),
+            );
+            if title.is_empty() {
+                suffix
+            } else {
+                format!("{title} · {suffix}")
+            }
+        })
+        .unwrap_or_else(|| i18n.text("inline-ui-loading"));
     frame.render_widget(
-        Paragraph::new(status)
-            .style(Style::default().add_modifier(Modifier::BOLD))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(status).style(theme::muted_style()),
         layout[0],
     );
-    let Some((_, _, view)) = panel(read, dialog.panel) else {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{}\n\n{}",
-                read.error
-                    .clone()
-                    .unwrap_or_else(|| i18n.text("inline-ui-loading")),
-                i18n.text("inline-ui-reset-help")
-            ))
-            .wrap(Wrap { trim: false }),
-            layout[1],
-        );
-        return;
-    };
-    let all = controls(&view);
-    let focused = all.iter().position(|c| c.id == dialog.focused).unwrap_or(0);
-    let split = if inner.width >= 90 {
-        Layout::default()
+    let (preview, control_area) = if all.is_empty() {
+        (layout[1], Rect::default())
+    } else if side_by_side {
+        let split = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(61), Constraint::Percentage(39)])
-            .split(layout[1])
+            .constraints([Constraint::Min(1), Constraint::Length(controls_width)])
+            .split(layout[1]);
+        (split[0], split[1])
     } else {
-        Layout::default()
+        // Reserve only the rows the visible control list needs, not a fixed
+        // percentage of the terminal. Leave room for results on short screens.
+        let minimum_preview = if lines.is_empty() {
+            0
+        } else {
+            3.min(layout[1].height.saturating_sub(2))
+        };
+        let count = controls_rows
+            .min(9)
+            .min(layout[1].height.saturating_sub(minimum_preview));
+        let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(layout[1])
+            .constraints([Constraint::Min(0), Constraint::Length(count)])
+            .split(layout[1]);
+        (split[0], split[1])
     };
-    let mut markdown = Vec::new();
-    agena_tui_transcript::push_markdown(
-        &mut markdown,
-        "",
-        &view.to_markdown(),
-        split[0].width.saturating_sub(2),
-    );
-    let lines = markdown
-        .into_iter()
-        .map(|line| {
-            line.rich_line
-                .unwrap_or_else(|| Line::styled(line.text, line.style))
-        })
-        .collect::<Vec<_>>();
+    let max_scroll = lines
+        .len()
+        .saturating_sub(usize::from(preview.height))
+        .min(usize::from(u16::MAX)) as u16;
+    dialog.scroll_limit.set(max_scroll);
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().borders(if inner.width >= 90 {
-                Borders::RIGHT
+        Paragraph::new(lines).scroll((dialog.scroll.min(max_scroll), 0)),
+        preview,
+    );
+    if !all.is_empty() && control_area.height > 0 {
+        let title = if all.len() > usize::from(control_area.height.saturating_sub(1)) {
+            format!(
+                "{} {}/{}",
+                i18n.text("inline-ui-controls"),
+                focused + 1,
+                all.len()
+            )
+        } else {
+            i18n.text("inline-ui-controls")
+        };
+        let border = Block::default()
+            .title(title)
+            .borders(if side_by_side {
+                Borders::TOP | Borders::LEFT
             } else {
-                Borders::NONE
-            }))
-            .scroll((dialog.scroll, 0))
-            .wrap(Wrap { trim: false }),
-        split[0],
-    );
-    let height = usize::from(split[1].height.saturating_sub(2));
-    let start = if focused >= height {
-        focused + 1 - height
-    } else {
-        0
-    };
-    let rows = all
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(height.max(1))
-        .map(|(i, c)| {
-            let label = format!(
-                "{} {}  {}",
-                if i == focused { "›" } else { " " },
-                c.label,
-                c.value
-            );
-            let style = if c.disabled {
-                Style::default().fg(agena_tui_components::theme::muted_color())
-            } else if i == focused {
-                Style::default()
-                    .fg(agena_tui_components::theme::accent_color())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(Span::styled(label, style)))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        List::new(rows).block(
-            Block::default()
-                .title(i18n.text("inline-ui-controls"))
-                .borders(if inner.width >= 90 {
-                    Borders::NONE
-                } else {
-                    Borders::TOP
-                }),
-        ),
-        split[1],
-    );
-    let mut footer = Vec::new();
-    if let Some(value) = &dialog.editing {
-        footer.push(Line::raw(format!(
-            "{}: {value}▏",
-            i18n.text("inline-ui-edit")
-        )));
+                Borders::TOP
+            })
+            .border_style(theme::muted_style());
+        let control_inner = border.inner(control_area);
+        let capacity = usize::from(control_inner.height);
+        let start = focused.saturating_add(1).saturating_sub(capacity);
+        let rows = all
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(capacity)
+            .map(|(index, control)| control_row(control, index == focused, control_inner.width))
+            .collect::<Vec<_>>();
+        frame.render_widget(List::new(rows).block(border), control_area);
     }
-    if let Some(error) = &dialog.error {
-        footer.push(Line::styled(
-            error.clone(),
-            Style::default().fg(agena_tui_components::theme::danger_color()),
-        ));
-    }
-    if let Some(error) = &read.error {
-        footer.push(Line::raw(error.clone()));
-    }
-    footer.push(Line::raw(i18n.text(if inner.width < 65 {
-        "inline-ui-keys-short"
-    } else {
-        "inline-ui-keys"
-    })));
-    frame.render_widget(
-        Paragraph::new(footer)
-            .style(Style::default().fg(agena_tui_components::theme::muted_color()))
-            .wrap(Wrap { trim: false }),
-        layout[2],
-    );
+    frame.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), layout[2]);
 }
 
 #[derive(Default)]
@@ -703,11 +829,18 @@ fn handle_dialog_key(
     }
     match key.code {
         KeyCode::PageDown => {
-            dialog.scroll = dialog.scroll.saturating_add(8);
+            dialog.scroll = dialog
+                .scroll
+                .min(dialog.scroll_limit.get())
+                .saturating_add(8)
+                .min(dialog.scroll_limit.get());
             return effect;
         }
         KeyCode::PageUp => {
-            dialog.scroll = dialog.scroll.saturating_sub(8);
+            dialog.scroll = dialog
+                .scroll
+                .min(dialog.scroll_limit.get())
+                .saturating_sub(8);
             return effect;
         }
         _ => {}

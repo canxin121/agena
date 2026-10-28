@@ -136,28 +136,28 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
   min-width: 0;
   max-width: 100%;
   color: var(--color-foreground);
-  font-size: 0.9375rem;
-  line-height: 1.75;
+  font-size: var(--text-markdown, 0.9375rem);
+  line-height: 1.6;
   overflow-wrap: anywhere;
-  container-type: inline-size;
+  container: inline-reply / inline-size;
 }
 .reply-title {
-  margin: 0 0 1.25rem;
-  font-size: 1.125rem;
-  font-weight: 650;
+  margin: 0 0 0.5rem;
+  font-size: var(--text-ui-header, 0.9375rem);
+  font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.5;
 }
 .reply-blocks {
   display: grid;
-  gap: 1.5rem;
+  gap: calc(0.75rem * var(--padding-scale, 1));
 }
 .reply-block {
   min-width: 0;
 }
 .block-title {
-  margin: 0 0 0.8rem;
-  font-size: 1rem;
+  margin: 0 0 0.375rem;
+  font-size: var(--text-ui-header, 0.9375rem);
   font-weight: 600;
   line-height: 1.6;
 }
@@ -166,8 +166,8 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
   white-space: pre-wrap;
 }
 .reply-icon {
-  height: 1.2rem;
-  width: 1.2rem;
+  height: 1rem;
+  width: 1rem;
   flex-shrink: 0;
 }
 .reply-steps {
@@ -178,8 +178,8 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
 .reply-step {
   display: grid;
   grid-template-columns: 1.5rem minmax(0, 1fr);
-  column-gap: 0.9rem;
-  padding: 1.1rem 0;
+  column-gap: 0.5rem;
+  padding: calc(0.5rem * var(--padding-scale, 1)) 0;
   border-bottom: 1px solid color-mix(in oklab, var(--color-border) 65%, transparent);
 }
 .reply-step:first-child {
@@ -196,21 +196,21 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
   color: var(--color-muted-foreground);
 }
 .step-number {
-  font-size: 0.8rem;
+  font-size: var(--text-micro, 0.8125rem);
   font-variant-numeric: tabular-nums;
 }
 .step-title {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.55rem;
-  margin: 0 0 0.35rem;
-  font-size: 1rem;
+  gap: 0.375rem;
+  margin: 0 0 0.125rem;
+  font-size: var(--text-ui-header, 0.9375rem);
   font-weight: 600;
   line-height: 1.6;
 }
 .step-label {
-  font-size: 0.8rem;
+  font-size: var(--text-micro, 0.8125rem);
   letter-spacing: 0.02em;
   font-weight: 500;
   color: var(--color-muted-foreground);
@@ -220,9 +220,9 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
 }
 .reply-callout {
   display: flex;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  border-inline-start: 3px solid var(--color-border);
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-inline-start: 2px solid var(--color-border);
   background: color-mix(in oklab, var(--color-muted) 28%, transparent);
   border-radius: 0 0.5rem 0.5rem 0;
 }
@@ -237,37 +237,37 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
   border-inline-start-color: var(--color-destructive);
 }
 .callout-title {
-  margin: 0 0 0.3rem;
-  font-size: 0.9375rem;
+  margin: 0 0 0.125rem;
+  font-size: var(--text-markdown, 0.9375rem);
   font-weight: 600;
 }
 .reply-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-  gap: 1rem;
+  gap: 0.5rem;
 }
 .reply-metric {
   margin: 0;
-  padding: 0.15rem 0 0.15rem 1rem;
+  padding: 0.125rem 0 0.125rem 0.5rem;
   border-inline-start: 2px solid var(--color-border);
   min-width: 0;
 }
 .reply-metric dt {
-  font-size: 0.8125rem;
+  font-size: var(--text-micro, 0.8125rem);
   color: var(--color-muted-foreground);
 }
 .reply-metric dd {
   margin: 0;
 }
 .metric-value {
-  font-size: 1.5rem;
+  font-size: calc(var(--text-ui-header, 0.9375rem) * 1.4);
   font-weight: 600;
   letter-spacing: -0.025em;
   line-height: 1.55;
   font-variant-numeric: tabular-nums;
 }
 .metric-detail {
-  font-size: 0.8rem;
+  font-size: var(--text-micro, 0.8125rem);
   color: var(--color-muted-foreground);
 }
 .table-scroll {
@@ -281,11 +281,11 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
   width: 100%;
   border-collapse: collapse;
   text-align: start;
-  font-size: 0.875rem;
+  font-size: var(--text-ui-label, 0.875rem);
 }
 .reply-table th,
 .reply-table td {
-  padding: 0.7rem 0.85rem;
+  padding: 0.375rem 0.5rem;
   min-width: 6rem;
   max-width: 24rem;
   text-align: start;
@@ -309,39 +309,40 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
 }
 .reply-details {
   border-block: 1px solid color-mix(in oklab, var(--color-border) 65%, transparent);
-  padding: 0.6rem 0;
+  padding: 0;
 }
 .reply-details summary {
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--text-ui-label, 0.875rem);
   font-weight: 500;
-  padding: 0.2rem;
+  padding: 0.375rem 0;
+  min-height: 2rem;
 }
 .reply-details[open] summary {
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.25rem;
 }
 .reply-details .prose-text {
   padding: 0 0.2rem 0.4rem;
-  font-size: 0.875rem;
+  font-size: var(--text-ui-label, 0.875rem);
 }
 .table-scroll:focus-visible,
 .reply-details summary:focus-visible {
   outline: 2px solid var(--color-ring);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
-@container (max-width: 420px) {
-  .inline-reply {
-    font-size: 0.875rem;
-  }
+@container inline-reply (max-width: 26rem) {
   .reply-step {
-    column-gap: 0.6rem;
-  }
-  .reply-callout {
-    padding: 0.7rem;
+    grid-template-columns: 1.25rem minmax(0, 1fr);
+    column-gap: 0.5rem;
   }
   .reply-table th,
   .reply-table td {
-    padding: 0.6rem;
+    padding: 0.375rem 0.5rem;
+  }
+}
+@media (pointer: coarse) {
+  .reply-details summary {
+    min-height: 2.5rem;
   }
 }
 @media (prefers-reduced-motion: reduce) {

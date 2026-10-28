@@ -186,26 +186,49 @@ across browsers. Changes to the agent document preserve still-valid local values
 Copying the whole answer uses the current displayed snapshot and reader state.
 `/ui` focuses the latest displayed interface (or a supplied reference).
 
-## TUI
+## TUI: native components in the actual reply
 
-The main transcript displays the current revision's content and current selections.
-`/ui [reference]` opens a native keyboard work surface for the latest/selected UI.
-It is part of the terminal client, not a Web Preview. Both clients run the same
-expression, validation and action rules.
+The normal transcript retains the source Markdown, authorized documents, resolved
+component tree, local state and control hit regions until terminal layout. It no
+longer expands interactive content into a Markdown dump. The same 24 node kinds
+have native terminal representations: responsive rows/grids/cards, highlighted
+metrics and badges, proper progress tracks, editable inputs, tabs/selects,
+checkboxes/switches/tasks, collapsible details, timelines, tables and charts.
 
-Tab/Shift+Tab moves control focus; arrows change tabs/options and adjust numeric
-values; Home/End selects numeric bounds; Space toggles checkbox/task selections;
-Enter activates buttons or edits text/numbers; Escape cancels an edit or closes.
-PageUp/PageDown scrolls content. `[` / `]` changes panel when a document has several.
-Pasted text is accepted only inside an explicit editor. A control removed during
-editing cancels that edit rather than writing into a different control.
+Mouse users can click tabs/buttons/checks/tasks directly in the answer and drag a
+slider track. Click an input to open a compact editor, or a select to choose from
+its actual options. The displayed value, derived metrics, plot and progress update
+together. Shift/Alt pointer gestures remain available for text selection. Native
+interaction requires the existing TUI mouse-capture setting; keyboard operation
+does not. There is no arbitrary command or model call behind a local input.
 
-At wide widths content and controls are side-by-side; narrow terminals stack them.
-Live subscriptions update the existing transcript and dialog; local input survives
-valid agent revisions. Charts have exact-data terminal tables rather than a fake
-browser chart. The local clipboard action, whole-answer copy and transcript export
-use current local selections. Terminal input is retained in the loaded session,
-not synchronized to another client or persisted across a terminal restart.
+Keyboard users focus the answer or its visible "Focus interface" control, then
+Tab/Shift+Tab between controls; Enter/Space activates; left/right adjusts tabs,
+choices and numeric values; Home/End selects declared numeric bounds. Editors
+support grapheme-safe caret movement, Backspace/Delete, paste at the caret, and
+Ctrl+U. Enter validates atomically and Escape cancels. Ctrl+R resets local input.
+`/ui [reference]` is an optional expanded work surface using the **same renderer
+and state**, not the only route to interaction. Its mouse targets, keyboard focus,
+local disclosure state and live snapshots are shared with the inline view.
+
+Charts are native colored terminal plots: categorical bars, lines, areas and a
+ring/pie. They preserve zeros, missing-value gaps and negative values. The series
+legend toggles visibility; the Data control exposes exact numeric values. Glyphs,
+line borders, colors, selection and modal chrome use terminal cells and host theme
+styles, not a claim of browser-pixel equivalence. Full-resolution SVG export remains
+a Web feature; terminal copying/export retains all values, including hidden data.
+
+Live revisions retain still-valid reader state and focus. A layout update cancels
+stale pointer geometry; removed/disabled controls cannot execute old actions. If
+new source data makes current local parameters invalid, a real Reset control can
+restore valid defaults. User input is local to this terminal session and is not
+silently synchronized to another client or model. No history read/repaint invokes
+action effects. Code examples, quotes and user messages stay inert.
+
+The source-backed content path is covered as well as direct text: raw UTF-8 bytes
+and pagination cursors are unchanged. Ordinary prose is parsed once in the full
+Markdown context, preserving reference-style links across UI boundaries. Copy and
+export use the semantic projection, not box-drawing characters or plot pixels.
 
 ## Acceptance fixtures and checks
 
@@ -225,7 +248,7 @@ Focused checks:
 
 ```sh
 cargo test -p agena-domain -p agena-runtime-plugins -p agena-bundled-plugins stateful_ui --offline
-cargo test -p agena-tui-app --lib stateful_ui --offline
+cargo test -p agena-tui-app --lib native_ui --offline
 cd packages/agena-web
 bun test ./tests/inlineUiProgram.test.ts
 PLAYWRIGHT_MODULE=/path/to/playwright CHROME_BIN=/path/to/chrome bun run test:inline-ui:live
@@ -265,20 +288,41 @@ Charts inside cards omit the extra frame/margins. Their SVG coordinates follow
 the measured width: labels keep a readable size instead of shrinking from an
 800px canvas. SVG export captures resolved theme colors and fonts.
 
-The terminal work surface uses the existing modal frame, border and selection
-styles. Header/footer rows are content-sized; controls consume only the rows they
-need, not a fixed percentage of the window. A read-only result does not display
-an empty controls pane. Preview facts/metrics are compact, meaningful sections
-have separators, and input labels are not needlessly repeated in both panes.
-These changes affect presentation, not the complete copy/export representation.
-The preview scroll limit is recomputed after live updates so removed content
-cannot leave the viewport stuck in empty space.
+The terminal renderer uses content-sized native surfaces and responsive grid
+columns. Short headings/badges/actions pack into rows; groups have single-line
+borders with a one-cell inset; meaningful sections retain spacing without repeating
+a separate controls pane. Controls remain in the layout next to the information
+they affect. Modal focus is revealed on navigation and scroll limits follow live
+content height. Only the presentation changes: semantic copy/export remains full.
 
 Run `bun run test:inline-ui:layout` with the same Playwright/Chrome environment as
 the other probes. It checks all 24 controlled node kinds at 320–1240px, both themes,
 large host font settings, RTL, nested grids, long Chinese/unbroken strings, style
 isolation, keyboard disclosure, theme-preserving chart export and touch targets.
 `probe-stateful-ui.cjs` records layout measurements alongside its live-state checks.
-Set `AGENA_INLINE_UI_LAYOUT_ARTIFACTS` when running terminal `stateful_ui` tests to
-save 40-, 80- and 120-column rendered buffers. Browser artifacts are ignored under
+Set `AGENA_INLINE_UI_NATIVE_ARTIFACTS` when running terminal `native_ui` tests to
+save narrow/wide native reply buffers and focused-surface captures. Browser artifacts are ignored under
 `artifacts/inline-ui/density-after`; no screenshots or tests connect to real user data.
+
+## Native terminal regression and screenshot reproduction
+
+`examples/inline-ui/terminal-simulation.json` reproduces the reported four-month
+example with explicitly illustrative values 120, 145, 132, 168. The actual App
+mouse/key event path verifies 20% → 30%, 678 → 735, delta 170, three checked tasks
+→ 100%, conditional assumptions and reset. It is not a separate mock renderer.
+
+```sh
+AGENA_INLINE_UI_NATIVE_ARTIFACTS=artifacts/inline-ui/tui-native \
+  cargo test -p agena-tui-app -p agena-tui-transcript --lib native_ui --offline
+cargo test -p agena-tui-app -p agena-tui-transcript --lib --tests --offline
+```
+
+The tests include actual transcript hit regions, native source-page delivery,
+focused-surface pointer events, UTF-8 editing, stale revision/permission removal,
+long select lists, grid copy geometry, all 24 component kinds, all four chart
+kinds and 12–180-column bounds. Setting the artifact variable writes real rendered
+text buffers; generated evidence is ignored under `artifacts/inline-ui/`.
+
+This is a client implementation change. An already-running TUI process will not
+hot-replace its Rust code. Build/relaunch the updated `agena tui` executable; no
+new reference syntax or API protocol is required for the existing live UI server.

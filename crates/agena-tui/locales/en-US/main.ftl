@@ -2731,3 +2731,12 @@ inline-ui-complete = Complete
 inline-ui-error = Needs attention
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R resets local input parameters.
+
+inline-ui-open = Focus interface
+inline-ui-inline-help = Tab · Enter/Space · ←/→ · click or drag
+inline-ui-unavailable = Referenced UI is unavailable in this conversation.
+inline-ui-data = Data
+inline-ui-reset = Reset input
+
+inline-ui-native-help = Tab/↑↓ focus · Enter/Space operate · ←→ adjust · PgUp/PgDn scroll · Esc close
+inline-ui-editor-help = Enter confirm · Esc cancel · ←→ move · Ctrl+U clear

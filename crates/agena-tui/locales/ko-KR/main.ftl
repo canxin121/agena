@@ -3053,3 +3053,12 @@ inline-ui-complete = 완료
 inline-ui-error = 확인 필요
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R로 입력을 초기값으로 되돌립니다.
+
+inline-ui-open = 인터페이스 조작
+inline-ui-inline-help = Tab 이동 · Enter/Space 조작 · ←/→ 조정 · 클릭/드래그
+inline-ui-unavailable = 이 대화에서 참조한 UI를 사용할 수 없습니다.
+inline-ui-data = 데이터
+inline-ui-reset = 입력 초기화
+
+inline-ui-native-help = Tab/↑↓ 이동 · Enter/Space 조작 · ←→ 조정 · PgUp/PgDn 스크롤 · Esc 닫기
+inline-ui-editor-help = Enter 확인 · Esc 취소 · ←→ 이동 · Ctrl+U 지우기

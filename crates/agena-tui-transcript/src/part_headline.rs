@@ -234,6 +234,7 @@ fn canonical_headline(payload: &ActivityPayload, i18n: &I18n) -> TranscriptPartH
 pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> TranscriptPartHeadline {
     let (title, summary) = match &part.content {
         TranscriptPartContent::UserDocument(document) => (String::new(), document.plain_text()),
+        TranscriptPartContent::InlineUi(reply) => (String::new(), reply.copy_text()),
         TranscriptPartContent::Text(text) => (String::new(), text.text.clone()),
         TranscriptPartContent::Activity(activity) => match activity {
             Activity::Canonical(payload) => {

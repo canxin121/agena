@@ -302,6 +302,7 @@ impl ToolCallView {
 pub enum TranscriptPartContent<'a> {
     UserDocument(TranscriptUserDocument),
     Text(TextPartResource),
+    InlineUi(Box<crate::inline_ui::InlineReply>),
     Activity(TranscriptActivityContent<'a>),
 }
 
@@ -690,6 +691,7 @@ pub struct RenderedTranscriptControl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptControlAction {
+    InlineUi(crate::inline_ui::InlineControl),
     Permission {
         request_id: String,
         /// None opens the full permission controls, including scope and rules.

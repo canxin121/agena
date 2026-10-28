@@ -3108,3 +3108,12 @@ inline-ui-complete = 已完成
 inline-ui-error = 需要關注
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R 恢復本地初始參數。
+
+inline-ui-open = 進入互動
+inline-ui-inline-help = Tab 切換 · Enter/Space 操作 · ←/→ 調整 · 點擊或拖曳
+inline-ui-unavailable = 此介面在目前對話中不可用。
+inline-ui-data = 資料
+inline-ui-reset = 重設輸入
+
+inline-ui-native-help = Tab/↑↓ 切換 · Enter/Space 操作 · ←→ 調整 · PgUp/PgDn 捲動 · Esc 關閉
+inline-ui-editor-help = Enter 確認 · Esc 取消 · ←→ 移動 · Ctrl+U 清空

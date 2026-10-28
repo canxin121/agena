@@ -549,3 +549,13 @@ pub fn entry_activity_summary_keys(entry: &TranscriptEntry<'_>) -> Vec<Transcrip
 
 use self::should_suppress_markdown_block;
 pub(crate) use self::transcript_aux::tool_invocation_label;
+
+/// Preserve one Markdown parse context around native embeds (links, footnotes,
+/// code/quote boundaries and source semantics remain owned by the host parser).
+pub(crate) fn render_inline_reply_document(
+    reply: &crate::inline_ui::InlineReply,
+    width: u16,
+    i18n: &I18n,
+) -> Vec<RenderedLine> {
+    transcript_text::render_inline_reply_document(reply, width, i18n)
+}

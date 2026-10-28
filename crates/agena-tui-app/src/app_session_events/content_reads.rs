@@ -24,6 +24,19 @@ pub(crate) struct ContentRead {
 }
 
 impl ContentRead {
+    #[cfg(test)]
+    pub(crate) fn native_ui_test_frame(frame: Arc<ContentFrame>) -> Self {
+        let (_tx, receiver) = watch::channel(ContentUpdate::default());
+        let (interested, _interest) = watch::channel(false);
+        let task = tokio::spawn(std::future::pending::<()>());
+        Self {
+            receiver,
+            interested,
+            task: task.abort_handle(),
+            displayed: Some(frame),
+            displayed_error: None,
+        }
+    }
     fn start(
         application: TuiBackend,
         session_id: i64,

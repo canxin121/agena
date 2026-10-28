@@ -51,5 +51,7 @@ spacer nodes, repeated divider lines or empty cards to manufacture whitespace.
 Keep labels concise but complete. Long text wraps and tables scroll within their
 own region; do not truncate the actual data to fit a visual size. Touch controls
 retain their hit area, keyboard focus stays visible, and user font/density settings
-remain authoritative. Terminal content uses meaningful section boundaries rather
-than a blank line for every fact; the control list carries input labels and values.
+remain authoritative. Terminal content uses native component layout with meaningful section boundaries,
+compact cards, actual plot/progress glyphs and input hit areas in the answer.
+Controls remain next to their data instead of being repeated in a detached list.
+The optional focused view uses that same layout and state.

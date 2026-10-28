@@ -2731,3 +2731,12 @@ inline-ui-complete = 已完成
 inline-ui-error = 需要关注
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R 恢复本地初始参数。
+
+inline-ui-open = 进入交互
+inline-ui-inline-help = Tab 切换 · 回车/空格操作 · ←/→ 调整 · 点击或拖动
+inline-ui-unavailable = 此界面在当前会话中不可用。
+inline-ui-data = 数据
+inline-ui-reset = 重置输入
+
+inline-ui-native-help = Tab/↑↓ 切换 · 回车/空格操作 · ←→ 调整 · PgUp/PgDn 滚动 · Esc 关闭
+inline-ui-editor-help = 回车确认 · Esc 取消 · ←→ 移动 · Ctrl+U 清空

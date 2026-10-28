@@ -490,22 +490,20 @@ fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
 }
 
 fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
-    let mut resolved_part;
-    let part = if part.kind == "text"
+    if part.kind == "text"
         && part.role == "assistant"
         && let Some(refs) = &part.inline_ui
-        && let Some(text) = part.content.get("text").and_then(Value::as_str)
+        && let Some(source) = part.content.get("text").and_then(Value::as_str)
+        && !agena_domain::inline_reference_spans(source, !part_state_is_terminal(&part.state))
+            .is_empty()
     {
-        resolved_part = part.clone();
-        resolved_part.content["text"] = Value::String(agena_domain::expand_inline_references(
-            text,
-            refs,
-            !part_state_is_terminal(&part.state),
-        ));
-        &resolved_part
-    } else {
-        part
-    };
+        return TranscriptPartContent::InlineUi(Box::new(crate::inline_ui::InlineReply {
+            source: source.to_owned(),
+            documents: refs.clone(),
+            streaming: !part_state_is_terminal(&part.state),
+            ..Default::default()
+        }));
+    }
     if part.kind == "text" && is_compaction_checkpoint(part) {
         return match decode_part_content::<CompactionContent>(part) {
             Some(content) => TranscriptPartContent::Activity(

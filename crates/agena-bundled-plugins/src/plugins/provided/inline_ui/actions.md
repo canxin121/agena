@@ -19,6 +19,10 @@ files. Use existing explicit user/permission workflows for external side effects
 Client state is not agent execution state. Checking a task is a local selection,
 not evidence that a build, deployment or analysis actually ran.
 
-TUI: open the reply's interactive UI, Tab through controls, arrows adjust choices
-or numeric values, Space toggles checks, Enter activates buttons or edits text.
-The same expression/state/action semantics apply to both clients.
+TUI: controls work directly in the answer. Click tabs/checks/tasks/buttons, drag
+slider tracks, or focus the answer and Tab between controls. Arrows adjust choices
+and numbers; Enter/Space operates; text/numeric edits and select choices use a
+compact native popup. `/ui` is an optional enlarged view of the same components,
+not a separate application or the only way to interact. Both clients run the same
+expression, validation and atomic action rules. Chart legends and data disclosure
+are local view state; copying retains exact source values.

@@ -37,11 +37,30 @@ impl TranscriptState {
         let Some(control) = self.control_at_cursor(width) else {
             return BTreeMap::new();
         };
+        let native_range = if matches!(control.action, TranscriptControlAction::InlineUi(_)) {
+            let line = self
+                .interaction
+                .cursor
+                .as_ref()
+                .map_or(0, |cursor| cursor.line);
+            Some(
+                self.action_start(width, line, &control.action)
+                    ..=self.action_end(width, line, &control.action),
+            )
+        } else {
+            None
+        };
         self.rendered(width)
             .lines
             .iter()
             .enumerate()
             .filter_map(|(index, line)| {
+                if native_range
+                    .as_ref()
+                    .is_some_and(|range| !range.contains(&index))
+                {
+                    return None;
+                }
                 line.controls
                     .iter()
                     .find(|candidate| candidate.enabled && candidate.action == control.action)
@@ -235,6 +254,125 @@ impl TranscriptState {
                     | TranscriptControlAction::Permission { request_id: id, .. } if id == request_id))
                 .map(|control| (line, control.columns.start)));
         if let Some((line, column)) = target {
+            self.set_cursor_position_with_reveal(
+                width,
+                height,
+                line,
+                column,
+                column,
+                TranscriptRevealPolicy::Minimal,
+            );
+        }
+    }
+    pub(crate) fn move_inline_focus(
+        &mut self,
+        width: u16,
+        height: u16,
+        reverse: bool,
+        reference: Option<&str>,
+    ) -> bool {
+        let current = self.control_at_cursor(width);
+        let scope = self.current_cursor_node_cloned(width);
+        let preferred = self
+            .interaction
+            .cursor
+            .as_ref()
+            .map_or(0, |cursor| cursor.line);
+        let mut controls = Vec::new();
+        let mut instance_start = 0;
+        for (line, row) in self.rendered(width).lines.iter().enumerate() {
+            if reference.is_none()
+                && scope
+                    .as_ref()
+                    .is_some_and(|node| line < node.start_line || line >= node.end_line)
+            {
+                continue;
+            }
+            if row.controls.iter().any(|control| matches!(&control.action,TranscriptControlAction::InlineUi(target) if target.event==agena_tui_transcript::inline_ui::InlineEvent::Open)) {
+                instance_start=controls.len();
+            }
+            for control in &row.controls {
+                if !control.enabled {
+                    continue;
+                }
+                let TranscriptControlAction::InlineUi(target) = &control.action else {
+                    continue;
+                };
+                if target.event == agena_tui_transcript::inline_ui::InlineEvent::Open
+                    || reference.is_some_and(|reference| reference != target.reference)
+                {
+                    continue;
+                }
+                if !controls[instance_start..].iter().any(
+                    |(_, previous): &(usize, RenderedTranscriptControl)| {
+                        previous.action == control.action
+                    },
+                ) {
+                    controls.push((line, control.clone()));
+                }
+            }
+        }
+        if controls.is_empty() {
+            return false;
+        }
+        let index = current.and_then(|current| {
+            controls
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, control))| control.action == current.action)
+                .min_by_key(|(_, (line, _))| line.abs_diff(preferred))
+                .map(|(index, _)| index)
+        });
+
+        let next = match index {
+            Some(index) if reverse => (index + controls.len() - 1) % controls.len(),
+            Some(index) => (index + 1) % controls.len(),
+            None if reverse => controls
+                .iter()
+                .rposition(|(line, _)| *line <= preferred)
+                .unwrap_or(controls.len() - 1),
+            None => controls
+                .iter()
+                .position(|(line, _)| *line >= preferred)
+                .unwrap_or(0),
+        };
+        let (line, control) = &controls[next];
+        let (line, column) = (*line, control.columns.start);
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            line,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+        true
+    }
+    pub(crate) fn restore_inline_focus(
+        &mut self,
+        width: u16,
+        height: u16,
+        target: &agena_tui_transcript::inline_ui::InlineControl,
+    ) {
+        let action = TranscriptControlAction::InlineUi(target.clone());
+        let preferred = self
+            .interaction
+            .cursor
+            .as_ref()
+            .map_or(0, |cursor| cursor.line);
+        let exact = self
+            .rendered(width)
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(line, row)| {
+                row.controls
+                    .iter()
+                    .find(|control| control.enabled && control.action == action)
+                    .map(|control| (line, control.columns.start))
+            })
+            .min_by_key(|(line, _)| line.abs_diff(preferred));
+        if let Some((line, column)) = exact {
             self.set_cursor_position_with_reveal(
                 width,
                 height,

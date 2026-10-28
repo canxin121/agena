@@ -46,3 +46,7 @@ with the actual `prepare` result. Show the fence first, then apply updates.
 `program-cases.json` is the cross-client behavioral oracle emitted by
 `cargo run -p agena-domain --example inline_ui_program_cases --offline`.
 See [the live runtime guide](../../docs/inline-ui-runtime.md).
+
+`terminal-simulation.json` reproduces the reported 20%/30% growth-rate and task
+progress example. Native TUI event tests operate the actual transcript, not a
+second detached sample UI. Its numbers are explicitly illustrative.

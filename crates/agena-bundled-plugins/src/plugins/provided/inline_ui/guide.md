@@ -45,7 +45,7 @@ are not supported. They do not render rich reply content.
 - comparison — two to four alternatives across named dimensions.
 - metrics — one to six supplied facts with units and optional context.
 - table — compact exact data, up to eight columns and forty rows.
-- details — supporting explanation; collapsible on Web, complete in TUI/copy.
+- details — supporting explanation; collapsible on Web and TUI, complete in copy/export.
 - chart — line, bar, area or pie over categories. Null means missing, not zero.
   Numeric-X scatter and irregular time spacing need another representation.
 

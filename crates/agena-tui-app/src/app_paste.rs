@@ -172,10 +172,7 @@ impl App {
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::InlineUi(dialog) => {
-                    if let Some(buffer) = &mut dialog.editing {
-                        let remaining = 6000_usize.saturating_sub(buffer.chars().count());
-                        buffer.extend(text.chars().filter(|c| !c.is_control()).take(remaining));
-                    }
+                    crate::app_inline_ui::native::paste_editor(dialog, &text);
                 }
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.insert_str(text.as_str());

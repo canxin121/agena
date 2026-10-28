@@ -255,6 +255,7 @@ impl TranscriptState {
             tool_detail_tasks: BTreeMap::new(),
             content_reads: BTreeMap::new(),
             inline_reads: BTreeMap::new(),
+            inline_pointer: None,
             tool_detail_pending: BTreeSet::new(),
             tool_detail_allowed_at: BTreeMap::new(),
             tool_detail_failures: BTreeMap::new(),
@@ -313,6 +314,7 @@ impl TranscriptState {
         self.tool_detail_tasks.clear();
         self.content_reads.clear();
         self.inline_reads.clear();
+        self.inline_pointer = None;
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
@@ -373,6 +375,7 @@ impl TranscriptState {
         self.tool_detail_tasks.clear();
         self.content_reads.clear();
         self.inline_reads.clear();
+        self.inline_pointer = None;
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
@@ -1601,7 +1604,6 @@ impl TranscriptState {
                     self.content_reads
                         .get(id)
                         .and_then(|read| read.displayed.clone())
-                        .map(|frame| self.inline_ui_frame(frame))
                 })
                 .collect::<Vec<_>>();
             let errors = entry
@@ -1673,6 +1675,53 @@ impl TranscriptState {
                                 TranscriptActivityContent::Compaction(body),
                             ) => body.summary = Some(text.clone()),
                             _ => {}
+                        }
+                    }
+                    // Preserve the source/typed tree until terminal layout. Do not
+                    // turn real controls into Markdown in the actual chat path.
+                    if let TranscriptContentId::StoredPart(id) = part.id
+                        && let Some(original) =
+                            self.parts.iter().find(|source| source.part_id == id)
+                        && original.kind == "text"
+                        && original.role == "assistant"
+                        && matches!(
+                            &part.content,
+                            TranscriptPartContent::InlineUi(_)
+                                | TranscriptPartContent::Text(_)
+                                | TranscriptPartContent::Activity(
+                                    TranscriptActivityContent::Answer(_)
+                                        | TranscriptActivityContent::TextSegment(_)
+                                )
+                        )
+                    {
+                        let mut seed = original.inline_ui.clone().unwrap_or_default();
+                        let mut source = String::new();
+                        for frame in &part_frames {
+                            if frame.resource.kind == agena_domain::ContentKind::Text {
+                                source.push_str(&frame.source_text);
+                                if let Some(documents) = &frame.inline_ui {
+                                    seed.extend(documents.clone());
+                                }
+                            }
+                        }
+                        source.push_str(
+                            original
+                                .content
+                                .get("text")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or(""),
+                        );
+                        let streaming =
+                            !agena_tui_transcript::part_state_is_terminal(&original.state)
+                                || part_frames.iter().any(|frame| {
+                                    frame.resource.state == agena_domain::ContentState::Active
+                                        || frame.resource.cursor.sequence
+                                            > frame.resource.committed_cursor.sequence
+                                });
+                        if !agena_domain::inline_reference_spans(&source, streaming).is_empty() {
+                            part.content = TranscriptPartContent::InlineUi(Box::new(
+                                self.native_inline_reply(source, Some(&seed), streaming),
+                            ));
                         }
                     }
                     if let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
@@ -3373,12 +3422,26 @@ impl TranscriptState {
                 .filter(|_| !visual)
                 .and_then(|anchor| anchor.action.as_ref())
                 .and_then(|action| {
-                    rendered.lines.iter().enumerate().find_map(|(line, row)| {
-                        row.controls
-                            .iter()
-                            .find(|control| control.enabled && &control.action == action)
-                            .map(|control| (line, control.columns.start))
-                    })
+                    rendered
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(line, row)| {
+                            row.controls
+                                .iter()
+                                .find(|control| control.enabled && &control.action == action)
+                                .map(|control| (line, control.columns.start))
+                        })
+                        .min_by_key(|(line, _)| {
+                            if matches!(
+                                action,
+                                agena_tui_transcript::TranscriptControlAction::InlineUi(_)
+                            ) {
+                                line.abs_diff(cursor.line)
+                            } else {
+                                *line
+                            }
+                        })
                 });
             let line = cursor
                 .anchor

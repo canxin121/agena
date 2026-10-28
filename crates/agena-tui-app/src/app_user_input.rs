@@ -100,6 +100,9 @@ impl App {
         {
             return false;
         }
+        if self.handle_inline_transcript_key(key) {
+            return true;
+        }
         if self.interaction_editing.is_some() {
             return self.handle_interaction_edit_key(key);
         }

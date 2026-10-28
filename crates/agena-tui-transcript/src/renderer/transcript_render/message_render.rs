@@ -1212,6 +1212,26 @@ pub(crate) fn render_part_node(
                 children: Vec::new(),
             }
         }
+        TranscriptPartContent::InlineUi(reply) => {
+            let rows = crate::inline_ui::render_reply(
+                reply,
+                width.saturating_sub(BODY_PREFIX.width() as u16).max(1),
+                i18n,
+            );
+            out.extend(crate::inline_ui::prefix_rows(rows, BODY_PREFIX));
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::Content {
+                    entry_id: message.id,
+                    content_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: reply.copy_text(),
+                toggleable: false,
+                expanded: true,
+                end_line: None,
+                children: Vec::new(),
+            }
+        }
         TranscriptPartContent::Text(text) => {
             push_markdown_document(out, BODY_PREFIX, text.text.as_str(), width, i18n);
             RenderedNodeDraft {

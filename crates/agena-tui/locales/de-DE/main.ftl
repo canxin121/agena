@@ -3203,3 +3203,12 @@ inline-ui-complete = Fertig
 inline-ui-error = Prüfen
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R setzt lokale Eingaben zurück.
+
+inline-ui-open = Bedienung fokussieren
+inline-ui-inline-help = Tab wechseln · Enter/Space bedienen · ←/→ ändern · klicken/ziehen
+inline-ui-unavailable = Diese referenzierte Oberfläche ist hier nicht verfügbar.
+inline-ui-data = Daten
+inline-ui-reset = Eingaben zurücksetzen
+
+inline-ui-native-help = Tab/↑↓ Fokus · Enter/Space Aktion · ←→ ändern · PgUp/PgDn scrollen · Esc schließen
+inline-ui-editor-help = Enter bestätigen · Esc abbrechen · ←→ bewegen · Ctrl+U leeren

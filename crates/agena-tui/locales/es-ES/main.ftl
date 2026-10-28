@@ -3059,3 +3059,12 @@ inline-ui-complete = Completado
 inline-ui-error = Revisar
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R restablece los parámetros locales.
+
+inline-ui-open = Enfocar controles
+inline-ui-inline-help = Tab navegar · Enter/Espacio operar · ←/→ ajustar · clic/arrastrar
+inline-ui-unavailable = La interfaz referenciada no está disponible en esta conversación.
+inline-ui-data = Datos
+inline-ui-reset = Restablecer entradas
+
+inline-ui-native-help = Tab/↑↓ navegar · Enter/Espacio operar · ←→ ajustar · PgUp/PgDn desplazar · Esc cerrar
+inline-ui-editor-help = Enter confirmar · Esc cancelar · ←→ mover · Ctrl+U borrar

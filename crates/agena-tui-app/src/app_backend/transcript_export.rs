@@ -500,6 +500,11 @@ fn take_export_body(part: &mut TranscriptEntryPart<'_>) -> Option<String> {
             document.nodes.clear();
             Some(text)
         }
+        TranscriptPartContent::InlineUi(reply) => {
+            let text = reply.copy_text();
+            reply.source.clear();
+            Some(text)
+        }
         TranscriptPartContent::Text(body) => Some(std::mem::take(&mut body.text)),
         TranscriptPartContent::Activity(
             TranscriptActivityContent::TextSegment(body) | TranscriptActivityContent::Answer(body),

@@ -133,3 +133,25 @@ test('bounds resolved value expansion and aggregate allocation, not only the inp
     many.computed![`expanded${i}`] = { $op: 'map', args: [{ $get: 'data.repeatRows' }, { $get: 'data.largeLabel' }] }
   expect(() => validateUiProgram(many)).toThrow('result budget')
 })
+
+test('the reported growth-rate and task example matches native TUI results', () => {
+  const document = parseInlineDocument(
+    JSON.parse(readFileSync(new URL('../../../examples/inline-ui/terminal-simulation.json', import.meta.url), 'utf8')),
+  )
+  const panel = document.blocks.find((block) => block.type === 'panel')
+  if (!panel || panel.type !== 'panel') throw new Error('Missing simulation panel')
+  const p = validateUiProgram(panel.program)
+  expect(renderUi(p).computed.projection).toBe(678)
+  let state = inputUi(p, {}, 'growth', 30).state
+  expect(renderUi(p, state).computed.projection).toBe(735)
+  expect(renderUi(p, state).computed.delta).toBe(170)
+  state = inputUi(p, state, 'tasks', ['slider', 'tasks', 'toggle']).state
+  expect(renderUi(p, state).computed.progress).toBe(100)
+  state = inputUi(p, state, 'assumptions', true).state
+  expect(uiMarkdown(renderUi(p, state))).toContain('计算假设')
+  expect(activateUi(p, state, 'copy').copy).toBe('推演总值：735；增长率：30%')
+  state = activateUi(p, state, 'reset').state
+  expect(state.growth).toBe(20)
+  expect(state.done).toEqual([])
+  expect(state.showFormula).toBe(false)
+})

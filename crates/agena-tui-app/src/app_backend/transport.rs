@@ -450,6 +450,41 @@ impl TuiBackend {
     }
     /// Connect to and validate a server, then resolve the local
     /// workspace path into the server's public workspace identity.
+    /// Pure in-memory transport fixture. Never handshakes with a real server.
+    #[cfg(test)]
+    pub(crate) fn isolated_test_backend(workspace_root: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(RemoteBackend {
+                client: AgenaClient::new("http://127.0.0.1:9").expect("test endpoint"),
+                workspace_id: 1,
+                providers: Default::default(),
+                models: Default::default(),
+                configured_provider_adapter_models: Default::default(),
+                provider_drafts: Default::default(),
+                config_sources: Default::default(),
+                runtime_status: Default::default(),
+                mcp_server_control: Default::default(),
+                plugin_catalog: Default::default(),
+                plugin_statuses: Default::default(),
+                plugin_inspects: Default::default(),
+                plugin_logs: Default::default(),
+                permission_tools: Default::default(),
+                plugin_notifications: Default::default(),
+                plugin_notifications_baseline: Default::default(),
+                activity_kinds: Default::default(),
+                workspace_files: Default::default(),
+                workspace_file_index: Default::default(),
+                workspace_directory_cache: Default::default(),
+                workspace_image_data_urls: Default::default(),
+                aws_profiles: Default::default(),
+                model_catalog: Default::default(),
+            }),
+            instance_id: format!("inline-ui-test-{}", workspace_root.display()).into(),
+            workspace_root: Arc::new(workspace_root),
+            media_workspace: Arc::new(tempfile::tempdir().expect("test media root")),
+        }
+    }
+
     pub async fn connect_remote(
         server_url: impl AsRef<str>,
         workspace_root: PathBuf,

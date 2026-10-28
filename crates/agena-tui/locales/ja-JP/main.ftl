@@ -3057,3 +3057,12 @@ inline-ui-complete = 完了
 inline-ui-error = 要確認
 inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
 inline-ui-reset-help = Ctrl+R で入力を初期値に戻します。
+
+inline-ui-open = 操作にフォーカス
+inline-ui-inline-help = Tab 移動 · Enter/Space 操作 · ←/→ 調整 · クリック/ドラッグ
+inline-ui-unavailable = この会話では参照先の UI を利用できません。
+inline-ui-data = データ
+inline-ui-reset = 入力をリセット
+
+inline-ui-native-help = Tab/↑↓ 移動 · Enter/Space 操作 · ←→ 調整 · PgUp/PgDn スクロール · Esc 閉じる
+inline-ui-editor-help = Enter 確定 · Esc 取消 · ←→ 移動 · Ctrl+U クリア

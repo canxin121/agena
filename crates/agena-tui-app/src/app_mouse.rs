@@ -7,6 +7,9 @@ const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 impl App {
     pub(crate) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
         self.clear_transcript_pending_command();
+        if self.handle_native_inline_mouse(mouse) {
+            return;
+        }
         if self.handle_surface_pointer(mouse) {
             return;
         }

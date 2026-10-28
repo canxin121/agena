@@ -442,6 +442,7 @@ impl App {
     pub(crate) fn handle_terminal_event(&mut self, event: Event) {
         match event {
             Event::Key(key) => {
+                self.transcript.inline_pointer = None;
                 self.transcript_scrollbar_drag = None;
                 self.last_transcript_click = None;
                 if self
@@ -467,6 +468,7 @@ impl App {
                 self.handle_paste(text);
             }
             Event::Resize(_, _) => {
+                self.transcript.inline_pointer = None;
                 self.pointer_targets = Default::default();
                 self.cancel_surface_selection();
                 self.transcript_scrollbar_drag = None;
@@ -497,6 +499,7 @@ impl App {
             }
             Event::FocusGained => {}
             Event::FocusLost => {
+                self.transcript.inline_pointer = None;
                 self.transcript_scrollbar_drag = None;
                 self.last_transcript_click = None;
                 if self

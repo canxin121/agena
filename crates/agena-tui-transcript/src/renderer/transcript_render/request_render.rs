@@ -76,6 +76,7 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         TranscriptPartContent::UserDocument(document) => {
             first_non_empty_preview_line(document.plain_text().as_str())
         }
+        TranscriptPartContent::InlineUi(reply) => first_non_empty_preview_line(&reply.copy_text()),
         TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
         TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
         TranscriptPartContent::Activity(_) => {

@@ -179,6 +179,7 @@ pub(crate) enum PendingComposerSubmit {
 
 pub(crate) struct TranscriptState {
     pub(crate) inline_reads: BTreeMap<String, crate::app_inline_ui::InlineUiRead>,
+    pub(crate) inline_pointer: Option<crate::app_inline_ui::native::InlinePointer>,
     pub(crate) i18n: I18n,
     pub(crate) math_render_context: MathRenderContext,
     pub(crate) session_id: Option<i64>,

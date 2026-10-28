@@ -1,0 +1,427 @@
+{
+  "version": 1,
+  "title": "终端与 Web 同一份交互演示",
+  "blocks": [
+    {
+      "type": "panel",
+      "id": "workspace",
+      "program": {
+        "root": "root",
+        "data": {
+          "months": [
+            {
+              "month": "1 月",
+              "value": 120
+            },
+            {
+              "month": "2 月",
+              "value": 145
+            },
+            {
+              "month": "3 月",
+              "value": 132
+            },
+            {
+              "month": "4 月",
+              "value": 168
+            }
+          ]
+        },
+        "state": {
+          "growth": {
+            "kind": "number",
+            "initial": 20,
+            "min": 0,
+            "max": 60,
+            "step": 1
+          },
+          "done": {
+            "kind": "selection",
+            "initial": []
+          },
+          "showFormula": {
+            "kind": "boolean",
+            "initial": false
+          }
+        },
+        "computed": {
+          "base": {
+            "$op": "sum",
+            "args": [
+              {
+                "$op": "map",
+                "args": [
+                  {
+                    "$get": "data.months"
+                  },
+                  {
+                    "$get": "item.value"
+                  }
+                ]
+              }
+            ]
+          },
+          "factor": {
+            "$op": "add",
+            "args": [
+              1,
+              {
+                "$op": "div",
+                "args": [
+                  {
+                    "$get": "state.growth"
+                  },
+                  100
+                ]
+              }
+            ]
+          },
+          "values": {
+            "$op": "map",
+            "args": [
+              {
+                "$get": "data.months"
+              },
+              {
+                "$op": "round",
+                "args": [
+                  {
+                    "$op": "mul",
+                    "args": [
+                      {
+                        "$get": "item.value"
+                      },
+                      {
+                        "$get": "computed.factor"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "projection": {
+            "$op": "sum",
+            "args": [
+              {
+                "$get": "computed.values"
+              }
+            ]
+          },
+          "delta": {
+            "$op": "sub",
+            "args": [
+              {
+                "$get": "computed.projection"
+              },
+              {
+                "$get": "computed.base"
+              }
+            ]
+          },
+          "progress": {
+            "$op": "mul",
+            "args": [
+              {
+                "$op": "div",
+                "args": [
+                  {
+                    "$op": "length",
+                    "args": [
+                      {
+                        "$get": "state.done"
+                      }
+                    ]
+                  },
+                  3
+                ]
+              },
+              100
+            ]
+          },
+          "summary": {
+            "$op": "concat",
+            "args": [
+              "推演总值：",
+              {
+                "$get": "computed.projection"
+              },
+              "；增长率：",
+              {
+                "$get": "state.growth"
+              },
+              "%"
+            ]
+          }
+        },
+        "actions": {
+          "reset": [
+            {
+              "type": "reset"
+            }
+          ],
+          "copy": [
+            {
+              "type": "copy",
+              "text": {
+                "$get": "computed.summary"
+              }
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "base",
+            "kind": "metric",
+            "props": {
+              "label": "基期合计",
+              "value": {
+                "$get": "computed.base"
+              },
+              "detail": "四个月原值相加"
+            }
+          },
+          {
+            "id": "projected",
+            "kind": "metric",
+            "props": {
+              "label": "推演合计",
+              "value": {
+                "$get": "computed.projection"
+              },
+              "tone": "primary",
+              "detail": "根据当前增长率重新计算"
+            }
+          },
+          {
+            "id": "delta",
+            "kind": "metric",
+            "props": {
+              "label": "增量",
+              "value": {
+                "$get": "computed.delta"
+              },
+              "tone": "success"
+            }
+          },
+          {
+            "id": "metrics",
+            "kind": "grid",
+            "props": {
+              "columns": 3
+            },
+            "children": [
+              "base",
+              "projected",
+              "delta"
+            ]
+          },
+          {
+            "id": "trend",
+            "kind": "chart",
+            "props": {
+              "title": "各月推演值",
+              "chart_type": "bar",
+              "labels": {
+                "$op": "map",
+                "args": [
+                  {
+                    "$get": "data.months"
+                  },
+                  {
+                    "$get": "item.month"
+                  }
+                ]
+              },
+              "series": [
+                {
+                  "name": "推演值",
+                  "values": {
+                    "$get": "computed.values"
+                  }
+                }
+              ],
+              "x_label": "月份",
+              "y_label": "数值"
+            }
+          },
+          {
+            "id": "chartCard",
+            "kind": "card",
+            "props": {
+              "title": "推演后各月数值",
+              "description": "柱状图、指标和摘要读取同一组数据。"
+            },
+            "children": [
+              "trend"
+            ]
+          },
+          {
+            "id": "growth",
+            "kind": "slider",
+            "props": {
+              "label": "推演增长率",
+              "suffix": "%",
+              "description": "拖动或用方向键调整，其他组件同步更新。"
+            },
+            "bind": "growth"
+          },
+          {
+            "id": "assumptions",
+            "kind": "checkbox",
+            "props": {
+              "label": "显示计算假设"
+            },
+            "bind": "showFormula"
+          },
+          {
+            "id": "formula",
+            "kind": "callout",
+            "props": {
+              "title": "计算假设",
+              "text": "逐月推演值 = round(原值 × (1 + 增长率 / 100))；仅用于交互演示。"
+            },
+            "visible": {
+              "$get": "state.showFormula"
+            }
+          },
+          {
+            "id": "parameters",
+            "kind": "card",
+            "props": {
+              "title": "控件"
+            },
+            "children": [
+              "growth",
+              "assumptions",
+              "formula"
+            ]
+          },
+          {
+            "id": "progress",
+            "kind": "progress",
+            "props": {
+              "label": "勾选进度",
+              "value": {
+                "$get": "computed.progress"
+              },
+              "max": 100,
+              "tone": "success"
+            }
+          },
+          {
+            "id": "tasks",
+            "kind": "tasks",
+            "props": {
+              "title": "试试这三步",
+              "items": [
+                {
+                  "id": "slider",
+                  "title": "拖动滑块看指标变化"
+                },
+                {
+                  "id": "tasks",
+                  "title": "勾选任务看进度条"
+                },
+                {
+                  "id": "toggle",
+                  "title": "切换开关看假设展开"
+                }
+              ]
+            },
+            "bind": "done"
+          },
+          {
+            "id": "execution",
+            "kind": "card",
+            "props": {
+              "title": "任务勾选（本地状态）"
+            },
+            "children": [
+              "progress",
+              "tasks"
+            ]
+          },
+          {
+            "id": "interactive",
+            "kind": "grid",
+            "props": {
+              "columns": 2
+            },
+            "children": [
+              "parameters",
+              "execution"
+            ]
+          },
+          {
+            "id": "original",
+            "kind": "table",
+            "props": {
+              "title": "原值明细",
+              "columns": [
+                {
+                  "key": "month",
+                  "label": "月份"
+                },
+                {
+                  "key": "value",
+                  "label": "原值"
+                }
+              ],
+              "rows": {
+                "$get": "data.months"
+              }
+            }
+          },
+          {
+            "id": "reset",
+            "kind": "button",
+            "props": {
+              "label": "重置全部本地状态"
+            },
+            "action": "reset"
+          },
+          {
+            "id": "copy",
+            "kind": "button",
+            "props": {
+              "label": "复制当前摘要"
+            },
+            "action": "copy"
+          },
+          {
+            "id": "buttons",
+            "kind": "row",
+            "props": {},
+            "children": [
+              "reset",
+              "copy"
+            ]
+          },
+          {
+            "id": "notice",
+            "kind": "callout",
+            "props": {
+              "title": "仅为界面交互演示",
+              "text": "这些数字来自问题复现样例，不代表真实业务。点击只更新当前客户端状态。",
+              "tone": "info"
+            }
+          },
+          {
+            "id": "root",
+            "kind": "stack",
+            "props": {},
+            "children": [
+              "metrics",
+              "chartCard",
+              "interactive",
+              "original",
+              "buttons",
+              "notice"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -909,6 +909,59 @@ pub(crate) fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+pub(crate) fn render_inline_reply_document(
+    reply: &crate::inline_ui::InlineReply,
+    width: u16,
+    i18n: &I18n,
+) -> Vec<RenderedLine> {
+    let blocks = markdown_blocks(&reply.source);
+    let mut out = Vec::new();
+    let mut layout = MarkdownBlockLayout::default();
+    let mut previous = None;
+    let mut embeds = 0;
+    for (index, block) in blocks.iter().enumerate() {
+        if should_suppress_markdown_block(&blocks, index) {
+            continue;
+        }
+        let embed = (embeds < agena_domain::INLINE_UI_MAX_REFERENCES)
+            .then(|| {
+                agena_domain::inline_reference_spans(
+                    &block.source,
+                    reply.streaming && index + 1 == blocks.len(),
+                )
+            })
+            .and_then(|spans| spans.into_iter().next());
+        push_markdown_block_spacing(&mut out, "", previous, &block.parsed);
+        if let Some(embed) = embed {
+            embeds += 1;
+            if let Some(reference) = embed.reference {
+                if let Some(document) = reply.documents.get(&reference) {
+                    out.extend(crate::inline_ui::render_document(
+                        document, &reference, reply, width, i18n,
+                    ));
+                } else {
+                    crate::push_wrapped_line(
+                        &mut out,
+                        "",
+                        "",
+                        &i18n.text("inline-ui-unavailable"),
+                        agena_tui_components::theme::muted_style(),
+                        width,
+                    );
+                }
+            }
+        } else {
+            let prefix = layout.prefix("", &block.parsed, width);
+            render_markdown_block(&mut out, &prefix, block, width, i18n);
+        }
+        previous = Some(&block.parsed);
+    }
+    while out.last().is_some_and(|row| row.text.trim().is_empty()) {
+        out.pop();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

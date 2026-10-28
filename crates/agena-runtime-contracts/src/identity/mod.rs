@@ -97,8 +97,9 @@ pub fn system_prompt_with_sections(sections: &[String]) -> String {
 
 /// Compose shared rules, the session role, and supported workflow guidance.
 ///
-/// User-facing sessions receive rich-output contracts. Subagents receive
-/// Markdown guidance; delegation supplies any additional output contracts.
+/// Tool-enabled user-facing sessions receive rich-output contracts. With
+/// tools disabled, or for subagents, use Markdown; delegation can supply an
+/// additional output contract.
 pub fn system_prompt_for_session(
     relation_kind: SessionRelationKind,
     tools_enabled: bool,
@@ -121,7 +122,7 @@ pub fn system_prompt_for_session(
         AGENA_CORE_PROMPT_TAIL,
         AGENA_MARKDOWN_PROMPT,
     ]);
-    if !relation_kind.is_subagent() {
+    if tools_enabled && !relation_kind.is_subagent() {
         parts.push(AGENA_RICH_OUTPUT_PROMPT);
     }
     parts

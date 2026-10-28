@@ -92,8 +92,22 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
             "agena.inline_ui",
             &["guide", "prepare", "read", "update"],
         );
-        if has("agena.inline_ui.prepare") && !inline_ui.is_empty() {
-            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. A single guide() explains the normal contract; use advanced sections only when needed, and prepare directly once learned. Preparing content does not display it. Paste the entire returned inline-ui code fence unchanged between Markdown paragraphs. Its body contains only the reference ID. Web and TUI resolve it at that position. Do not add an outer fence or print the document JSON. State, actions, layout and basic updates are in the default guide. When working over time, display the fence early in commentary, then update the same reference using returned revisions; read to inspect or resolve conflicts. Publish only actual observed progress, and preserve user-local selections; UI actions do not execute external tools."));
+        if has("agena.inline_ui.prepare") {
+            let mut guidance = format!(
+                "Use Inline Generative UI ({inline_ui}) when visual structure or local interaction materially improves the answer over Markdown, or the user explicitly requests a supported rich view. Do not add decorative UI to otherwise simple answers. Follow the selection criteria under Presentation. "
+            );
+            if has("agena.inline_ui.guide") {
+                guidance.push_str("A single guide() explains the normal contract; request advanced sections only when needed, and prepare directly once learned. ");
+            }
+            guidance.push_str("Prepare validates content but does not display it. Paste the exact returned inline-ui embed fence between Markdown paragraphs, not the document JSON or an outer code fence. Web and TUI render it there. ");
+            if has("agena.inline_ui.update") {
+                guidance.push_str("For genuine ongoing work, prepare with phase working, display the fence early in commentary, and update the same reference using returned revisions. ");
+            }
+            if has("agena.inline_ui.read") {
+                guidance.push_str("Use read only to inspect or resolve conflicts, not as a mandatory update step. ");
+            }
+            guidance.push_str("Show only observed progress; preserve user-local selections, and never treat UI actions as external tool execution.");
+            paragraphs.push(guidance);
         }
     }
 
@@ -252,6 +266,8 @@ mod tests {
         "memory.write",
         "inline_ui.guide",
         "inline_ui.prepare",
+        "inline_ui.read",
+        "inline_ui.update",
     ];
 
     fn catalog(names: &[&str]) -> AvailableTools {
@@ -277,7 +293,7 @@ mod tests {
         assert_eq!(prompt.matches("- **").count(), 9);
         assert_eq!(prompt.matches("# Presentation\n").count(), 1);
         assert!(prompt.contains("## Inline Generative UI"));
-        assert!(prompt.contains("A single guide() call"));
+        assert!(prompt.contains("single `guide()` call, when offered"));
         assert!(prompt.contains("initial phase complete by default"));
         assert!(!prompt.contains("```agena-chart"));
         assert!(!prompt.contains("```agena-ui"));
@@ -312,6 +328,7 @@ mod tests {
         }
         assert_eq!(prompt.matches("- **").count(), 9);
         assert!(prompt.contains("`mermaid`"));
+        assert!(!prompt.contains("## Inline Generative UI"));
         assert!(!prompt.contains("agena-chart"));
         assert!(!prompt.contains("agena-ui"));
         assert!(!prompt.contains("agena.fetch"));
@@ -350,6 +367,8 @@ mod tests {
         let prompt = prompt(SessionRelationKind::Root, true, &["fs.read"]);
         assert!(prompt.contains("`tools_help`"));
         assert!(!prompt.contains("# Workflows"));
+        assert!(prompt.contains("If the relevant tools"));
+        assert!(!prompt.contains("Use Inline Generative UI ("));
         for plugin in [
             "agena.plan",
             "agena.interaction",
@@ -383,6 +402,7 @@ mod tests {
             let prompt = prompt(role, false, ALL_WORKFLOW_TOOLS);
             assert!(!prompt.contains("# Tool discovery"));
             assert!(!prompt.contains("# Workflows"));
+            assert!(!prompt.contains("## Inline Generative UI"));
             for name in ["plugins_list", "tools_list", "tools_help", "tools_call"] {
                 assert!(!prompt.contains(&format!("`{name}`")), "{name}");
             }
@@ -410,19 +430,31 @@ mod tests {
 
     #[test]
     fn inline_ui_discovery_teaches_core_once_and_uses_only_available_tools() {
-        let prompt = prompt(
+        let limited = prompt(
             SessionRelationKind::Root,
             true,
             &["inline_ui.guide", "inline_ui.prepare"],
         );
-        assert!(prompt.contains("`inline_ui.guide`"));
-        assert!(prompt.contains("`inline_ui.prepare`"));
-        assert!(!prompt.contains("`inline_ui.validate`"));
-        assert!(prompt.contains("A single guide() explains the normal contract"));
-        assert!(prompt.contains("prepare directly once learned"));
-        assert!(prompt.contains("read to inspect or resolve conflicts"));
-        assert!(!prompt.contains("read only the needed content kind"));
-        assert!(!prompt.contains("\"blocks\":"));
+        assert!(limited.contains("`inline_ui.guide`"));
+        assert!(limited.contains("`inline_ui.prepare`"));
+        assert!(!limited.contains("`inline_ui.validate`"));
+        assert!(limited.contains("A single guide() explains the normal contract"));
+        assert!(limited.contains("prepare directly once learned"));
+        assert!(!limited.contains("For genuine ongoing work, prepare with phase working"));
+        assert!(!limited.contains("Use read only to inspect or resolve conflicts"));
+        assert!(!limited.contains("read only the needed content kind"));
+        assert!(!limited.contains("\"blocks\":"));
+
+        let full = prompt(SessionRelationKind::Root, true, ALL_WORKFLOW_TOOLS);
+        assert!(full.contains("`inline_ui.read`"));
+        assert!(full.contains("`inline_ui.update`"));
+        assert!(full.contains("For genuine ongoing work, prepare with phase working"));
+        assert!(full.contains("Use read only to inspect or resolve conflicts"));
+
+        let no_guide = prompt(SessionRelationKind::Root, true, &["inline_ui.prepare"]);
+        assert!(no_guide.contains("Use Inline Generative UI (`inline_ui.prepare`)"));
+        assert!(!no_guide.contains("A single guide() explains the normal contract"));
+
         let missing_publisher = assemble_system_prompt(
             SessionRelationKind::Root,
             true,
@@ -432,6 +464,47 @@ mod tests {
             "",
         );
         assert!(!missing_publisher.contains("Use Inline Generative UI ("));
+    }
+
+    #[test]
+    fn rich_output_selection_promotes_useful_ui_without_forcing_it() {
+        let prompt = prompt(SessionRelationKind::Root, true, ALL_WORKFLOW_TOOLS);
+        let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+        // Both a positive threshold and concrete negative cases are needed:
+        // otherwise the model either never discovers UI or decorates every answer.
+        for required in [
+            "Proactively use",
+            "materially improve understanding or usability over clear Markdown",
+            "the user need not explicitly request a UI",
+            "Good fits include several related metrics",
+            "multidimensional comparisons",
+            "filters or other local controls",
+            "*observed* status",
+            "Choose the smallest useful UI",
+            "skip inline UI for greetings, short factual answers",
+            "Honor an explicit request for a supported rich view",
+            "simple Markdown tables",
+            "code or diffs",
+            "plain text, raw JSON",
+            "standalone application",
+            "If the relevant tools",
+            "Never invent measurements or progress",
+            "Prepare validates and stores content",
+            "Read only to inspect state or reconcile a conflict",
+        ] {
+            assert!(
+                normalized.contains(required),
+                "missing UI-selection rule: {required}"
+            );
+        }
+        for stale in [
+            "optionally `validate`",
+            "read only the needed topic",
+            "start with `guide`,",
+            "```agena-ui",
+        ] {
+            assert!(!prompt.contains(stale), "stale UI contract: {stale}");
+        }
     }
 
     #[test]

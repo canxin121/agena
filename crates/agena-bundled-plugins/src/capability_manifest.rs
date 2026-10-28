@@ -124,6 +124,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_notebook_plugin());
     add!(crate::tool::new_plan_plugin());
     add!(crate::tool::new_report_plugin());
+    add!(crate::tool::new_inline_ui_plugin());
     add!(crate::tool::new_session_plugin());
     add!(crate::tool::new_provider_plugin());
     add!(crate::tool::new_settings_plugin());

@@ -39,6 +39,7 @@ mod execution_selection;
 mod execution_status;
 mod finish_reason;
 mod ids;
+mod inline_ui;
 mod interaction_notification;
 mod json_path;
 mod message_activity;
@@ -239,3 +240,25 @@ mod availability_outcome;
 pub use availability_outcome::{
     CapabilitySourceKind, CapabilityUnavailableResult, ToolUnavailableResult,
 };
+
+// Semantic, immutable rich passages embedded in assistant replies.
+pub use inline_ui::{
+    INLINE_UI_MAX_BLOCKS, INLINE_UI_MAX_BYTES, INLINE_UI_TOOL, INLINE_UI_VERSION, InlineBlock,
+    InlineChartType, InlineComparisonRow, InlineDocument, InlineIcon, InlineMetric, InlineSeries,
+    InlineStep, InlineTone,
+};
+
+pub use inline_ui::{
+    INLINE_UI_MAX_REFERENCES, INLINE_UI_REFERENCE_PREFIX, InlineReferenceSpan, InlineUiReferences,
+    PreparedInlineUi, expand_inline_references, inline_reference_candidates,
+    inline_reference_spans, inline_reference_tool_id, is_inline_ui_prepare_tool,
+};
+
+pub use inline_ui::{
+    UI_MAX_EVALUATION_STEPS, UI_MAX_NODES, UiAction, UiActionResult, UiKind, UiNode, UiOption,
+    UiProgram, UiResolvedNode, UiState, UiStateField, UiStateKind, UiView, ui_identifier,
+};
+
+pub use inline_ui::{InlinePanelPatch, InlinePhase, InlineSnapshot, InlineUpdate};
+
+pub use inline_ui::expand_inline_references_with;

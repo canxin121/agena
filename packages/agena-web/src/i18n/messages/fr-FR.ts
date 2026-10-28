@@ -1,4 +1,27 @@
 export default {
+  inlineUi: {
+    resetInputs: "Réinitialiser les paramètres",
+    noData: "Aucune donnée pour cette sélection.",
+    invalidInput: "Cette saisie ne peut pas être appliquée.",
+    working: "En direct",
+    complete: "Terminé",
+    error: "À vérifier",
+    reconnecting: "Reconnexion…",
+    revision: "Révision",
+
+    referenceUnavailable: "Ce contenu référencé n’est pas disponible dans cette conversation.",
+    "label": "Réponse enrichie",
+    "comparison": "Comparaison",
+    "dimension": "Critère",
+    "table": "Tableau de données",
+    "loading": "Préparation du contenu…",
+    "unavailable": "Impossible d’afficher ce passage. Consultez le résultat original ou réessayez.",
+    "copy": "Copier le passage",
+    "copied": "Copié",
+    "copyFailed": "Échec de la copie. Sélectionnez le texte.",
+    "retry": "Réessayer",
+    "inspect": "Voir le résultat original"
+},
   browserNotifications: {
     "title": "Notifications du navigateur",
     "description": "Recevez une notification lorsque l’IA termine, pose une question, demande une autorisation ou échoue. Enregistré dans ce navigateur.",

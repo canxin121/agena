@@ -100,6 +100,139 @@ export type ActiveExecutionResource = {
   phase: ExecutionPhase
 }
 
+export type InlineBlock = {
+  id: string
+  program: UiProgram
+  type: 'panel'
+} | {
+  id: string
+  text: string
+  type: 'paragraph'
+} | {
+  id: string
+  text: string
+  title?: string
+  tone?: InlineTone
+  type: 'callout'
+} | {
+  id: string
+  items: InlineStep[]
+  title?: string
+  type: 'steps'
+} | {
+  columns: string[]
+  id: string
+  rows: InlineComparisonRow[]
+  title?: string
+  type: 'comparison'
+} | {
+  id: string
+  items: InlineMetric[]
+  title?: string
+  type: 'metrics'
+} | {
+  columns: string[]
+  id: string
+  rows: string[][]
+  title?: string
+  type: 'table'
+} | {
+  id: string
+  text: string
+  title: string
+  type: 'details'
+} | {
+  chart_type: InlineChartType
+  id: string
+  labels: string[]
+  series: InlineSeries[]
+  title: string
+  type: 'chart'
+  x_label?: string
+  y_label?: string
+}
+
+export type InlineChartType = 'line' | 'bar' | 'area' | 'pie'
+
+export type InlineComparisonRow = {
+  label: string
+  values: string[]
+}
+
+export type InlineIcon = 'number' | 'shield' | 'layers' | 'sparkles' | 'link' | 'check' | 'search' | 'code'
+
+export type InlineMetric = {
+  detail?: string
+  label: string
+  value: string
+}
+
+export type InlineSeries = {
+  name: string
+  values: (number | null)[]
+}
+
+export type InlineStep = {
+  icon?: InlineIcon
+  label?: string
+  text: string
+  title: string
+}
+
+export type InlineTone = 'note' | 'tip' | 'warning'
+
+export type UiAction = {
+  key: string
+  type: 'set'
+  value: JsonValue
+} | {
+  key: string
+  type: 'toggle'
+} | {
+  type: 'reset'
+} | {
+  text: JsonValue
+  type: 'copy'
+}
+
+export type UiKind = 'stack' | 'row' | 'grid' | 'card' | 'text' | 'heading' | 'metric' | 'badge' | 'divider' | 'tabs' | 'select' | 'checkbox' | 'switch' | 'slider' | 'number' | 'input' | 'button' | 'progress' | 'chart' | 'table' | 'tasks' | 'timeline' | 'callout' | 'details'
+
+export type UiNode = {
+  kind: UiKind
+  action?: string | null
+  bind?: string | null
+  children?: string[]
+  id: string
+  props?: Record<string, JsonValue>
+  visible?: JsonValue
+}
+
+export type UiOption = {
+  label: string
+  value: string
+}
+
+export type UiProgram = {
+  actions?: Record<string, UiAction[]>
+  computed?: Record<string, JsonValue>
+  data?: Record<string, JsonValue>
+  nodes: UiNode[]
+  root: string
+  state?: Record<string, UiStateField>
+}
+
+export type UiStateField = {
+  kind: UiStateKind
+  initial: JsonValue
+  max?: number | null
+  max_length?: number
+  min?: number | null
+  options?: UiOption[]
+  step?: number | null
+}
+
+export type UiStateKind = 'boolean' | 'number' | 'text' | 'choice' | 'selection'
+
 /** Current processing state of a session. This is the single client-facing execution state. Durable session facts are derived from durable parts; the optional live execution and workflow payloads are attached by the application service when it has a full execution snapshot. */
 export type SessionState = {
   kind: 'creating'
@@ -127,4 +260,10 @@ export type SessionState = {
   data: {
     failure?: JsonValue
   }
+}
+
+export type InlineDocument = {
+  blocks: InlineBlock[]
+  title?: string
+  version: number
 }

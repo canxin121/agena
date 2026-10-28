@@ -2713,3 +2713,21 @@ exit-menu-cancel = Cancel
 exit-menu-cancel-detail = Return to the TUI without stopping AI work.
 exit-menu-stopping = Waiting for the server to acknowledge cancellation...
 context-help-key-exit-menu = Open the exit menu (detach, stop and exit, or return).
+
+# Stateful inline reply controls
+command-inline-ui-summary = Open the interactive UI in this conversation.
+inline-ui-title = Interactive reply
+inline-ui-controls = Controls
+inline-ui-loading = Loading live UI…
+inline-ui-no-content = No inline UI is available. Open a reply containing an inline-ui reference first.
+inline-ui-invalid-number = Enter a finite number within the control range.
+inline-ui-copied = Copied the current UI summary.
+inline-ui-edit = Edit
+inline-ui-keys = Tab/Shift+Tab: focus · ←/→: adjust · Space: toggle · Enter: activate/edit · PgUp/PgDn: scroll · Esc: close
+inline-ui-control-changed = This control changed while you were editing. Select it again.
+
+inline-ui-working = Updating
+inline-ui-complete = Complete
+inline-ui-error = Needs attention
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R resets local input parameters.

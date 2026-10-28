@@ -33,7 +33,6 @@ mod render;
 pub use render::*;
 mod parse;
 pub use parse::*;
-mod rich_output;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A node of the markdown AST.

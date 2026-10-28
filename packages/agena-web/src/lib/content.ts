@@ -1,3 +1,4 @@
+import { mergeInlineReferences, type InlineUiReferences } from '@/features/inlineUi/references'
 import { i18n } from '@/i18n'
 import { apiJson, apiResponse, apiUrl } from './api'
 import { SseFrames } from './sseFrames'
@@ -84,6 +85,7 @@ export type ContentResource = ContentRef & {
   capture_error?: string
 }
 export type ContentPage = {
+  inline_ui?: InlineUiReferences | null
   resource: ContentResource
   chunks: ContentChunk[]
   next_cursor: ContentCursor
@@ -127,6 +129,7 @@ export function terminalSnapshotText(screen: TerminalSnapshot, rows?: number[]):
 /** A cursor reducer shared by content widgets. A stale snapshot never
  * replaces newer displayed bytes; explicit retention gaps remain visible. */
 export class ContentBuffer {
+  inlineUi: InlineUiReferences | null = null
   cursor: ContentCursor | null = null
   resource: ContentResource | null = null
   chunks: ContentChunk[] = []
@@ -238,6 +241,7 @@ export class ContentBuffer {
       this.chunks = []
       this.bytes = 0
       this.cursor = null
+      this.inlineUi = null
       this.resource = null
       this.gap = false
       this.windowed = false
@@ -270,6 +274,7 @@ export class ContentBuffer {
     }
     if (trim) this.chunks = this.chunks.slice(trim)
     if (!this.cursor || page.next_cursor.sequence >= this.cursor.sequence) this.cursor = page.next_cursor
+    this.inlineUi = mergeInlineReferences(this.inlineUi, page.inline_ui)
     if (!this.resource) this.resource = page.resource
     else {
       const previous = this.resource

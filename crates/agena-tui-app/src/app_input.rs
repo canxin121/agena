@@ -203,6 +203,7 @@ impl App {
 
         let exit_menu = matches!(&overlay, Overlay::Choice(dialog) if matches!(dialog.action, crate::ChoiceOverlayAction::Exit));
         let close = match &mut overlay {
+            Overlay::InlineUi(dialog) => self.handle_inline_ui_key(key, dialog),
             Overlay::TranscriptSearch(dialog) => {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }

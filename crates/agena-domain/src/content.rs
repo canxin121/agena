@@ -263,6 +263,9 @@ pub struct ContentTextSlice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContentTextPage {
+    /// Session-authorized immutable reply embeds; not part of source bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_ui: Option<crate::InlineUiReferences>,
     pub resource: ContentResource,
     pub slices: Vec<ContentTextSlice>,
     pub next_position: ContentTextPosition,
@@ -551,6 +554,9 @@ pub struct ContentChunk {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContentPage {
+    /// Session-authorized immutable reply embeds; not part of source bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_ui: Option<crate::InlineUiReferences>,
     pub resource: ContentResource,
     pub chunks: Vec<ContentChunk>,
     pub next_cursor: ContentCursor,

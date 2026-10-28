@@ -1,3 +1,4 @@
+import { replyTextForCopy } from '@/features/inlineUi/copy'
 import { i18n } from '@/i18n'
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
@@ -15,6 +16,10 @@ type ToastKind = 'info' | 'success' | 'error'
 type ToastsStore = { push: (kind: ToastKind, message: string) => void }
 
 type MessagePartLike = {
+  agenaKind?: string
+  agenaContent?: JsonValue
+  agenaInlineUi?: JsonValue
+  agenaPresentation?: JsonValue
   type?: string
   text?: string
   filename?: string
@@ -92,10 +97,21 @@ export function useChatMessageActions(opts: {
 
   async function handleCopyMessage(message: MessageLike) {
     const id = typeof message?.info?.id === 'string' ? message.info.id : ''
-    const text = getTextParts(Array.isArray(message?.parts) ? message.parts : [])
-      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-      .filter((t) => t.trim())
-      .join('\n\n')
+    let text: string
+    try {
+      text = await replyTextForCopy(
+        Array.isArray(message?.parts) ? message.parts : [],
+        (part) =>
+          getTextParts([part])
+            .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+            .join('\n\n'),
+        chat.selectedSessionId,
+        message?.info?.role === 'assistant',
+      )
+    } catch {
+      toasts.push('error', t('common.copyFailed'))
+      return
+    }
     if (!text) return
     try {
       await copyToClipboard(text)

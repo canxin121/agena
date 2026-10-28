@@ -1835,6 +1835,17 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'background':
       await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
       return
+    case 'inline-ui': {
+      const reference = args.trim()
+      const candidates = Array.from(pageRef.value?.querySelectorAll<HTMLElement>('[data-inline-embed]') || [])
+      const target = reference ? candidates.find((node) => node.dataset.inlineReference === reference) : candidates.at(-1)
+      if (!target) toasts.push('info', String(t('inlineUi.referenceUnavailable')))
+      else {
+        target.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+        target.querySelector<HTMLElement>('button, input, select, summary, [tabindex="0"]')?.focus({ preventScroll: true })
+      }
+      return
+    }
     case 'plan':
       if (!sid) toasts.push('info', String(t('chat.planViewer.requiresSession')))
       else openPlanViewer()

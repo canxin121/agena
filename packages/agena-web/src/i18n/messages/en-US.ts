@@ -1,4 +1,27 @@
 export default {
+  inlineUi: {
+    resetInputs: "Reset input parameters",
+    noData: "No data for the current selection.",
+    invalidInput: "This input could not be applied.",
+    working: "Live updates",
+    complete: "Complete",
+    error: "Needs attention",
+    reconnecting: "Reconnecting…",
+    revision: "Revision",
+
+    referenceUnavailable: "This referenced content is unavailable in this conversation.",
+    "label": "Inline Generative UI",
+    "comparison": "Comparison",
+    "dimension": "Dimension",
+    "table": "Data table",
+    "loading": "Preparing rich content…",
+    "unavailable": "This passage could not be displayed. Inspect the original result or retry.",
+    "copy": "Copy passage",
+    "copied": "Copied",
+    "copyFailed": "Copy failed. Select the text to copy it.",
+    "retry": "Retry",
+    "inspect": "Inspect original result"
+},
   browserNotifications: {
     "title": "Browser notifications",
     "description": "Get a system notification when AI finishes, asks a question, needs approval, or stops with an error. Saved in this browser.",

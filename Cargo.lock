@@ -268,6 +268,7 @@ dependencies = [
  "agena-skills",
  "agena-storage",
  "agena-storage-layout",
+ "agena-storage-sqlite",
  "agena-tool",
  "anyhow",
  "base64 0.22.1",
@@ -405,6 +406,7 @@ version = "0.1.0"
 dependencies = [
  "agena-failure",
  "chrono",
+ "comrak",
  "indexmap",
  "schemars",
  "serde",
@@ -951,6 +953,7 @@ dependencies = [
 name = "agena-runtime-plugins"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
  "agena-failure",
  "agena-plugin-host",
  "agena-plugin-sdk",
@@ -960,8 +963,10 @@ dependencies = [
  "agena-secret-store",
  "agena-storage-layout",
  "async-trait",
+ "chrono",
  "hex",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

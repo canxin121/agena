@@ -3039,3 +3039,21 @@ exit-menu-cancel = Cancel（戻る）
 exit-menu-cancel-detail = AI 処理を止めずに TUI に戻ります。
 exit-menu-stopping = サーバーのキャンセル確認を待機中…
 context-help-key-exit-menu = 終了メニューを開く（切断、停止して終了、戻る）。
+
+# Stateful inline reply controls
+command-inline-ui-summary = 会話内の対話型UIを開く。
+inline-ui-title = 対話型の回答
+inline-ui-controls = 操作
+inline-ui-loading = UIを読み込み中…
+inline-ui-no-content = 先に inline-ui を含む回答を開いてください。
+inline-ui-invalid-number = 範囲内の有効な数値を入力してください。
+inline-ui-copied = 現在の要約をコピーしました。
+inline-ui-edit = 編集
+inline-ui-keys = Tab: 移動 · ←/→: 調整 · Space: 切替 · Enter: 操作/編集 · PgUp/PgDn: スクロール · Esc: 閉じる
+inline-ui-control-changed = 編集中にコントロールが変わりました。選択し直してください。
+
+inline-ui-working = 更新中
+inline-ui-complete = 完了
+inline-ui-error = 要確認
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R で入力を初期値に戻します。

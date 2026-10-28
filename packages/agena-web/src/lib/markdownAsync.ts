@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n'
-import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels } from './markdown'
+import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels, type MarkdownReferences } from './markdown'
 import type { MarkdownWork } from './markdown.worker'
 
 type Work = {
@@ -116,9 +116,10 @@ export function renderMarkdownAsync(
   labels: Partial<MarkdownUiLabels>,
   signal: AbortSignal,
   streamKey?: number,
+  references?: MarkdownReferences,
 ): Promise<string[]> {
   if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
-  if (typeof Worker === 'undefined') return Promise.resolve([renderMarkdown(content, labels)])
+  if (typeof Worker === 'undefined') return Promise.resolve([renderMarkdown(content, labels, references)])
   return new Promise((resolve, reject) => {
     const id = ++sequence
     const abort = () => {
@@ -132,6 +133,7 @@ export function renderMarkdownAsync(
         id,
         content,
         streamKey,
+        references,
         labels: { ...serialLabels, expandLinesTemplate: expandLinesTitle('__AGENA_LINES__' as unknown as number) },
       },
       resolve,

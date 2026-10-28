@@ -42,3 +42,6 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+agena-storage-sqlite = { workspace = true }

@@ -1,9 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import Markdown from '@/components/Markdown.vue'
-import { computed, defineAsyncComponent } from 'vue'
-import { splitReplySegments } from '@/features/interactive/model'
-const InteractiveAppCard = defineAsyncComponent(() => import('@/features/interactive/InteractiveAppCard.vue'))
-const ReplyChart = defineAsyncComponent(() => import('@/features/interactive/ReplyChart.vue'))
+import InlineReference from '@/features/inlineUi/InlineReference.vue'
+import { splitInlineReferences, inlineMarkdownReferences, mergeInlineReferences } from '@/features/inlineUi/references'
 
 const props = withDefaults(
   defineProps<{
@@ -14,9 +13,9 @@ const props = withDefaults(
     sourcePath?: string
     revealAnchor?: string
     revealRequestSeq?: number
-    allowApps?: boolean
-    appOwner?: string
-    appDirectory?: string
+    allowInlineUi?: boolean
+    inlineDocuments?: unknown
+    inlineSessionId?: string
   }>(),
   {
     mode: 'markdown',
@@ -25,42 +24,43 @@ const props = withDefaults(
     sourcePath: '',
     revealAnchor: '',
     revealRequestSeq: 0,
-    allowApps: false,
-    appOwner: '',
-    appDirectory: '',
+    allowInlineUi: false,
+    inlineDocuments: null,
+    inlineSessionId: '',
   },
 )
+const references = computed(() =>
+  props.allowInlineUi && props.content.includes('inline-ui') ? inlineMarkdownReferences(props.content) : undefined,
+)
+const documents = computed(() => mergeInlineReferences(null, props.inlineDocuments))
 const segments = computed(() =>
-  props.mode === 'plain'
-    ? [{ kind: 'markdown' as const, key: 'md:0', content: props.content }]
-    : splitReplySegments(props.content, props.allowApps),
+  props.mode !== 'plain' && props.allowInlineUi
+    ? splitInlineReferences(props.content, props.stream)
+    : [{ kind: 'markdown' as const, key: 'text:0', content: props.content }],
 )
 </script>
 
 <template>
   <div class="min-w-0">
     <template v-for="segment in segments" :key="segment.key">
-      <InteractiveAppCard
-        v-if="segment.kind === 'app'"
-        :manifest="segment.manifest"
-        :owner="appOwner"
-        :directory="appDirectory"
+      <InlineReference
+        v-if="segment.kind === 'reference'"
+        :reference="segment.reference"
+        :session-id="inlineSessionId"
+        :documents="documents"
       />
-      <ReplyChart v-else-if="segment.kind === 'chart'" :spec="segment.spec" :source="segment.source" />
-      <template v-else>
-        <p v-if="'error' in segment && segment.error" class="my-2 text-xs text-muted-foreground" role="status">
-          {{ segment.error }}
-        </p>
-        <Markdown
-          :content="segment.content"
-          :mode="mode"
-          :stream="stream"
-          :stream-debounce-ms="streamDebounceMs"
-          :source-path="sourcePath"
-          :reveal-anchor="revealAnchor"
-          :reveal-request-seq="revealRequestSeq"
-        />
-      </template>
+      <span v-else-if="segment.kind === 'pending-reference'" aria-hidden="true" data-inline-reference-pending />
+      <Markdown
+        v-else
+        :content="segment.content"
+        :references="references"
+        :mode="mode"
+        :stream="stream"
+        :stream-debounce-ms="streamDebounceMs"
+        :source-path="sourcePath"
+        :reveal-anchor="revealAnchor"
+        :reveal-request-seq="revealRequestSeq"
+      />
     </template>
   </div>
 </template>

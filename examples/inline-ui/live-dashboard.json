@@ -1,0 +1,1023 @@
+{
+  "version": 1,
+  "title": "Agena · 实时交互工作台",
+  "blocks": [
+    {
+      "type": "panel",
+      "id": "workspace",
+      "program": {
+        "root": "root",
+        "nodes": [
+          {
+            "id": "root",
+            "kind": "stack",
+            "props": {
+              "gap": "lg"
+            },
+            "children": [
+              "hero",
+              "navigation",
+              "overview",
+              "tasksPage",
+              "simulation",
+              "footer"
+            ]
+          },
+          {
+            "id": "hero",
+            "kind": "row",
+            "props": {
+              "gap": "md"
+            },
+            "children": [
+              "headline",
+              "demo",
+              "copy"
+            ]
+          },
+          {
+            "id": "headline",
+            "kind": "heading",
+            "props": {
+              "text": "工作洞察",
+              "size": "lg"
+            }
+          },
+          {
+            "id": "demo",
+            "kind": "badge",
+            "props": {
+              "text": "交互演示 · 非真实经营数据",
+              "tone": "info"
+            }
+          },
+          {
+            "id": "copy",
+            "kind": "button",
+            "props": {
+              "label": "复制当前摘要",
+              "tone": "neutral"
+            },
+            "action": "copySummary"
+          },
+          {
+            "id": "navigation",
+            "kind": "tabs",
+            "props": {
+              "label": "工作视图"
+            },
+            "bind": "page"
+          },
+          {
+            "id": "overview",
+            "kind": "stack",
+            "props": {
+              "gap": "lg"
+            },
+            "children": [
+              "overviewHeader",
+              "metricGrid",
+              "chartCard",
+              "workGrid",
+              "salesTable"
+            ],
+            "visible": {
+              "$op": "eq",
+              "args": [
+                {
+                  "$get": "state.page"
+                },
+                "overview"
+              ]
+            }
+          },
+          {
+            "id": "overviewHeader",
+            "kind": "row",
+            "children": [
+              "overviewTitle",
+              "channel"
+            ]
+          },
+          {
+            "id": "overviewTitle",
+            "kind": "text",
+            "props": {
+              "text": "筛选渠道，指标与趋势一起变化。",
+              "tone": "neutral"
+            }
+          },
+          {
+            "id": "channel",
+            "kind": "select",
+            "props": {
+              "label": "渠道"
+            },
+            "bind": "channel"
+          },
+          {
+            "id": "metricGrid",
+            "kind": "grid",
+            "props": {
+              "columns": 3
+            },
+            "children": [
+              "revenue",
+              "orders",
+              "aov"
+            ]
+          },
+          {
+            "id": "revenue",
+            "kind": "metric",
+            "props": {
+              "label": "模拟成交额",
+              "value": {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.revenue"
+                  },
+                  0
+                ]
+              },
+              "prefix": "¥",
+              "detail": "随当前渠道筛选更新",
+              "tone": "primary"
+            }
+          },
+          {
+            "id": "orders",
+            "kind": "metric",
+            "props": {
+              "label": "模拟订单",
+              "value": {
+                "$get": "computed.orders"
+              },
+              "detail": "来源：演示数据"
+            }
+          },
+          {
+            "id": "aov",
+            "kind": "metric",
+            "props": {
+              "label": "平均订单金额",
+              "value": {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.average"
+                  },
+                  2
+                ]
+              },
+              "prefix": "¥",
+              "detail": "成交额 / 订单"
+            }
+          },
+          {
+            "id": "chartCard",
+            "kind": "card",
+            "props": {
+              "title": "渠道表现",
+              "description": "演示数据 · 分类序列，不代表真实日期间距。"
+            },
+            "children": [
+              "revenueChart"
+            ]
+          },
+          {
+            "id": "revenueChart",
+            "kind": "chart",
+            "props": {
+              "title": "模拟成交额",
+              "chart_type": "bar",
+              "labels": {
+                "$op": "pluck",
+                "args": [
+                  {
+                    "$get": "computed.sales"
+                  },
+                  "day"
+                ]
+              },
+              "series": [
+                {
+                  "name": "成交额",
+                  "values": {
+                    "$op": "pluck",
+                    "args": [
+                      {
+                        "$get": "computed.sales"
+                      },
+                      "revenue"
+                    ]
+                  }
+                }
+              ],
+              "x_label": "类别",
+              "y_label": "元"
+            }
+          },
+          {
+            "id": "workGrid",
+            "kind": "grid",
+            "props": {
+              "columns": 2
+            },
+            "children": [
+              "tasksCard",
+              "agentCard"
+            ]
+          },
+          {
+            "id": "tasksCard",
+            "kind": "card",
+            "props": {
+              "title": "你的任务选择"
+            },
+            "children": [
+              "taskProgress",
+              "taskSummary",
+              "viewTasks"
+            ]
+          },
+          {
+            "id": "taskProgress",
+            "kind": "progress",
+            "props": {
+              "label": "任务完成度",
+              "value": {
+                "$get": "computed.progress"
+              },
+              "max": 100,
+              "tone": "success"
+            }
+          },
+          {
+            "id": "taskSummary",
+            "kind": "text",
+            "props": {
+              "text": {
+                "$op": "concat",
+                "args": [
+                  "已勾选 ",
+                  {
+                    "$get": "computed.done"
+                  },
+                  " / ",
+                  {
+                    "$op": "length",
+                    "args": [
+                      {
+                        "$get": "data.tasks"
+                      }
+                    ]
+                  },
+                  " 个任务。这是界面状态，不代表后台任务执行。"
+                ]
+              }
+            }
+          },
+          {
+            "id": "viewTasks",
+            "kind": "button",
+            "props": {
+              "label": "查看项目执行"
+            },
+            "action": "showTasks"
+          },
+          {
+            "id": "agentCard",
+            "kind": "card",
+            "props": {
+              "title": "AI 工作进展",
+              "description": "初始为示例进度；测试会通过 update 实际更新这些字段。"
+            },
+            "children": [
+              "agentProgress",
+              "workStatus",
+              "timeline"
+            ]
+          },
+          {
+            "id": "agentProgress",
+            "kind": "progress",
+            "props": {
+              "label": "已检查记录",
+              "value": {
+                "$get": "data.processed"
+              },
+              "max": {
+                "$get": "data.total"
+              },
+              "detail": {
+                "$get": "data.workLabel"
+              },
+              "tone": "primary"
+            }
+          },
+          {
+            "id": "workStatus",
+            "kind": "badge",
+            "props": {
+              "text": {
+                "$get": "data.workLabel"
+              },
+              "tone": "info"
+            }
+          },
+          {
+            "id": "timeline",
+            "kind": "timeline",
+            "props": {
+              "items": {
+                "$get": "data.timeline"
+              }
+            }
+          },
+          {
+            "id": "salesTable",
+            "kind": "table",
+            "props": {
+              "title": "当前渠道明细",
+              "columns": [
+                {
+                  "key": "day",
+                  "label": "类别"
+                },
+                {
+                  "key": "revenue",
+                  "label": "成交额（元）"
+                },
+                {
+                  "key": "orders",
+                  "label": "订单"
+                }
+              ],
+              "rows": {
+                "$get": "computed.sales"
+              }
+            }
+          },
+          {
+            "id": "tasksPage",
+            "kind": "stack",
+            "props": {
+              "gap": "md"
+            },
+            "children": [
+              "tasksTitle",
+              "query",
+              "taskList",
+              "tasksReturn"
+            ],
+            "visible": {
+              "$op": "eq",
+              "args": [
+                {
+                  "$get": "state.page"
+                },
+                "tasks"
+              ]
+            }
+          },
+          {
+            "id": "tasksTitle",
+            "kind": "heading",
+            "props": {
+              "text": "项目执行",
+              "size": "md"
+            }
+          },
+          {
+            "id": "query",
+            "kind": "input",
+            "props": {
+              "label": "筛选任务",
+              "placeholder": "输入任务标题中的文字"
+            },
+            "bind": "query"
+          },
+          {
+            "id": "taskList",
+            "kind": "tasks",
+            "props": {
+              "title": "任务清单",
+              "items": {
+                "$get": "computed.tasks"
+              },
+              "empty": "没有匹配的任务"
+            },
+            "bind": "done"
+          },
+          {
+            "id": "tasksReturn",
+            "kind": "button",
+            "props": {
+              "label": "返回总览查看进度"
+            },
+            "action": "showOverview"
+          },
+          {
+            "id": "simulation",
+            "kind": "stack",
+            "props": {
+              "gap": "lg"
+            },
+            "children": [
+              "simTitle",
+              "simControls",
+              "simMetrics",
+              "simWarning",
+              "formulaToggle",
+              "formula",
+              "reset"
+            ],
+            "visible": {
+              "$op": "eq",
+              "args": [
+                {
+                  "$get": "state.page"
+                },
+                "simulation"
+              ]
+            }
+          },
+          {
+            "id": "simTitle",
+            "kind": "heading",
+            "props": {
+              "text": "情景推演",
+              "size": "md"
+            }
+          },
+          {
+            "id": "simControls",
+            "kind": "grid",
+            "props": {
+              "columns": 2
+            },
+            "children": [
+              "budget",
+              "margin"
+            ]
+          },
+          {
+            "id": "budget",
+            "kind": "slider",
+            "props": {
+              "label": "模拟广告预算",
+              "prefix": "¥",
+              "description": "提高预算后观察边际收益递减。"
+            },
+            "bind": "budget"
+          },
+          {
+            "id": "margin",
+            "kind": "number",
+            "props": {
+              "label": "模拟毛利率",
+              "suffix": "%",
+              "description": "仅用于演示，不构成经营建议。"
+            },
+            "bind": "margin"
+          },
+          {
+            "id": "simMetrics",
+            "kind": "grid",
+            "props": {
+              "columns": 2
+            },
+            "children": [
+              "scenarioRevenue",
+              "scenarioProfit"
+            ]
+          },
+          {
+            "id": "scenarioRevenue",
+            "kind": "metric",
+            "props": {
+              "label": "模拟收入",
+              "prefix": "¥",
+              "value": {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.scenarioRevenue"
+                  },
+                  0
+                ]
+              },
+              "detail": "基于下方简化假设"
+            }
+          },
+          {
+            "id": "scenarioProfit",
+            "kind": "metric",
+            "props": {
+              "label": "模拟利润",
+              "prefix": "¥",
+              "value": {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.scenarioProfit"
+                  },
+                  0
+                ]
+              },
+              "tone": {
+                "$op": "if",
+                "args": [
+                  {
+                    "$op": "lt",
+                    "args": [
+                      {
+                        "$get": "computed.scenarioProfit"
+                      },
+                      0
+                    ]
+                  },
+                  "danger",
+                  "success"
+                ]
+              },
+              "detail": "收入 × 毛利率 − 广告预算 − 固定成本"
+            }
+          },
+          {
+            "id": "simWarning",
+            "kind": "callout",
+            "props": {
+              "title": "收入提高，不一定意味着利润提高",
+              "text": "这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。",
+              "tone": "warning"
+            },
+            "visible": {
+              "$op": "lt",
+              "args": [
+                {
+                  "$get": "computed.scenarioProfit"
+                },
+                0
+              ]
+            }
+          },
+          {
+            "id": "formulaToggle",
+            "kind": "checkbox",
+            "props": {
+              "label": "显示计算假设"
+            },
+            "bind": "showFormula"
+          },
+          {
+            "id": "formula",
+            "kind": "card",
+            "props": {
+              "title": "模型假设"
+            },
+            "children": [
+              "formulaText"
+            ],
+            "visible": {
+              "$get": "state.showFormula"
+            }
+          },
+          {
+            "id": "formulaText",
+            "kind": "text",
+            "props": {
+              "text": "收入 = 30,000 + 90,000 × 预算 / (预算 + 15,000)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。"
+            }
+          },
+          {
+            "id": "reset",
+            "kind": "button",
+            "props": {
+              "label": "重置推演参数"
+            },
+            "action": "resetScenario"
+          },
+          {
+            "id": "footer",
+            "kind": "callout",
+            "props": {
+              "title": "界面内的操作，不会修改外部业务数据",
+              "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+              "tone": "info"
+            }
+          }
+        ],
+        "state": {
+          "page": {
+            "kind": "choice",
+            "initial": "overview",
+            "options": [
+              {
+                "value": "overview",
+                "label": "经营总览"
+              },
+              {
+                "value": "tasks",
+                "label": "项目执行"
+              },
+              {
+                "value": "simulation",
+                "label": "情景推演"
+              }
+            ]
+          },
+          "channel": {
+            "kind": "choice",
+            "initial": "all",
+            "options": [
+              {
+                "value": "all",
+                "label": "全部渠道"
+              },
+              {
+                "value": "organic",
+                "label": "自然搜索"
+              },
+              {
+                "value": "paid",
+                "label": "付费推广"
+              },
+              {
+                "value": "referral",
+                "label": "用户推荐"
+              }
+            ]
+          },
+          "done": {
+            "kind": "selection",
+            "initial": [
+              "research"
+            ]
+          },
+          "budget": {
+            "kind": "number",
+            "initial": 12000,
+            "min": 0,
+            "max": 60000,
+            "step": 1000
+          },
+          "margin": {
+            "kind": "number",
+            "initial": 65,
+            "min": 10,
+            "max": 90,
+            "step": 1
+          },
+          "query": {
+            "kind": "text",
+            "initial": "",
+            "max_length": 100
+          },
+          "showFormula": {
+            "kind": "boolean",
+            "initial": false
+          }
+        },
+        "data": {
+          "sales": [
+            {
+              "day": "自然 · D1",
+              "channel": "organic",
+              "revenue": 24000,
+              "orders": 160
+            },
+            {
+              "day": "推广 · D1",
+              "channel": "paid",
+              "revenue": 18000,
+              "orders": 126
+            },
+            {
+              "day": "推荐 · D1",
+              "channel": "referral",
+              "revenue": 12500,
+              "orders": 89
+            },
+            {
+              "day": "自然 · D2",
+              "channel": "organic",
+              "revenue": 28500,
+              "orders": 190
+            },
+            {
+              "day": "推广 · D2",
+              "channel": "paid",
+              "revenue": 21000,
+              "orders": 141
+            },
+            {
+              "day": "推荐 · D2",
+              "channel": "referral",
+              "revenue": 14500,
+              "orders": 98
+            }
+          ],
+          "tasks": [
+            {
+              "id": "research",
+              "title": "整理需求与事实",
+              "detail": "确认数据来源，区分实测与模拟。"
+            },
+            {
+              "id": "design",
+              "title": "完成界面设计",
+              "detail": "保证筛选、任务和推演共用同一份状态。"
+            },
+            {
+              "id": "verify",
+              "title": "核验结果与边界",
+              "detail": "覆盖断线恢复、窄屏与终端交互。"
+            }
+          ],
+          "processed": 2,
+          "total": 6,
+          "workLabel": "正在检查数据与任务关联",
+          "timeline": [
+            {
+              "id": "start",
+              "title": "开始处理",
+              "detail": "示例事件：数据已载入。"
+            },
+            {
+              "id": "check",
+              "title": "检查数据结构",
+              "detail": "示例事件：正在检查余下数据。"
+            }
+          ],
+          "fixedCost": 16000
+        },
+        "computed": {
+          "sales": {
+            "$op": "filter",
+            "args": [
+              {
+                "$get": "data.sales"
+              },
+              {
+                "$op": "or",
+                "args": [
+                  {
+                    "$op": "eq",
+                    "args": [
+                      {
+                        "$get": "state.channel"
+                      },
+                      "all"
+                    ]
+                  },
+                  {
+                    "$op": "eq",
+                    "args": [
+                      {
+                        "$get": "item.channel"
+                      },
+                      {
+                        "$get": "state.channel"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "revenue": {
+            "$op": "sum",
+            "args": [
+              {
+                "$op": "pluck",
+                "args": [
+                  {
+                    "$get": "computed.sales"
+                  },
+                  "revenue"
+                ]
+              }
+            ]
+          },
+          "orders": {
+            "$op": "sum",
+            "args": [
+              {
+                "$op": "pluck",
+                "args": [
+                  {
+                    "$get": "computed.sales"
+                  },
+                  "orders"
+                ]
+              }
+            ]
+          },
+          "average": {
+            "$op": "div",
+            "args": [
+              {
+                "$get": "computed.revenue"
+              },
+              {
+                "$get": "computed.orders"
+              }
+            ]
+          },
+          "done": {
+            "$op": "length",
+            "args": [
+              {
+                "$get": "state.done"
+              }
+            ]
+          },
+          "tasks": {
+            "$op": "filter",
+            "args": [
+              {
+                "$get": "data.tasks"
+              },
+              {
+                "$op": "includes",
+                "args": [
+                  {
+                    "$get": "item.title"
+                  },
+                  {
+                    "$get": "state.query"
+                  }
+                ]
+              }
+            ]
+          },
+          "progress": {
+            "$op": "mul",
+            "args": [
+              {
+                "$op": "div",
+                "args": [
+                  {
+                    "$get": "computed.done"
+                  },
+                  {
+                    "$op": "length",
+                    "args": [
+                      {
+                        "$get": "data.tasks"
+                      }
+                    ]
+                  }
+                ]
+              },
+              100
+            ]
+          },
+          "scenarioRevenue": {
+            "$op": "add",
+            "args": [
+              30000,
+              {
+                "$op": "div",
+                "args": [
+                  {
+                    "$op": "mul",
+                    "args": [
+                      90000,
+                      {
+                        "$get": "state.budget"
+                      }
+                    ]
+                  },
+                  {
+                    "$op": "add",
+                    "args": [
+                      {
+                        "$get": "state.budget"
+                      },
+                      15000
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "scenarioProfit": {
+            "$op": "sub",
+            "args": [
+              {
+                "$op": "sub",
+                "args": [
+                  {
+                    "$op": "mul",
+                    "args": [
+                      {
+                        "$get": "computed.scenarioRevenue"
+                      },
+                      {
+                        "$op": "div",
+                        "args": [
+                          {
+                            "$get": "state.margin"
+                          },
+                          100
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "$get": "state.budget"
+                  }
+                ]
+              },
+              {
+                "$get": "data.fixedCost"
+              }
+            ]
+          },
+          "summary": {
+            "$op": "concat",
+            "args": [
+              "【模拟报告】成交额 ¥",
+              {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.revenue"
+                  },
+                  0
+                ]
+              },
+              "；订单 ",
+              {
+                "$get": "computed.orders"
+              },
+              "；任务 ",
+              {
+                "$get": "computed.done"
+              },
+              "/",
+              {
+                "$op": "length",
+                "args": [
+                  {
+                    "$get": "data.tasks"
+                  }
+                ]
+              },
+              "；推演利润 ¥",
+              {
+                "$op": "format",
+                "args": [
+                  {
+                    "$get": "computed.scenarioProfit"
+                  },
+                  0
+                ]
+              }
+            ]
+          }
+        },
+        "actions": {
+          "showTasks": [
+            {
+              "type": "set",
+              "key": "page",
+              "value": "tasks"
+            }
+          ],
+          "showOverview": [
+            {
+              "type": "set",
+              "key": "page",
+              "value": "overview"
+            }
+          ],
+          "resetScenario": [
+            {
+              "type": "set",
+              "key": "budget",
+              "value": 12000
+            },
+            {
+              "type": "set",
+              "key": "margin",
+              "value": 65
+            }
+          ],
+          "copySummary": [
+            {
+              "type": "copy",
+              "text": {
+                "$get": "computed.summary"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

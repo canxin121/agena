@@ -42,6 +42,7 @@ mod model_catalog;
 pub use agena_runtime_contracts::permission;
 pub mod plugins {
     pub use agena_bundled_plugins::plugins::{provided, sources};
+    pub use agena_runtime_plugins::plugins::inline_ui;
     pub use agena_runtime_plugins::plugins::storage;
 }
 pub use agena_runtime_provider::provider;

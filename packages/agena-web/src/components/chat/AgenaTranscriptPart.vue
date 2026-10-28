@@ -23,7 +23,6 @@ import {
 import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
-import { useChatStore } from '@/stores/chat'
 import { useErrorPartHeadline } from '@/composables/useErrorPartHeadline'
 
 const props = defineProps<{
@@ -48,8 +47,6 @@ const emit = defineEmits<{
 
 const directory = useDirectoryStore()
 const ui = useUiStore()
-const chat = useChatStore()
-const appDirectory = computed(() => chat.getSessionDirectory(props.sessionId) || '')
 // A durable Part's kind is stable. Ordinary Markdown Parts need no clock or visibility observer.
 const errorHeadline = props.part.kind === 'error' ? useErrorPartHeadline(toRef(props, 'part')) : computed(() => null)
 const status = computed(() => errorHeadline.value?.status ?? partStatusPresentation(props.part.status))
@@ -103,9 +100,9 @@ function openAttachment(attachment: AttachmentPresentation, path: string, url: s
       mode="markdown"
       :stream="Boolean(streaming)"
       :source-path="sourcePath || ''"
-      :allow-apps="part.role === 'assistant'"
-      :app-owner="sessionId || ''"
-      :app-directory="appDirectory"
+      :allow-inline-ui="part.role === 'assistant'"
+      :inline-documents="part.source.agenaInlineUi"
+      :inline-session-id="sessionId || ''"
     />
   </div>
 
@@ -222,7 +219,7 @@ function openAttachment(attachment: AttachmentPresentation, path: string, url: s
             :resource="resource"
             :session-id="sessionId"
             :source-path="sourcePath"
-            :allow-apps="part.role === 'assistant'"
+            :allow-inline-ui="part.role === 'assistant'"
           />
         </template>
         <MarkdownRenderer
@@ -231,9 +228,9 @@ function openAttachment(attachment: AttachmentPresentation, path: string, url: s
           mode="markdown"
           :stream="Boolean(streaming)"
           :source-path="sourcePath || ''"
-          :allow-apps="part.role === 'assistant'"
-          :app-owner="sessionId || ''"
-          :app-directory="appDirectory"
+          :allow-inline-ui="part.role === 'assistant'"
+          :inline-documents="part.source.agenaInlineUi"
+          :inline-session-id="sessionId || ''"
         />
       </div>
 

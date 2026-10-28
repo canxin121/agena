@@ -949,7 +949,7 @@ defineExpose({ refresh })
               v-if="isMarkdown"
               :content="path === 'SKILL.md' ? skillMarkdownBody(content) : content"
               :stream="false"
-              :allow-apps="false"
+              :allow-inline-ui="false"
               source-path=""
             />
             <pre v-else class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{{ content }}</pre>

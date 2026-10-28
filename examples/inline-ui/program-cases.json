@@ -1,0 +1,3667 @@
+{
+  "cases": [
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 经营总览\n\n筛选渠道，指标与趋势一起变化。\n\n**渠道:** 全部渠道\n\n**模拟成交额:** ¥118500 — 随当前渠道筛选更新\n\n**模拟订单:** 804 — 来源：演示数据\n\n**平均订单金额:** ¥147\\.39 — 成交额 / 订单\n\n### 渠道表现\n\n演示数据 · 分类序列，不代表真实日期间距。\n\n#### 模拟成交额\n\n元\n| 类别 | 成交额 |\n| --- | --- |\n| 自然 · D1 | 24000 |\n| 推广 · D1 | 18000 |\n| 推荐 · D1 | 12500 |\n| 自然 · D2 | 28500 |\n| 推广 · D2 | 21000 |\n| 推荐 · D2 | 14500 |\n\n### 你的任务选择\n\n**任务完成度:** ■■■■■□□□□□□□□□□□ 33%\n\n已勾选 1 / 3 个任务。这是界面状态，不代表后台任务执行。\n\n[ 查看项目执行 ]\n\n### AI 工作进展\n\n初始为示例进度；测试会通过 update 实际更新这些字段。\n\n**已检查记录:** ■■■■■□□□□□□□□□□□ 33% — 正在检查数据与任务关联\n\n**正在检查数据与任务关联**\n\n- **开始处理** — 示例事件：数据已载入。\n- **检查数据结构** — 示例事件：正在检查余下数据。\n\n### 当前渠道明细\n\n| 类别 | 成交额（元） | 订单 |\n| --- | --- | --- |\n| 自然 · D1 | 24000 | 160 |\n| 推广 · D1 | 18000 | 126 |\n| 推荐 · D1 | 12500 | 89 |\n| 自然 · D2 | 28500 | 190 |\n| 推广 · D2 | 21000 | 141 |\n| 推荐 · D2 | 14500 | 98 |\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "type": "snapshot"
+      },
+      "view": {
+        "computed": {
+          "average": 147.38805970149255,
+          "done": 1,
+          "orders": 804.0,
+          "progress": 33.33333333333333,
+          "revenue": 118500.0,
+          "sales": [
+            {
+              "channel": "organic",
+              "day": "自然 · D1",
+              "orders": 160,
+              "revenue": 24000
+            },
+            {
+              "channel": "paid",
+              "day": "推广 · D1",
+              "orders": 126,
+              "revenue": 18000
+            },
+            {
+              "channel": "referral",
+              "day": "推荐 · D1",
+              "orders": 89,
+              "revenue": 12500
+            },
+            {
+              "channel": "organic",
+              "day": "自然 · D2",
+              "orders": 190,
+              "revenue": 28500
+            },
+            {
+              "channel": "paid",
+              "day": "推广 · D2",
+              "orders": 141,
+              "revenue": 21000
+            },
+            {
+              "channel": "referral",
+              "day": "推荐 · D2",
+              "orders": 98,
+              "revenue": 14500
+            }
+          ]
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "overview"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "overviewTitle",
+                      "kind": "text",
+                      "props": {
+                        "text": "筛选渠道，指标与趋势一起变化。",
+                        "tone": "neutral"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": "channel",
+                      "children": [],
+                      "field": {
+                        "initial": "all",
+                        "kind": "choice",
+                        "max_length": 1024,
+                        "options": [
+                          {
+                            "label": "全部渠道",
+                            "value": "all"
+                          },
+                          {
+                            "label": "自然搜索",
+                            "value": "organic"
+                          },
+                          {
+                            "label": "付费推广",
+                            "value": "paid"
+                          },
+                          {
+                            "label": "用户推荐",
+                            "value": "referral"
+                          }
+                        ]
+                      },
+                      "id": "channel",
+                      "kind": "select",
+                      "props": {
+                        "label": "渠道"
+                      },
+                      "value": "all"
+                    }
+                  ],
+                  "field": null,
+                  "id": "overviewHeader",
+                  "kind": "row",
+                  "props": {},
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "随当前渠道筛选更新",
+                        "label": "模拟成交额",
+                        "prefix": "¥",
+                        "tone": "primary",
+                        "value": "118500"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "orders",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "来源：演示数据",
+                        "label": "模拟订单",
+                        "value": 804.0
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "aov",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "成交额 / 订单",
+                        "label": "平均订单金额",
+                        "prefix": "¥",
+                        "value": "147.39"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "metricGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 3
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenueChart",
+                      "kind": "chart",
+                      "props": {
+                        "chart_type": "bar",
+                        "labels": [
+                          "自然 · D1",
+                          "推广 · D1",
+                          "推荐 · D1",
+                          "自然 · D2",
+                          "推广 · D2",
+                          "推荐 · D2"
+                        ],
+                        "series": [
+                          {
+                            "name": "成交额",
+                            "values": [
+                              24000,
+                              18000,
+                              12500,
+                              28500,
+                              21000,
+                              14500
+                            ]
+                          }
+                        ],
+                        "title": "模拟成交额",
+                        "x_label": "类别",
+                        "y_label": "元"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "chartCard",
+                  "kind": "card",
+                  "props": {
+                    "description": "演示数据 · 分类序列，不代表真实日期间距。",
+                    "title": "渠道表现"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskProgress",
+                          "kind": "progress",
+                          "props": {
+                            "label": "任务完成度",
+                            "max": 100,
+                            "tone": "success",
+                            "value": 33.33333333333333
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskSummary",
+                          "kind": "text",
+                          "props": {
+                            "text": "已勾选 1 / 3 个任务。这是界面状态，不代表后台任务执行。"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": "showTasks",
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "viewTasks",
+                          "kind": "button",
+                          "props": {
+                            "label": "查看项目执行"
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "tasksCard",
+                      "kind": "card",
+                      "props": {
+                        "title": "你的任务选择"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "agentProgress",
+                          "kind": "progress",
+                          "props": {
+                            "detail": "正在检查数据与任务关联",
+                            "label": "已检查记录",
+                            "max": 6,
+                            "tone": "primary",
+                            "value": 2
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "workStatus",
+                          "kind": "badge",
+                          "props": {
+                            "text": "正在检查数据与任务关联",
+                            "tone": "info"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "timeline",
+                          "kind": "timeline",
+                          "props": {
+                            "items": [
+                              {
+                                "detail": "示例事件：数据已载入。",
+                                "id": "start",
+                                "title": "开始处理"
+                              },
+                              {
+                                "detail": "示例事件：正在检查余下数据。",
+                                "id": "check",
+                                "title": "检查数据结构"
+                              }
+                            ]
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "agentCard",
+                      "kind": "card",
+                      "props": {
+                        "description": "初始为示例进度；测试会通过 update 实际更新这些字段。",
+                        "title": "AI 工作进展"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "workGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "salesTable",
+                  "kind": "table",
+                  "props": {
+                    "columns": [
+                      {
+                        "key": "day",
+                        "label": "类别"
+                      },
+                      {
+                        "key": "revenue",
+                        "label": "成交额（元）"
+                      },
+                      {
+                        "key": "orders",
+                        "label": "订单"
+                      }
+                    ],
+                    "rows": [
+                      {
+                        "channel": "organic",
+                        "day": "自然 · D1",
+                        "orders": 160,
+                        "revenue": 24000
+                      },
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D1",
+                        "orders": 126,
+                        "revenue": 18000
+                      },
+                      {
+                        "channel": "referral",
+                        "day": "推荐 · D1",
+                        "orders": 89,
+                        "revenue": 12500
+                      },
+                      {
+                        "channel": "organic",
+                        "day": "自然 · D2",
+                        "orders": 190,
+                        "revenue": 28500
+                      },
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D2",
+                        "orders": 141,
+                        "revenue": 21000
+                      },
+                      {
+                        "channel": "referral",
+                        "day": "推荐 · D2",
+                        "orders": 98,
+                        "revenue": 14500
+                      }
+                    ],
+                    "title": "当前渠道明细"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "overview",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "all",
+          "done": [
+            "research"
+          ],
+          "margin": 65,
+          "page": "overview",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 项目执行\n\n#### 项目执行\n\n**筛选任务:** \n\n### 任务清单\n\n- [x] **整理需求与事实** — 确认数据来源，区分实测与模拟。\n- [ ] **完成界面设计** — 保证筛选、任务和推演共用同一份状态。\n- [ ] **核验结果与边界** — 覆盖断线恢复、窄屏与终端交互。\n\n[ 返回总览查看进度 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "navigation",
+        "type": "input",
+        "value": "tasks"
+      },
+      "view": {
+        "computed": {
+          "tasks": [
+            {
+              "detail": "确认数据来源，区分实测与模拟。",
+              "id": "research",
+              "title": "整理需求与事实"
+            },
+            {
+              "detail": "保证筛选、任务和推演共用同一份状态。",
+              "id": "design",
+              "title": "完成界面设计"
+            },
+            {
+              "detail": "覆盖断线恢复、窄屏与终端交互。",
+              "id": "verify",
+              "title": "核验结果与边界"
+            }
+          ]
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "tasks"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "tasksTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "项目执行"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "query",
+                  "children": [],
+                  "field": {
+                    "initial": "",
+                    "kind": "text",
+                    "max_length": 100,
+                    "options": []
+                  },
+                  "id": "query",
+                  "kind": "input",
+                  "props": {
+                    "label": "筛选任务",
+                    "placeholder": "输入任务标题中的文字"
+                  },
+                  "value": ""
+                },
+                {
+                  "action": null,
+                  "bind": "done",
+                  "children": [],
+                  "field": {
+                    "initial": [
+                      "research"
+                    ],
+                    "kind": "selection",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "taskList",
+                  "kind": "tasks",
+                  "props": {
+                    "empty": "没有匹配的任务",
+                    "items": [
+                      {
+                        "detail": "确认数据来源，区分实测与模拟。",
+                        "id": "research",
+                        "title": "整理需求与事实"
+                      },
+                      {
+                        "detail": "保证筛选、任务和推演共用同一份状态。",
+                        "id": "design",
+                        "title": "完成界面设计"
+                      },
+                      {
+                        "detail": "覆盖断线恢复、窄屏与终端交互。",
+                        "id": "verify",
+                        "title": "核验结果与边界"
+                      }
+                    ],
+                    "title": "任务清单"
+                  },
+                  "value": [
+                    "research"
+                  ]
+                },
+                {
+                  "action": "showOverview",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "tasksReturn",
+                  "kind": "button",
+                  "props": {
+                    "label": "返回总览查看进度"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "tasksPage",
+              "kind": "stack",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "all",
+          "done": [
+            "research"
+          ],
+          "margin": 65,
+          "page": "tasks",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 项目执行\n\n#### 项目执行\n\n**筛选任务:** \n\n### 任务清单\n\n- [x] **整理需求与事实** — 确认数据来源，区分实测与模拟。\n- [x] **完成界面设计** — 保证筛选、任务和推演共用同一份状态。\n- [ ] **核验结果与边界** — 覆盖断线恢复、窄屏与终端交互。\n\n[ 返回总览查看进度 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "taskList",
+        "type": "input",
+        "value": [
+          "research",
+          "design"
+        ]
+      },
+      "view": {
+        "computed": {
+          "tasks": [
+            {
+              "detail": "确认数据来源，区分实测与模拟。",
+              "id": "research",
+              "title": "整理需求与事实"
+            },
+            {
+              "detail": "保证筛选、任务和推演共用同一份状态。",
+              "id": "design",
+              "title": "完成界面设计"
+            },
+            {
+              "detail": "覆盖断线恢复、窄屏与终端交互。",
+              "id": "verify",
+              "title": "核验结果与边界"
+            }
+          ]
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "tasks"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "tasksTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "项目执行"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "query",
+                  "children": [],
+                  "field": {
+                    "initial": "",
+                    "kind": "text",
+                    "max_length": 100,
+                    "options": []
+                  },
+                  "id": "query",
+                  "kind": "input",
+                  "props": {
+                    "label": "筛选任务",
+                    "placeholder": "输入任务标题中的文字"
+                  },
+                  "value": ""
+                },
+                {
+                  "action": null,
+                  "bind": "done",
+                  "children": [],
+                  "field": {
+                    "initial": [
+                      "research"
+                    ],
+                    "kind": "selection",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "taskList",
+                  "kind": "tasks",
+                  "props": {
+                    "empty": "没有匹配的任务",
+                    "items": [
+                      {
+                        "detail": "确认数据来源，区分实测与模拟。",
+                        "id": "research",
+                        "title": "整理需求与事实"
+                      },
+                      {
+                        "detail": "保证筛选、任务和推演共用同一份状态。",
+                        "id": "design",
+                        "title": "完成界面设计"
+                      },
+                      {
+                        "detail": "覆盖断线恢复、窄屏与终端交互。",
+                        "id": "verify",
+                        "title": "核验结果与边界"
+                      }
+                    ],
+                    "title": "任务清单"
+                  },
+                  "value": [
+                    "research",
+                    "design"
+                  ]
+                },
+                {
+                  "action": "showOverview",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "tasksReturn",
+                  "kind": "button",
+                  "props": {
+                    "label": "返回总览查看进度"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "tasksPage",
+              "kind": "stack",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "all",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "tasks",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 经营总览\n\n筛选渠道，指标与趋势一起变化。\n\n**渠道:** 全部渠道\n\n**模拟成交额:** ¥118500 — 随当前渠道筛选更新\n\n**模拟订单:** 804 — 来源：演示数据\n\n**平均订单金额:** ¥147\\.39 — 成交额 / 订单\n\n### 渠道表现\n\n演示数据 · 分类序列，不代表真实日期间距。\n\n#### 模拟成交额\n\n元\n| 类别 | 成交额 |\n| --- | --- |\n| 自然 · D1 | 24000 |\n| 推广 · D1 | 18000 |\n| 推荐 · D1 | 12500 |\n| 自然 · D2 | 28500 |\n| 推广 · D2 | 21000 |\n| 推荐 · D2 | 14500 |\n\n### 你的任务选择\n\n**任务完成度:** ■■■■■■■■■■■□□□□□ 67%\n\n已勾选 2 / 3 个任务。这是界面状态，不代表后台任务执行。\n\n[ 查看项目执行 ]\n\n### AI 工作进展\n\n初始为示例进度；测试会通过 update 实际更新这些字段。\n\n**已检查记录:** ■■■■■□□□□□□□□□□□ 33% — 正在检查数据与任务关联\n\n**正在检查数据与任务关联**\n\n- **开始处理** — 示例事件：数据已载入。\n- **检查数据结构** — 示例事件：正在检查余下数据。\n\n### 当前渠道明细\n\n| 类别 | 成交额（元） | 订单 |\n| --- | --- | --- |\n| 自然 · D1 | 24000 | 160 |\n| 推广 · D1 | 18000 | 126 |\n| 推荐 · D1 | 12500 | 89 |\n| 自然 · D2 | 28500 | 190 |\n| 推广 · D2 | 21000 | 141 |\n| 推荐 · D2 | 14500 | 98 |\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "tasksReturn",
+        "type": "activate"
+      },
+      "view": {
+        "computed": {
+          "average": 147.38805970149255,
+          "done": 2,
+          "orders": 804.0,
+          "progress": 66.66666666666666,
+          "revenue": 118500.0,
+          "sales": [
+            {
+              "channel": "organic",
+              "day": "自然 · D1",
+              "orders": 160,
+              "revenue": 24000
+            },
+            {
+              "channel": "paid",
+              "day": "推广 · D1",
+              "orders": 126,
+              "revenue": 18000
+            },
+            {
+              "channel": "referral",
+              "day": "推荐 · D1",
+              "orders": 89,
+              "revenue": 12500
+            },
+            {
+              "channel": "organic",
+              "day": "自然 · D2",
+              "orders": 190,
+              "revenue": 28500
+            },
+            {
+              "channel": "paid",
+              "day": "推广 · D2",
+              "orders": 141,
+              "revenue": 21000
+            },
+            {
+              "channel": "referral",
+              "day": "推荐 · D2",
+              "orders": 98,
+              "revenue": 14500
+            }
+          ]
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "overview"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "overviewTitle",
+                      "kind": "text",
+                      "props": {
+                        "text": "筛选渠道，指标与趋势一起变化。",
+                        "tone": "neutral"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": "channel",
+                      "children": [],
+                      "field": {
+                        "initial": "all",
+                        "kind": "choice",
+                        "max_length": 1024,
+                        "options": [
+                          {
+                            "label": "全部渠道",
+                            "value": "all"
+                          },
+                          {
+                            "label": "自然搜索",
+                            "value": "organic"
+                          },
+                          {
+                            "label": "付费推广",
+                            "value": "paid"
+                          },
+                          {
+                            "label": "用户推荐",
+                            "value": "referral"
+                          }
+                        ]
+                      },
+                      "id": "channel",
+                      "kind": "select",
+                      "props": {
+                        "label": "渠道"
+                      },
+                      "value": "all"
+                    }
+                  ],
+                  "field": null,
+                  "id": "overviewHeader",
+                  "kind": "row",
+                  "props": {},
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "随当前渠道筛选更新",
+                        "label": "模拟成交额",
+                        "prefix": "¥",
+                        "tone": "primary",
+                        "value": "118500"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "orders",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "来源：演示数据",
+                        "label": "模拟订单",
+                        "value": 804.0
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "aov",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "成交额 / 订单",
+                        "label": "平均订单金额",
+                        "prefix": "¥",
+                        "value": "147.39"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "metricGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 3
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenueChart",
+                      "kind": "chart",
+                      "props": {
+                        "chart_type": "bar",
+                        "labels": [
+                          "自然 · D1",
+                          "推广 · D1",
+                          "推荐 · D1",
+                          "自然 · D2",
+                          "推广 · D2",
+                          "推荐 · D2"
+                        ],
+                        "series": [
+                          {
+                            "name": "成交额",
+                            "values": [
+                              24000,
+                              18000,
+                              12500,
+                              28500,
+                              21000,
+                              14500
+                            ]
+                          }
+                        ],
+                        "title": "模拟成交额",
+                        "x_label": "类别",
+                        "y_label": "元"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "chartCard",
+                  "kind": "card",
+                  "props": {
+                    "description": "演示数据 · 分类序列，不代表真实日期间距。",
+                    "title": "渠道表现"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskProgress",
+                          "kind": "progress",
+                          "props": {
+                            "label": "任务完成度",
+                            "max": 100,
+                            "tone": "success",
+                            "value": 66.66666666666666
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskSummary",
+                          "kind": "text",
+                          "props": {
+                            "text": "已勾选 2 / 3 个任务。这是界面状态，不代表后台任务执行。"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": "showTasks",
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "viewTasks",
+                          "kind": "button",
+                          "props": {
+                            "label": "查看项目执行"
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "tasksCard",
+                      "kind": "card",
+                      "props": {
+                        "title": "你的任务选择"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "agentProgress",
+                          "kind": "progress",
+                          "props": {
+                            "detail": "正在检查数据与任务关联",
+                            "label": "已检查记录",
+                            "max": 6,
+                            "tone": "primary",
+                            "value": 2
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "workStatus",
+                          "kind": "badge",
+                          "props": {
+                            "text": "正在检查数据与任务关联",
+                            "tone": "info"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "timeline",
+                          "kind": "timeline",
+                          "props": {
+                            "items": [
+                              {
+                                "detail": "示例事件：数据已载入。",
+                                "id": "start",
+                                "title": "开始处理"
+                              },
+                              {
+                                "detail": "示例事件：正在检查余下数据。",
+                                "id": "check",
+                                "title": "检查数据结构"
+                              }
+                            ]
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "agentCard",
+                      "kind": "card",
+                      "props": {
+                        "description": "初始为示例进度；测试会通过 update 实际更新这些字段。",
+                        "title": "AI 工作进展"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "workGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "salesTable",
+                  "kind": "table",
+                  "props": {
+                    "columns": [
+                      {
+                        "key": "day",
+                        "label": "类别"
+                      },
+                      {
+                        "key": "revenue",
+                        "label": "成交额（元）"
+                      },
+                      {
+                        "key": "orders",
+                        "label": "订单"
+                      }
+                    ],
+                    "rows": [
+                      {
+                        "channel": "organic",
+                        "day": "自然 · D1",
+                        "orders": 160,
+                        "revenue": 24000
+                      },
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D1",
+                        "orders": 126,
+                        "revenue": 18000
+                      },
+                      {
+                        "channel": "referral",
+                        "day": "推荐 · D1",
+                        "orders": 89,
+                        "revenue": 12500
+                      },
+                      {
+                        "channel": "organic",
+                        "day": "自然 · D2",
+                        "orders": 190,
+                        "revenue": 28500
+                      },
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D2",
+                        "orders": 141,
+                        "revenue": 21000
+                      },
+                      {
+                        "channel": "referral",
+                        "day": "推荐 · D2",
+                        "orders": 98,
+                        "revenue": 14500
+                      }
+                    ],
+                    "title": "当前渠道明细"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "overview",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "all",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "overview",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 经营总览\n\n筛选渠道，指标与趋势一起变化。\n\n**渠道:** 付费推广\n\n**模拟成交额:** ¥39000 — 随当前渠道筛选更新\n\n**模拟订单:** 267 — 来源：演示数据\n\n**平均订单金额:** ¥146\\.07 — 成交额 / 订单\n\n### 渠道表现\n\n演示数据 · 分类序列，不代表真实日期间距。\n\n#### 模拟成交额\n\n元\n| 类别 | 成交额 |\n| --- | --- |\n| 推广 · D1 | 18000 |\n| 推广 · D2 | 21000 |\n\n### 你的任务选择\n\n**任务完成度:** ■■■■■■■■■■■□□□□□ 67%\n\n已勾选 2 / 3 个任务。这是界面状态，不代表后台任务执行。\n\n[ 查看项目执行 ]\n\n### AI 工作进展\n\n初始为示例进度；测试会通过 update 实际更新这些字段。\n\n**已检查记录:** ■■■■■□□□□□□□□□□□ 33% — 正在检查数据与任务关联\n\n**正在检查数据与任务关联**\n\n- **开始处理** — 示例事件：数据已载入。\n- **检查数据结构** — 示例事件：正在检查余下数据。\n\n### 当前渠道明细\n\n| 类别 | 成交额（元） | 订单 |\n| --- | --- | --- |\n| 推广 · D1 | 18000 | 126 |\n| 推广 · D2 | 21000 | 141 |\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "channel",
+        "type": "input",
+        "value": "paid"
+      },
+      "view": {
+        "computed": {
+          "average": 146.06741573033707,
+          "done": 2,
+          "orders": 267.0,
+          "progress": 66.66666666666666,
+          "revenue": 39000.0,
+          "sales": [
+            {
+              "channel": "paid",
+              "day": "推广 · D1",
+              "orders": 126,
+              "revenue": 18000
+            },
+            {
+              "channel": "paid",
+              "day": "推广 · D2",
+              "orders": 141,
+              "revenue": 21000
+            }
+          ]
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "overview"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "overviewTitle",
+                      "kind": "text",
+                      "props": {
+                        "text": "筛选渠道，指标与趋势一起变化。",
+                        "tone": "neutral"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": "channel",
+                      "children": [],
+                      "field": {
+                        "initial": "all",
+                        "kind": "choice",
+                        "max_length": 1024,
+                        "options": [
+                          {
+                            "label": "全部渠道",
+                            "value": "all"
+                          },
+                          {
+                            "label": "自然搜索",
+                            "value": "organic"
+                          },
+                          {
+                            "label": "付费推广",
+                            "value": "paid"
+                          },
+                          {
+                            "label": "用户推荐",
+                            "value": "referral"
+                          }
+                        ]
+                      },
+                      "id": "channel",
+                      "kind": "select",
+                      "props": {
+                        "label": "渠道"
+                      },
+                      "value": "paid"
+                    }
+                  ],
+                  "field": null,
+                  "id": "overviewHeader",
+                  "kind": "row",
+                  "props": {},
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "随当前渠道筛选更新",
+                        "label": "模拟成交额",
+                        "prefix": "¥",
+                        "tone": "primary",
+                        "value": "39000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "orders",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "来源：演示数据",
+                        "label": "模拟订单",
+                        "value": 267.0
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "aov",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "成交额 / 订单",
+                        "label": "平均订单金额",
+                        "prefix": "¥",
+                        "value": "146.07"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "metricGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 3
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "revenueChart",
+                      "kind": "chart",
+                      "props": {
+                        "chart_type": "bar",
+                        "labels": [
+                          "推广 · D1",
+                          "推广 · D2"
+                        ],
+                        "series": [
+                          {
+                            "name": "成交额",
+                            "values": [
+                              18000,
+                              21000
+                            ]
+                          }
+                        ],
+                        "title": "模拟成交额",
+                        "x_label": "类别",
+                        "y_label": "元"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "chartCard",
+                  "kind": "card",
+                  "props": {
+                    "description": "演示数据 · 分类序列，不代表真实日期间距。",
+                    "title": "渠道表现"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskProgress",
+                          "kind": "progress",
+                          "props": {
+                            "label": "任务完成度",
+                            "max": 100,
+                            "tone": "success",
+                            "value": 66.66666666666666
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "taskSummary",
+                          "kind": "text",
+                          "props": {
+                            "text": "已勾选 2 / 3 个任务。这是界面状态，不代表后台任务执行。"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": "showTasks",
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "viewTasks",
+                          "kind": "button",
+                          "props": {
+                            "label": "查看项目执行"
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "tasksCard",
+                      "kind": "card",
+                      "props": {
+                        "title": "你的任务选择"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "agentProgress",
+                          "kind": "progress",
+                          "props": {
+                            "detail": "正在检查数据与任务关联",
+                            "label": "已检查记录",
+                            "max": 6,
+                            "tone": "primary",
+                            "value": 2
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "workStatus",
+                          "kind": "badge",
+                          "props": {
+                            "text": "正在检查数据与任务关联",
+                            "tone": "info"
+                          },
+                          "value": null
+                        },
+                        {
+                          "action": null,
+                          "bind": null,
+                          "children": [],
+                          "field": null,
+                          "id": "timeline",
+                          "kind": "timeline",
+                          "props": {
+                            "items": [
+                              {
+                                "detail": "示例事件：数据已载入。",
+                                "id": "start",
+                                "title": "开始处理"
+                              },
+                              {
+                                "detail": "示例事件：正在检查余下数据。",
+                                "id": "check",
+                                "title": "检查数据结构"
+                              }
+                            ]
+                          },
+                          "value": null
+                        }
+                      ],
+                      "field": null,
+                      "id": "agentCard",
+                      "kind": "card",
+                      "props": {
+                        "description": "初始为示例进度；测试会通过 update 实际更新这些字段。",
+                        "title": "AI 工作进展"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "workGrid",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "salesTable",
+                  "kind": "table",
+                  "props": {
+                    "columns": [
+                      {
+                        "key": "day",
+                        "label": "类别"
+                      },
+                      {
+                        "key": "revenue",
+                        "label": "成交额（元）"
+                      },
+                      {
+                        "key": "orders",
+                        "label": "订单"
+                      }
+                    ],
+                    "rows": [
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D1",
+                        "orders": 126,
+                        "revenue": 18000
+                      },
+                      {
+                        "channel": "paid",
+                        "day": "推广 · D2",
+                        "orders": 141,
+                        "revenue": 21000
+                      }
+                    ],
+                    "title": "当前渠道明细"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "overview",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "overview",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 情景推演\n\n#### 情景推演\n\n**模拟广告预算:** ¥12000\n\n**模拟毛利率:** 65%\n\n**模拟收入:** ¥70000 — 基于下方简化假设\n\n**模拟利润:** ¥17500 — 收入 × 毛利率 − 广告预算 − 固定成本\n\n[ ] 显示计算假设\n\n[ 重置推演参数 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "navigation",
+        "type": "input",
+        "value": "simulation"
+      },
+      "view": {
+        "computed": {
+          "scenarioProfit": 17500.0,
+          "scenarioRevenue": 70000.0
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "simulation"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "情景推演"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": "budget",
+                      "children": [],
+                      "field": {
+                        "initial": 12000,
+                        "kind": "number",
+                        "max": 60000,
+                        "max_length": 1024,
+                        "min": 0,
+                        "options": [],
+                        "step": 1000
+                      },
+                      "id": "budget",
+                      "kind": "slider",
+                      "props": {
+                        "description": "提高预算后观察边际收益递减。",
+                        "label": "模拟广告预算",
+                        "prefix": "¥"
+                      },
+                      "value": 12000
+                    },
+                    {
+                      "action": null,
+                      "bind": "margin",
+                      "children": [],
+                      "field": {
+                        "initial": 65,
+                        "kind": "number",
+                        "max": 90,
+                        "max_length": 1024,
+                        "min": 10,
+                        "options": [],
+                        "step": 1
+                      },
+                      "id": "margin",
+                      "kind": "number",
+                      "props": {
+                        "description": "仅用于演示，不构成经营建议。",
+                        "label": "模拟毛利率",
+                        "suffix": "%"
+                      },
+                      "value": 65
+                    }
+                  ],
+                  "field": null,
+                  "id": "simControls",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioRevenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "基于下方简化假设",
+                        "label": "模拟收入",
+                        "prefix": "¥",
+                        "value": "70000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioProfit",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "收入 × 毛利率 − 广告预算 − 固定成本",
+                        "label": "模拟利润",
+                        "prefix": "¥",
+                        "tone": "success",
+                        "value": "17500"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "simMetrics",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "showFormula",
+                  "children": [],
+                  "field": {
+                    "initial": false,
+                    "kind": "boolean",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "formulaToggle",
+                  "kind": "checkbox",
+                  "props": {
+                    "label": "显示计算假设"
+                  },
+                  "value": false
+                },
+                {
+                  "action": "resetScenario",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "reset",
+                  "kind": "button",
+                  "props": {
+                    "label": "重置推演参数"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "simulation",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "simulation",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 情景推演\n\n#### 情景推演\n\n**模拟广告预算:** ¥60000\n\n**模拟毛利率:** 65%\n\n**模拟收入:** ¥102000 — 基于下方简化假设\n\n**模拟利润:** ¥\\-9700 — 收入 × 毛利率 − 广告预算 − 固定成本\n\n### 收入提高，不一定意味着利润提高\n\n> 这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。\n\n[ ] 显示计算假设\n\n[ 重置推演参数 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "budget",
+        "type": "input",
+        "value": 60000
+      },
+      "view": {
+        "computed": {
+          "scenarioProfit": -9700.0,
+          "scenarioRevenue": 102000.0
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "simulation"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "情景推演"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": "budget",
+                      "children": [],
+                      "field": {
+                        "initial": 12000,
+                        "kind": "number",
+                        "max": 60000,
+                        "max_length": 1024,
+                        "min": 0,
+                        "options": [],
+                        "step": 1000
+                      },
+                      "id": "budget",
+                      "kind": "slider",
+                      "props": {
+                        "description": "提高预算后观察边际收益递减。",
+                        "label": "模拟广告预算",
+                        "prefix": "¥"
+                      },
+                      "value": 60000
+                    },
+                    {
+                      "action": null,
+                      "bind": "margin",
+                      "children": [],
+                      "field": {
+                        "initial": 65,
+                        "kind": "number",
+                        "max": 90,
+                        "max_length": 1024,
+                        "min": 10,
+                        "options": [],
+                        "step": 1
+                      },
+                      "id": "margin",
+                      "kind": "number",
+                      "props": {
+                        "description": "仅用于演示，不构成经营建议。",
+                        "label": "模拟毛利率",
+                        "suffix": "%"
+                      },
+                      "value": 65
+                    }
+                  ],
+                  "field": null,
+                  "id": "simControls",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioRevenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "基于下方简化假设",
+                        "label": "模拟收入",
+                        "prefix": "¥",
+                        "value": "102000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioProfit",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "收入 × 毛利率 − 广告预算 − 固定成本",
+                        "label": "模拟利润",
+                        "prefix": "¥",
+                        "tone": "danger",
+                        "value": "-9700"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "simMetrics",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simWarning",
+                  "kind": "callout",
+                  "props": {
+                    "text": "这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。",
+                    "title": "收入提高，不一定意味着利润提高",
+                    "tone": "warning"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "showFormula",
+                  "children": [],
+                  "field": {
+                    "initial": false,
+                    "kind": "boolean",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "formulaToggle",
+                  "kind": "checkbox",
+                  "props": {
+                    "label": "显示计算假设"
+                  },
+                  "value": false
+                },
+                {
+                  "action": "resetScenario",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "reset",
+                  "kind": "button",
+                  "props": {
+                    "label": "重置推演参数"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "simulation",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 60000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "simulation",
+          "query": "",
+          "showFormula": false
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 情景推演\n\n#### 情景推演\n\n**模拟广告预算:** ¥60000\n\n**模拟毛利率:** 65%\n\n**模拟收入:** ¥102000 — 基于下方简化假设\n\n**模拟利润:** ¥\\-9700 — 收入 × 毛利率 − 广告预算 − 固定成本\n\n### 收入提高，不一定意味着利润提高\n\n> 这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。\n\n[x] 显示计算假设\n\n### 模型假设\n\n收入 = 30,000 \\+ 90,000 × 预算 / \\(预算 \\+ 15,000\\)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。\n\n[ 重置推演参数 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "formulaToggle",
+        "type": "input",
+        "value": true
+      },
+      "view": {
+        "computed": {
+          "scenarioProfit": -9700.0,
+          "scenarioRevenue": 102000.0
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "simulation"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "情景推演"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": "budget",
+                      "children": [],
+                      "field": {
+                        "initial": 12000,
+                        "kind": "number",
+                        "max": 60000,
+                        "max_length": 1024,
+                        "min": 0,
+                        "options": [],
+                        "step": 1000
+                      },
+                      "id": "budget",
+                      "kind": "slider",
+                      "props": {
+                        "description": "提高预算后观察边际收益递减。",
+                        "label": "模拟广告预算",
+                        "prefix": "¥"
+                      },
+                      "value": 60000
+                    },
+                    {
+                      "action": null,
+                      "bind": "margin",
+                      "children": [],
+                      "field": {
+                        "initial": 65,
+                        "kind": "number",
+                        "max": 90,
+                        "max_length": 1024,
+                        "min": 10,
+                        "options": [],
+                        "step": 1
+                      },
+                      "id": "margin",
+                      "kind": "number",
+                      "props": {
+                        "description": "仅用于演示，不构成经营建议。",
+                        "label": "模拟毛利率",
+                        "suffix": "%"
+                      },
+                      "value": 65
+                    }
+                  ],
+                  "field": null,
+                  "id": "simControls",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioRevenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "基于下方简化假设",
+                        "label": "模拟收入",
+                        "prefix": "¥",
+                        "value": "102000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioProfit",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "收入 × 毛利率 − 广告预算 − 固定成本",
+                        "label": "模拟利润",
+                        "prefix": "¥",
+                        "tone": "danger",
+                        "value": "-9700"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "simMetrics",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simWarning",
+                  "kind": "callout",
+                  "props": {
+                    "text": "这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。",
+                    "title": "收入提高，不一定意味着利润提高",
+                    "tone": "warning"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "showFormula",
+                  "children": [],
+                  "field": {
+                    "initial": false,
+                    "kind": "boolean",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "formulaToggle",
+                  "kind": "checkbox",
+                  "props": {
+                    "label": "显示计算假设"
+                  },
+                  "value": true
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "formulaText",
+                      "kind": "text",
+                      "props": {
+                        "text": "收入 = 30,000 + 90,000 × 预算 / (预算 + 15,000)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "formula",
+                  "kind": "card",
+                  "props": {
+                    "title": "模型假设"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "resetScenario",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "reset",
+                  "kind": "button",
+                  "props": {
+                    "label": "重置推演参数"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "simulation",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 60000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "simulation",
+          "query": "",
+          "showFormula": true
+        }
+      }
+    },
+    {
+      "copy": "【模拟报告】成交额 ¥39000；订单 267；任务 2/3；推演利润 ¥-9700",
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 情景推演\n\n#### 情景推演\n\n**模拟广告预算:** ¥60000\n\n**模拟毛利率:** 65%\n\n**模拟收入:** ¥102000 — 基于下方简化假设\n\n**模拟利润:** ¥\\-9700 — 收入 × 毛利率 − 广告预算 − 固定成本\n\n### 收入提高，不一定意味着利润提高\n\n> 这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。\n\n[x] 显示计算假设\n\n### 模型假设\n\n收入 = 30,000 \\+ 90,000 × 预算 / \\(预算 \\+ 15,000\\)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。\n\n[ 重置推演参数 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "copy",
+        "type": "activate"
+      },
+      "view": {
+        "computed": {
+          "scenarioProfit": -9700.0,
+          "scenarioRevenue": 102000.0
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "simulation"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "情景推演"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": "budget",
+                      "children": [],
+                      "field": {
+                        "initial": 12000,
+                        "kind": "number",
+                        "max": 60000,
+                        "max_length": 1024,
+                        "min": 0,
+                        "options": [],
+                        "step": 1000
+                      },
+                      "id": "budget",
+                      "kind": "slider",
+                      "props": {
+                        "description": "提高预算后观察边际收益递减。",
+                        "label": "模拟广告预算",
+                        "prefix": "¥"
+                      },
+                      "value": 60000
+                    },
+                    {
+                      "action": null,
+                      "bind": "margin",
+                      "children": [],
+                      "field": {
+                        "initial": 65,
+                        "kind": "number",
+                        "max": 90,
+                        "max_length": 1024,
+                        "min": 10,
+                        "options": [],
+                        "step": 1
+                      },
+                      "id": "margin",
+                      "kind": "number",
+                      "props": {
+                        "description": "仅用于演示，不构成经营建议。",
+                        "label": "模拟毛利率",
+                        "suffix": "%"
+                      },
+                      "value": 65
+                    }
+                  ],
+                  "field": null,
+                  "id": "simControls",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioRevenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "基于下方简化假设",
+                        "label": "模拟收入",
+                        "prefix": "¥",
+                        "value": "102000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioProfit",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "收入 × 毛利率 − 广告预算 − 固定成本",
+                        "label": "模拟利润",
+                        "prefix": "¥",
+                        "tone": "danger",
+                        "value": "-9700"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "simMetrics",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simWarning",
+                  "kind": "callout",
+                  "props": {
+                    "text": "这个模型采用边际收益递减假设。高预算的新增收入不足以覆盖新增成本时，利润会下降。",
+                    "title": "收入提高，不一定意味着利润提高",
+                    "tone": "warning"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "showFormula",
+                  "children": [],
+                  "field": {
+                    "initial": false,
+                    "kind": "boolean",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "formulaToggle",
+                  "kind": "checkbox",
+                  "props": {
+                    "label": "显示计算假设"
+                  },
+                  "value": true
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "formulaText",
+                      "kind": "text",
+                      "props": {
+                        "text": "收入 = 30,000 + 90,000 × 预算 / (预算 + 15,000)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "formula",
+                  "kind": "card",
+                  "props": {
+                    "title": "模型假设"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "resetScenario",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "reset",
+                  "kind": "button",
+                  "props": {
+                    "label": "重置推演参数"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "simulation",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 60000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "simulation",
+          "query": "",
+          "showFormula": true
+        }
+      }
+    },
+    {
+      "copy": null,
+      "markdown": "#### 工作洞察\n\n**交互演示 · 非真实经营数据**\n\n[ 复制当前摘要 ]\n\n**工作视图:** 情景推演\n\n#### 情景推演\n\n**模拟广告预算:** ¥12000\n\n**模拟毛利率:** 65%\n\n**模拟收入:** ¥70000 — 基于下方简化假设\n\n**模拟利润:** ¥17500 — 收入 × 毛利率 − 广告预算 − 固定成本\n\n[x] 显示计算假设\n\n### 模型假设\n\n收入 = 30,000 \\+ 90,000 × 预算 / \\(预算 \\+ 15,000\\)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。\n\n[ 重置推演参数 ]\n\n### 界面内的操作，不会修改外部业务数据\n\n> 切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+      "operation": {
+        "id": "reset",
+        "type": "activate"
+      },
+      "view": {
+        "computed": {
+          "scenarioProfit": 17500.0,
+          "scenarioRevenue": 70000.0
+        },
+        "root": {
+          "action": null,
+          "bind": null,
+          "children": [
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "headline",
+                  "kind": "heading",
+                  "props": {
+                    "size": "lg",
+                    "text": "工作洞察"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "demo",
+                  "kind": "badge",
+                  "props": {
+                    "text": "交互演示 · 非真实经营数据",
+                    "tone": "info"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "copySummary",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "copy",
+                  "kind": "button",
+                  "props": {
+                    "label": "复制当前摘要",
+                    "tone": "neutral"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "hero",
+              "kind": "row",
+              "props": {
+                "gap": "md"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": "page",
+              "children": [],
+              "field": {
+                "initial": "overview",
+                "kind": "choice",
+                "max_length": 1024,
+                "options": [
+                  {
+                    "label": "经营总览",
+                    "value": "overview"
+                  },
+                  {
+                    "label": "项目执行",
+                    "value": "tasks"
+                  },
+                  {
+                    "label": "情景推演",
+                    "value": "simulation"
+                  }
+                ]
+              },
+              "id": "navigation",
+              "kind": "tabs",
+              "props": {
+                "label": "工作视图"
+              },
+              "value": "simulation"
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "simTitle",
+                  "kind": "heading",
+                  "props": {
+                    "size": "md",
+                    "text": "情景推演"
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": "budget",
+                      "children": [],
+                      "field": {
+                        "initial": 12000,
+                        "kind": "number",
+                        "max": 60000,
+                        "max_length": 1024,
+                        "min": 0,
+                        "options": [],
+                        "step": 1000
+                      },
+                      "id": "budget",
+                      "kind": "slider",
+                      "props": {
+                        "description": "提高预算后观察边际收益递减。",
+                        "label": "模拟广告预算",
+                        "prefix": "¥"
+                      },
+                      "value": 12000
+                    },
+                    {
+                      "action": null,
+                      "bind": "margin",
+                      "children": [],
+                      "field": {
+                        "initial": 65,
+                        "kind": "number",
+                        "max": 90,
+                        "max_length": 1024,
+                        "min": 10,
+                        "options": [],
+                        "step": 1
+                      },
+                      "id": "margin",
+                      "kind": "number",
+                      "props": {
+                        "description": "仅用于演示，不构成经营建议。",
+                        "label": "模拟毛利率",
+                        "suffix": "%"
+                      },
+                      "value": 65
+                    }
+                  ],
+                  "field": null,
+                  "id": "simControls",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioRevenue",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "基于下方简化假设",
+                        "label": "模拟收入",
+                        "prefix": "¥",
+                        "value": "70000"
+                      },
+                      "value": null
+                    },
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "scenarioProfit",
+                      "kind": "metric",
+                      "props": {
+                        "detail": "收入 × 毛利率 − 广告预算 − 固定成本",
+                        "label": "模拟利润",
+                        "prefix": "¥",
+                        "tone": "success",
+                        "value": "17500"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "simMetrics",
+                  "kind": "grid",
+                  "props": {
+                    "columns": 2
+                  },
+                  "value": null
+                },
+                {
+                  "action": null,
+                  "bind": "showFormula",
+                  "children": [],
+                  "field": {
+                    "initial": false,
+                    "kind": "boolean",
+                    "max_length": 1024,
+                    "options": []
+                  },
+                  "id": "formulaToggle",
+                  "kind": "checkbox",
+                  "props": {
+                    "label": "显示计算假设"
+                  },
+                  "value": true
+                },
+                {
+                  "action": null,
+                  "bind": null,
+                  "children": [
+                    {
+                      "action": null,
+                      "bind": null,
+                      "children": [],
+                      "field": null,
+                      "id": "formulaText",
+                      "kind": "text",
+                      "props": {
+                        "text": "收入 = 30,000 + 90,000 × 预算 / (预算 + 15,000)\n利润 = 收入 × 毛利率 − 预算 − 16,000\n所有数据和公式仅供交互演示。"
+                      },
+                      "value": null
+                    }
+                  ],
+                  "field": null,
+                  "id": "formula",
+                  "kind": "card",
+                  "props": {
+                    "title": "模型假设"
+                  },
+                  "value": null
+                },
+                {
+                  "action": "resetScenario",
+                  "bind": null,
+                  "children": [],
+                  "field": null,
+                  "id": "reset",
+                  "kind": "button",
+                  "props": {
+                    "label": "重置推演参数"
+                  },
+                  "value": null
+                }
+              ],
+              "field": null,
+              "id": "simulation",
+              "kind": "stack",
+              "props": {
+                "gap": "lg"
+              },
+              "value": null
+            },
+            {
+              "action": null,
+              "bind": null,
+              "children": [],
+              "field": null,
+              "id": "footer",
+              "kind": "callout",
+              "props": {
+                "text": "切换、筛选、任务选择和推演状态由当前客户端保存。AI 更新数据与布局时会保留仍然合法的用户输入。",
+                "title": "界面内的操作，不会修改外部业务数据",
+                "tone": "info"
+              },
+              "value": null
+            }
+          ],
+          "field": null,
+          "id": "root",
+          "kind": "stack",
+          "props": {
+            "gap": "lg"
+          },
+          "value": null
+        },
+        "state": {
+          "budget": 12000,
+          "channel": "paid",
+          "done": [
+            "research",
+            "design"
+          ],
+          "margin": 65,
+          "page": "simulation",
+          "query": "",
+          "showFormula": true
+        }
+      }
+    }
+  ]
+}

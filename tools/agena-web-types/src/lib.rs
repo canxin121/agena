@@ -251,10 +251,16 @@ fn literal_enums() -> Vec<LiteralEnum> {
 /// Structured roots rendered from their JSON schema (discriminated unions with
 /// their payload shapes). Referenced types are emitted once, by name.
 fn structured_roots() -> Vec<(&'static str, Value)> {
-    vec![(
-        "SessionState",
-        schema_of::<agena_api::resource::SessionState>(),
-    )]
+    vec![
+        (
+            "SessionState",
+            schema_of::<agena_api::resource::SessionState>(),
+        ),
+        (
+            "InlineDocument",
+            schema_of::<agena_domain::InlineDocument>(),
+        ),
+    ]
 }
 
 fn schema_of<T: schemars::JsonSchema>() -> Value {
@@ -556,7 +562,12 @@ fn render_node(
         }
         Some(_) => Err("`type` must be a string or an array of strings".to_owned()),
         None => {
-            if object.is_empty() {
+            if object.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "description" | "title" | "default" | "examples" | "$comment"
+                )
+            }) {
                 Ok("JsonValue".to_owned())
             } else {
                 Err(format!(
@@ -584,7 +595,13 @@ fn render_kind(
                 Some(items) => render(items, definitions, indent)?,
                 None => "JsonValue".to_owned(),
             };
-            Ok(format!("{items}[]"))
+            // Nullable/union array items need parentheses; `number | null[]`
+            // describes a different type from `(number | null)[]`.
+            Ok(if items.contains('|') || items.contains('&') {
+                format!("({items})[]")
+            } else {
+                format!("{items}[]")
+            })
         }
         "object" => render_object(object, definitions, indent),
         other => Err(format!("unsupported schema type `{other}`")),
@@ -690,5 +707,27 @@ fn ts_key(name: &str) -> String {
         name.to_owned()
     } else {
         format!("'{}'", name.replace('\'', "\\'"))
+    }
+}
+
+#[cfg(test)]
+mod inline_ui_tests {
+    #[test]
+    fn nullable_chart_values_remain_array_items() {
+        let schema = serde_json::json!({"type":"array", "items":{"type":["number","null"]}});
+        let result = super::render(&schema, &Default::default(), 0).unwrap();
+        assert_eq!(result, "(number | null)[]");
+    }
+}
+
+#[cfg(test)]
+mod dynamic_ui_schema_tests {
+    #[test]
+    fn annotated_unconstrained_expression_is_json_value() {
+        let schema = serde_json::json!({"description":"A declarative expression","default":null});
+        assert_eq!(
+            super::render(&schema, &Default::default(), 0).unwrap(),
+            "JsonValue"
+        );
     }
 }

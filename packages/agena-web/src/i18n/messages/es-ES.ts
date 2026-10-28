@@ -1,4 +1,27 @@
 export default {
+  inlineUi: {
+    resetInputs: "Restablecer parámetros",
+    noData: "Sin datos para esta selección.",
+    invalidInput: "No se pudo aplicar esta entrada.",
+    working: "En directo",
+    complete: "Completado",
+    error: "Requiere atención",
+    reconnecting: "Reconectando…",
+    revision: "Revisión",
+
+    referenceUnavailable: "El contenido de esta referencia no está disponible en esta conversación.",
+    "label": "Respuesta enriquecida",
+    "comparison": "Comparación",
+    "dimension": "Criterio",
+    "table": "Tabla de datos",
+    "loading": "Preparando el contenido…",
+    "unavailable": "No se pudo mostrar el contenido. Consulta el resultado original o reintenta.",
+    "copy": "Copiar contenido",
+    "copied": "Copiado",
+    "copyFailed": "Error al copiar. Selecciona el texto.",
+    "retry": "Reintentar",
+    "inspect": "Ver resultado original"
+},
   browserNotifications: {
     "title": "Notificaciones del navegador",
     "description": "Recibe una notificación cuando la IA termine, haga una pregunta, necesite aprobación o falle. Se guarda en este navegador.",

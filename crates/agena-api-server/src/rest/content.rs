@@ -108,3 +108,78 @@ pub async fn stream_content(
     };
     Ok(Sse::new(output).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
+
+/// Resolve only an immutable prepared result belonging to this session.
+pub async fn read_inline_ui_reference(
+    State(state): State<AppState>,
+    Path((session_id, reference)): Path<(i64, String)>,
+) -> Result<impl axum::response::IntoResponse, ServerError> {
+    let document = state
+        .application()
+        .read_inline_ui_reference(session_id, &reference)
+        .await?;
+    let mut response = crate::json_codec::response(document).await?;
+    // Membership may be revoked by rewind/deletion; do not lend an old authorized
+    // response through browser or intermediary caches.
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
+pub async fn read_inline_ui_snapshot(
+    State(state): State<AppState>,
+    Path((session_id, reference)): Path<(i64, String)>,
+) -> Result<impl axum::response::IntoResponse, ServerError> {
+    let snapshot = state
+        .application()
+        .read_inline_ui_snapshot(session_id, &reference)
+        .await?;
+    let mut response = crate::json_codec::response(snapshot).await?;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}
+
+pub async fn stream_inline_ui(
+    State(state): State<AppState>,
+    Path((session_id, reference)): Path<(i64, String)>,
+) -> Result<impl axum::response::IntoResponse, ServerError> {
+    let app = state.application().clone();
+    let mut subscription = app.watch_inline_ui(session_id, &reference).await?;
+    let output = async_stream::stream! {
+        let mut revision=0;
+        // In-process writes notify immediately. Periodic rereads also recover
+        // cross-process writes and revoke access after session deletion/rewind.
+        let mut recovery=tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            match app.read_inline_ui_snapshot(session_id,&reference).await {
+                Ok(snapshot) => if snapshot.revision!=revision {
+                    revision=snapshot.revision;
+                    yield Ok::<Event,Infallible>(Event::default().event("inline_ui").id(revision.to_string()).json_data(snapshot).expect("snapshot serializes"));
+                },
+                Err(error)=>{yield Ok(Event::default().event("inline_ui_error").json_data(ServerError::from(error).into_api()).expect("error serializes"));break;}
+            }
+            tokio::select!{
+                result=subscription.changed()=>if result.is_err(){break;},
+                _=recovery.tick()=>{},
+            }
+        }
+    };
+    use axum::response::IntoResponse as _;
+    let mut response = axum::response::Sse::new(output)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store, no-transform"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::HeaderName::from_static("x-accel-buffering"),
+        axum::http::HeaderValue::from_static("no"),
+    );
+    Ok(response)
+}

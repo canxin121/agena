@@ -44,6 +44,8 @@ use crate::ws::SubscriptionEvent;
 
 mod archive;
 mod content;
+mod inline_ui;
+pub use inline_ui::InlineUiSubscription;
 mod mcp_connections;
 mod skills;
 #[cfg(test)]

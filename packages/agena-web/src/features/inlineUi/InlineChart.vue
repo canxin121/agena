@@ -1,25 +1,55 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { RiTableLine, RiCodeLine, RiDownloadLine } from '@remixicon/vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
-import type { ChartSpec } from './model'
-const props = defineProps<{ spec: ChartSpec; source: string }>()
+import type { ChartSpec } from './charts'
+const props = withDefaults(defineProps<{ spec: ChartSpec; source: string; embedded?: boolean }>(), { embedded: false })
 const { t } = useI18n()
 const hidden = ref(new Set<number>())
 const hover = ref<number | null>(null)
 const showData = ref(false)
 const showSource = ref(false)
 const svg = ref<SVGSVGElement>()
-const palette = ['#818cf8', '#34d399', '#fb923c', '#38bdf8', '#f472b6', '#a78bfa', '#facc15', '#2dd4bf']
-const W = 800,
-  H = 320,
-  left = 72,
-  right = 24,
-  top = 22,
-  bottom = 56
-const plotWidth = W - left - right,
-  plotHeight = H - top - bottom
+const container = ref<HTMLElement>()
+const availableWidth = ref(640),
+  axisFont = ref(13)
+useResizeObserver(container, (entries) => {
+  const entry = entries[0]
+  if (!entry || entry.contentRect.width <= 0) return
+  availableWidth.value = Math.max(160, Math.round(entry.contentRect.width))
+  if (container.value) axisFont.value = Number.parseFloat(getComputedStyle(container.value).fontSize) || 13
+})
+// SVG coordinates follow the actual component width. Fixed 800px coordinates
+// made mobile labels illegibly small and wasted vertical space on wide cards.
+const palette = Array.from({ length: 8 }, (_, i) => `var(--inline-chart-${i + 1})`)
+const W = computed(() => (props.spec.type === 'pie' ? Math.min(320, availableWidth.value) : availableWidth.value))
+const H = computed(() =>
+  props.spec.type === 'pie'
+    ? Math.round(Math.max(160, Math.min(224, W.value * 0.72)))
+    : Math.round(Math.max(180, Math.min(260, W.value * 0.32))),
+)
+const right = 12,
+  top = 16
+const left = computed(() =>
+  Math.min(
+    W.value * 0.42,
+    Math.max(
+      40,
+      Math.max(...ticks.value.map((tick) => format(tick).length)) * axisFont.value * 0.6 +
+        (props.spec.yLabel ? 28 : 12),
+    ),
+  ),
+)
+const bottom = computed(() => (props.spec.xLabel ? axisFont.value * 3.4 : axisFont.value * 2))
+const plotWidth = computed(() => W.value - left.value - right)
+const plotHeight = computed(() => H.value - top - bottom.value)
+const pieCenter = computed(() => ({
+  x: W.value / 2,
+  y: H.value / 2,
+  radius: Math.max(24, Math.min(W.value / 2 - 12, H.value / 2 - 8)),
+}))
 const visible = computed(() =>
   props.spec.series.map((s, index) => ({ ...s, index })).filter((s) => !hidden.value.has(s.index)),
 )
@@ -33,13 +63,14 @@ const bounds = computed(() => {
   }
   return { min, max }
 })
-const y = (value: number) => top + ((bounds.value.max - value) / (bounds.value.max - bounds.value.min)) * plotHeight
-const x = (index: number) => left + ((index + 0.5) / props.spec.labels.length) * plotWidth
+const y = (value: number) =>
+  top + ((bounds.value.max - value) / (bounds.value.max - bounds.value.min)) * plotHeight.value
+const x = (index: number) => left.value + ((index + 0.5) / props.spec.labels.length) * plotWidth.value
 const format = (value: number | null) =>
   value === null
     ? '—'
     : new Intl.NumberFormat(undefined, {
-        notation: Math.abs(value) >= 1e6 ? 'compact' : 'standard',
+        notation: Math.abs(value) >= 1e12 ? 'scientific' : Math.abs(value) >= 1e6 ? 'compact' : 'standard',
         maximumFractionDigits: 3,
       }).format(value)
 const ticks = computed(() =>
@@ -72,11 +103,11 @@ const pie = computed(() => {
   return values.map((v, index) => {
     const value = v || 0,
       start = angle
-    angle += (value / total) * Math.PI * 2
+    angle += (total > 0 ? value / total : 0) * Math.PI * 2
     const end = angle,
-      cx = 400,
-      cy = 151,
-      radius = 116
+      cx = pieCenter.value.x,
+      cy = pieCenter.value.y,
+      radius = pieCenter.value.radius
     const a = [cx + Math.cos(start) * radius, cy + Math.sin(start) * radius]
     const b = [
       cx + Math.cos(end - (end - start >= Math.PI * 2 ? 0.00001 : 0)) * radius,
@@ -85,7 +116,7 @@ const pie = computed(() => {
     return {
       index,
       value,
-      percent: (value / total) * 100,
+      percent: total > 0 ? (value / total) * 100 : 0,
       path: `M${cx},${cy} L${a.join(',')} A${radius},${radius} 0 ${end - start > Math.PI ? 1 : 0} 1 ${b.join(',')} Z`,
     }
   })
@@ -99,30 +130,50 @@ function pointer(event: PointerEvent) {
   if (props.spec.type === 'pie') return
   const rect = svg.value?.getBoundingClientRect()
   if (!rect) return
-  const px = ((event.clientX - rect.left) / rect.width) * W
+  const px = ((event.clientX - rect.left) / rect.width) * W.value
   hover.value = Math.max(
     0,
-    Math.min(props.spec.labels.length - 1, Math.floor(((px - left) / plotWidth) * props.spec.labels.length)),
+    Math.min(
+      props.spec.labels.length - 1,
+      Math.floor(((px - left.value) / plotWidth.value) * props.spec.labels.length),
+    ),
   )
 }
 function download() {
   if (!svg.value) return
   const copy = svg.value.cloneNode(true) as SVGSVGElement
   copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  copy.style.color = getComputedStyle(svg.value).color
+  copy.setAttribute('width', String(W.value))
+  copy.setAttribute('height', String(H.value))
+  // Embed resolved colors/fonts: downloaded SVGs do not inherit app CSS vars.
+  const originals = [svg.value, ...svg.value.querySelectorAll<SVGElement>('*')]
+  const clones = [copy, ...copy.querySelectorAll<SVGElement>('*')]
+  for (const [index, original] of originals.entries()) {
+    const clone = clones[index]!,
+      style = getComputedStyle(original)
+    for (const property of ['fill', 'stroke', 'color', 'font-family', 'font-size'])
+      clone.style.setProperty(property, style.getPropertyValue(property))
+  }
   const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: 'image/svg+xml' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = 'agena-chart.svg'
+  link.download = 'inline-ui-chart.svg'
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 </script>
 <template>
-  <figure class="my-4 overflow-hidden rounded-xl border border-border/70 bg-muted/10" data-reply-chart>
-    <figcaption class="flex items-center gap-2 px-4 pt-3">
-      <span class="min-w-0 flex-1 text-sm font-semibold">{{ spec.title || t('interactive.chart') }}</span>
+  <figure
+    ref="container"
+    class="inline-chart"
+    :data-embedded="embedded ? 'true' : undefined"
+    :data-chart-type="spec.type"
+    data-reply-chart
+  >
+    <figcaption class="chart-heading">
+      <span class="chart-title">{{ spec.title || t('interactive.chart') }}</span>
       <button
+        type="button"
         class="chart-action"
         :aria-label="t('interactive.data')"
         :title="t('interactive.data')"
@@ -132,7 +183,9 @@ function download() {
         <RiTableLine class="h-4 w-4" />
       </button>
       <button
+        type="button"
         class="chart-action"
+        v-if="source"
         :aria-label="t('interactive.source')"
         :title="t('interactive.source')"
         :aria-pressed="showSource"
@@ -141,6 +194,7 @@ function download() {
         <RiCodeLine class="h-4 w-4" />
       </button>
       <button
+        type="button"
         class="chart-action"
         :aria-label="t('interactive.download')"
         :title="t('interactive.download')"
@@ -152,7 +206,8 @@ function download() {
     <svg
       ref="svg"
       :viewBox="`0 0 ${W} ${H}`"
-      class="block w-full text-foreground"
+      class="chart-plot"
+      :style="{ aspectRatio: `${W} / ${H}`, maxWidth: spec.type === 'pie' ? '320px' : undefined }"
       role="img"
       :aria-label="spec.title || t('interactive.chart')"
       @pointermove="pointer"
@@ -162,7 +217,7 @@ function download() {
       <template v-if="spec.type !== 'pie'">
         <g v-for="tick in ticks" :key="tick">
           <line :x1="left" :x2="W - right" :y1="y(tick)" :y2="y(tick)" stroke="currentColor" opacity=".1" />
-          <text :x="left - 10" :y="y(tick) + 4" text-anchor="end" font-size="11" fill="currentColor" opacity=".6">
+          <text :x="left - 10" :y="y(tick) + 4" text-anchor="end" font-size="11" fill="currentColor" opacity=".8">
             {{ format(tick) }}
           </text>
         </g>
@@ -172,12 +227,17 @@ function download() {
           :key="i"
           :x="x(i)"
           :y="H - bottom + 23"
-          text-anchor="middle"
+          :text-anchor="i === 0 ? 'start' : i === spec.labels.length - 1 ? 'end' : 'middle'"
           font-size="11"
           fill="currentColor"
-          opacity=".6"
+          opacity=".8"
         >
-          {{ (spec.labels[i] || '').slice(0, 18) }}
+          <title>{{ spec.labels[i] }}</title>
+          {{
+            Array.from(spec.labels[i] || '')
+              .slice(0, Math.max(3, Math.floor(plotWidth / (labelIndexes.length * axisFont))))
+              .join('')
+          }}
         </text>
         <text
           v-if="spec.xLabel"
@@ -186,7 +246,7 @@ function download() {
           text-anchor="middle"
           font-size="11"
           fill="currentColor"
-          opacity=".65"
+          opacity=".8"
         >
           {{ spec.xLabel }}
         </text>
@@ -198,7 +258,7 @@ function download() {
           text-anchor="middle"
           font-size="11"
           fill="currentColor"
-          opacity=".65"
+          opacity=".8"
         >
           {{ spec.yLabel }}
         </text>
@@ -275,10 +335,15 @@ function download() {
         >
           <title>{{ spec.labels[slice.index] }}: {{ format(slice.value) }} ({{ slice.percent.toFixed(1) }}%)</title>
         </path>
-        <circle cx="400" cy="151" r="64" fill="var(--color-background, #18181b)" />
+        <circle
+          :cx="pieCenter.x"
+          :cy="pieCenter.y"
+          :r="pieCenter.radius * 0.56"
+          fill="var(--color-card, var(--color-background))"
+        />
       </template>
     </svg>
-    <div class="flex min-h-8 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 pb-3 text-xs">
+    <div class="chart-legend">
       <template v-if="spec.type === 'pie'"
         ><span v-for="slice in pie" :key="slice.index" class="inline-flex items-center gap-1.5"
           ><span class="h-2 w-2 rounded-full" :style="{ background: palette[slice.index % palette.length] }" />{{
@@ -290,7 +355,8 @@ function download() {
       <button
         v-for="(series, i) in spec.type === 'pie' ? [] : spec.series"
         :key="i"
-        class="inline-flex items-center gap-1.5 rounded px-1 focus-visible:outline-2 focus-visible:outline-ring"
+        type="button"
+        class="chart-legend-button"
         :class="hidden.has(i) ? 'opacity-35' : ''"
         :aria-pressed="!hidden.has(i)"
         @click="toggle(i)"
@@ -300,8 +366,8 @@ function download() {
       </button>
       <span v-if="hover !== null" class="text-muted-foreground">{{ spec.labels[hover] }}</span>
     </div>
-    <div v-if="showData" class="max-h-64 overflow-auto border-t border-border/60">
-      <table class="w-full text-left text-xs">
+    <div v-if="showData" class="chart-data" tabindex="0" role="region" :aria-label="t('interactive.data')">
+      <table class="chart-data-table">
         <caption class="sr-only">
           {{
             spec.title || t('interactive.data')
@@ -309,14 +375,14 @@ function download() {
         </caption>
         <thead class="sticky top-0 bg-background">
           <tr>
-            <th class="px-4 py-2">{{ spec.xLabel || t('interactive.label') }}</th>
-            <th v-for="(series, i) in spec.series" :key="i" class="px-4 py-2">{{ series.name }}</th>
+            <th class="chart-cell">{{ spec.xLabel || t('interactive.label') }}</th>
+            <th v-for="(series, i) in spec.series" :key="i" class="chart-cell">{{ series.name }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(label, index) in spec.labels" :key="index" class="border-t border-border/40">
-            <th class="px-4 py-1.5 font-normal">{{ label }}</th>
-            <td v-for="(series, i) in spec.series" :key="i" class="px-4 py-1.5 font-mono">
+            <th class="chart-cell font-normal">{{ label }}</th>
+            <td v-for="(series, i) in spec.series" :key="i" class="chart-cell font-mono">
               {{ format(series.values[index] ?? null) }}
             </td>
           </tr>
@@ -327,20 +393,134 @@ function download() {
   </figure>
 </template>
 <style scoped>
+.inline-chart {
+  --inline-chart-1: var(--color-primary);
+  --inline-chart-2: #0f766e;
+  --inline-chart-3: #6366f1;
+  --inline-chart-4: #0284c7;
+  --inline-chart-5: #be185d;
+  --inline-chart-6: #7c3aed;
+  --inline-chart-7: #a16207;
+  --inline-chart-8: #15803d;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--color-card, var(--color-background));
+  color: var(--color-foreground);
+  font-size: var(--text-micro, 0.8125rem);
+  line-height: 1.4;
+}
+:global(.dark) .inline-chart {
+  --inline-chart-2: #2dd4bf;
+  --inline-chart-3: #a5b4fc;
+  --inline-chart-4: #38bdf8;
+  --inline-chart-5: #f472b6;
+  --inline-chart-6: #c4b5fd;
+  --inline-chart-7: #facc15;
+  --inline-chart-8: #4ade80;
+}
+.inline-chart[data-embedded='true'] {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.chart-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem 0;
+}
+.inline-chart[data-embedded='true'] .chart-heading {
+  padding: 0;
+}
+.chart-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-ui-label, 0.875rem);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.chart-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+.chart-plot text {
+  font-family: inherit;
+  font-size: var(--text-micro, 0.8125rem);
+}
 .chart-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 5px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm, 0.375rem);
   color: var(--color-muted-foreground);
+  cursor: pointer;
 }
 .chart-action:hover {
-  background: var(--color-muted);
+  background: var(--color-accent);
   color: var(--color-foreground);
 }
-.chart-action:focus-visible {
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.125rem 0.5rem 0.375rem;
+  min-width: 0;
+}
+.chart-legend > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chart-legend-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.25rem;
+  min-height: 1.75rem;
+  max-width: 100%;
+  border-radius: var(--radius-sm, 0.375rem);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.chart-data {
+  max-height: 16rem;
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+  overscroll-behavior: contain;
+}
+.chart-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: start;
+  font-size: inherit;
+}
+.chart-cell {
+  text-align: start;
+  padding: 0.375rem 0.5rem;
+  overflow-wrap: anywhere;
+}
+.chart-action:focus-visible,
+.chart-legend-button:focus-visible,
+.chart-data:focus-visible {
   outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .chart-action {
+    width: 36px;
+    height: 36px;
+  }
+  .chart-legend-button {
+    min-height: 36px;
+  }
 }
 </style>

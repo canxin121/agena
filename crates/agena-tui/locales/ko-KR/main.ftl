@@ -3035,3 +3035,21 @@ exit-menu-cancel = Cancel (돌아가기)
 exit-menu-cancel-detail = AI 작업을 중지하지 않고 돌아갑니다.
 exit-menu-stopping = 서버의 취소 확인을 기다리는 중…
 context-help-key-exit-menu = 종료 메뉴 열기 (연결 해제, 중지, 돌아가기).
+
+# Stateful inline reply controls
+command-inline-ui-summary = 대화의 인터랙티브 UI를 엽니다.
+inline-ui-title = 인터랙티브 답변
+inline-ui-controls = 컨트롤
+inline-ui-loading = UI를 불러오는 중…
+inline-ui-no-content = 먼저 inline-ui 참조가 포함된 답변을 여세요.
+inline-ui-invalid-number = 범위 내의 유효한 숫자를 입력하세요.
+inline-ui-copied = 현재 요약을 복사했습니다.
+inline-ui-edit = 편집
+inline-ui-keys = Tab 이동 · ←/→ 조절 · Space 전환 · Enter 실행/편집 · PgUp/PgDn 스크롤 · Esc 닫기
+inline-ui-control-changed = 편집 중 컨트롤이 변경되었습니다. 다시 선택하세요.
+
+inline-ui-working = 갱신 중
+inline-ui-complete = 완료
+inline-ui-error = 확인 필요
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R로 입력을 초기값으로 되돌립니다.

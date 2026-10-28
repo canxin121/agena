@@ -1,7 +1,13 @@
-import { MarkdownStreamRenderer, renderMarkdown, type MarkdownUiLabels } from './markdown'
+import { MarkdownStreamRenderer, renderMarkdown, type MarkdownUiLabels, type MarkdownReferences } from './markdown'
 
 export type WorkerMarkdownLabels = Partial<Omit<MarkdownUiLabels, 'expandLinesTitle'>> & { expandLinesTemplate: string }
-export type MarkdownWork = { id: number; content: string; labels: WorkerMarkdownLabels; streamKey?: number }
+export type MarkdownWork = {
+  id: number
+  content: string
+  labels: WorkerMarkdownLabels
+  streamKey?: number
+  references?: MarkdownReferences
+}
 const streams = new Map<number, MarkdownStreamRenderer>()
 const workerGlobal = globalThis as unknown as {
   onmessage: (event: MessageEvent<MarkdownWork | { release: number }>) => void
@@ -19,7 +25,12 @@ workerGlobal.onmessage = ({ data }) => {
       expandLinesTitle: (lines: number) => data.labels.expandLinesTemplate.replace('__AGENA_LINES__', String(lines)),
     }
     let parts: string[]
-    if (data.streamKey !== undefined) {
+    if (data.references && Object.keys(data.references).length) {
+      // The surrounding answer owns reference definitions, including those
+      // written after this fragment. Do not reuse a parse with an old context.
+      if (data.streamKey !== undefined) streams.delete(data.streamKey)
+      parts = [renderMarkdown(data.content, labels, data.references)]
+    } else if (data.streamKey !== undefined) {
       const stream = streams.get(data.streamKey) || new MarkdownStreamRenderer()
       streams.delete(data.streamKey)
       streams.set(data.streamKey, stream)

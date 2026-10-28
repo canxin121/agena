@@ -202,3 +202,10 @@ pub fn claude_plugin_id() -> &'static str {
 pub fn new_claude_plugin() -> impl agena_plugin_host::sdk::Plugin {
     crate::plugins::provided::claude::ClaudeToolsPlugin::new()
 }
+
+pub fn inline_ui_plugin_id() -> &'static str {
+    crate::plugins::provided::inline_ui::INLINE_UI_PLUGIN_ID
+}
+pub fn new_inline_ui_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::inline_ui::InlineUiPlugin::new()
+}

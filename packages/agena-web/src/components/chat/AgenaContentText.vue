@@ -8,7 +8,6 @@ import PartLoadingIndicator from './PartLoadingIndicator.vue'
 import { type ContentFormat, type ContentRef } from '@/lib/content'
 import { observeContent } from '@/lib/contentSubscriptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
-import { useChatStore } from '@/stores/chat'
 
 const props = defineProps<{
   resource: ContentRef
@@ -16,17 +15,17 @@ const props = defineProps<{
   plain?: boolean
   sourcePath?: string
   format?: ContentFormat
-  allowApps?: boolean
+  allowInlineUi?: boolean
 }>()
 const { t } = useI18n()
 const pane = useWorkspacePaneContext()
-const chat = useChatStore()
 const body = shallowRef('')
 const active = ref(true)
 const gap = ref(false)
 const error = ref('')
 const loading = ref(true)
 const root = ref<HTMLElement>()
+const inlineDocuments = shallowRef<unknown>(null)
 let latestBody = ''
 function selected() {
   const selection = document.getSelection()
@@ -51,9 +50,13 @@ function connect() {
   stop = undefined
   if (pane && !pane.isVisible.value) return
   stop = observeContent(props.sessionId, props.resource, (frame) => {
+    inlineDocuments.value = frame.buffer.inlineUi
     latestBody = frame.text
     if (!selected()) body.value = latestBody
-    active.value = !frame.buffer.resource || frame.buffer.resource.state === 'active'
+    active.value =
+      !frame.buffer.resource ||
+      frame.buffer.resource.state === 'active' ||
+      (frame.buffer.cursor?.sequence ?? 0) < frame.buffer.resource.cursor.sequence
     gap.value = frame.buffer.gap
     error.value = frame.error
     loading.value = !frame.buffer.resource && !frame.text && !frame.error
@@ -95,9 +98,9 @@ onBeforeUnmount(() => {
       :content="body"
       :stream="active"
       :source-path="sourcePath || ''"
-      :allow-apps="allowApps"
-      :app-owner="sessionId"
-      :app-directory="chat.getSessionDirectory(sessionId) || ''"
+      :allow-inline-ui="allowInlineUi === true"
+      :inline-documents="inlineDocuments"
+      :inline-session-id="sessionId"
     />
     <pre
       v-else

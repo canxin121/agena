@@ -113,6 +113,7 @@ mod app_composer_state;
 mod app_exit;
 mod app_help;
 mod app_hub;
+mod app_inline_ui;
 mod app_input;
 mod app_lifecycle;
 mod app_message_queue;

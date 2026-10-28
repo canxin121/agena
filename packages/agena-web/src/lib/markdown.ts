@@ -312,10 +312,16 @@ md.core.ruler.push('add_heading_ids', (state) => {
   }
 })
 
-export function renderMarkdown(content: string, labels?: Partial<MarkdownUiLabels>): string {
+export type MarkdownReferences = Record<string, { href: string; title: string }>
+
+export function renderMarkdown(
+  content: string,
+  labels?: Partial<MarkdownUiLabels>,
+  references?: MarkdownReferences,
+): string {
   currentLabels = { ...DEFAULT_LABELS, ...(labels || {}) }
   try {
-    return md.render(String(content ?? ''))
+    return md.render(String(content ?? ''), references ? { references: { ...references } } : {})
   } finally {
     currentLabels = DEFAULT_LABELS
   }

@@ -338,6 +338,7 @@ impl Application {
             });
         };
         let projection = self.render_tool_result(&invocation, output).await;
+
         if !content
             .resources
             .iter()

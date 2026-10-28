@@ -80,6 +80,7 @@ impl App {
                 self.should_quit = true;
             }
             ClientCommandAction::Plan => self.open_plan_viewer_fullscreen(),
+            ClientCommandAction::InlineUi => self.open_inline_ui(args),
             ClientCommandAction::Side => self.handle_side_command(args),
             ClientCommandAction::Btw => self.open_btw(args),
         }

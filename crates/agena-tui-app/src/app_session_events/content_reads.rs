@@ -342,6 +342,7 @@ impl App {
         if changed {
             self.transcript.invalidate_content_render();
         }
+        self.heal_inline_ui_reads();
     }
 }
 
@@ -396,6 +397,7 @@ mod tests {
         };
         let mut view = ContentView::default();
         assert!(view.apply(ContentPage {
+            inline_ui: None,
             resource: ContentResource {
                 resource_id: resource.resource_id,
                 owner_session_id: 1,

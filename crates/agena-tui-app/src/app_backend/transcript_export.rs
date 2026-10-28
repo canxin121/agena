@@ -25,12 +25,14 @@ pub(crate) struct TranscriptExportRequest {
     pub markdown: bool,
     pub destination: Option<PathBuf>,
     pub pager_context: String,
+    pub inline_ui: crate::app_inline_ui::InlineUiCopyState,
 }
 
 impl TuiBackend {
     pub(crate) async fn last_assistant_message_text(
         &self,
         session_id: i64,
+        inline_ui: crate::app_inline_ui::InlineUiCopyState,
     ) -> Result<Option<String>> {
         let parts = self.client().session_all_parts(session_id).await?;
         let entries = parts_entries(&parts);
@@ -78,9 +80,16 @@ impl TuiBackend {
             if index > 0 {
                 text.push(b'\n');
             }
+            let mut raw = Vec::new();
             self.client()
-                .write_part_text(session_id, part, &mut text)
+                .write_part_text(session_id, part, &mut raw)
                 .await?;
+            let body = String::from_utf8(raw).context("assistant text is not valid UTF-8")?;
+            text.extend_from_slice(
+                self.resolve_local_inline_text(session_id, &body, &inline_ui)
+                    .await?
+                    .as_bytes(),
+            );
         }
         let text = String::from_utf8(text).context("assistant text is not valid UTF-8")?;
         Ok((!text.trim().is_empty()).then_some(text))
@@ -90,7 +99,12 @@ impl TuiBackend {
         &self,
         request: TranscriptExportRequest,
     ) -> Result<Option<NamedTempFile>> {
-        let parts = self.client().session_all_parts(request.session_id).await?;
+        let mut parts = self.client().session_all_parts(request.session_id).await?;
+        for part in &mut parts {
+            if part.kind == "text" && part.role == "assistant" {
+                part.inline_ui = None;
+            }
+        }
         let entries = parts_entries(&parts);
         if entries.is_empty() {
             return Ok(None);
@@ -202,10 +216,25 @@ impl TuiBackend {
                         source,
                         &mut output,
                         &request.i18n,
+                        &request.inline_ui,
+                        source_part
+                            .is_some_and(|part| part.role == "assistant" && part.kind == "text"),
                     )
                     .await?;
                 }
                 if let Some(body) = body {
+                    let body = if source_part
+                        .is_some_and(|part| part.role == "assistant" && part.kind == "text")
+                    {
+                        self.resolve_local_inline_text(
+                            request.session_id,
+                            &body,
+                            &request.inline_ui,
+                        )
+                        .await?
+                    } else {
+                        body
+                    };
                     output.write_all(body.as_bytes()).await?;
                 }
                 output.write_all(b"\n").await?;
@@ -221,13 +250,73 @@ impl TuiBackend {
         Ok(Some(staged))
     }
 
+    async fn resolve_local_inline_text(
+        &self,
+        session: i64,
+        text: &str,
+        local: &crate::app_inline_ui::InlineUiCopyState,
+    ) -> Result<String> {
+        let mut references = agena_domain::InlineUiReferences::new();
+        for span in agena_domain::inline_reference_spans(text, false) {
+            let Some(reference) = span.reference else {
+                continue;
+            };
+            if references.contains_key(&reference) {
+                continue;
+            }
+            if let Some((document, _)) = local.get(&reference) {
+                references.insert(reference, document.clone());
+                continue;
+            }
+            match self.client().read_inline_ui(session, &reference).await {
+                Ok(snapshot) => {
+                    references.insert(reference, snapshot.document);
+                }
+                Err(agena_client::ClientError::Api(error))
+                    if matches!(
+                        error.problem.category,
+                        agena_failure::FailureCategory::NotFound
+                            | agena_failure::FailureCategory::PermissionDenied
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(agena_domain::expand_inline_references_with(
+            text,
+            &references,
+            false,
+            |reference, document| {
+                document.to_markdown_with_states(
+                    local
+                        .get(reference)
+                        .map(|(_, states)| states)
+                        .unwrap_or(&Default::default()),
+                )
+            },
+        ))
+    }
+
     async fn write_export_resource(
         &self,
         session_id: i64,
         source: &ContentRef,
         output: &mut tokio::fs::File,
         i18n: &I18n,
+        inline_ui: &crate::app_inline_ui::InlineUiCopyState,
+        allow_inline: bool,
     ) -> Result<()> {
+        if source.kind == ContentKind::Text && allow_inline {
+            let mut bytes = Vec::new();
+            self.client()
+                .write_content_text(session_id, source, &mut bytes)
+                .await?;
+            let text = String::from_utf8(bytes).context("reply source is not valid UTF-8")?;
+            let text = self
+                .resolve_local_inline_text(session_id, &text, inline_ui)
+                .await?;
+            output.write_all(text.as_bytes()).await?;
+            return Ok(());
+        }
         if matches!(source.kind, ContentKind::Text | ContentKind::Log) {
             return Ok(self
                 .client()

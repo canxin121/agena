@@ -23,7 +23,11 @@
     "vite": "bun ./node_modules/vite/bin/vite.js",
     "check:i18n-settings": "bun ./scripts/check-settings-i18n.mjs",
     "check:i18n-messages": "bun ./scripts/check-messages-i18n.mjs",
-    "check:i18n-locales": "bun ./scripts/check-message-locales-i18n.mjs"
+    "check:i18n-locales": "bun ./scripts/check-message-locales-i18n.mjs",
+    "test:inline-ui": "bun test ./tests/inlineUi.test.ts ./tests/inlineUiReferences.test.ts ./tests/inlineUiProgram.test.ts",
+    "test:inline-ui:browser": "node ./scripts/probe-inline-ui.cjs",
+    "test:inline-ui:live": "node ./scripts/probe-stateful-ui.cjs",
+    "test:inline-ui:layout": "node ./scripts/probe-inline-ui-layout.cjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

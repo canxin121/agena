@@ -1,0 +1,404 @@
+{
+  "reference": "ui_123_0123456789abcdef0123456789abcdef",
+  "cases": [
+    {
+      "name": "fenced between paragraphs",
+      "text": "前文 **重点**。\n\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\n\n后文。",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "fenced at EOF",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "fenced CRLF",
+      "text": "```inline-ui\r\nui_123_0123456789abcdef0123456789abcdef\r\n```",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "fence with three-space indentation",
+      "text": "   ```inline-ui\n   ui_123_0123456789abcdef0123456789abcdef\n   ```",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "four-space code is not an embed",
+      "text": "    ```inline-ui\n    ui_123_0123456789abcdef0123456789abcdef\n    ```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "longer opening fence",
+      "text": "````inline-ui\nui_123_0123456789abcdef0123456789abcdef\n````",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "longer closing fence",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n`````",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "space before info string",
+      "text": "``` inline-ui  \nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "trim reference whitespace",
+      "text": "```inline-ui\n\n  ui_123_0123456789abcdef0123456789abcdef  \n\n```",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "adjacent paragraph blocks",
+      "text": "Before\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\nAfter",
+      "streaming": false,
+      "references": 1,
+      "pending": 0
+    },
+    {
+      "name": "two consecutive embeds",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\n\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 2,
+      "pending": 0
+    },
+    {
+      "name": "ordinary text fence",
+      "text": "```text\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "empty code fence language",
+      "text": "```\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "JSON in fence is not executable",
+      "text": "```inline-ui\n{\"reference\":\"ui_123_0123456789abcdef0123456789abcdef\"}\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "multiple references in a single fence",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "unknown info attributes",
+      "text": "```inline-ui example\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "case-sensitive language",
+      "text": "```INLINE-UI\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "tilde fences stay ordinary code",
+      "text": "~~~inline-ui\nui_123_0123456789abcdef0123456789abcdef\n~~~",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "longer outer example fence",
+      "text": "````markdown\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\n````",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "quoted fenced example",
+      "text": "> ```inline-ui\n> ui_123_0123456789abcdef0123456789abcdef\n> ```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "list fenced example",
+      "text": "- ```inline-ui\n  ui_123_0123456789abcdef0123456789abcdef\n  ```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "HTML comment example",
+      "text": "<!--\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\n-->",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "HTML block example",
+      "text": "<div>\n```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```\n</div>",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "escaped opener",
+      "text": "\\```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "invalid opaque id",
+      "text": "```inline-ui\nui_0_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "unterminated fence final",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "unterminated fence streaming",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "partial ID streaming",
+      "text": "Before\n\n```inline-ui\nui_123_",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "four-space closer stays open while streaming",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n    ```",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "empty fence streaming",
+      "text": "```inline-ui\n",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "partial closer streaming",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n``",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "shorter closer final",
+      "text": "````inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "shorter closer streaming",
+      "text": "````inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+      "streaming": true,
+      "references": 0,
+      "pending": 1
+    },
+    {
+      "name": "invalid closing suffix",
+      "text": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n``` example",
+      "streaming": false,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "closed invalid fence does not disappear",
+      "text": "```inline-ui\nnot-a-reference\n```",
+      "streaming": true,
+      "references": 0,
+      "pending": 0
+    },
+    {
+      "name": "unsupported brackets: between paragraphs",
+      "text": "前文 **重点**。\n\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n\n后文。",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: at EOF",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: CRLF",
+      "text": "A\r\n\r\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\r\n\r\nB",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: three spaces",
+      "text": "   [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: indented code",
+      "text": "    [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: inline code",
+      "text": "`[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]`",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: fenced code",
+      "text": "```text\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n```",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: open fence",
+      "text": "```\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": true,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: long outer fence",
+      "text": "````\n```\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n```\n````",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: quoted example",
+      "text": "> [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: list example",
+      "text": "- [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: nested list",
+      "text": "- example\n\n  [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: inline prose",
+      "text": "A [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]] B",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: not independent paragraph",
+      "text": "A\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\nB",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: escaped",
+      "text": "\\[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: HTML comment",
+      "text": "<!--\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n-->",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: HTML block",
+      "text": "<div>\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n</div>",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: heading",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n------",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: invalid id",
+      "text": "[[inline-ui:ui_0_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: repeated explicit refs",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: unfinished marker",
+      "text": "A\n\n[[inline-ui:ui_123_0123456789abcdef012345678",
+      "streaming": true,
+      "references": 0,
+      "literal": true
+    },
+    {
+      "name": "unsupported brackets: unfinished final literal",
+      "text": "A\n\n[[inline-ui:ui_123_0123456789abcdef012345678",
+      "streaming": false,
+      "references": 0,
+      "literal": true
+    }
+  ]
+}

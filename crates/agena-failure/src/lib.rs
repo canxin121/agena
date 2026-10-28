@@ -235,6 +235,13 @@ pub struct FieldIssue {
     #[serde(deserialize_with = "deserialize_safe_field_path")]
     field: String,
     pub kind: FieldIssueKind,
+    /// Scrubbed, bounded corrective guidance that survives model replay.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_safe_field_hint"
+    )]
+    hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,12 +260,35 @@ impl FieldIssue {
         Self {
             field: sanitize_field_path(field.as_ref()),
             kind,
+            hint: None,
         }
+    }
+
+    pub fn with_hint(mut self, hint: impl AsRef<str>) -> Self {
+        let hint = crate::diagnostic::user_message_with_context(hint.as_ref(), 140);
+        if !hint.is_empty() {
+            self.hint = Some(hint);
+        }
+        self
     }
 
     pub fn field(&self) -> &str {
         self.field.as_str()
     }
+}
+
+/// Re-scrub persisted field hints before replay. A serialized failure can be
+/// reloaded from storage or another transport; deserialization must not turn
+/// untrusted hint text into model instructions.
+fn deserialize_safe_field_hint<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|text| {
+        let safe = crate::diagnostic::user_message_with_context(&text, 140);
+        (!safe.is_empty()).then_some(safe)
+    }))
 }
 
 fn sanitize_field_path(field: &str) -> String {
@@ -447,7 +477,11 @@ impl ModelFeedback {
                 "The tool input is invalid. Correct these fields and retry: {}.",
                 self.fields
                     .iter()
-                    .map(|issue| format!("{} ({})", issue.field(), issue.kind.as_str()))
+                    .map(|issue| match &issue.hint {
+                        Some(hint) =>
+                            format!("{} ({}): {}", issue.field(), issue.kind.as_str(), hint),
+                        None => format!("{} ({})", issue.field(), issue.kind.as_str()),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             ));

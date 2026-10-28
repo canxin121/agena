@@ -1,7 +1,7 @@
 # Layout and component catalog
 
 Use a `panel` block with a `program`: root node ID, flat `nodes`, `data`, typed
-`state`, optional `computed`, and named `actions`. Read guide(topic=panel) only
+`state`, optional `computed`, and named `actions`. Read guide({sections:["schema","dashboard"]}) only
 when a full schema and dashboard example are useful. Start small and update.
 
 Nodes: `{id,kind,props?,children?,bind?,visible?,action?}`. IDs are stable so updates

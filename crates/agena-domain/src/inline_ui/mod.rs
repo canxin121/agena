@@ -240,8 +240,8 @@ impl InlineDocument {
         if bytes.len() > INLINE_UI_MAX_BYTES {
             return Err("inline document exceeds 60 KiB".into());
         }
-        let document: Self =
-            serde_json::from_value(value).map_err(|e| format!("invalid inline document: {e}"))?;
+        let document: Self = serde_path_to_error::deserialize(value)
+            .map_err(|e| format!("{}: {}", e.path(), e.inner()))?;
         document.validate()?;
         Ok(document)
     }

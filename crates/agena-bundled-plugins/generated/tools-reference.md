@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 208 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 207 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -22,7 +22,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
-- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: composable, stateful interfaces and live work updates inside answers. Start with guide; discover layout/state/actions/live progressively, then prepare/read/update. (5 tools)
+- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update. (4 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (26 tools)
@@ -13522,58 +13522,58 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 
 ## agena.inline_ui
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 4
 
-Inline Generative UI: composable, stateful interfaces and live work updates inside answers. Start with guide; discover layout/state/actions/live progressively, then prepare/read/update.
+Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update.
 
 ### guide
 
-`agena.inline_ui.guide` · **Summary**: Learn Inline Generative UI progressively: overview or one kind's schema and example.
+`agena.inline_ui.guide` · **Summary**: Learn the complete core panel, state, action and live-update workflow in one call; batch optional advanced sections.
 
 **Tags**: `read_only` `discovery`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read overview once, then only the needed topic. Results are instructions, not a published UI. Prepare content, then put the returned embed in your answer; validate is an optional dry run.
+> guide() is a self-contained first-use manual with a small tested panel and update. guide({sections:["chart","expressions"]}) fetches optional references without repeating the core. Once learned, call prepare directly. The embed must be placed in the answer.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `topic` | `GuideTopic` | — | `overview` | Start with overview; request only the content kind needed for this answer. |
+| `sections` | `array<GuideSection>` | — | `[]` | Empty/default: complete core guide and tested 7-node example.<br>Nonempty: only these supplemental sections in one call. |
 
 **Input schema**:
 ```json
 {
   "$defs": {
-    "GuideTopic": {
-      "description": "Start with overview; request only the content kind needed for this answer.",
+    "GuideSection": {
       "enum": [
-        "overview",
+        "schema",
+        "dashboard",
+        "expressions",
+        "updates",
+        "chart",
         "paragraph",
         "callout",
         "steps",
         "comparison",
         "metrics",
         "table",
-        "details",
-        "chart",
-        "panel",
-        "layout",
-        "state",
-        "actions",
-        "live"
+        "details"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "type": "string"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "topic": {
-      "$ref": "#/$defs/GuideTopic",
-      "default": "overview",
-      "description": "Start with overview; request only the content kind needed for this answer."
+    "sections": {
+      "default": [],
+      "description": "Empty/default: complete core guide and tested 7-node example.\nNonempty: only these supplemental sections in one call.",
+      "items": {
+        "$ref": "#/$defs/GuideSection"
+      },
+      "type": "array",
+      "x-agena-order": "000000"
     }
   },
   "type": "object"
@@ -13589,21 +13589,45 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read guide for the needed kinds. Prepares one versioned passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
+> Learn via guide() if needed; no pre-validation call is required. Prepares one versioned passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `document` | `any` | ✓ | — | Bounded semantic document: version=1, optional title, ordered blocks.<br>Read guide(topic) for exact schemas. No HTML, commands or executable code. |
+| `document` | `any` | ✓ | — | Bounded semantic document: version=1, optional title, ordered blocks.<br>Document v1; guide() covers the common contract. No executable code. |
+| `phase` | `InlinePhase / null` | — | `null` | Complete by default; working when the agent will publish later updates. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "InlinePhase": {
+      "enum": [
+        "working",
+        "complete",
+        "error"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "document": {
-      "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nRead guide(topic) for exact schemas. No HTML, commands or executable code.",
+      "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nDocument v1; guide() covers the common contract. No executable code.",
       "x-agena-order": "000000"
+    },
+    "phase": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InlinePhase"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Complete by default; working when the agent will publish later updates.",
+      "x-agena-order": "000001"
     }
   },
   "required": [
@@ -13615,7 +13639,7 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 
 ### read
 
-`agena.inline_ui.read` · **Summary**: Read a prepared UI's latest revision and document before editing. User-local selections are not agent data.
+`agena.inline_ui.read` · **Summary**: Inspect the current UI for context recovery or revision-conflict reconciliation; not required before normal sequential updates. User-local selections are not agent data.
 
 **Tags**: `read_only`
 
@@ -13652,7 +13676,7 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read guide(topic=live). Display the prepared reference early in the answer, then call update after actual work changes. Prefer a panel patch with block_id and changed data or whole-node upserts. Never invent progress. Use phase=complete when finished. This changes only agent-authored UI content, not the user's local selections or external services.
+> Display the prepared reference early in the answer, then call update after actual work changes. Prefer a panel patch with block_id and changed data or whole-node upserts. Never invent progress. Use phase=complete when finished. This changes only agent-authored UI content, not the user's local selections or external services.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -14443,36 +14467,6 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
   },
   "required": [
     "update"
-  ],
-  "type": "object"
-}
-```
-
-### validate
-
-`agena.inline_ui.validate` · **Summary**: Check an inline reply document without publishing it; reports precise validation errors.
-
-**Tags**: `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `document` | `any` | ✓ | — | Bounded semantic document: version=1, optional title, ordered blocks.<br>Read guide(topic) for exact schemas. No HTML, commands or executable code. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "document": {
-      "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nRead guide(topic) for exact schemas. No HTML, commands or executable code.",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "document"
   ],
   "type": "object"
 }

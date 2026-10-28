@@ -257,6 +257,7 @@ pub use inline_ui::{
 pub use inline_ui::{
     UI_MAX_EVALUATION_STEPS, UI_MAX_NODES, UiAction, UiActionResult, UiKind, UiNode, UiOption,
     UiProgram, UiResolvedNode, UiState, UiStateField, UiStateKind, UiView, ui_identifier,
+    ui_supported_operators,
 };
 
 pub use inline_ui::{InlinePanelPatch, InlinePhase, InlineSnapshot, InlineUpdate};

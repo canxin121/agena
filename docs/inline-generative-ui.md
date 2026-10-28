@@ -12,9 +12,8 @@
 
 | 工具 | 行为 |
 | --- | --- |
-| `agena.inline_ui.guide` | 默认返回简短概览；指定 `topic` 后，只返回该类型的结构和完整示例。 |
-| `agena.inline_ui.validate` | 可选校验；不准备引用、不展示 UI。 |
-| `agena.inline_ui.prepare` | 准备版本 1 的界面并返回引用；**工具调用本身不展示 UI**。 |
+| `agena.inline_ui.guide` | 无参数时一次返回完整交互面板与实时更新核心指南；按需通过 `sections` 批量获取 Schema、图表和高级示例。 |
+| `agena.inline_ui.prepare` | `prepare({document,phase?})` 直接校验并原子创建 revision 1；默认 `phase=complete`，持续工作显式 `working`。**工具调用本身不展示 UI**。 |
 | `agena.inline_ui.read` | 读取当前文档与版本，不读取用户本地输入。 |
 | `agena.inline_ui.update` | 带预期版本原子更新同一界面，客户端实时刷新并保留合法输入。 |
 
@@ -41,10 +40,11 @@
 
 ```json
 {
-  "prepared": true,
   "reference": "ui_123_0123456789abcdef0123456789abcdef",
   "embed": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
-  "message": "Not displayed yet. Paste the entire returned inline-ui fenced block unchanged between Markdown paragraphs..."
+  "revision": 1,
+  "phase": "complete",
+  "message": "Not displayed yet. Insert embed unchanged in the answer; update this same reference for new facts."
 }
 ```
 
@@ -65,6 +65,12 @@ Web 与 TUI 都在这一行的位置展开内容。前后的普通 Markdown 仍�
 链接的引用定义即使位于另一个富内容块之后，也使用同一回答的解析上下文。
 正文可以交错多个引用，不需要分成多条回答或多个工具结果。
 **不写正文引用就不会显示这份内容。** 准备工具只保留可检查的普通执行记录，不再重复展示 UI。需要实时显示工作进展时，先在可见说明中输出围栏，再调用 update；不要只在最终回答才输出它。
+
+## 学习和实时更新的最短路径
+
+首次 `guide()` 一次读完结构、状态、表达式、动作、嵌入、更新、限制和 7 节点交互示例；已经掌握契约直接 `prepare({document})`。完整 Schema、45 节点仪表盘、复杂表达式和静态图表实例只有在 `guide({sections:["schema","chart"]})` 等批量请求后返回，补充资料不会重复核心说明。示例见 [quick-start.json](../examples/inline-ui/quick-start.json) 与 [quick-start-update.json](../examples/inline-ui/quick-start-update.json)。
+
+创建时已完成的回答默认 `phase:"complete"`，还需持续处理的工作显式 `phase:"working"`；创建版本始终为 1。更新传入已返回的 `reference` 与 `expected_revision`，成功后以新 `revision` 为下次预期版本，不需要每次先 `read`。版本冲突返回当前/预期版本和修复建议，但必须先 `read`、协调内容，再重试，不能盲目改版本号。非法输入不会写入；出现 I/O 错误不能武断认定未提交。用户本地操作不自动反馈模型。
 
 ## 引用语法与流式行为
 
@@ -150,7 +156,7 @@ Web 将正文拆成原样的 Markdown 片段与引用组件。TUI 在完整 Mark
 自动展示、`agena-chart` / `agena-ui` JSON 围栏都不再解析为富内容；对应适配器、工具结果卡片
 与复制回退已删除。旧格式按普通文本／代码显示，不执行应用代码，也不自动转换或迁移。
 
-`prepare` 只准备文档，`validate` 只校验，UI 必须由正文中的围栏引用触发。
+`prepare` 内部执行权威校验，失败直接返回字段定位和修复提示，不会创建引用；不再公开 `validate`。UI 必须由正文中的围栏引用触发。
 独立的 Web Preview 和预览应用运行功能没有更改，不属于这套回答协议。
 
 ## 验证

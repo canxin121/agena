@@ -384,6 +384,59 @@ impl ToolError {
             .and_then(serde_json::Value::as_object)
             .and_then(|data| data.get("agena_public_problem"))
             .and_then(serde_json::Value::as_str);
+        // Reconstruct only sanitized, bounded field feedback from an Inline UI
+        // error report, not private diagnostics or arbitrary plugin prose.
+        let inline_issues = error
+            .diagnostic
+            .data
+            .as_ref()
+            .and_then(|data| data.get("agena_inline_ui_error"))
+            .filter(|report| {
+                matches!(
+                    report.get("code").and_then(serde_json::Value::as_str),
+                    Some("invalid_ui" | "revision_conflict" | "not_found")
+                )
+            })
+            .and_then(|report| {
+                let kind = report.get("code").and_then(serde_json::Value::as_str)?;
+                let issues = report.get("issues")?.as_array()?;
+                let fields = issues
+                    .iter()
+                    .take(8)
+                    .filter_map(|issue| {
+                        let path = issue.get("path")?.as_str()?;
+                        let fix = issue.get("fix")?.as_str()?;
+                        if path.is_empty() || path.len() > 80 || fix.len() > 160 {
+                            return None;
+                        }
+                        // Do not trust arbitrary diagnostic prose. Only carry
+                        // a scrubbed reason and fix, or typed revision integers.
+                        let hint = if kind == "revision_conflict" {
+                            let expected = report.get("expected_revision")?.as_u64()?;
+                            let current = report.get("current_revision")?.as_u64()?;
+                            format!(
+                                "revision_conflict: expected {expected}, current {current}. {fix}"
+                            )
+                        } else {
+                            let reason = issue
+                                .get("reason")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let reason =
+                                agena_failure::diagnostic::user_message_with_context(reason, 48);
+                            format!("{kind} (not applied): {reason}. {fix}")
+                        };
+                        Some(
+                            agena_failure::FieldIssue::new(
+                                path,
+                                agena_failure::FieldIssueKind::Invalid,
+                            )
+                            .with_hint(hint),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (!fields.is_empty()).then_some(fields)
+            });
         let proposed_public_detail = error.failure.user.fallback.clone();
         let diagnostic = bounded_plugin_diagnostic(error.diagnostic.message);
         let mut public = if public_problem
@@ -410,9 +463,10 @@ impl ToolError {
             failure
         };
         public.model = Some(match error_kind {
-            agena_plugin_host::sdk::PluginErrorKind::InvalidParams => {
-                agena_failure::ModelFeedback::invalid_input()
-            }
+            agena_plugin_host::sdk::PluginErrorKind::InvalidParams => inline_issues.map_or_else(
+                agena_failure::ModelFeedback::invalid_input,
+                agena_failure::ModelFeedback::invalid_input_with_fields,
+            ),
             agena_plugin_host::sdk::PluginErrorKind::PolicyDenied => {
                 agena_failure::ModelFeedback::permission_denied()
             }
@@ -660,5 +714,95 @@ mod execution_namespace_tests {
             problem.public.impact,
             agena_failure::FailureImpact::PartialSuccess
         );
+    }
+}
+
+#[cfg(test)]
+mod inline_ui_model_error_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn plugin_inline_error_survives_host_and_persisted_model_projection_without_private_data() {
+        let mut error = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
+            "invalid_ui",
+            json!({"agena_inline_ui_error":{
+                "code":"invalid_ui",
+                "applied":false,
+                "issues":[
+                    {"path":"document.blocks[0].program.nodes[2].props.style",
+                     "fix":"Remove the unsupported property."},
+                    {"path":"document.blocks[0].program.nodes[3].bind",
+                     "fix":"Declare a bounded number state for the slider."}
+                ],
+                "truncated":false
+            }}),
+        );
+        error.failure.user = agena_failure::UserPresentation::validated(
+            "inline_ui.error",
+            "invalid_ui at nodes[2].props.style: unsupported property",
+        );
+        let result = ToolError::from_plugin_error(error);
+        let ToolError::Plugin(problem) = result else {
+            panic!("expected plugin failure")
+        };
+        let failure = problem.public;
+        assert_eq!(failure.code.as_str(), "plugin.invalid_input");
+        let serialized = serde_json::to_string(&failure).unwrap();
+        assert!(!serialized.contains("agena_inline_ui_error"));
+        let replayed: agena_failure::Failure = serde_json::from_str(&serialized).unwrap();
+        let projected = agena_domain::OperationError { failure: replayed }
+            .model_message()
+            .expect("model-visible failure");
+        assert!(
+            projected.contains("document.blocks[0].program.nodes[2].props.style"),
+            "{projected}"
+        );
+        assert!(
+            projected.contains("Remove the unsupported property"),
+            "{projected}"
+        );
+        assert!(
+            projected.contains("document.blocks[0].program.nodes[3].bind"),
+            "{projected}"
+        );
+        assert!(
+            projected.contains("Declare a bounded number state"),
+            "{projected}"
+        );
+        assert!(!projected.contains("agena_inline_ui_error"));
+        assert!(projected.contains("invalid_ui"), "{projected}");
+        assert!(projected.len() < 600);
+    }
+
+    #[test]
+    fn revision_conflict_projection_reports_both_revisions_and_required_reconciliation() {
+        let error = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
+            "revision_conflict",
+            json!({"agena_inline_ui_error":{
+                "code":"revision_conflict", "applied":false,
+                "expected_revision":1, "current_revision":2,
+                "issues":[{"path":"update.expected_revision",
+                    "reason":"expected 1, current 2",
+                    "fix":"Read current UI and reconcile before retrying."}]
+            }}),
+        );
+        let ToolError::Plugin(problem) = ToolError::from_plugin_error(error) else {
+            panic!("plugin failure")
+        };
+        let projected = agena_domain::OperationError {
+            failure: serde_json::from_value(serde_json::to_value(problem.public).unwrap()).unwrap(),
+        }
+        .model_message()
+        .unwrap();
+        for text in [
+            "revision_conflict",
+            "expected 1",
+            "current 2",
+            "update.expected_revision",
+            "reconcile",
+        ] {
+            assert!(projected.contains(text), "{projected}");
+        }
     }
 }

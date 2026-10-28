@@ -262,3 +262,55 @@ fn native_ui_single_line_slots_keep_multiline_text_from_escaping_their_cells() {
         );
     }
 }
+
+#[test]
+fn quick_start_example_has_native_controls_and_matches_web_live_update_values() {
+    let mut reply = InlineReply::default();
+    let reference = "ui_99_0123456789abcdef0123456789abcdef";
+    reply.source = format!("Before\n\n\x60\x60\x60inline-ui\n{reference}\n\x60\x60\x60\n\nAfter");
+    let mut document = InlineDocument::from_value(
+        serde_json::from_str(include_str!(
+            "../../../../examples/inline-ui/quick-start.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let InlineBlock::Panel { program, .. } = &document.blocks[0] else {
+        panic!("panel")
+    };
+    let selected = program
+        .input(&UiState::new(), "slider", json!(50))
+        .unwrap()
+        .state;
+    reply.documents.insert(reference.into(), document.clone());
+    for width in [24, 40, 80] {
+        let rows = render_reply(&reply, width, &I18n::english());
+        check_geometry(&rows, width);
+        assert!(rows.iter().flat_map(|row| &row.controls).any(
+            |control| matches!(&control.action, TranscriptControlAction::InlineUi(target)
+                if target.node == "slider")
+        ));
+    }
+    reply
+        .states
+        .insert(reference.into(), [("scenario".into(), selected)].into());
+    let text = render_reply(&reply, 80, &I18n::english())
+        .iter()
+        .map(|row| row.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("180"), "{text}");
+    assert!(text.contains("Above 150"), "{text}");
+    let InlineBlock::Panel { program, .. } = &mut document.blocks[0] else {
+        panic!("panel")
+    };
+    program.data.insert("base".into(), json!(160));
+    reply.documents.insert(reference.into(), document);
+    let text = render_reply(&reply, 80, &I18n::english())
+        .iter()
+        .map(|row| row.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("240"), "{text}");
+    assert!(text.contains("Adjustment"), "{text}");
+}

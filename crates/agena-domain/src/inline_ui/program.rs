@@ -11,6 +11,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub type UiState = BTreeMap<String, Value>;
+/// Canonical operator catalog, shared by the validator and authoring guide.
+pub fn ui_supported_operators() -> &'static [&'static str] {
+    expression::OPERATORS
+}
+
 pub const UI_MAX_NODES: usize = 128;
 pub const UI_MAX_EVALUATION_STEPS: usize = 30_000;
 
@@ -78,6 +83,35 @@ pub enum UiKind {
     Details,
 }
 impl UiKind {
+    /// Canonical component catalog; guide field lists use allowed_props().
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Stack,
+            Self::Row,
+            Self::Grid,
+            Self::Card,
+            Self::Text,
+            Self::Heading,
+            Self::Metric,
+            Self::Badge,
+            Self::Divider,
+            Self::Tabs,
+            Self::Select,
+            Self::Checkbox,
+            Self::Switch,
+            Self::Slider,
+            Self::Number,
+            Self::Input,
+            Self::Button,
+            Self::Progress,
+            Self::Chart,
+            Self::Table,
+            Self::Tasks,
+            Self::Timeline,
+            Self::Callout,
+            Self::Details,
+        ]
+    }
     pub fn is_container(self) -> bool {
         matches!(
             self,
@@ -319,50 +353,55 @@ impl UiProgram {
         let value = serde_json::to_value(self).map_err(|e| e.to_string())?;
         safe_value(&value, 0, &mut 0)?;
         let mut ids = BTreeSet::new();
-        for node in &self.nodes {
+        for (i, node) in self.nodes.iter().enumerate() {
+            let path = format!("nodes[{i}]");
             if !ui_identifier(&node.id) || !ids.insert(node.id.as_str()) {
-                return Err(format!("node {}: invalid or duplicate id", node.id));
+                return Err(format!("{path}.id: invalid or duplicate id"));
             }
             if node.children.len() > 48 || (!node.kind.is_container() && !node.children.is_empty())
             {
-                return Err(format!("node {}: invalid children", node.id));
+                return Err(format!(
+                    "{path}.children: only containers may have up to 48 child IDs"
+                ));
             }
             for (key, value) in &node.props {
                 if !node.kind.allowed_props().contains(&key.as_str()) {
-                    return Err(format!("node {}: unsupported property {key}", node.id));
+                    return Err(format!(
+                        "{path}.props.{key}: unsupported property for this kind"
+                    ));
                 }
-                expression::validate(value, 0)?;
+                expression::validate(value, 0).map_err(|e| format!("{path}.props.{key}: {e}"))?;
             }
             if let Some(value) = &node.visible {
-                expression::validate(value, 0)?;
+                expression::validate(value, 0).map_err(|e| format!("{path}.visible: {e}"))?;
             }
             if node.kind.is_control() && node.kind != UiKind::Button && node.bind.is_none() {
-                return Err(format!("node {}: control requires bind", node.id));
+                return Err(format!("{path}.bind: control requires state binding"));
             }
             if let Some(key) = &node.bind {
                 let field = self
                     .state
                     .get(key)
-                    .ok_or_else(|| format!("node {}: unknown state {key}", node.id))?;
+                    .ok_or_else(|| format!("{path}.bind: unknown state {key}"))?;
                 let expected = match node.kind {
                     UiKind::Tabs | UiKind::Select => UiStateKind::Choice,
                     UiKind::Checkbox | UiKind::Switch => UiStateKind::Boolean,
                     UiKind::Slider | UiKind::Number => UiStateKind::Number,
                     UiKind::Input => UiStateKind::Text,
                     UiKind::Tasks => UiStateKind::Selection,
-                    _ => return Err("Only input controls can bind state".into()),
+                    _ => return Err(format!("{path}.bind: only input controls can bind state")),
                 };
                 if field.kind != expected {
-                    return Err(format!("node {}: state type mismatch", node.id));
+                    return Err(format!("{path}.bind: state type mismatch"));
                 }
             }
             if let Some(action) = &node.action
                 && (node.kind != UiKind::Button || !self.actions.contains_key(action))
             {
-                return Err(format!("node {}: invalid action", node.id));
+                return Err(format!("{path}.action: button requires a declared action"));
             }
             if node.kind == UiKind::Button && node.action.is_none() {
-                return Err(format!("node {}: button requires action", node.id));
+                return Err(format!("{path}.action: button requires action"));
             }
         }
         for (key, field) in &self.state {
@@ -405,7 +444,7 @@ impl UiProgram {
             if !ui_identifier(key) {
                 return Err(format!("computed.{key}: invalid key"));
             }
-            expression::validate(value, 0)?;
+            expression::validate(value, 0).map_err(|e| format!("computed.{key}: {e}"))?;
         }
         fn dependencies(value: &Value, result: &mut BTreeSet<String>) {
             match value {
@@ -464,13 +503,14 @@ impl UiProgram {
             if !ui_identifier(key) || actions.is_empty() || actions.len() > 16 {
                 return Err(format!("action.{key}: invalid action list"));
             }
-            for action in actions {
+            for (i, action) in actions.iter().enumerate() {
+                let path = format!("actions.{key}[{i}]");
                 match action {
                     UiAction::Set { key, value } => {
                         if !self.state.contains_key(key) {
-                            return Err(format!("unknown state {key}"));
+                            return Err(format!("{path}.key: unknown state {key}"));
                         }
-                        expression::validate(value, 0)?;
+                        expression::validate(value, 0).map_err(|e| format!("{path}.value: {e}"))?;
                     }
                     UiAction::Toggle { key } => {
                         if self
@@ -478,10 +518,12 @@ impl UiProgram {
                             .get(key)
                             .is_none_or(|s| s.kind != UiStateKind::Boolean)
                         {
-                            return Err(format!("toggle requires boolean state {key}"));
+                            return Err(format!("{path}.key: toggle requires boolean state {key}"));
                         }
                     }
-                    UiAction::Copy { text } => expression::validate(text, 0)?,
+                    UiAction::Copy { text } => {
+                        expression::validate(text, 0).map_err(|e| format!("{path}.text: {e}"))?
+                    }
                     UiAction::Reset => {}
                 }
             }
@@ -519,7 +561,9 @@ impl UiProgram {
         let state = self.reconcile_state(&UiState::new());
         let mut evaluator = expression::Evaluator::new(self, &state);
         for key in self.computed.keys() {
-            evaluator.computed(key)?;
+            evaluator
+                .computed(key)
+                .map_err(|e| format!("computed.{key}: {e}"))?;
         }
         self.render(&state)?;
         Ok(())
@@ -543,17 +587,30 @@ impl UiProgram {
                 return Err("render depth exceeded".into());
             }
             let node = nodes.get(id).ok_or_else(|| format!("missing node {id}"))?;
+            let index = e.program.nodes.iter().position(|n| n.id == id).unwrap_or(0);
             if let Some(visible) = &node.visible {
-                let value = e.eval(visible, &Value::Null)?;
-                if !value.as_bool().ok_or("visible must be boolean")? {
+                let value = e
+                    .eval(visible, &Value::Null)
+                    .map_err(|error| format!("nodes[{index}].visible: {error}"))?;
+                if !value
+                    .as_bool()
+                    .ok_or_else(|| format!("nodes[{index}].visible: must evaluate to a boolean"))?
+                {
                     return Ok(None);
                 }
             }
             let mut props = BTreeMap::new();
             for (k, v) in &node.props {
-                props.insert(k.clone(), e.eval(v, &Value::Null)?);
+                props.insert(
+                    k.clone(),
+                    e.eval(v, &Value::Null)
+                        .map_err(|error| format!("nodes[{index}].props.{k}: {error}"))?,
+                );
             }
-            presentation::validate_props(node.kind, &props)?;
+            presentation::validate_props(node.kind, &props).map_err(|err| {
+                let index = e.program.nodes.iter().position(|n| n.id == id).unwrap_or(0);
+                format!("nodes[{index}].props: {err}")
+            })?;
             let mut children = Vec::new();
             for child in &node.children {
                 if let Some(view) = resolve(child, nodes, e, state, depth + 1)? {

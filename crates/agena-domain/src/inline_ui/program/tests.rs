@@ -65,6 +65,14 @@ fn stateful_ui_dashboard_links_tasks_filters_and_simulation() {
             .len(),
         2
     );
+    assert_eq!(
+        filtered.root.find("salesTable").unwrap().props["rows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "one filter must update both native chart and table"
+    );
     let state = program
         .input(&state, "navigation", json!("simulation"))
         .unwrap()

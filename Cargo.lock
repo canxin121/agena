@@ -411,6 +411,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "smol_str",
  "strum 0.28.0",
  "thiserror 2.0.20",

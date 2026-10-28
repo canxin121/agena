@@ -17,19 +17,22 @@ The same reference is used throughout. Valid user choices and stable node focus 
 retained. The UI phase is an explicit agent-authored status, not an inferred promise
 that a real process or business operation has completed.
 
-### Progressive tools
+### Four tools and one-call core learning
 
 | Tool | Purpose |
 | --- | --- |
-| `agena.inline_ui.guide` | Overview, one content kind, or `layout` / `state` / `actions` / `live`. `panel` gives the exact schema and a complete dashboard example. |
-| `agena.inline_ui.validate` | Check a document before publication; no UI state is created. |
-| `agena.inline_ui.prepare` | Create a session-scoped live head at revision 1 and return its fenced embed. |
+| `agena.inline_ui.guide` | Default: complete core panel, expressions, actions and live guide with 7-node tested example. Request multiple optional sections for advanced references without replaying the core. |
+| `agena.inline_ui.prepare` | Internally validate and atomically create a session-scoped head at revision 1. Default phase is `complete`; use `phase:"working"` when continuing. Return the fenced embed. |
 | `agena.inline_ui.read` | Read the current agent-authored document and revision; not the reader's private local input. |
 | `agena.inline_ui.update` | Atomically replace the document or patch panel data/nodes, with optimistic revision checking. |
 
 The model must include the returned fence in visible commentary before doing work
 that should update the interface. Preparing data alone does not render a UI. It is
 not necessary to repeat the fence in every update or duplicate it in the final answer.
+
+The normal path is `guide()` → `prepare()` → embed; once learned, `prepare()` → embed. Existing heads refresh in place using `update()` without preliminary `read`. A failed prepare returns bounded, field-located `invalid_ui` errors with corrective hints and no head. A revision conflict reports `expected_revision` and `current_revision` without overwriting the previous revision. Storage failure has an uncertain commit state and is not mislabeled as validation failure.
+
+The minimal example is [quick-start.json](../examples/inline-ui/quick-start.json), with its data-only [quick-start-update.json](../examples/inline-ui/quick-start-update.json). The 45-node dashboard is an optional reference rather than required default reading.
 
 ## Panel contract
 
@@ -135,8 +138,7 @@ expressions/actions; it is mutually exclusive with `patch`. The entire candidate
 is validated before commit. Failed edits never replace the last valid interface.
 
 `expected_revision` is mandatory. Concurrent writers cannot silently overwrite one
-another. A repeated call ID is idempotent. The tool returns the new revision; a
-conflict requires read/reconcile/retry. Phases are working, complete and error.
+another. An identical successful invocation may be replayed without duplicating a commit; this does not guarantee general retry idempotency. The tool returns the new revision; read is not a routine prerequisite for updating. A conflict requires read/reconcile/retry, not blind revision replacement. Phases are working, complete and error.
 
 The immutable prepare result remains in the normal tool history for authorization
 and provenance. The current agent-authored head is stored in the existing private,

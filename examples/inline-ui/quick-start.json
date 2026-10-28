@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "title": "Illustrative adjustment",
+  "blocks": [
+    {
+      "id": "scenario",
+      "type": "panel",
+      "program": {
+        "root": "root",
+        "data": {
+          "base": 120
+        },
+        "state": {
+          "percent": {
+            "kind": "number",
+            "initial": 25,
+            "min": 0,
+            "max": 100,
+            "step": 5
+          }
+        },
+        "computed": {
+          "total": {
+            "$op": "round",
+            "args": [
+              {
+                "$op": "mul",
+                "args": [
+                  {
+                    "$get": "data.base"
+                  },
+                  {
+                    "$op": "add",
+                    "args": [
+                      1,
+                      {
+                        "$op": "div",
+                        "args": [
+                          {
+                            "$get": "state.percent"
+                          },
+                          100
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              0
+            ]
+          },
+          "high": {
+            "$op": "gt",
+            "args": [
+              {
+                "$get": "computed.total"
+              },
+              150
+            ]
+          }
+        },
+        "actions": {
+          "reset": [
+            {
+              "type": "reset"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": "root",
+            "kind": "stack",
+            "props": {
+              "gap": "md"
+            },
+            "children": [
+              "intro",
+              "base",
+              "slider",
+              "summary",
+              "warning",
+              "reset"
+            ]
+          },
+          {
+            "id": "intro",
+            "kind": "heading",
+            "props": {
+              "text": "Adjustment example (illustrative)"
+            }
+          },
+          {
+            "id": "base",
+            "kind": "metric",
+            "props": {
+              "label": "Agent-supplied baseline",
+              "value": {
+                "$get": "data.base"
+              },
+              "suffix": " units"
+            }
+          },
+          {
+            "id": "slider",
+            "kind": "slider",
+            "props": {
+              "label": "Adjustment",
+              "suffix": "%"
+            },
+            "bind": "percent"
+          },
+          {
+            "id": "summary",
+            "kind": "metric",
+            "props": {
+              "label": "Adjusted total",
+              "value": {
+                "$get": "computed.total"
+              },
+              "suffix": " units"
+            }
+          },
+          {
+            "id": "warning",
+            "kind": "callout",
+            "props": {
+              "text": "Above 150 units. Illustration only.",
+              "tone": "warning"
+            },
+            "visible": {
+              "$get": "computed.high"
+            }
+          },
+          {
+            "id": "reset",
+            "kind": "button",
+            "props": {
+              "label": "Reset adjustment"
+            },
+            "action": "reset"
+          }
+        ]
+      }
+    }
+  ]
+}

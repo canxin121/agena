@@ -644,6 +644,75 @@ mod protocol_history_tests {
     use super::*;
 
     #[test]
+    fn failed_inline_ui_plugin_projects_located_correction_through_the_actual_provider_output() {
+        use agena_runtime_tools::tool::ToolError;
+        let mut sdk = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
+            "invalid_ui",
+            serde_json::json!({"agena_inline_ui_error":{
+                "code":"invalid_ui", "applied":false, "truncated":false,
+                "issues":[{"path":"document.blocks[0].program.nodes[2].props.style",
+                    "reason":"unsupported property",
+                    "fix":"Remove the unsupported property."}]
+            }}),
+        );
+        sdk.failure.user = agena_failure::UserPresentation::validated(
+            "inline_ui.error",
+            "The plugin input is invalid.",
+        );
+        let ToolError::Plugin(problem) = ToolError::from_plugin_error(sdk) else {
+            panic!("plugin error must survive as a typed tool failure")
+        };
+        let operation = agena_runtime_contracts::part::OperationPart::failed(
+            17,
+            agena_domain::ToolInvocation::new("agena.inline_ui.prepare", Default::default()),
+            problem.public,
+            agena_domain::RawOutput::default(),
+            agena_domain::TimeRange::default(),
+        );
+        let model_text =
+            project_operation_output(agena_domain::ExecutionStatus::Failed, &operation);
+        eprintln!("Inline UI model-visible validation example: {model_text}");
+        assert!(model_text.contains("document.blocks[0].program.nodes[2].props.style"));
+        assert!(model_text.contains("Remove the unsupported property."));
+        assert!(model_text.contains("invalid_ui"));
+        assert!(!model_text.contains("agena_inline_ui_error"));
+        assert!(model_text.len() < 450);
+
+        // A revision conflict remains distinct, with both actual numbers.
+        let conflict = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
+            "revision_conflict",
+            serde_json::json!({"agena_inline_ui_error":{
+                "code":"revision_conflict", "applied":false, "truncated":false,
+                "expected_revision":1, "current_revision":2,
+                "issues":[{"path":"update.expected_revision",
+                    "reason":"expected 1, current 2",
+                    "fix":"Read current UI and reconcile before retrying."}]
+            }}),
+        );
+        let ToolError::Plugin(problem) = ToolError::from_plugin_error(conflict) else {
+            panic!("typed conflict")
+        };
+        let operation = agena_runtime_contracts::part::OperationPart::failed(
+            18,
+            agena_domain::ToolInvocation::new("agena.inline_ui.update", Default::default()),
+            problem.public,
+            agena_domain::RawOutput::default(),
+            agena_domain::TimeRange::default(),
+        );
+        let projected = project_operation_output(agena_domain::ExecutionStatus::Failed, &operation);
+        eprintln!("Inline UI model-visible conflict example: {projected}");
+        for expected in [
+            "revision_conflict",
+            "update.expected_revision",
+            "expected 1",
+            "current 2",
+            "reconcile",
+        ] {
+            assert!(projected.contains(expected), "{projected}");
+        }
+    }
+
+    #[test]
     fn history_replays_explicit_protocol_calls_and_rejects_control_decisions() {
         let run = |function| CompletionInputRun {
             role: Role::Assistant,
@@ -1179,9 +1248,13 @@ pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -
         }
         ExecutionStatus::Failed => exec
             .output_text()
-            .or_else(|| exec.error_message())
-            .unwrap_or_default()
-            .to_string(),
+            .map(str::to_owned)
+            // A failed call with no ordinary output must preserve the reviewed,
+            // structured corrective feedback from its Failure on provider
+            // replay. error_message() alone drops field paths and fix hints.
+            .or_else(|| exec.error.as_ref().and_then(agena_domain::OperationError::model_message))
+            .or_else(|| exec.error_message().map(str::to_owned))
+            .unwrap_or_default(),
     }
 }
 

@@ -307,3 +307,36 @@ fn json_sha256(value: &serde_json::Value) -> String {
     let digest = Sha256::digest(bytes);
     hex::encode(digest)
 }
+
+#[cfg(test)]
+mod inline_ui_contract_tests {
+    #[test]
+    fn real_discovery_catalog_has_exactly_four_inline_ui_tools() {
+        let catalog = super::bundled_capability_manifest();
+        let inline = catalog
+            .plugins
+            .iter()
+            .find(|p| p.id == "agena.inline_ui")
+            .expect("bundled Inline UI plugin");
+        let names = inline
+            .tools
+            .iter()
+            .map(|tool| tool.canonical_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "agena.inline_ui.guide",
+                "agena.inline_ui.prepare",
+                "agena.inline_ui.read",
+                "agena.inline_ui.update",
+            ]
+        );
+        assert!(
+            inline
+                .tools
+                .iter()
+                .all(|tool| !tool.definition_identity.contains("validate"))
+        );
+    }
+}

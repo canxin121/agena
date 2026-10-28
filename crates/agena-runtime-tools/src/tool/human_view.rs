@@ -51,8 +51,10 @@ impl BuiltinHumanRenderer {
                 serde_json::from_value::<agena_domain::PreparedInlineUi>(prepared.clone()).ok()?;
             prepared.validate().ok()?;
             return Some(serde_json::json!({
-                "prepared": true, "reference": prepared.reference, "embed": prepared.marker(), "revision": raw.payload.as_ref().and_then(|value|value.get("revision")).cloned().unwrap_or(serde_json::json!(1)),
-                "message": "Not displayed yet. Paste the entire returned inline-ui fenced block unchanged between Markdown paragraphs, early in commentary if work continues. The block contains only the reference ID. Update this same reference with expected_revision as work produces new facts; do not duplicate the panel. Read guide(topic=live) for details."
+                "reference": prepared.reference, "embed": prepared.marker(),
+                "revision": raw.payload.as_ref().and_then(|value|value.get("revision")).cloned().unwrap_or(serde_json::json!(1)),
+                "phase": raw.payload.as_ref().and_then(|value|value.get("phase")).cloned().unwrap_or(serde_json::json!("complete")),
+                "message": "Not displayed yet. Insert embed unchanged in the answer; update this same reference for new facts."
             }).to_string());
         }
         None

@@ -36,6 +36,14 @@ Only `inline-ui` reference fences are supported. There is no legacy bracket,
 `present` auto-rendering, or JSON-fence compatibility path.
 
 
+## Minimal first-use interactive example
+
+`quick-start.json` is the self-contained 7-node default guide example.
+It connects agent-authored data to a local slider, derived metric,
+conditional callout and reset button. `quick-start-update.json` patches
+only the agent data on the same reference. The default guide includes both;
+the 45-node reference is on demand via `guide({sections:["dashboard"]})`.
+
 ## Stateful live example
 
 `live-dashboard.json` is a 45-node dashboard with overview/tasks/simulation tabs,

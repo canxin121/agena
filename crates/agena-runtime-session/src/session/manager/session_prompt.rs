@@ -90,10 +90,10 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
         let inline_ui = plugin_tools(
             tools,
             "agena.inline_ui",
-            &["guide", "validate", "prepare", "read", "update"],
+            &["guide", "prepare", "read", "update"],
         );
         if has("agena.inline_ui.prepare") && !inline_ui.is_empty() {
-            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Preparing content does not display it. Paste the entire returned inline-ui code fence unchanged between Markdown paragraphs. Its body contains only the reference ID. Web and TUI resolve it at that position. Do not add an outer fence or print the document JSON. For stateful panels, discover layout/state/actions topics as needed. When working over time, display the fence early in commentary, then use read/update on the same reference with expected_revision. Publish only actual observed progress, and preserve user-local selections; UI actions do not execute external tools."));
+            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. A single guide() explains the normal contract; use advanced sections only when needed, and prepare directly once learned. Preparing content does not display it. Paste the entire returned inline-ui code fence unchanged between Markdown paragraphs. Its body contains only the reference ID. Web and TUI resolve it at that position. Do not add an outer fence or print the document JSON. State, actions, layout and basic updates are in the default guide. When working over time, display the fence early in commentary, then update the same reference using returned revisions; read to inspect or resolve conflicts. Publish only actual observed progress, and preserve user-local selections; UI actions do not execute external tools."));
         }
     }
 
@@ -251,7 +251,6 @@ mod tests {
         "memory.get",
         "memory.write",
         "inline_ui.guide",
-        "inline_ui.validate",
         "inline_ui.prepare",
     ];
 
@@ -278,7 +277,8 @@ mod tests {
         assert_eq!(prompt.matches("- **").count(), 9);
         assert_eq!(prompt.matches("# Presentation\n").count(), 1);
         assert!(prompt.contains("## Inline Generative UI"));
-        assert!(prompt.contains("Start with guide"));
+        assert!(prompt.contains("A single guide() call"));
+        assert!(prompt.contains("initial phase complete by default"));
         assert!(!prompt.contains("```agena-chart"));
         assert!(!prompt.contains("```agena-ui"));
         assert!(!prompt.contains("await window.agena.ready"));
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_ui_discovery_is_progressive_and_uses_only_available_tools() {
+    fn inline_ui_discovery_teaches_core_once_and_uses_only_available_tools() {
         let prompt = prompt(
             SessionRelationKind::Root,
             true,
@@ -418,7 +418,10 @@ mod tests {
         assert!(prompt.contains("`inline_ui.guide`"));
         assert!(prompt.contains("`inline_ui.prepare`"));
         assert!(!prompt.contains("`inline_ui.validate`"));
-        assert!(prompt.contains("read only the needed content kind"));
+        assert!(prompt.contains("A single guide() explains the normal contract"));
+        assert!(prompt.contains("prepare directly once learned"));
+        assert!(prompt.contains("read to inspect or resolve conflicts"));
+        assert!(!prompt.contains("read only the needed content kind"));
         assert!(!prompt.contains("\"blocks\":"));
         let missing_publisher = assemble_system_prompt(
             SessionRelationKind::Root,

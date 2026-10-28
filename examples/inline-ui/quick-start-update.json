@@ -1,0 +1,12 @@
+{
+  "update": {
+    "reference": "REFERENCE_FROM_PREPARE",
+    "expected_revision": 1,
+    "patch": {
+      "block_id": "scenario",
+      "data": {
+        "base": 160
+      }
+    }
+  }
+}

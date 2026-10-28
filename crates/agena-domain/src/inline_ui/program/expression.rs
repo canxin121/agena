@@ -30,7 +30,7 @@ fn result_size(value: &Value, bytes: &mut usize, depth: usize) -> Result<(), Str
     Ok(())
 }
 
-const OPERATORS: &[&str] = &[
+pub(super) const OPERATORS: &[&str] = &[
     "add", "sub", "mul", "div", "min", "max", "round", "clamp", "eq", "ne", "lt", "lte", "gt",
     "gte", "and", "or", "not", "if", "coalesce", "concat", "length", "sum", "average", "filter",
     "map", "pluck", "includes", "format",

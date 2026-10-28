@@ -155,3 +155,40 @@ test('the reported growth-rate and task example matches native TUI results', () 
   expect(state.done).toEqual([])
   expect(state.showFormula).toBe(false)
 })
+
+test('a choice filter recomputes the existing dashboard chart and table together', () => {
+  const p = validateUiProgram(program())
+  const state = inputUi(p, {}, 'channel', 'paid').state
+  const view = renderUi(p, state)
+  const find = (node: any, id: string): any =>
+    node.id === id ? node : node.children?.map((child: any) => find(child, id)).find(Boolean)
+  expect(find(view.root, 'revenueChart').props.labels).toHaveLength(2)
+  expect(find(view.root, 'salesTable').props.rows).toHaveLength(2)
+})
+
+test('the single-guide seven-node example validates and keeps local slider state through data updates', () => {
+  const source = JSON.parse(
+    readFileSync(new URL('../../../examples/inline-ui/quick-start.json', import.meta.url), 'utf8'),
+  )
+  const update = JSON.parse(
+    readFileSync(new URL('../../../examples/inline-ui/quick-start-update.json', import.meta.url), 'utf8'),
+  ).update
+  const document = parseInlineDocument(structuredClone(source))
+  expect(document.blocks[0]?.type).toBe('panel')
+  const p = validateUiProgram(structuredClone(source.blocks[0].program))
+  expect(p.nodes).toHaveLength(7)
+  const initial = renderUi(p)
+  expect(initial.root.children.some((node) => node.id === 'warning')).toBe(false)
+  expect(initial.root.children.find((node) => node.id === 'summary')!.props!.value).toBe(150)
+  const selected = inputUi(p, initial.state, 'slider', 50).state
+  const after = renderUi(p, selected)
+  expect(after.root.children.find((node) => node.id === 'summary')!.props!.value).toBe(180)
+  expect(after.root.children.some((node) => node.id === 'warning')).toBe(true)
+  expect(activateUi(p, selected, 'reset').state.percent).toBe(25)
+  const next = structuredClone(p)
+  Object.assign(next.data!, update.patch.data)
+  expect(reconcileUiState(next, selected).percent).toBe(50)
+  expect(renderUi(next, selected).root.children.find((node) => node.id === 'summary')!.props!.value).toBe(240)
+  expect(() => inputUi(next, selected, 'slider', 110)).toThrow()
+  expect(selected.percent).toBe(50)
+})

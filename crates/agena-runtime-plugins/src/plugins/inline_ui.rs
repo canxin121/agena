@@ -18,6 +18,19 @@ use tokio::sync::watch;
 
 static WATCHES: LazyLock<Mutex<BTreeMap<PathBuf, Weak<watch::Sender<u64>>>>> =
     LazyLock::new(Default::default);
+/// Update validation and CAS failures are distinct from storage I/O/corruption.
+#[derive(Debug, thiserror::Error)]
+pub enum InlineUiUpdateError {
+    #[error("revision conflict: expected {expected}, current {current}; read and reconcile")]
+    RevisionConflict { expected: u64, current: u64 },
+    #[error("invalid UI update: {0}")]
+    Invalid(String),
+    #[error("UI not found in this session")]
+    NotFound,
+    #[error(transparent)]
+    Storage(#[from] PluginStorageError),
+}
+
 #[derive(Clone)]
 pub struct InlineUiStore {
     root: PathBuf,
@@ -70,6 +83,7 @@ impl InlineUiStore {
         reference: &str,
         document: InlineDocument,
         call_id: i64,
+        phase: InlinePhase,
     ) -> Result<InlineSnapshot, PluginStorageError> {
         document.validate().map_err(PluginStorageError::Data)?;
         if inline_reference_tool_id(reference) != Some(call_id) {
@@ -86,7 +100,7 @@ impl InlineUiStore {
                 let snapshot = InlineSnapshot {
                     reference: reference.into(),
                     revision: 1,
-                    phase: InlinePhase::Working,
+                    phase,
                     updated_at_ms: chrono::Utc::now().timestamp_millis(),
                     last_call_id: call_id,
                     document,
@@ -102,29 +116,39 @@ impl InlineUiStore {
         session: i64,
         update: &InlineUpdate,
         call_id: i64,
-    ) -> Result<InlineSnapshot, PluginStorageError> {
+    ) -> Result<InlineSnapshot, InlineUiUpdateError> {
         if call_id <= 0 {
-            return Err(PluginStorageError::Data(
+            return Err(InlineUiUpdateError::Invalid(
                 "update requires an active invocation".into(),
             ));
         }
         let path = self.path(session, &update.reference)?;
-        let snapshot =
+        let (snapshot, changed) =
             agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-                let current = read(&path)?.ok_or_else(|| {
-                    PluginStorageError::Data(
-                        "UI not found in this session; prepare it first".into(),
-                    )
-                })?;
+                let current = read(&path)?.ok_or(InlineUiUpdateError::NotFound)?;
+                // An identical invocation can be retried, but never silently rebase
+                // an unrelated caller on the head's revision.
+                if !(current.last_call_id == call_id && call_id > 0)
+                    && update.expected_revision != current.revision
+                {
+                    return Err(InlineUiUpdateError::RevisionConflict {
+                        expected: update.expected_revision,
+                        current: current.revision,
+                    });
+                }
                 let next = current
                     .apply(update, call_id, chrono::Utc::now().timestamp_millis())
-                    .map_err(PluginStorageError::Data)?;
-                if next != current {
+                    .map_err(InlineUiUpdateError::Invalid)?;
+                let changed = next != current;
+                if changed {
                     write(&path, &next)?;
                 }
-                Ok::<_, PluginStorageError>(next)
-            })??;
-        publish(&path, snapshot.revision);
+                Ok::<_, InlineUiUpdateError>((next, changed))
+            })
+            .map_err(|error| InlineUiUpdateError::Storage(error.into()))??;
+        if changed {
+            publish(&path, snapshot.revision);
+        }
         Ok(snapshot)
     }
     /// Subscribe before reading, so a concurrent commit cannot be missed.
@@ -210,7 +234,9 @@ mod tests {
         )
         .unwrap();
         let mut watch = store.subscribe(1, reference).unwrap();
-        let first = store.create(1, reference, doc.clone(), 7).unwrap();
+        let first = store
+            .create(1, reference, doc.clone(), 7, InlinePhase::Complete)
+            .unwrap();
         assert_eq!(first.revision, 1);
         watch.changed().await.unwrap();
         assert!(store.read(2, reference).unwrap().is_none());
@@ -270,7 +296,9 @@ mod update_tests {
             .unwrap(),
         )
         .unwrap();
-        let first = store.create(1, reference, document, 17).unwrap();
+        let first = store
+            .create(1, reference, document, 17, InlinePhase::Working)
+            .unwrap();
         let InlineBlock::Panel { program, .. } = &first.document.blocks[0] else {
             panic!("panel")
         };

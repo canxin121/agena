@@ -469,6 +469,10 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.transcript.inline_pointer = None;
+                if let Some(crate::Overlay::InlineUi(dialog)) = &mut self.overlay {
+                    dialog.pointer = None;
+                    dialog.native_layout.borrow_mut().valid = false;
+                }
                 self.pointer_targets = Default::default();
                 self.cancel_surface_selection();
                 self.transcript_scrollbar_drag = None;

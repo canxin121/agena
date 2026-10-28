@@ -52,75 +52,81 @@ fn grid(
     if children.is_empty() {
         return Vec::new();
     }
-    let metrics = children.iter().all(|node| node.kind == UiKind::Metric);
-    let minimum = if metrics { 20 } else { 36 };
-    let columns = requested
-        .max(1)
-        .min(children.len())
-        .min((usize::from(width) + 1) / (minimum + 1))
-        .max(1);
-    if columns == 1 {
-        return stack(children, width, ctx, usize::from(!metrics));
-    }
-    let gap = 1u16;
-    let usable = width.saturating_sub((columns - 1) as u16 * gap);
-    let mut result = Vec::new();
-    for chunk in children.chunks(columns) {
-        if !result.is_empty() {
-            result.push(RenderedLine::plain("", Style::default()));
-        }
-        let row = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, node)| {
-                let column_width =
-                    usable / columns as u16 + u16::from(i < usize::from(usable % columns as u16));
-                (column_width, render_node(node, column_width, ctx))
+    let measures = children.iter().map(sizing::measure).collect::<Vec<_>>();
+    // Requested columns are a maximum, not a command to squeeze a chart/card.
+    let columns = (1..=requested.max(1).min(children.len()))
+        .rev()
+        .find(|&columns| {
+            measures.chunks(columns).all(|chunk| {
+                let usable = usize::from(width).saturating_sub(chunk.len() - 1);
+                chunk.iter().enumerate().all(|(index, measure)| {
+                    usize::from(measure.minimum)
+                        <= usable / chunk.len() + usize::from(index < usable % chunk.len())
+                })
             })
-            .collect();
-        result.extend(layout::horizontal(row, gap));
+        })
+        .unwrap_or(1);
+    if columns == 1 {
+        return stack(
+            children,
+            width,
+            ctx,
+            usize::from(!children.iter().all(|node| node.kind == UiKind::Metric)),
+        );
     }
-    result
+    let mut output = Vec::new();
+    for chunk in children.chunks(columns) {
+        if !output.is_empty() {
+            output.push(RenderedLine::plain("", Style::default()));
+        }
+        // The last visible row uses its real item count: no phantom empty tracks.
+        let usable = width.saturating_sub(chunk.len().saturating_sub(1) as u16);
+        output.extend(layout::horizontal(
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(index, node)| {
+                    let size = usable / chunk.len() as u16
+                        + u16::from(index < usize::from(usable % chunk.len() as u16));
+                    (size, render_node(node, size, ctx))
+                })
+                .collect(),
+            1,
+        ));
+    }
+    output
 }
 
-/// Rows pack content-sized controls instead of applying card/grid minimums.
-/// A short heading, badge and action fit together even on an 80-column terminal.
+/// Content-sized labels/buttons share rows with growing cards, plots and fields.
+/// Measure once; do not render full-width children and then infer their minimum
+/// from that already-wrapped result (which made every container occupy a row).
 fn row_layout(children: &[UiResolvedNode], width: u16, ctx: &Context<'_>) -> Vec<RenderedLine> {
+    let measures = children.iter().map(sizing::measure).collect::<Vec<_>>();
     let mut output = Vec::new();
-    let mut current = Vec::new();
-    let mut occupied = 0u16;
-    for child in children {
-        let rows = render_node(child, width, ctx);
-        if rows.is_empty() {
-            continue;
+    let mut start = 0;
+    while start < children.len() {
+        let mut end = start;
+        let mut used = 0u16;
+        while end < children.len() {
+            let m = measures[end];
+            let required = if m.grow { m.minimum } else { m.preferred }.min(width);
+            let gap = if end == start { 0 } else { 2 };
+            if end > start && used.saturating_add(gap).saturating_add(required) > width {
+                break;
+            }
+            used = used.saturating_add(gap).saturating_add(required);
+            end += 1;
         }
-        let used = rows
-            .iter()
-            .map(|row| row.text.trim_end().width())
-            .max()
-            .unwrap_or(1)
-            .max(1)
-            .min(usize::from(width)) as u16;
-        // Cells with full-width hit regions (e.g. sliders) keep that width.
-        let used = used.max(
-            rows.iter()
-                .flat_map(|row| &row.controls)
-                .map(|control| control.columns.end.min(usize::from(width)) as u16)
-                .max()
-                .unwrap_or(0),
-        );
-        if !current.is_empty() && occupied.saturating_add(2).saturating_add(used) > width {
-            output.extend(layout::horizontal(std::mem::take(&mut current), 2));
-            occupied = 0;
-        }
-        if !current.is_empty() {
-            occupied = occupied.saturating_add(2);
-        }
-        occupied = occupied.saturating_add(used);
-        current.push((used, render_node(child, used, ctx)));
-    }
-    if !current.is_empty() {
-        output.extend(layout::horizontal(current, 2));
+        let sizes = sizing::allocate(&measures[start..end], width, 2);
+        output.extend(layout::horizontal(
+            children[start..end]
+                .iter()
+                .zip(sizes)
+                .map(|(node, size)| (size, render_node(node, size.max(1), ctx)))
+                .collect(),
+            2,
+        ));
+        start = end;
     }
     output
 }
@@ -312,7 +318,7 @@ pub(super) fn render_node(
                 node,
                 ctx,
                 InlineEvent::Activate,
-                layout::text(&format!("[ {current} ▾ ]"), width, color),
+                layout::input_box(&current, "▾", width, color),
             ));
             let desc = prop(node, "description");
             if !desc.is_empty() {
@@ -380,13 +386,9 @@ pub(super) fn render_node(
                 node,
                 ctx,
                 InlineEvent::Activate,
-                layout::text(
-                    &format!(
-                        "[ {}{}{} ▏ ]",
-                        prop(node, "prefix"),
-                        value,
-                        prop(node, "suffix")
-                    ),
+                layout::input_box(
+                    &format!("{}{}{}", prop(node, "prefix"), value, prop(node, "suffix")),
+                    "▏",
                     width,
                     color,
                 ),

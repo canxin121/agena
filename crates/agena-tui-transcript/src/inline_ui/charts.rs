@@ -137,41 +137,57 @@ pub(super) fn render_chart(
             ));
         }
     }
-    let mut legend = Vec::new();
-    for (index, s) in series.iter().enumerate() {
-        let name = s.get("name").map(display).unwrap_or_default();
-        let on = !hidden.is_some_and(|h| h.contains(&index));
-        let label = format!("[ {} {name} ]", if on { "●" } else { "○" });
-        let rows = layout::interactive(
-            layout::text(
-                &label,
-                width,
+    let showing = ctx.presentation.data.contains(id);
+    let mut line = Vec::new();
+    let mut occupied = 0u16;
+    let items = series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| {
+            let name = series.get("name").map(display).unwrap_or_default();
+            let on = !hidden.is_some_and(|set| set.contains(&index));
+            (
+                format!("[ {} {name} ]", if on { "●" } else { "○" }),
                 if on {
                     Style::default().fg(colors(index))
                 } else {
                     theme::muted_style()
                 },
-            ),
-            ctx.control(id, InlineEvent::Series(index)),
-            enabled,
-        );
-        legend.extend(rows);
-    }
-    out.extend(legend);
-    let showing = ctx.presentation.data.contains(id);
-    out.extend(layout::interactive(
-        layout::text(
-            &format!(
+                InlineEvent::Series(index),
+            )
+        })
+        .chain(std::iter::once((
+            format!(
                 "[ {} {} ]",
                 if showing { "▾" } else { "▸" },
                 ctx.i18n.text("inline-ui-data")
             ),
-            width,
             theme::muted_style(),
-        ),
-        ctx.control(id, InlineEvent::Data),
-        enabled,
-    ));
+            InlineEvent::Data,
+        )));
+    for (label, style, event) in items {
+        let label = layout::single_line(&label);
+        let size = label.width().min(usize::from(width)) as u16;
+        if !line.is_empty() && occupied.saturating_add(1).saturating_add(size) > width {
+            out.extend(layout::horizontal(std::mem::take(&mut line), 1));
+            occupied = 0;
+        }
+        if !line.is_empty() {
+            occupied += 1;
+        }
+        occupied = occupied.saturating_add(size);
+        line.push((
+            size,
+            layout::interactive(
+                layout::text(&label, size.max(1), style),
+                ctx.control(id, event),
+                enabled,
+            ),
+        ));
+    }
+    if !line.is_empty() {
+        out.extend(layout::horizontal(line, 1));
+    }
     if showing || width < 18 {
         let mut columns = vec![text("x_label")];
         columns.extend(
@@ -226,7 +242,7 @@ fn cartesian(
     let minlabel = number(min);
     let axis = maxlabel.width().max(minlabel.width()).min(12) + 2;
     let plot_width = usize::from(width).saturating_sub(axis).max(1);
-    let height = if width < 45 { 7 } else { 10 };
+    let height = plot_width.div_ceil(8).clamp(7, 18);
     let mut plot = PixelPlot::new(plot_width, height);
     let y = |v: f64| {
         ((max - v) / (max - min) * (height * 4 - 1) as f64)
@@ -348,8 +364,15 @@ fn pie(labels: &[Value], series: &[(usize, &Value)], width: u16) -> Vec<Rendered
     if total <= 0.0 {
         return Vec::new();
     }
-    let w = usize::from(width).min(24);
-    let h = (w / 2).clamp(6, 12);
+    let beside = width >= 64;
+    let w = if beside {
+        usize::from(width / 2).clamp(32, 48)
+    } else {
+        usize::from(width).min(40)
+    };
+    // Terminal cells are approximately twice as tall as they are wide. Grow
+    // the ring with its container while preserving a circle, not a wide oval.
+    let h = (w / 2).clamp(6, 24);
     let mut plot = PixelPlot::new(w, h);
     let rx = (w as f64 * 2.0 - 2.0) / 2.0;
     let ry = (h as f64 * 4.0 - 2.0) / 2.0;
@@ -372,21 +395,36 @@ fn pie(labels: &[Value], series: &[(usize, &Value)], width: u16) -> Vec<Rendered
             }
         }
     }
-    let mut rows = (0..h)
+    let plot_rows = (0..h)
         .map(|y| RenderedLine::rich(Line::from(plot.row(y))).with_copy_projection("", 0))
         .collect::<Vec<_>>();
+    let legend_width = if beside {
+        width.saturating_sub(w as u16 + 2).max(1)
+    } else {
+        width
+    };
+    let mut legend_rows = Vec::new();
     for (index, label) in labels.iter().enumerate() {
         let value = values.get(index).and_then(Value::as_f64).unwrap_or(0.0);
-        rows.extend(layout::text(
+        legend_rows.extend(layout::text(
             &format!(
                 "● {}  {} ({:.1}%)",
                 display(label),
                 number(value),
                 value / total * 100.0
             ),
-            width,
+            legend_width,
             Style::default().fg(colors(index)),
         ));
     }
-    rows
+    if beside {
+        layout::horizontal(vec![(w as u16, plot_rows), (legend_width, legend_rows)], 2)
+    } else {
+        let mut rows = prefix_rows(
+            plot_rows,
+            &" ".repeat(usize::from(width).saturating_sub(w) / 2),
+        );
+        rows.extend(legend_rows);
+        rows
+    }
 }

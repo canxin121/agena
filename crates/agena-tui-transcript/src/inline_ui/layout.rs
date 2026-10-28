@@ -19,6 +19,38 @@ pub(super) fn text(value: &str, width: u16, style: Style) -> Vec<RenderedLine> {
         })
         .collect()
 }
+/// A field owns its allocated track, including the clickable trailing area.
+/// The editor retains the complete value; display clipping never mutates state.
+pub(super) fn input_box(
+    value: &str,
+    indicator: &str,
+    width: u16,
+    style: Style,
+) -> Vec<RenderedLine> {
+    let value = single_line(value);
+    let suffix = format!(" {indicator} ]");
+    let chrome = 2 + suffix.width();
+    if usize::from(width) <= chrome {
+        return text(
+            &truncate_display_text(&value, usize::from(width)),
+            width,
+            style,
+        );
+    }
+    let budget = usize::from(width) - chrome;
+    let shown = truncate_display_text(&value, budget);
+    let padding = budget.saturating_sub(shown.width());
+    vec![
+        RenderedLine::rich(Line::from(vec![
+            Span::styled("[ ", theme::muted_style()),
+            Span::styled(shown.clone(), style),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(suffix, theme::muted_style()),
+        ]))
+        .with_copy_projection(shown, 2),
+    ]
+}
+
 pub(super) fn rule(width: u16) -> RenderedLine {
     RenderedLine::plain("─".repeat(usize::from(width)), theme::muted_style())
         .with_copy_projection("", 0)
@@ -239,9 +271,32 @@ pub(super) fn table(columns: &[String], rows: &[Vec<String>], width: u16) -> Vec
         }
         return out;
     }
-    let sizes = (0..n)
-        .map(|index| available / n + usize::from(index < available % n))
+    let intrinsic = columns
+        .iter()
+        .enumerate()
+        .map(|(index, heading)| {
+            std::iter::once(heading.as_str())
+                .chain(
+                    rows.iter()
+                        .filter_map(|row| row.get(index).map(String::as_str)),
+                )
+                .map(|value| single_line(value).width())
+                .max()
+                .unwrap_or(0)
+                .min(usize::from(u16::MAX)) as u16
+        })
         .collect::<Vec<_>>();
+    let long = intrinsic.iter().any(|&length| length > 16);
+    let measures = intrinsic
+        .iter()
+        .enumerate()
+        .map(|(index, &length)| sizing::Measure {
+            minimum: (single_line(&columns[index]).width() as u16).clamp(6, 12),
+            preferred: length.max(6),
+            grow: !long || length > 16,
+        })
+        .collect::<Vec<_>>();
+    let sizes = sizing::allocate(&measures, width, 1);
     let render = |row: &[String], header: bool| {
         horizontal(
             row.iter()
@@ -249,10 +304,10 @@ pub(super) fn table(columns: &[String], rows: &[Vec<String>], width: u16) -> Vec
                 .enumerate()
                 .map(|(index, value)| {
                     (
-                        sizes[index] as u16,
+                        sizes[index],
                         text(
                             value,
-                            sizes[index].max(1) as u16,
+                            sizes[index].max(1),
                             if header {
                                 Style::default()
                                     .fg(theme::accent_color())

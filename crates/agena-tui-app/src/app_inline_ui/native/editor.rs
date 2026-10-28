@@ -177,13 +177,13 @@ pub(crate) fn handle_modal_key(
         (layout.rows.clone(), layout.scroll)
     };
     if matches!(key.code, KeyCode::PageDown | KeyCode::PageUp) {
-        dialog.scroll = if key.code == KeyCode::PageDown {
+        dialog.scroll.set(if key.code == KeyCode::PageDown {
             current_scroll
                 .saturating_add(8)
                 .min(dialog.scroll_limit.get())
         } else {
             current_scroll.saturating_sub(8)
-        };
+        });
         return outcome;
     }
     let controls = rendered_controls(&rows);
@@ -217,7 +217,7 @@ pub(crate) fn handle_modal_key(
             dialog.native_focus = Some(target.clone());
             dialog.focused = target.node.clone();
         }
-        dialog.scroll = current_scroll;
+        dialog.scroll.set(current_scroll);
         dialog.reveal_native.set(true);
         return outcome;
     }

@@ -55,3 +55,13 @@ remain authoritative. Terminal content uses native component layout with meaning
 compact cards, actual plot/progress glyphs and input hit areas in the answer.
 Controls remain next to their data instead of being repeated in a detached list.
 The optional focused view uses that same layout and state.
+
+## Terminal width
+
+Let the renderer adapt to the available terminal width. `grid.columns` is a maximum,
+not a fixed terminal width; short metric cards fit together sooner than complex
+charts/forms. `row` keeps short headings, badges and buttons compact while giving
+remaining space to cards, charts and fields. Do not simulate columns with spaces,
+empty nodes or nested cards. A final partially filled grid row uses its available
+width; an explicit single-column grid remains single-column. The same data and
+interactions continue to work as the user resizes their terminal.

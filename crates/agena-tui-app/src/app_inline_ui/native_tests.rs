@@ -625,3 +625,6 @@ async fn native_ui_tab_navigation_keeps_the_selected_repeated_embed() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(state(&app)["page"], "tasks");
 }
+
+#[path = "responsive_tests.rs"]
+mod responsive_tests;

@@ -39,7 +39,10 @@ pub fn render_framed_surface(
     )
 }
 
-pub(crate) fn render_modal_framed_surface(
+/// Keep modal theme and pointer chrome while allowing the caller to supply an
+/// exact responsive rectangle with `SurfaceMode::Route`. Compact dialog sizing
+/// remains unchanged for callers that use `SurfaceMode::Overlay`.
+pub fn render_modal_framed_surface(
     frame: &mut Frame,
     area: Rect,
     surface: SurfaceMode,

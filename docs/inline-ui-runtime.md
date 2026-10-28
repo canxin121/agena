@@ -326,3 +326,44 @@ text buffers; generated evidence is ignored under `artifacts/inline-ui/`.
 This is a client implementation change. An already-running TUI process will not
 hot-replace its Rust code. Build/relaunch the updated `agena tui` executable; no
 new reference syntax or API protocol is required for the existing live UI server.
+
+## Terminal-width adaptation
+
+Native Inline UI layout uses actual terminal cells, including the width of a
+nested container. The main answer uses the host transcript body (one cell is
+reserved for the host scrollbar). The focused workspace has no 150-column cap
+and does not inherit compact dialog breakpoints: it retains one outside margin
+cell and one border cell on each side. Its usable widths are 76 / 116 / 236 / 316
+cells in 80 / 120 / 240 / 320-column terminals. Single-field editors remain
+intentionally compact; expanding a dashboard does not expand an edit box to a
+whole ultrawide screen.
+
+Grids treat the declared column count as a maximum and choose fitting columns
+from the resolved children's minimum content widths. A short metric card is not
+forced to use the same minimum as a chart/table. The last row divides the full
+available width among its actual visible children. An explicit one-column grid
+stays one column. Rows measure once, keep labels/buttons compact, and share the
+remaining width between flexible cards, plots and input fields; they do not infer
+minimum widths from already-full-width rendered children. Fields visibly occupy
+their allocated track and keep matching pointer/copy coordinates.
+
+Tables allocate space to actual column demand instead of giving short identifiers
+and numeric cells the same width as a long description. Plot height follows its
+container width within bounded terminal-friendly limits; legends wrap horizontally.
+Ring charts scale beyond the old 24-column size and place category values alongside
+when space permits. These are rendering policies, not additional agent properties.
+
+Resize keeps an already-visible focused control visible and retains edits and
+valid input. Ordinary repaints retain automatically revealed scroll offsets.
+Pointer geometry from before a resize is retired until a new frame is drawn;
+a dragging gesture cannot continue using stale columns. Exact widths, copying,
+actual App drawing and mouse/key routing are covered by `responsive_ui` tests.
+
+```sh
+AGENA_INLINE_UI_RESPONSIVE_ARTIFACTS=artifacts/inline-ui/responsive \
+  cargo test -p agena-tui-app -p agena-tui-transcript --lib responsive_ui --offline
+```
+
+The capture files are produced by the normal host draw path, not a separate
+fixed-width preview. Tests cover 40–320-column windows, breakpoint boundaries,
+repeated narrowing/widening, modal redraws and editing/dragging across resizes.

@@ -223,7 +223,7 @@ pub(crate) struct InlineUiDialog {
 
     reference: String,
     focused: String,
-    scroll: u16,
+    scroll: std::cell::Cell<u16>,
     // Derived viewport limit: rendering clamps it after live content shrinks.
     scroll_limit: std::cell::Cell<u16>,
     pub(crate) editing: Option<String>,

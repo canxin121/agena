@@ -58,16 +58,22 @@ pub(crate) fn render_modal(
     read: Option<&InlineUiRead>,
     i18n: &agena_tui::i18n::I18n,
 ) {
-    use agena_tui_components::{FramedSurfaceSpec, SurfaceMode, render_framed_surface, theme};
-    let editing = dialog.editing.is_some() || dialog.picker;
-    let target_width = if editing {
-        area.width.min(72)
-    } else {
-        area.width.min(150)
+    use agena_tui_components::{
+        FramedSurfaceSpec, SurfaceMode, frame::render_modal_framed_surface, theme,
     };
-    let width = SurfaceMode::Overlay
-        .content_width(area, target_width)
-        .max(1);
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let editing = dialog.editing.is_some() || dialog.picker;
+    // A workspace is not a small form dialog: use the actual terminal width,
+    // retaining only one cell of outside margin and the host's modal border.
+    // Editors stay intentionally compact, independent of the dashboard width.
+    let outer_width =
+        area.width
+            .saturating_sub(2)
+            .max(1)
+            .min(if editing { 72 } else { area.width });
+    let width = outer_width.saturating_sub(2).max(1);
     let mut title = i18n.text("inline-ui-title");
     let mut rows = Vec::new();
     let mut choice_focus = None;
@@ -172,16 +178,23 @@ pub(crate) fn render_modal(
         .saturating_add(footer.len())
         .saturating_add(2)
         .min(usize::from(u16::MAX)) as u16;
-    let surface = render_framed_surface(
+    let outer_height = desired.max(5).min(area.height.saturating_sub(2).max(1));
+    let outer = Rect::new(
+        area.x + area.width.saturating_sub(outer_width) / 2,
+        area.y + area.height.saturating_sub(outer_height) / 2,
+        outer_width,
+        outer_height,
+    );
+    let surface = render_modal_framed_surface(
         frame,
-        area,
-        SurfaceMode::Overlay,
+        outer,
+        SurfaceMode::Route,
         &FramedSurfaceSpec {
             title: agena_tui_transcript::sanitize_terminal_text(&title)
                 .replace(['\n', '\t'], " ")
                 .into(),
-            target_width,
-            target_height: desired.max(5),
+            target_width: outer_width,
+            target_height: outer_height,
         },
     );
     if surface.inner.width == 0 || surface.inner.height == 0 {
@@ -199,18 +212,60 @@ pub(crate) fn render_modal(
         .saturating_sub(usize::from(split[0].height))
         .min(usize::from(u16::MAX)) as u16;
     dialog.scroll_limit.set(max);
-    let mut scroll = dialog.scroll.min(max);
-    if (dialog.reveal_native.replace(false) || dialog.picker)
-        && let Some((line, _)) = &focus
-    {
+    let previous = dialog.native_layout.borrow();
+    let resized = previous.body.width > 0
+        && (previous.body.width != split[0].width || previous.body.height != split[0].height);
+    let focused_was_visible = focus.as_ref().is_some_and(|(_, target)| {
+        previous
+            .rows
+            .iter()
+            .skip(usize::from(previous.scroll))
+            .take(usize::from(previous.body.height))
+            .flat_map(|row| &row.controls)
+            .any(|control| control.action == TranscriptControlAction::InlineUi(target.clone()))
+    });
+    let reveal =
+        dialog.reveal_native.replace(false) || dialog.picker || (resized && focused_was_visible);
+    let mut scroll = dialog.scroll.get().min(max);
+    if resized && !reveal && !previous.rows.is_empty() {
+        // Preserve the nearby semantic control when wrapping changes row counts.
+        // A text-only region falls back to its proportional document position.
+        let anchor = previous
+            .rows
+            .iter()
+            .enumerate()
+            .skip(usize::from(previous.scroll))
+            .take(usize::from(previous.body.height))
+            .find_map(|(line, row)| {
+                row.controls
+                    .first()
+                    .map(|control| (line - usize::from(previous.scroll), &control.action))
+            });
+        scroll = anchor
+            .and_then(|(offset, action)| {
+                rows.iter()
+                    .position(|row| row.controls.iter().any(|control| &control.action == action))
+                    .map(|line| line.saturating_sub(offset).min(usize::from(max)) as u16)
+            })
+            .unwrap_or_else(|| {
+                (usize::from(previous.scroll) * rows.len() / previous.rows.len())
+                    .min(usize::from(max)) as u16
+            });
+    }
+    drop(previous);
+    if reveal && let Some((line, _)) = &focus {
         if *line < usize::from(scroll) {
             scroll = *line as u16;
         } else if *line >= usize::from(scroll) + usize::from(split[0].height) {
             scroll = (*line + 1).saturating_sub(usize::from(split[0].height)) as u16;
         }
     }
+    scroll = scroll.min(max);
+    // Retain auto-reveal across ordinary paint-only redraws, not only key events.
+    dialog.scroll.set(scroll);
     // The layout carries full semantic actions for the next actual pointer event.
     *dialog.native_layout.borrow_mut() = NativeLayout {
+        valid: true,
         body: split[0],
         rows: rows.clone(),
         scroll,

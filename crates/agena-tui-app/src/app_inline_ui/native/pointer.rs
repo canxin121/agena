@@ -6,19 +6,25 @@ impl App {
             return false;
         };
         let layout = dialog.native_layout.borrow().clone();
+        if !layout.valid {
+            self.overlay = Some(Overlay::InlineUi(dialog));
+            return true;
+        }
         let mut outcome = InlineKeyEffect::default();
         if matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
         ) {
-            dialog.scroll = if mouse.kind == MouseEventKind::ScrollUp {
-                layout.scroll.saturating_sub(3)
-            } else {
-                layout
-                    .scroll
-                    .saturating_add(3)
-                    .min(dialog.scroll_limit.get())
-            };
+            dialog
+                .scroll
+                .set(if mouse.kind == MouseEventKind::ScrollUp {
+                    layout.scroll.saturating_sub(3)
+                } else {
+                    layout
+                        .scroll
+                        .saturating_add(3)
+                        .min(dialog.scroll_limit.get())
+                });
         } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && contains(layout.body, mouse.column, mouse.row)
         {

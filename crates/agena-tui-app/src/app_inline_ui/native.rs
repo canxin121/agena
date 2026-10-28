@@ -14,6 +14,7 @@ pub(crate) struct InlinePointer {
 }
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NativeLayout {
+    pub valid: bool,
     pub body: Rect,
     pub rows: Vec<RenderedLine>,
     pub scroll: u16,

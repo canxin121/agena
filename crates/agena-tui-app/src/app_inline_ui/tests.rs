@@ -356,7 +356,7 @@ async fn native_ui_live_shrink_clamps_focused_surface_scroll() {
     let (mut read, _tx) = reader();
     let mut dialog = InlineUiDialog {
         reference: fixture().reference,
-        scroll: u16::MAX,
+        scroll: u16::MAX.into(),
         ..Default::default()
     };
     draw(&read, &dialog, 80, 24);
@@ -368,7 +368,7 @@ async fn native_ui_live_shrink_clamps_focused_surface_scroll() {
         key(KeyCode::PageUp),
         &agena_tui::i18n::I18n::english(),
     );
-    assert_eq!(dialog.scroll, max.saturating_sub(8));
+    assert_eq!(dialog.scroll.get(), max.saturating_sub(8));
     small(
         &mut read,
         json!([{"id":"text","kind":"text","props":{"text":"Finished"}}]),

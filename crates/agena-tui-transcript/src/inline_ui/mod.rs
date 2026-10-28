@@ -4,6 +4,9 @@ mod charts;
 mod layout;
 mod nodes;
 #[cfg(test)]
+mod responsive_tests;
+mod sizing;
+#[cfg(test)]
 mod tests;
 
 use crate::{RenderedLine, RenderedTranscriptControl, TranscriptControlAction};

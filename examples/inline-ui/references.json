@@ -1,0 +1,137 @@
+{
+  "reference": "ui_123_0123456789abcdef0123456789abcdef",
+  "cases": [
+    {
+      "name": "between paragraphs",
+      "text": "前文 **重点**。\n\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n\n后文。",
+      "streaming": false,
+      "references": 1
+    },
+    {
+      "name": "at EOF",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 1
+    },
+    {
+      "name": "CRLF",
+      "text": "A\r\n\r\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\r\n\r\nB",
+      "streaming": false,
+      "references": 1
+    },
+    {
+      "name": "three spaces",
+      "text": "   [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 1
+    },
+    {
+      "name": "indented code",
+      "text": "    [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "inline code",
+      "text": "`[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]`",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "fenced code",
+      "text": "```text\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n```",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "open fence",
+      "text": "```\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": true,
+      "references": 0
+    },
+    {
+      "name": "long outer fence",
+      "text": "````\n```\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n```\n````",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "quoted example",
+      "text": "> [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "list example",
+      "text": "- [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "nested list",
+      "text": "- example\n\n  [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "inline prose",
+      "text": "A [[inline-ui:ui_123_0123456789abcdef0123456789abcdef]] B",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "not independent paragraph",
+      "text": "A\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\nB",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "escaped",
+      "text": "\\[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "HTML comment",
+      "text": "<!--\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n-->",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "HTML block",
+      "text": "<div>\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n</div>",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "heading",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n------",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "invalid id",
+      "text": "[[inline-ui:ui_0_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 0
+    },
+    {
+      "name": "repeated explicit refs",
+      "text": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]\n\n[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+      "streaming": false,
+      "references": 2
+    },
+    {
+      "name": "unfinished marker",
+      "text": "A\n\n[[inline-ui:ui_123_0123456789abcdef012345678",
+      "streaming": true,
+      "references": 0
+    },
+    {
+      "name": "unfinished final literal",
+      "text": "A\n\n[[inline-ui:ui_123_0123456789abcdef012345678",
+      "streaming": false,
+      "references": 0
+    }
+  ]
+}

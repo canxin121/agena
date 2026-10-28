@@ -396,6 +396,7 @@ mod tests {
         };
         let mut view = ContentView::default();
         assert!(view.apply(ContentPage {
+            inline_ui: None,
             resource: ContentResource {
                 resource_id: resource.resource_id,
                 owner_session_id: 1,

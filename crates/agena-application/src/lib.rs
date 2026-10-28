@@ -22,6 +22,7 @@ mod application_archives;
 mod application_config;
 mod application_content;
 mod application_conversations;
+mod application_inline_ui;
 mod application_models;
 mod application_parts;
 mod application_plugins;

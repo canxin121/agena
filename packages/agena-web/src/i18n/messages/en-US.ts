@@ -1,5 +1,6 @@
 export default {
   inlineUi: {
+    referenceUnavailable: "This referenced content is unavailable in this conversation.",
     "label": "Inline Generative UI",
     "comparison": "Comparison",
     "dimension": "Dimension",

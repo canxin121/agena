@@ -22,7 +22,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
-- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and present. (3 tools)
+- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare. (3 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
@@ -13524,7 +13524,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 
 **Version** `0.1.0` · **Tools** 3
 
-Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and present.
+Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare.
 
 ### guide
 
@@ -13535,7 +13535,7 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read overview once, then only the needed topic. Results are instructions, not a published UI. Use present for the actual reply; validate is an optional dry run.
+> Read overview once, then only the needed topic. Results are instructions, not a published UI. Prepare content, then put the returned embed in your answer; validate is an optional dry run.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -13575,16 +13575,16 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
 }
 ```
 
-### present
+### prepare
 
-`agena.inline_ui.present` · **Summary**: Include a semantic rich passage directly in the answer, readable in Web and TUI. Not an app.
+`agena.inline_ui.prepare` · **Summary**: Prepare immutable rich content and return an embed reference. Insert it at the desired position in your normal answer; this tool does not display the content.
 
 **Tags**: `read_only`
 
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read guide for the needed kinds. Publishes one immutable passage in conversation order. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do not repeat the passage in final prose. Validation failures publish nothing.
+> Read guide for the needed kinds. Prepares one immutable passage without displaying it. Insert the returned embed as a standalone paragraph at its intended position in the normal answer. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

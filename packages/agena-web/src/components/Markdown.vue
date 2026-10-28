@@ -4,7 +4,7 @@ import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { renderMermaid } from '@/lib/mermaidRenderer'
-import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels } from '@/lib/markdown'
+import { renderMarkdown, renderMarkdownPlainText, type MarkdownUiLabels, type MarkdownReferences } from '@/lib/markdown'
 import { useNearViewport } from '@/composables/useNearViewport'
 import { createMarkdownStreamKey, releaseMarkdownStream, renderMarkdownAsync } from '@/lib/markdownAsync'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
@@ -21,6 +21,7 @@ import { isPlainNavigationKey, navigationIndex } from '@/lib/keyboardNavigation'
 const props = withDefaults(
   defineProps<{
     content: string
+    references?: MarkdownReferences
     mode?: 'markdown' | 'plain'
     sourcePath?: string
     revealAnchor?: string
@@ -340,7 +341,11 @@ async function updateNow() {
   parseController = request
   const version = ++renderVersion
   const labels = buildMarkdownLabels()
-  const labelKey = JSON.stringify({ ...labels, expandLinesTitle: labels.expandLinesTitle?.(1) })
+  const labelKey = JSON.stringify({
+    ...labels,
+    expandLinesTitle: labels.expandLinesTitle?.(1),
+    references: props.references,
+  })
   if (renderedContent === props.content && renderedLabels === labelKey && html.value.length) {
     scheduleHydrateMermaid()
     return
@@ -351,8 +356,8 @@ async function updateNow() {
     // Small code/math bodies can be expensive too, especially when opening a
     // transcript with many parts. Keep all rich parsing on the shared worker.
     rendered = import.meta.env.SSR
-      ? [renderMarkdown(content, labels)]
-      : await renderMarkdownAsync(content, labels, request.signal, markdownStreamKey)
+      ? [renderMarkdown(content, labels, props.references)]
+      : await renderMarkdownAsync(content, labels, request.signal, markdownStreamKey, props.references)
   } catch (error) {
     if (request.signal.aborted) return
     console.error('Markdown rendering failed', error)
@@ -823,6 +828,7 @@ watch(
     [
       props.mode,
       props.content,
+      props.references,
       props.sourcePath,
       props.stream,
       props.streamDebounceMs,

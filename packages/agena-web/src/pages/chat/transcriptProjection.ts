@@ -1,3 +1,4 @@
+import { expandInlineReferences, mergeInlineReferences } from '@/features/inlineUi/references'
 import { inlineDocumentFromPresentation, inlineDocumentMarkdown, isInlineUiTool } from '../../features/inlineUi/model'
 import { computed, shallowRef, type ComputedRef, type ShallowRef } from 'vue'
 import type {
@@ -352,7 +353,8 @@ function displayFields(
               ? text(presentationLabels?.textSegment) || 'Text'
               : ''),
       summary: presentedSummary || firstLine || '',
-      copyText: body,
+      copyText: kind !== 'reasoning' && (text(part.agenaRole) || 'assistant') === 'assistant'
+        ? expandInlineReferences(body, mergeInlineReferences(null, part.agenaInlineUi) || {}) : body,
     }
   }
   if (kind === 'operation') {

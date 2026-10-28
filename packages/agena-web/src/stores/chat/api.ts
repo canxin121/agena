@@ -473,6 +473,7 @@ export function normalizeAgenaPart(
     agenaContent: content,
     agenaSections: Array.isArray(part.sections) ? part.sections : [],
     agenaPresentation,
+    agenaInlineUi: part.inline_ui ?? null,
     runId,
     parentPartId,
     time: {

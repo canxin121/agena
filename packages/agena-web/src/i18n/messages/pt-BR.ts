@@ -1,5 +1,6 @@
 export default {
   inlineUi: {
+    referenceUnavailable: "O conteúdo desta referência não está disponível nesta conversa.",
     "label": "Resposta enriquecida",
     "comparison": "Comparação",
     "dimension": "Critério",

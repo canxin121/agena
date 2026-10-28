@@ -105,6 +105,9 @@ function openAttachment(path: string, url: string) {
       :stream="Boolean(streaming)"
       :source-path="sourcePath || ''"
       :allow-apps="part.role === 'assistant'"
+      :allow-inline-ui="part.role === 'assistant'"
+      :inline-documents="part.source.agenaInlineUi"
+      :inline-session-id="sessionId || ''"
       :app-owner="sessionId || ''"
       :app-directory="appDirectory"
     />
@@ -233,6 +236,9 @@ function openAttachment(path: string, url: string) {
           :stream="Boolean(streaming)"
           :source-path="sourcePath || ''"
           :allow-apps="part.role === 'assistant'"
+          :allow-inline-ui="part.role === 'assistant'"
+          :inline-documents="part.source.agenaInlineUi"
+          :inline-session-id="sessionId || ''"
           :app-owner="sessionId || ''"
           :app-directory="appDirectory"
         />

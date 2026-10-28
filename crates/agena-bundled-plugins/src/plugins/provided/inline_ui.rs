@@ -1,7 +1,10 @@
 //! Progressive discovery and publication of inert, semantic inline reply content.
-use agena_domain::{INLINE_UI_TOOL, InlineDocument};
+use agena_domain::{InlineDocument, PreparedInlineUi};
+const INLINE_UI_TOOL: &str = "agena.inline_ui.prepare";
 use agena_macros::ToolInput;
-use agena_plugin_host::sdk::{PluginError, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    PluginError, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,7 +37,7 @@ struct GuideInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
-struct PresentInput {
+struct PrepareInput {
     /// Bounded semantic document: version=1, optional title, ordered blocks.
     /// Read guide(topic) for exact schemas. No HTML, commands or executable code.
     document: Value,
@@ -42,10 +45,10 @@ struct PresentInput {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "inline_ui", version = env!("CARGO_PKG_VERSION"),
-    summary = "Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and present.",
+    summary = "Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare.",
     translations(
-        locale("zh-CN", summary = "内嵌式生成 UI：在回复中表达步骤、对比、重点与数据。先读 guide，再按需查询类型并 present。"),
-        locale("zh-TW", summary = "內嵌式生成 UI：在回覆中表達步驟、比較、重點與資料。先讀 guide，再按需查詢並 present。"),
+        locale("zh-CN", summary = "内嵌式生成 UI：在回复中表达步骤、对比、重点与数据。先读 guide，再按需查询类型并 prepare。"),
+        locale("zh-TW", summary = "內嵌式生成 UI：在回覆中表達步驟、比較、重點與資料。先讀 guide，再按需查詢並 prepare。"),
         locale("ja-JP", summary = "回答内の手順・比較・注記・データを読みやすく表示。guide で必要な種類だけ確認します。"),
         locale("ko-KR", summary = "답변 안의 단계, 비교, 핵심과 데이터를 표현합니다. guide에서 필요한 종류만 확인하세요."),
         locale("fr-FR", summary = "Contenu visuel intégré aux réponses. Consultez guide, puis seulement le type nécessaire."),
@@ -65,7 +68,7 @@ impl InlineUiPlugin {
         tags(read_only, discovery),
         name = "guide",
         summary = "Learn Inline Generative UI progressively: overview or one kind's schema and example.",
-        help = "Read overview once, then only the needed topic. Results are instructions, not a published UI. Use present for the actual reply; validate is an optional dry run.",
+        help = "Read overview once, then only the needed topic. Results are instructions, not a published UI. Prepare content, then put the returned embed in your answer; validate is an optional dry run.",
         translations(
             locale(
                 "zh-CN",
@@ -117,7 +120,7 @@ impl InlineUiPlugin {
             format!("Inline Generative UI · {kind}"),
             format!("{kind}: schema and complete example"),
             format!(
-                "# Inline Generative UI: {kind}\n\nPublish with {INLINE_UI_TOOL}(document=...). Text is plain text. Use ordinary prose around this passage; do not repeat it or print its JSON. Each document is immutable.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
+                "# Inline Generative UI: {kind}\n\nPrepare with {INLINE_UI_TOOL}(document=...). This tool does NOT display content. Insert its returned embed verbatim as a standalone paragraph in your normal Markdown answer. Use blank lines before and after; never put it in a code fence. Do not print the document JSON. Text fields are plain text and each prepared document is immutable.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
                 serde_json::to_string_pretty(&schema)
                     .map_err(|error| PluginError::internal_error(&error))?,
                 serde_json::to_string_pretty(&example)
@@ -146,68 +149,82 @@ impl InlineUiPlugin {
             locale("pt-BR", summary = "Valide sem publicar.")
         )
     )]
-    async fn validate(&self, input: &PresentInput) -> SdkResult<ToolInvokeOutput> {
+    async fn validate(&self, input: &PrepareInput) -> SdkResult<ToolInvokeOutput> {
         let document = InlineDocument::from_value(input.document.clone())
             .map_err(PluginError::invalid_params)?;
         Ok(ToolInvokeOutput::text(format!(
-            "Valid Inline Generative UI document ({} blocks). Not published; use present to include it in your answer.",
+            "Valid Inline Generative UI document ({} blocks). Not displayed; use prepare to obtain an embed reference, then insert it in the answer.",
             document.blocks.len()
         )))
     }
 
     #[tool(
         tags(read_only),
-        name = "present",
-        summary = "Include a semantic rich passage directly in the answer, readable in Web and TUI. Not an app.",
-        help = "Read guide for the needed kinds. Publishes one immutable passage in conversation order. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do not repeat the passage in final prose. Validation failures publish nothing.",
+        name = "prepare",
+        summary = "Prepare immutable rich content and return an embed reference. Insert it at the desired position in your normal answer; this tool does not display the content.",
+        help = "Read guide for the needed kinds. Prepares one immutable passage without displaying it. Insert the returned embed as a standalone paragraph at its intended position in the normal answer. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.",
         translations(
             locale(
                 "zh-CN",
-                summary = "在回答中直接呈现富内容段落，Web 与 TUI 均可读；不是创建应用。"
+                summary = "准备富内容并返回引用；将引用插入正常回答的所需位置。工具本身不展示内容。"
             ),
             locale(
                 "zh-TW",
-                summary = "在回答中直接呈現富內容段落，Web 與 TUI 均可讀；不是建立應用程式。"
+                summary = "準備富內容並回傳引用；將引用放入正常回答的指定位置。工具本身不展示內容。"
             ),
             locale(
                 "ja-JP",
-                summary = "Web と TUI の回答内に構造化された説明を表示します。"
+                summary = "Web と TUI の向けの内容を準備して参照を返します。参照を回答本文に挿入してください。"
             ),
-            locale("ko-KR", summary = "Web와 TUI 답변 안에 구조화된 설명을 표시합니다."),
+            locale(
+                "ko-KR",
+                summary = "내용을 준비하고 참조를 반환합니다. 참조를 답변 본문에 삽입하세요."
+            ),
             locale(
                 "fr-FR",
-                summary = "Insérer un passage visuel dans la réponse Web et TUI."
+                summary = "Préparer un contenu et retourner une référence à insérer dans la réponse."
             ),
             locale(
                 "de-DE",
-                summary = "Strukturierten Inhalt direkt in Web- und TUI-Antworten anzeigen."
+                summary = "Inhalt vorbereiten und eine Referenz zum Einfügen in die Antwort zurückgeben."
             ),
             locale(
                 "es-ES",
-                summary = "Incluye un pasaje visual en la respuesta Web y TUI."
+                summary = "Prepara contenido y devuelve una referencia para insertarla en la respuesta."
             ),
-            locale("hi-IN", summary = "Web और TUI उत्तर में संरचित सामग्री दिखाएँ।"),
+            locale("hi-IN", summary = "सामग्री तैयार करें और उत्तर में डालने के लिए संदर्भ लौटाएँ।"),
+            locale("ar-SA", summary = "جهّز المحتوى وأعد مرجعاً لإدراجه في نص الإجابة."),
             locale(
-                "ar-SA",
-                summary = "أدرج محتوى منظماً داخل الإجابة في الويب والواجهة الطرفية."
-            ),
-            locale("pt-BR", summary = "Inclua conteúdo visual na resposta Web e TUI.")
+                "pt-BR",
+                summary = "Prepare conteúdo e retorne uma referência para inserir na resposta."
+            )
         )
     )]
-    async fn present(&self, input: &PresentInput) -> SdkResult<ToolInvokeOutput> {
+    async fn prepare(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &PrepareInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let document = InlineDocument::from_value(input.document.clone())
             .map_err(PluginError::invalid_params)?;
-        let text = document.to_markdown();
+        if context.call_id <= 0 {
+            return Err(PluginError::invalid_params(
+                "prepare requires a durable tool invocation",
+            ));
+        }
+        let prepared = PreparedInlineUi {
+            reference: format!("ui_{}_{}", context.call_id, uuid::Uuid::new_v4().simple()),
+            document,
+        };
+        let marker = prepared.marker();
         Ok(ToolInvokeOutput::from_parts(
-            if document.title.is_empty() {
-                "Inline Generative UI"
-            } else {
-                &document.title
-            },
-            format!("{} rich content blocks", document.blocks.len()),
-            text,
-            Some(json!({"inline_ui": document})),
-            std::collections::BTreeMap::from([("agena.effect".into(), "inline_reply".into())]),
+            "Prepared inline content",
+            "Ready to embed in the answer; not displayed here.",
+            format!(
+                "Insert {marker} on its own line in your normal answer, with blank lines before and after. This preparation has not displayed the content. Do not repeat its JSON."
+            ),
+            Some(json!({"inline_ui_prepared": prepared})),
+            Default::default(),
             Vec::new(),
         ))
     }
@@ -282,8 +299,15 @@ fn topic_schema(kind: &str) -> SdkResult<Value> {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn progressive_guides_and_present_use_the_same_validated_contract() {
+    async fn progressive_guides_and_prepare_use_the_same_validated_contract() {
         let plugin = InlineUiPlugin::new();
+        let context = ToolInvokeContext {
+            tool_name: "prepare",
+            session_id: 1,
+            call_id: 123,
+            workspace_root: ".",
+            cancellation: Default::default(),
+        };
         let value: Value =
             serde_json::from_str(include_str!("../../../../../examples/inline-ui/reply.json"))
                 .unwrap();
@@ -302,23 +326,29 @@ mod tests {
             assert!(result.payload.is_none());
         }
         let result = plugin
-            .present(&PresentInput {
-                document: value.clone(),
-            })
+            .prepare(
+                &context,
+                &PrepareInput {
+                    document: value.clone(),
+                },
+            )
             .await
             .unwrap();
-        assert!(result.payload.unwrap().get("inline_ui").is_some());
+        assert!(result.payload.unwrap().get("inline_ui_prepared").is_some());
         assert!(result.attachments.is_empty());
         let validation = plugin
-            .validate(&PresentInput { document: value })
+            .validate(&PrepareInput { document: value })
             .await
             .unwrap();
         assert!(validation.payload.is_none());
         assert!(
             plugin
-                .present(&PresentInput {
-                    document: json!({"version":1,"blocks":[]})
-                })
+                .prepare(
+                    &context,
+                    &PrepareInput {
+                        document: json!({"version":1,"blocks":[]})
+                    }
+                )
                 .await
                 .is_err()
         );

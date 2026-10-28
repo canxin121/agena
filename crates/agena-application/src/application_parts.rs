@@ -532,6 +532,14 @@ pub(crate) async fn project_kernel_entry(
             .saturating_add(phase_revision),
     );
     part.updated_at_ms = part.created_at_ms.saturating_add(part.revision);
+    if part.kind == "text"
+        && part.role == "assistant"
+        && let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str)
+    {
+        part.inline_ui = crate::application_inline_ui::resolve_inline_text(reader, session, text)
+            .await
+            .map_err(crate::kernel_error)?;
+    }
     Ok(part)
 }
 

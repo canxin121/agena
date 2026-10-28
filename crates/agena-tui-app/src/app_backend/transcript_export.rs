@@ -79,7 +79,7 @@ impl TuiBackend {
                 text.push(b'\n');
             }
             self.client()
-                .write_part_text(session_id, part, &mut text)
+                .write_reply_part_text(session_id, part, &mut text)
                 .await?;
         }
         let text = String::from_utf8(text).context("assistant text is not valid UTF-8")?;
@@ -231,7 +231,7 @@ impl TuiBackend {
         if matches!(source.kind, ContentKind::Text | ContentKind::Log) {
             return Ok(self
                 .client()
-                .write_content_text(session_id, source, output)
+                .write_reply_content_text(session_id, source, output)
                 .await?);
         }
         // Document/terminal mutations are state, not text events. Reuse the

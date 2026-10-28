@@ -1,5 +1,6 @@
 export default {
   inlineUi: {
+    referenceUnavailable: "यह संदर्भित सामग्री इस बातचीत में उपलब्ध नहीं है।",
     "label": "समृद्ध उत्तर",
     "comparison": "तुलना",
     "dimension": "आयाम",

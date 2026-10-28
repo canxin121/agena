@@ -16,6 +16,9 @@ fn is_false(value: &bool) -> bool {
 /// One persisted part as exposed by the public API.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PartResource {
+    /// Display-only embeds for an assistant text body; absent on user input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_ui: Option<agena_domain::InlineUiReferences>,
     pub part_id: i64,
     pub kind: String,
     /// The real entry also establishes a stable message boundary.

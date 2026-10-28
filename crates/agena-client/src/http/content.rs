@@ -60,6 +60,7 @@ impl AgenaClient {
                     reference.resource_id,
                     Some(part.part_id),
                     target,
+                    None,
                 )
                 .await?;
             }
@@ -70,6 +71,87 @@ impl AgenaClient {
             })?;
         }
         Ok(())
+    }
+
+    /// Human-facing copy of an assistant reply. Unlike write_part_text (raw),
+    /// this expands only explicit standalone references using authorized sidecars.
+    pub async fn write_reply_part_text<W: AsyncWrite + Unpin + Send + ?Sized>(
+        &self,
+        session_id: i64,
+        part: &agena_api::part::PartResource,
+        target: &mut W,
+    ) -> Result<(), ClientError> {
+        if part.role != "assistant" || part.kind != "text" {
+            return self.write_part_text(session_id, part, target).await;
+        }
+        if let Some(resources) = part
+            .content
+            .get("resources")
+            .and_then(serde_json::Value::as_array)
+        {
+            for value in resources {
+                let source: agena_domain::ContentRef =
+                    serde_json::from_value(value.clone()).map_err(ClientError::Decode)?;
+                if source.kind == agena_domain::ContentKind::Text {
+                    self.write_resolved_native_text(
+                        session_id,
+                        source.resource_id,
+                        Some(part.part_id),
+                        target,
+                    )
+                    .await?;
+                }
+            }
+        }
+        if let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str) {
+            let text = part.inline_ui.as_ref().map_or_else(
+                || text.to_owned(),
+                |refs| agena_domain::expand_inline_references(text, refs, false),
+            );
+            target
+                .write_all(text.as_bytes())
+                .await
+                .map_err(|e| ClientError::Transport(format!("write reply text: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Human-facing export. Native text is collected to preserve Markdown code,
+    /// quote and paragraph boundaries across transport pages; raw APIs still stream
+    /// unchanged bytes. Non-assistant content has no reference sidecar and stays raw.
+    pub async fn write_reply_content_text<W: AsyncWrite + Unpin + Send + ?Sized>(
+        &self,
+        session_id: i64,
+        source: &agena_domain::ContentRef,
+        target: &mut W,
+    ) -> Result<(), ClientError> {
+        if source.kind != agena_domain::ContentKind::Text {
+            return self.write_content_text(session_id, source, target).await;
+        }
+        self.write_resolved_native_text(session_id, source.resource_id, None, target)
+            .await
+    }
+
+    async fn write_resolved_native_text<W: AsyncWrite + Unpin + Send + ?Sized>(
+        &self,
+        session_id: i64,
+        id: ContentId,
+        part_id: Option<i64>,
+        target: &mut W,
+    ) -> Result<(), ClientError> {
+        let mut bytes = Vec::new();
+        let mut refs = None;
+        self.write_native_text(session_id, id, part_id, &mut bytes, Some(&mut refs))
+            .await?;
+        let text = String::from_utf8(bytes).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        let text = refs.as_ref().map_or_else(
+            || text.clone(),
+            |refs| agena_domain::expand_inline_references(&text, refs, false),
+        );
+        target
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| ClientError::Transport(format!("write rich reply text: {e}")))
     }
 
     /// Write a native Text source or the ordered text of a Log source.
@@ -93,7 +175,7 @@ impl AgenaClient {
     ) -> Result<(), ClientError> {
         if source.kind == agena_domain::ContentKind::Text {
             return self
-                .write_native_text(session_id, source.resource_id, None, target)
+                .write_native_text(session_id, source.resource_id, None, target, None)
                 .await;
         }
         if source.kind != agena_domain::ContentKind::Log {
@@ -235,6 +317,7 @@ impl AgenaClient {
         id: ContentId,
         part_id: Option<i64>,
         target: &mut W,
+        mut inline_ui: Option<&mut Option<agena_domain::InlineUiReferences>>,
     ) -> Result<(), ClientError> {
         let mut page = self
             .read_content(session_id, id, None, COMPLETE_TEXT_PAGE_BYTES)
@@ -306,6 +389,21 @@ impl AgenaClient {
                 return Err(ClientError::Protocol(
                     "complete part text ended before its initial source head".into(),
                 ));
+            }
+            if let (Some(destination), Some(refs)) = (inline_ui.as_mut(), &page.inline_ui) {
+                let documents = destination.get_or_insert_with(Default::default);
+                for (reference, document) in refs {
+                    if documents.len() >= agena_domain::INLINE_UI_MAX_REFERENCES
+                        && !documents.contains_key(reference)
+                    {
+                        break;
+                    }
+                    if agena_domain::inline_reference_tool_id(reference).is_some()
+                        && document.validate().is_ok()
+                    {
+                        documents.insert(reference.clone(), document.clone());
+                    }
+                }
             }
             let mut remaining = boundary.sequence - cursor.sequence;
             for chunk in &page.chunks {

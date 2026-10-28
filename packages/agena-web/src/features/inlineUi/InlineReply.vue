@@ -12,7 +12,8 @@ import {
   RiLightbulbLine,
   RiAlertLine,
 } from '@remixicon/vue'
-import InlineChart from './InlineChart.vue'
+import { defineAsyncComponent } from 'vue'
+const InlineChart = defineAsyncComponent(() => import('./InlineChart.vue'))
 import { inlineChartSpec, type InlineDocument } from './model'
 
 defineProps<{ document: InlineDocument }>()

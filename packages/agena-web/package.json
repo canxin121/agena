@@ -22,7 +22,7 @@
     "check:i18n-settings": "bun ./scripts/check-settings-i18n.mjs",
     "check:i18n-messages": "bun ./scripts/check-messages-i18n.mjs",
     "check:i18n-locales": "bun ./scripts/check-message-locales-i18n.mjs",
-    "test:inline-ui": "bun test ./tests/inlineUi.test.ts",
+    "test:inline-ui": "bun test ./tests/inlineUi.test.ts ./tests/inlineUiReferences.test.ts",
     "test:inline-ui:browser": "node ./scripts/probe-inline-ui.cjs"
   },
   "dependencies": {

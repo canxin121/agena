@@ -1,16 +1,30 @@
-# Inline Generative UI example
+# Inline Generative UI examples
 
-`reply.json` is a validated, inert document containing all eight content kinds.
-Publish it as the `document` argument of `agena.inline_ui.present`; it is not an
-application manifest or a Markdown fence. Its chart is explicitly illustrative.
+`reply.json` is an inert document containing all eight content kinds. Pass it as
+`document` to `agena.inline_ui.prepare`. Preparation returns an immutable reference;
+it does **not** display a rich tool-result card. Insert the returned `embed` marker
+on a standalone line in the normal Markdown answer, surrounded by blank lines.
 
-`reply.md` is the canonical copy/TUI fallback generated from the Rust contract:
+For example (the ID here is illustrative; use the exact returned ID):
+
+```text
+Here is the proposed sequence:
+
+[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]
+
+The second stage matters because ...
+```
+
+`reply.md` is the canonical copy/TUI fallback generated from the Rust document:
 
 ```sh
 cargo run -p agena-domain --example inline_ui_markdown --offline > examples/inline-ui/reply.md
 ```
 
-The Web contract tests compare their copy projection against this exact file.
-The isolated browser probe renders `reply.json` through the real transcript entry.
-See [the feature guide](../../docs/inline-generative-ui.md) for progressive discovery,
-content limits, architecture and the verification commands.
+`references.json` is shared by the Rust and Web parser tests. It covers real embeds,
+code/quoted/listed examples, streaming boundaries and invalid references.
+The isolated browser probe exercises two embeds inside one final answer, not merely
+a tool card, including source-backed SSE and complete-answer copying.
+
+See [the feature guide](../../docs/inline-generative-ui.md) for the protocol,
+content limits, authorization, architecture and verification commands.

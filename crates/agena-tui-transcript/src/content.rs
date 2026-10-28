@@ -23,6 +23,7 @@ pub struct ContentFrame {
 }
 
 pub struct ContentView {
+    inline_ui: Option<agena_domain::InlineUiReferences>,
     pub cursor: Option<ContentCursor>,
     pub frame: Option<Arc<ContentFrame>>,
     parser: vt100::Parser,
@@ -39,6 +40,7 @@ pub struct ContentView {
 impl Default for ContentView {
     fn default() -> Self {
         Self {
+            inline_ui: None,
             cursor: None,
             frame: None,
             parser: vt100::Parser::new(16, 240, 2048),
@@ -216,6 +218,21 @@ impl ContentView {
             *self = Self::default();
             self.retired_epochs = retired;
         }
+        if let Some(refs) = &page.inline_ui {
+            let known = self.inline_ui.get_or_insert_with(Default::default);
+            for (reference, document) in refs {
+                if known.len() >= agena_domain::INLINE_UI_MAX_REFERENCES
+                    && !known.contains_key(reference)
+                {
+                    break;
+                }
+                if agena_domain::inline_reference_tool_id(reference).is_some()
+                    && document.validate().is_ok()
+                {
+                    known.insert(reference.clone(), document.clone());
+                }
+            }
+        }
         if self.cursor.is_none()
             && page.chunks.first().is_some_and(|chunk| {
                 if let ContentPayload::Text { text } = &chunk.payload
@@ -361,6 +378,16 @@ impl ContentView {
             observation_lines(self.parser.screen_mut(), !terminal)
         };
         self.windowed |= omitted;
+        let display_text = self.inline_ui.as_ref().map_or_else(
+            || self.text.clone(),
+            |refs| {
+                agena_domain::expand_inline_references(
+                    &self.text,
+                    refs,
+                    resource.state == ContentState::Active || page.has_more,
+                )
+            },
+        );
         self.frame = Some(Arc::new(ContentFrame {
             resource,
             lines,
@@ -368,7 +395,7 @@ impl ContentView {
             terminal_size: terminal.then(|| self.parser.screen().size()),
             gap: self.gap,
             windowed: self.windowed,
-            text: Arc::from(self.text.as_str()),
+            text: Arc::from(display_text),
             document: self
                 .document
                 .as_ref()
@@ -650,6 +677,7 @@ mod tests {
             sequence,
         };
         ContentPage {
+            inline_ui: None,
             resource: ContentResource {
                 resource_id: agena_domain::ContentId::new(),
                 owner_session_id: 1,

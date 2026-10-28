@@ -244,3 +244,9 @@ pub use inline_ui::{
     InlineChartType, InlineComparisonRow, InlineDocument, InlineIcon, InlineMetric, InlineSeries,
     InlineStep, InlineTone, is_inline_ui_tool,
 };
+
+pub use inline_ui::{
+    INLINE_UI_MAX_REFERENCES, INLINE_UI_REFERENCE_PREFIX, InlineReferenceSpan, InlineUiReferences,
+    PreparedInlineUi, expand_inline_references, inline_reference_candidates,
+    inline_reference_spans, inline_reference_tool_id, is_inline_ui_prepare_tool,
+};

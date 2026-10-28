@@ -1,48 +1,54 @@
-# Inline Generative UI — rich passages inside your answer
+# Inline Generative UI — embed rich content in the answer body
 
-Use `agena.inline_ui` to explain, not to build an application. The result appears
-inline in the conversation on Web and TUI, including when tool details are folded.
-It is immutable, safe to replay, and never starts services or executes generated code.
+Use this for explanation, not applications. Preparing content does NOT display it.
+The AI's normal Markdown answer determines its exact position.
 
 ## Progressive discovery
 
-1. `guide()` gives this short overview and the content catalog.
-2. `guide(topic="steps")` (or another content kind) gives only that kind's schema
-   and a complete valid example. Read only the kinds needed for this answer.
-3. `validate(document=...)` is an optional dry run with no visible rich passage.
-4. `present(document=...)` publishes a validated passage at this point in the reply.
+1. `guide()` gives this short overview.
+2. `guide(topic="steps")` (or one other kind) gives only its schema and example.
+3. `validate(document=...)` optionally checks input, without preparing or displaying it.
+4. `prepare(document=...)` saves an immutable tool result and returns `reference` and
+   `embed`. Copy `embed` exactly into the normal answer, at the intended position.
 
-Use ordinary prose before/after a passage. Do not repeat the same content in the
-final answer, print the document JSON to the user, or wrap it in Markdown fences.
-For a complete rich answer, include paragraph blocks between visual structures.
-Prefer one coherent passage to many small calls; do not call concurrently when
-reading order matters. A failed call publishes nothing: fix its field error and retry.
+The answer should look like this (REFERENCE is a placeholder, never invent it):
 
-## Catalog
+    Here is the proposed sequence:
 
-- paragraph — short connecting explanation; plain text, not HTML or Markdown.
-- callout — one important note, tip or warning; not a decorative container for everything.
-- steps — an ordered explanation or roadmap. Optional neutral icons and short labels.
-  These are explanatory stages, not live task progress or evidence of completion.
-- comparison — two to four alternatives compared across named dimensions.
+    [[inline-ui:REFERENCE]]
+
+    The second stage is important because ...
+
+Put the returned marker on its own line with blank lines before and after it.
+Do not put the actual marker in a code fence, quote, list, heading, or sentence.
+Those contexts intentionally show it as source instead of embedding UI.
+Do not print the document JSON. Do not leave the marker out of the final answer:
+without a reference, the prepared content remains only a tool result, not visible UI.
+You can place several references between ordinary Markdown paragraphs. Normal
+Markdown formatting, links and citations remain available in the surrounding prose.
+
+## Content catalog
+
+- paragraph — connecting plain-text explanation within a rich passage.
+- callout — one note, tip or warning; not a decorative wrapper for every paragraph.
+- steps — ordered explanation/roadmap, not live task progress or proof of completion.
+- comparison — two to four alternatives across named dimensions.
 - metrics — one to six supplied facts with units and optional context.
 - table — compact exact data, up to eight columns and forty rows.
-- details — optional supporting explanation; collapsible on Web, expanded in TUI/copy.
-- chart — line, bar, area or pie over a categorical sequence; gaps are null, not zero.
-  Use ordinary tables for numeric-X scatter plots or irregular time spacing.
+- details — supporting explanation; collapsible on Web, complete in TUI/copy.
+- chart — line, bar, area or pie over categories. Null means missing, not zero.
+  Numeric-X scatter and irregular time spacing need another representation.
 
-## Content rules
+All document text fields are plain text, not executable markup. Use the user's
+language, supported facts, honest uncertainty and real source attribution in the
+surrounding answer. Label illustrative data. Prefer prose when structure adds no value.
 
-All text fields are plain text. Use the user's language. Never invent values,
-measurements, provenance, task progress, or citations for visual completeness.
-Clearly label illustrative data. Include relevant uncertainty and sources in the
-surrounding prose or ordinary text; preserve the meaning when compressing content.
+Documents have `version: 1`, an optional title, 1–24 ordered blocks with unique
+ASCII ids, and a 60 KiB serialized limit. Use at most 32 references per answer.
+References are immutable and scoped to conversation membership; never guess, edit,
+or copy a reference from an unrelated conversation. Preparing a revision produces
+a new reference; old answers keep their original content.
 
-Every document has `version: 1`, an optional title and 1–24 ordered blocks with
-unique, stable-in-this-document ASCII ids. Maximum serialized size is 60 KiB.
-No arbitrary HTML, CSS, JavaScript, URLs, callbacks, commands or network resources.
-Images, runnable apps and Web Preview remain separate existing capabilities.
-
-Use rich content only when its structure makes the answer easier to understand.
-A simple sentence should remain a sentence. Chat and TUI both retain exact content;
-layout, disclosure and chart hover state stay local to each reader.
+No HTML, JS, callbacks, commands, network bindings, services or independent apps.
+Web Preview remains separate. Invalid input creates no reference. Missing references
+show a readable fallback, and quoted/code examples never execute or embed.

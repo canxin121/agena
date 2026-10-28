@@ -4,6 +4,8 @@
 //! executable code, URLs, commands, remote data bindings, or runtime state. Both
 //! clients render the same facts; layout and disclosure remain client-local.
 mod markdown;
+mod references;
+pub use references::*;
 #[cfg(test)]
 mod tests;
 

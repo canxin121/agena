@@ -108,3 +108,22 @@ pub async fn stream_content(
     };
     Ok(Sse::new(output).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
+
+/// Resolve only an immutable prepared result belonging to this session.
+pub async fn read_inline_ui_reference(
+    State(state): State<AppState>,
+    Path((session_id, reference)): Path<(i64, String)>,
+) -> Result<impl axum::response::IntoResponse, ServerError> {
+    let document = state
+        .application()
+        .read_inline_ui_reference(session_id, &reference)
+        .await?;
+    let mut response = crate::json_codec::response(document).await?;
+    // Membership may be revoked by rewind/deletion; do not lend an old authorized
+    // response through browser or intermediary caches.
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    Ok(response)
+}

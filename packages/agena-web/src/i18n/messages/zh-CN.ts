@@ -1,5 +1,6 @@
 export default {
   inlineUi: {
+    referenceUnavailable: "这份引用内容在当前会话中不可用。",
     "label": "富内容回复",
     "comparison": "方案对比",
     "dimension": "对比维度",

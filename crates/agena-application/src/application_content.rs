@@ -38,6 +38,8 @@ impl From<ContentReadError> for ApplicationError {
 }
 
 pub struct ContentWatch {
+    /// Only assistant prose can contain active body references.
+    inline_reply: bool,
     pub resource: ContentResource,
     session: agena_storage::kernel::SessionId,
     reader: KernelReader,
@@ -200,6 +202,44 @@ impl ContentWatch {
                 epoch: page.stream.epoch.into(),
                 sequence: page.start.saturating_add((skipped + length) as u64),
             };
+            // References may straddle UTF-8/delivery pages. Carry immutable
+            // resolved data separately; never replace source bytes or cursors.
+            // An empty sidecar also identifies a reply stream while a marker
+            // is still incomplete across pages. Tool/user source text stays raw.
+            let mut inline_ui = self.inline_reply.then(Default::default);
+            if self.inline_reply
+                && (text.contains(agena_domain::INLINE_UI_REFERENCE_PREFIX) || text.contains(']'))
+            {
+                let mut context = String::new();
+                if page.start > page.stream.retained_start {
+                    let start = page
+                        .start
+                        .saturating_sub(128)
+                        .max(page.stream.retained_start);
+                    let prefix = self
+                        .reader
+                        .text_range(
+                            self.session,
+                            head.id,
+                            Some(TextCursor {
+                                content: head.id,
+                                epoch: page.stream.epoch,
+                                offset: start,
+                            }),
+                            (page.start - start) as usize,
+                        )
+                        .await?;
+                    context.push_str(&String::from_utf8_lossy(&prefix.bytes));
+                }
+                context.push_str(&text);
+                inline_ui = crate::application_inline_ui::resolve_inline_text(
+                    &self.reader,
+                    self.session,
+                    &context,
+                )
+                .await?
+                .or(inline_ui);
+            }
             let chunks = if text.is_empty() {
                 Vec::new()
             } else {
@@ -210,6 +250,7 @@ impl ContentWatch {
                 }]
             };
             return Ok(ContentPage {
+                inline_ui,
                 resource: resource(self.session.get(), &page.stream),
                 chunks,
                 next_cursor: next,
@@ -329,6 +370,7 @@ impl ContentWatch {
             });
         }
         Ok(ContentPage {
+            inline_ui: None,
             resource: resource(self.session.get(), &page.stream),
             has_more: page.has_more || chunks.len() < page.records.len(),
             chunks,
@@ -416,6 +458,7 @@ impl Application {
                 }
                 if end == start && start < text.len() {
                     return Ok(ContentTextPage {
+                        inline_ui: page.inline_ui.clone(),
                         resource: page.resource,
                         slices,
                         next_position: next,
@@ -434,6 +477,7 @@ impl Application {
                 if end < text.len() {
                     next.offset = end;
                     return Ok(ContentTextPage {
+                        inline_ui: page.inline_ui.clone(),
                         resource: page.resource,
                         slices,
                         next_position: next,
@@ -451,6 +495,7 @@ impl Application {
             next.after = page.next_cursor;
         }
         Ok(ContentTextPage {
+            inline_ui: page.inline_ui.clone(),
             resource: page.resource,
             slices,
             next_position: next,
@@ -501,7 +546,20 @@ impl Application {
             }
         };
         let resource = resource(session_id, &head);
+        let inline_reply = if head.kind == ContentKind::Text {
+            let owner = reader
+                .entry(session, head.entry)
+                .await
+                .map_err(crate::kernel_error)?;
+            matches!(
+                owner.payload,
+                agena_storage::kernel::EntryPayload::Text { .. }
+            ) && owner.compaction_phase.is_none()
+        } else {
+            false
+        };
         Ok(ContentWatch {
+            inline_reply,
             resource,
             session,
             reader,
@@ -545,3 +603,6 @@ fn resource(session_id: i64, head: &ContentStreamView) -> ContentResource {
         capture_error: head.capture_error.clone(),
     }
 }
+
+#[cfg(test)]
+mod inline_ui_tests;

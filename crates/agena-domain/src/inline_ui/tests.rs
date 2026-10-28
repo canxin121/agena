@@ -93,3 +93,44 @@ fn inline_ui_reserves_room_for_the_runtime_result_envelope() {
     let payload = json!({"inline_ui":document,"metadata":{"agena.effect":"inline_reply"}});
     assert!(serde_json::to_vec(&payload).unwrap().len() < 64 * 1024);
 }
+
+#[test]
+fn inline_ui_body_reference_parser_obeys_shared_markdown_boundaries() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../examples/inline-ui/references.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let spans = inline_reference_spans(
+            case["text"].as_str().unwrap(),
+            case["streaming"].as_bool().unwrap(),
+        );
+        assert_eq!(
+            spans.iter().filter(|s| s.reference.is_some()).count(),
+            case["references"].as_u64().unwrap() as usize,
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
+fn inline_ui_reference_expansion_preserves_prose_order_and_literal_examples() {
+    let reference = "ui_123_0123456789abcdef0123456789abcdef";
+    let marker = format!("[[inline-ui:{reference}]]");
+    let document = InlineDocument::from_value(sample()).unwrap();
+    let refs = [(reference.into(), document.clone())].into();
+    let source = format!("**Before**\n\n{marker}\n\nAfter\n\n```text\n{marker}\n```\n");
+    let expanded = expand_inline_references(&source, &refs, false);
+    assert!(expanded.starts_with("**Before**\n\n"));
+    assert!(expanded.contains(&format!("{}\n\nAfter", document.to_markdown())));
+    assert!(expanded.ends_with(&format!("```text\n{marker}\n```\n")));
+    let missing = expand_inline_references(&marker, &Default::default(), false);
+    assert!(missing.contains("unavailable"));
+    let partial = "Before\n\n[[inline-ui:ui_123_".to_owned();
+    assert_eq!(
+        expand_inline_references(&partial, &refs, true),
+        "Before\n\n"
+    );
+    assert_eq!(expand_inline_references(&partial, &refs, false), partial);
+}

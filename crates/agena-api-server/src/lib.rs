@@ -439,6 +439,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::stream_content),
             )
             .route(
+                "/api/v1/sessions/{session_id}/inline-ui/{reference}",
+                get(rest::read_inline_ui_reference),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{section}",
                 get(rest::get_session_tool_detail),
             )

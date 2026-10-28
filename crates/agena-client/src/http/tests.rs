@@ -288,3 +288,88 @@ async fn proxy_environment_child() {
         }
     }
 }
+
+#[tokio::test]
+async fn inline_ui_human_export_expands_body_references_but_raw_sdk_reads_preserve_them() {
+    use agena_domain::{
+        ContentChunk, ContentCursor, ContentKind, ContentPage, ContentPayload, ContentRef,
+        ContentResource, ContentState, InlineDocument,
+    };
+    let reference = "ui_123_0123456789abcdef0123456789abcdef";
+    let marker = format!("[[inline-ui:{reference}]]");
+    let document = InlineDocument::from_value(serde_json::json!({"version":1,"blocks":[{"type":"paragraph","id":"fact","text":"Exact embedded content"}]})).unwrap();
+    let original = format!("Before\n\n{marker}\n\nAfter\n\n```\n{marker}\n```\n");
+    let cursor = ContentCursor {
+        epoch: uuid::Uuid::new_v4(),
+        sequence: original.len() as u64,
+    };
+    let id = agena_domain::ContentId::new();
+    let page = ContentPage {
+        inline_ui: Some([(reference.into(), document.clone())].into()),
+        resource: ContentResource {
+            resource_id: id,
+            owner_session_id: 1,
+            part_id: 2,
+            kind: ContentKind::Text,
+            state: ContentState::Complete,
+            cursor,
+            committed_cursor: cursor,
+            total_bytes: Some(cursor.sequence),
+            dropped_bytes: 0,
+            dropped_packets: 0,
+            committed_dropped_bytes: 0,
+            committed_dropped_packets: 0,
+            retained_ranges: vec![],
+            capture_error: None,
+        },
+        chunks: vec![ContentChunk {
+            cursor,
+            captured_at_ms: 0,
+            payload: ContentPayload::Text {
+                text: original.clone(),
+            },
+        }],
+        next_cursor: cursor,
+        has_more: false,
+        gap: false,
+    };
+    let response = Box::leak(serde_json::to_string(&page).unwrap().into_boxed_str());
+    let server = Fixture::new("127.0.0.1:0", "inline-ui", Some(response)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let source = ContentRef {
+        resource_id: id,
+        kind: ContentKind::Text,
+    };
+    let mut raw = Vec::new();
+    client
+        .write_content_text(1, &source, &mut raw)
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8(raw).unwrap(), original);
+    let mut human = Vec::new();
+    client
+        .write_reply_content_text(1, &source, &mut human)
+        .await
+        .unwrap();
+    let human = String::from_utf8(human).unwrap();
+    assert_eq!(
+        human,
+        format!(
+            "Before\n\n{}\n\nAfter\n\n```\n{marker}\n```\n",
+            document.to_markdown()
+        )
+    );
+    let part = agena_api::part::PartResource {
+        part_id: 2,
+        kind: "text".into(),
+        role: "assistant".into(),
+        content: serde_json::json!({"resources":[source]}),
+        ..Default::default()
+    };
+    let mut part_copy = Vec::new();
+    client
+        .write_reply_part_text(1, &part, &mut part_copy)
+        .await
+        .unwrap();
+    assert_eq!(String::from_utf8(part_copy).unwrap(), human);
+}

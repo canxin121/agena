@@ -87,9 +87,9 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
     }
 
     if !subagent {
-        let inline_ui = plugin_tools(tools, "agena.inline_ui", &["guide", "validate", "present"]);
-        if has("agena.inline_ui.present") && !inline_ui.is_empty() {
-            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Published passages are already part of the reply on Web and TUI; do not repeat them or print their JSON. This is explanation, not an app or task-progress system."));
+        let inline_ui = plugin_tools(tools, "agena.inline_ui", &["guide", "validate", "prepare"]);
+        if has("agena.inline_ui.prepare") && !inline_ui.is_empty() {
+            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Preparing content does not display it. Put the exact returned embed on a standalone line in the normal answer, with blank lines before and after. Web and TUI resolve it at that position. Do not print the document JSON. This is explanation, not an app or task-progress system."));
         }
     }
 
@@ -248,7 +248,7 @@ mod tests {
         "memory.write",
         "inline_ui.guide",
         "inline_ui.validate",
-        "inline_ui.present",
+        "inline_ui.prepare",
     ];
 
     fn catalog(names: &[&str]) -> AvailableTools {
@@ -409,10 +409,10 @@ mod tests {
         let prompt = prompt(
             SessionRelationKind::Root,
             true,
-            &["inline_ui.guide", "inline_ui.present"],
+            &["inline_ui.guide", "inline_ui.prepare"],
         );
         assert!(prompt.contains("`inline_ui.guide`"));
-        assert!(prompt.contains("`inline_ui.present`"));
+        assert!(prompt.contains("`inline_ui.prepare`"));
         assert!(!prompt.contains("`inline_ui.validate`"));
         assert!(prompt.contains("read only the needed content kind"));
         assert!(!prompt.contains("\"blocks\":"));

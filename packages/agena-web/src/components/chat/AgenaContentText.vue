@@ -27,6 +27,7 @@ const gap = ref(false)
 const error = ref('')
 const loading = ref(true)
 const root = ref<HTMLElement>()
+const inlineDocuments = shallowRef<unknown>(null)
 let latestBody = ''
 function selected() {
   const selection = document.getSelection()
@@ -51,9 +52,13 @@ function connect() {
   stop = undefined
   if (pane && !pane.isVisible.value) return
   stop = observeContent(props.sessionId, props.resource, (frame) => {
+    inlineDocuments.value = frame.buffer.inlineUi
     latestBody = frame.text
     if (!selected()) body.value = latestBody
-    active.value = !frame.buffer.resource || frame.buffer.resource.state === 'active'
+    active.value =
+      !frame.buffer.resource ||
+      frame.buffer.resource.state === 'active' ||
+      (frame.buffer.cursor?.sequence ?? 0) < frame.buffer.resource.cursor.sequence
     gap.value = frame.buffer.gap
     error.value = frame.error
     loading.value = !frame.buffer.resource && !frame.text && !frame.error
@@ -96,6 +101,9 @@ onBeforeUnmount(() => {
       :stream="active"
       :source-path="sourcePath || ''"
       :allow-apps="allowApps"
+      :allow-inline-ui="allowApps === true"
+      :inline-documents="inlineDocuments"
+      :inline-session-id="sessionId"
       :app-owner="sessionId"
       :app-directory="chat.getSessionDirectory(sessionId) || ''"
     />

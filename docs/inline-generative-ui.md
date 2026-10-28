@@ -1,132 +1,159 @@
-# Inline Generative UI（富内容回复）
+# Inline Generative UI（正文内嵌富内容）
 
-Inline Generative UI 是回答的一种表达方式，而不是独立应用。AI 用普通文字解释，
-在有助于理解时插入步骤、对比、提示、指标、表格、补充说明或图表。
-Web 和 TUI 读取相同的语义内容；打开历史回答不会写入配置、启动进程或请求外部数据。
+这项能力让 AI 在**正常 Markdown 回答的指定位置**插入步骤、对比、提示、指标、表格、说明或图表。
+不是展示一个独立 App，也不是把工具调用结果画得像卡片就算“内嵌”。
 
-## 给 Agent 的渐进式入口
+## 实际流程：准备 → 正文引用 → 原位渲染
 
-内置插件 ID 是 `agena.inline_ui`，默认随其他 bundled plugins 注册，可按现有插件设置禁用。
-模型看到的简短工具目录引导其按需发现，不把所有内容类型的完整结构塞进系统提示。
-实际调用名由当前工具目录决定，下列名称为 canonical identity：
+内置插件是 `agena.inline_ui`。工具目录按需发现，不把所有内容类型的完整 Schema 塞进系统提示。
+实际执行名以当前目录为准，以下为 canonical identity：
 
-| 工具 | 用途 |
+| 工具 | 行为 |
 | --- | --- |
-| `agena.inline_ui.guide` | 不传 topic 时返回简短概览；传入单一类型时只返回该类型的 Schema 和完整示例。 |
-| `agena.inline_ui.validate` | 可选的发布前校验；成功或失败都不产生富内容段落。 |
-| `agena.inline_ui.present` | 校验后在当前会话顺序中发布一个不可变的富内容段落。 |
+| `agena.inline_ui.guide` | 默认返回简短概览；指定 `topic` 后，只返回该类型的结构和完整示例。 |
+| `agena.inline_ui.validate` | 可选校验；不准备引用、不展示 UI。 |
+| `agena.inline_ui.prepare` | 保存不可变内容，返回 `reference` 和 `embed`；**工具调用本身不展示这份富内容**。 |
 
-推荐流程：先 `guide({})`，按需 `guide({"topic":"steps"})`，然后调用 `present`。
-有疑问时先 `validate`；错误包含具体字段路径。无效文档不会部分发布。
+例如模型调用 `prepare`，参数仍是受控的结构化内容：
 
 ```json
 {
   "document": {
     "version": 1,
-    "title": "推荐做法",
-    "blocks": [
-      {
-        "type": "paragraph",
-        "id": "intro",
-        "text": "先统一数据契约，再逐步改进展示。"
-      },
-      {
-        "type": "steps",
-        "id": "plan",
-        "items": [
-          {"label":"P0","title":"定义内容","text":"让同一份内容可用于 Web 与终端。","icon":"layers"},
-          {"label":"P1","title":"验证体验","text":"检查窄屏、键盘操作、复制与历史回放。","icon":"check"}
-        ]
-      }
-    ]
+    "title": "建议的实施顺序",
+    "blocks": [{
+      "type": "steps",
+      "id": "plan",
+      "items": [
+        {"label":"P0","title":"统一内容","text":"先让同一份信息在 Web 和终端都能读懂。","icon":"layers"},
+        {"label":"P1","title":"验证体验","text":"检查窄屏、复制与历史回放。","icon":"check"}
+      ]
+    }]
   }
 }
 ```
 
-这是工具参数，不应作为 JSON 或特殊 Markdown 围栏直接发给读者。
-`present` 的内容已经属于回答；可在前后继续解释，不要在最后又重复一遍。
-单个文档支持交错的普通段落与富内容块；多个发布调用的顺序很重要时应串行调用。
-这不是任务管理器：步骤标签和图标仅表达讲解结构，不表示某项工作已执行或完成。
+成功后模型收到简短结果，而不是重复接收整个文档：
 
-## 内容目录
+```json
+{
+  "prepared": true,
+  "reference": "ui_123_0123456789abcdef0123456789abcdef",
+  "embed": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
+  "message": "Not displayed yet. Insert the embed verbatim on a standalone line in your normal answer..."
+}
+```
+
+以上 ID 仅为说明。真实 ID 来自该次调用，模型不能猜测、重写或引用其他会话的 ID。
+随后 AI 正常输出回答文本：
+
+```text
+我建议分两个阶段推进：
+
+[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]
+
+第二阶段应重点检查窄屏和历史回放，因为……
+```
+
+Web 与 TUI 都在这一行的位置展开内容。前后的普通 Markdown 仍可加粗、写链接和引用来源；
+链接的引用定义即使位于另一个富内容块之后，也使用同一回答的解析上下文。
+正文可以交错多个引用，不需要分成多条回答或多个工具结果。
+**不写正文引用就不会显示这份内容。** 准备工具只保留可检查的普通执行记录，不再重复展示 UI。
+
+## 引用语法与流式行为
+
+引用必须独占一个顶层段落，前后使用空行。协议格式是：
+
+```text
+[[inline-ui:ui_<positive-tool-id>_<32-lowercase-hex-nonce>]]
+```
+
+不在下列位置展开：代码围栏（含尚未闭合的围栏）、行内代码、引用块、列表、缩进代码、
+HTML 块、标题、普通句子中间或转义后的示例。用户消息中的引用也只是原文。
+
+只有合法完整引用才会解析；流式生成尚未完成的尾部标记暂不泄露为协议文本。
+结束后仍不完整的标记保留原文。不存在、伪造或不属于当前会话的完整引用给出明确的不可用提示，
+不会静默删除正文，也不会自动执行工具来补全。
+
+实际 UI 内容先经完整校验再准备；正文按正常文本流生成，不声称支持半个 JSON 的组件流式执行。
+
+## 内容目录与边界
 
 | 类型 | 语义及限制 |
 | --- | --- |
-| `paragraph` | 连接段落，最多 6,000 个 Unicode 字符。 |
-| `callout` | note、tip 或 warning；正文最多 3,000 字符。 |
-| `steps` | 1–12 个阶段；可选短标签、受控图标；单项正文最多 3,000 字符。 |
-| `comparison` | 2–4 个选项、1–16 个对比维度；每行值数与选项数一致。 |
-| `metrics` | 1–6 个有来源的值，含单位和可选背景说明。 |
-| `table` | 1–8 列、1–40 行；每行列数一致；不承载无限数据集。 |
-| `details` | 补充说明；Web 可折叠，TUI 与复制内容保留完整正文。 |
+| `paragraph` | 富内容内部的连接文字，最多 6,000 个 Unicode 字符。 |
+| `callout` | note、tip 或 warning，正文最多 3,000 字符。 |
+| `steps` | 1–12 个说明阶段，可选短标签与受控图标；不是任务执行状态。 |
+| `comparison` | 2–4 个选项、1–16 个对比维度，每行值数必须一致。 |
+| `metrics` | 1–6 个有依据的值，带单位与可选背景。 |
+| `table` | 1–8 列、1–40 行，不用来承载无限数据集。 |
+| `details` | Web 可折叠；TUI 与复制保留完整内容。 |
 | `chart` | line、bar、area、pie；1–128 个分类标签、1–6 个序列。 |
 
-图表的 X 轴是分类序列，不是任意数值 X／不等间隔时间轴。空值 `null` 表示缺失，
-不能当成零值；饼图只接受单个非负序列且至少有一个正值。TUI 用包含单位的精确数据表
-表达图表内容。不要虚构数值；演示数据必须标明为演示，来源与不确定性不能被视觉排版省略。
+文档内部文本字段是纯文本，不编译 HTML、Markdown 模板或代码；普通回答正文仍是 Markdown。
+图表的 X 轴是分类序列，不是数值散点图或不等间隔时间轴。`null` 表示缺失，不等于零。
+饼图需要单个非负序列且至少有一个正值。演示数据必须明确标注，不得虚构测量或进度。
 
-所有文本字段均为**纯文本**，不是 HTML、Markdown、模板或代码。
-文档必须为 `version: 1`，包含 1–24 个块，序列化后不超过 60 KiB。
-此上限为运行时的 64 KiB 内联结果预算保留包装与元数据空间，避免历史内容被转存为不再可直接渲染的分页结果。
-块 ID 在文档内唯一，由 1–80 个 ASCII 字母、数字、下划线或连字符组成。
-标题最多 160 字符；服务端拒绝未知字段、未知版本、终端控制字符以及越界数据。
+文档 `version: 1`，1–24 个块，序列化上限 60 KiB，为运行时 64 KiB 的内联结果预算预留包装空间。
+块 ID 在文档内唯一，1–80 个 ASCII 字母、数字、下划线或连字符。单个回答最多解析 32 个引用。
+所有输入仍经过 Rust 的权威校验和 Web 的防御校验。
 
-## Web、TUI 和复制
+## 持久化、权限与回放
 
-Web 使用与正文一致的字体、主题和间距，减少不必要的卡片边框。
-步骤是有序列表；表格使用真实表格语义；窄屏表格在自己的容器中滚动；说明可用键盘展开。
-展示本身不使用 iframe，不执行模型生成的脚本，不访问声明以外的数据源。
-图表保留悬停、图例、原始数据和 SVG 导出等局部交互。
+准备后的文档只保存在该工具调用的 `RawOutput.payload.inline_ui_prepared`，不另存一套可变 Registry。
+引用由持久化工具 ID 和随机后缀组成；服务端验证调用已成功、所属工具正确、保存的后缀完全匹配。
+读取使用 `KernelReader.tool(current_session, tool_id)`，沿用会话成员关系授权，不使用全局 ID 查表绕过权限。
+分支继承可见历史时使用当前分支的成员关系，不将 origin session 当作访问捷径。
 
-富内容不藏在工具折叠区内。原始调用仍可通过“查看原始结果”检查，错误也不会被伪装成成功。
-TUI 在工具折叠时同样显示完整讲解，用现有终端排版支持标题、步骤和表格。
-复制操作使用语义投影，不从 DOM 抓取布局；共享 fixture 验证 Web 与 Rust 的复制内容完全一致。
-终端导出包含折叠说明与图表的完整数据。
+需要修订时再次准备并获得新引用；旧回答保持旧内容。读取、渲染、复制不修改工具结果、不重启服务。
+即使历史分页尚未载入原工具消息，仍可通过当前会话的授权引用接口恢复内容：
 
-生成过程使用正常工具调用的生命周期，待文档完整校验成功后发布。不会把半个 JSON
-当成可交互界面，也不声称支持任意 token 级的组件流式渲染。
+```text
+GET /api/v1/sessions/{session_id}/inline-ui/{reference}
+```
 
-## 架构与历史兼容
+接口返回 `Cache-Control: private, no-store`。前端不维护跨会话的全局引用缓存，切换会话时取消旧请求。
+真实存储测试覆盖未完成调用、无关会话、错误后缀、伪装工具、重复读取不写入。
 
-持久化唯一事实源仍是工具 `RawOutput`，`inline_ui` 数据由 Rust 类型定义。
-`ViewBlock::InlineUi` 是读时投影，不另存一份可覆盖的 App／Surface 记录。
-版本号是内容协议版本，不是一个可变应用版本；历史消息不能因为重新挂载而覆盖新消息。
+## 文本流、TUI 与复制导出
 
-TypeScript 类型由 `agena-web-types` 从 Rust Schema 生成；Web 入口另做有边界的防御式校验。
-后端只为 `agena.inline_ui.present`／正常解析后的 `inline_ui.present` 生成该富内容投影。
-`guide` 和 `validate` 的结果保留普通工具展示，不会误发布为回答内容。
+原始正文和 UTF-8 字节游标始终保持不变。`ContentPage` / `ContentTextPage` 可携带可选 `inline_ui`
+旁路数据，保存已经过当前会话授权的引用文档。服务端与 Web／TUI 客户端应一起更新，旧版严格解码客户端不支持这个新增传输字段。标记跨网络页面时，服务端用有限的字节回看恢复引用，
+不是修改文本长度再伪造游标。未加载原工具记录不影响正文显示。
 
-旧的 `agena-chart` 和 `agena-ui` 消息继续使用原有只读解析／应用实现以兼容历史；
-新系统提示不再要求生成这些围栏。图表展示实现已迁移到 `features/inlineUi`，
-历史 chart parser 通过 re-export 使用相同的图表实现。
-原有 Interactive App／Web Preview 功能未改造成 Inline Generative UI，二者职责保持分离。
+Web 将正文拆成原样的 Markdown 片段与引用组件。TUI 在读时将引用替换为语义 Markdown：
+步骤、对比、提示保持清晰，图表以精确数据表呈现。终端流式缓冲仍按原始字节合并，只有显示投影展开引用。
 
-## 开发与验证
+整条回答复制按正文顺序展开引用，保留前后文字，不把准备工具结果额外复制一次。
+原始 SDK `write_part_text` / `write_content_text` 保持返回原始文本；新的 `write_reply_part_text` /
+`write_reply_content_text` 用于面向读者的复制和导出。后者收集一份固定文本快照以保持跨页 Markdown
+边界，再展开授权引用，不会让网络分块改变代码示例的含义。超大原始输出仍可走原有流式接口。
+
+## 历史兼容
+
+先前版本的 `inline_ui.present` 结果保留旧的读时渲染，以免破坏已保存的对话；新工具目录只引导 `prepare`。
+旧 `agena-chart`、`agena-ui` 消息也继续兼容。新系统提示不再要求输出 JSON 围栏。
+Web Preview 与运行中的项目仍然独立，不因这次改动变成回答组件。
+
+## 验证
 
 ```sh
 cargo test -p agena-domain -p agena-bundled-plugins -p agena-runtime-tools \
-  -p agena-tui-transcript -p agena-web-types inline_ui --offline
-cargo run -p agena-web-types --offline > /tmp/agenaState.ts
-cmp /tmp/agenaState.ts packages/agena-web/src/generated/agenaState.ts
-cargo run -p agena-domain --example inline_ui_markdown --offline > /tmp/inline-ui.md
-cmp /tmp/inline-ui.md examples/inline-ui/reply.md
+  -p agena-tui-transcript -p agena-application inline_ui --offline
+cargo test -p agena-runtime-session --lib session_prompt --offline
+cargo check -p agena --all-targets --offline
 
 cd packages/agena-web
-bun run test:inline-ui
-bun run typecheck
+bun test ./tests
 bun run build
-```
-
-浏览器检查使用独立 Vite 服务、示例数据和真实聊天组件，不启动模型，不连接正在运行的
-Agena 服务。安装 Playwright 后运行；也可以通过 `PLAYWRIGHT_MODULE` 指向现有安装：
-
-```sh
 PLAYWRIGHT_MODULE=/path/to/playwright CHROME_BIN=/path/to/chrome bun run test:inline-ui:browser
 ```
 
-覆盖折叠工具、8 类内容、键盘操作、相同块 ID 更新时保留展开状态、浅／深色主题、
-375px 窄屏、复制一致性、恶意文本不执行，以及展示时不产生后端请求或写入。
-截图与检查记录输出到 `artifacts/inline-ui/`（忽略提交），可用 `INLINE_UI_ARTIFACTS` 指定路径。
+共享样例 `examples/inline-ui/references.json` 覆盖正常引用及代码、引用块、列表、HTML、CRLF、
+重复标记和未完成流式标记。真实存储测试检查会话授权、不可变结果和 4 字节分页下的引用恢复。
+浏览器检查渲染真实最终回答组件，覆盖正文中两个 UI 与文字交错、准备结果不重复显示、完整回答复制、
+代码／用户示例保持原文、历史缺少工具缓存、跨页 SSE、会话切换、浅／深色和 375px 窄屏。
+截图及结果保存在忽略提交的 `artifacts/inline-ui/body-*`。
 
-新增或调整类型时同时更新 Rust 校验、Web 防御校验、共享样例及复制契约测试，
-再重新生成前端类型、bundled capability identity snapshot 与 tools reference。
+变更工具定义后须重新生成 bundled capability identity snapshot 和 tools reference。
+Rust 类型仍是文档 Schema 的唯一来源，前端类型由 `agena-web-types` 生成。

@@ -1,5 +1,6 @@
 export default {
   inlineUi: {
+    referenceUnavailable: "المحتوى المشار إليه غير متاح في هذه المحادثة.",
     "label": "إجابة غنية",
     "comparison": "مقارنة",
     "dimension": "المعيار",

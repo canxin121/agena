@@ -439,6 +439,14 @@ pub fn router(state: AppState) -> Router {
                 get(rest::stream_content),
             )
             .route(
+                "/api/v1/sessions/{session_id}/inline-ui/{reference}/live",
+                get(rest::read_inline_ui_snapshot),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/inline-ui/{reference}/stream",
+                get(rest::stream_inline_ui),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/inline-ui/{reference}",
                 get(rest::read_inline_ui_reference),
             )

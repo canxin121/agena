@@ -8,7 +8,7 @@ The AI's normal Markdown answer determines its exact position.
 1. `guide()` gives this short overview.
 2. `guide(topic="steps")` (or one other kind) gives only its schema and example.
 3. `validate(document=...)` optionally checks input, without preparing or displaying it.
-4. `prepare(document=...)` saves an immutable tool result and returns `reference` and
+4. `prepare(document=...)` creates a revisioned UI and returns `reference` and
    `embed`. Copy `embed` exactly into the normal answer, at the intended position.
 
 The answer should look like this (REFERENCE is a placeholder, never invent it):
@@ -29,10 +29,11 @@ that block, never the document JSON. Do not wrap it in an additional code fence,
 quote, list or inline code: those show an example instead of embedding the UI.
 The opening and closing backtick fences must both be present.
 
-Do not leave the block out of the final answer: without it, prepared content
-remains only a tool result, not visible UI. You can place several blocks between
-ordinary paragraphs. Normal Markdown formatting, links and citations stay in the
-surrounding prose. Only `inline-ui` reference fences are supported. Bracket
+Include the block once in visible reply text: without it, prepared content is
+only a tool result, not visible UI. For ongoing work, emit it early in commentary
+before updates; do not repeat the same interface in the final answer. Several
+different blocks can appear between ordinary paragraphs. Normal Markdown links,
+formatting and citations stay in the surrounding prose. Only `inline-ui` reference fences are supported. Bracket
 markers, `agena-chart` / `agena-ui` JSON fences and the old `present` workflow
 are not supported. They do not render rich reply content.
 
@@ -54,10 +55,20 @@ surrounding answer. Label illustrative data. Prefer prose when structure adds no
 
 Documents have `version: 1`, an optional title, 1–24 ordered blocks with unique
 ASCII ids, and a 60 KiB serialized limit. Use at most 32 references per answer.
-References are immutable and scoped to conversation membership; never guess, edit,
-or copy a reference from an unrelated conversation. Preparing a revision produces
-a new reference; old answers keep their original content.
+References are stable and scoped to their originating conversation. Updates use
+expected_revision and keep the same reference; never guess or borrow unrelated IDs.
+Prepared tool results remain immutable, while the explicit live head is revisioned.
 
 No HTML, JS, callbacks, commands, network bindings, services or independent apps.
 Web Preview remains separate. Invalid input creates no reference. Missing references
 show a readable fallback, and quoted/code examples never execute or embed.
+
+
+## Stateful and live interfaces
+
+Use `panel` for a composable, stateful interface rather than a static passage.
+Discover progressively: `guide(topic="layout")` for components, `state` for
+bindings/computed expressions, `actions` for local interactions, `live` for
+revisioned agent updates, then `panel` for the exact schema and a full example.
+Show the fence early while working. `read` inspects the current revision;
+`update` changes the same displayed UI without replacing the user's local inputs.

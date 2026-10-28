@@ -1,3 +1,4 @@
+import { validateUiProgram, renderUi, uiMarkdown, type UiState } from './program'
 import type { InlineDocument, InlineBlock } from '@/generated/agenaState'
 export type { InlineDocument, InlineBlock } from '@/generated/agenaState'
 
@@ -59,6 +60,10 @@ export function parseInlineDocument(value: unknown): InlineDocument {
     ids.add(b.id as string)
     optional(b.title, `${p}.title`, 160)
     switch (b.type) {
+      case 'panel':
+        object(b, p, ['type', 'id', 'program'])
+        validateUiProgram(b.program)
+        break
       case 'paragraph':
         object(b, p, ['type', 'id', 'text'])
         text(b.text, `${p}.text`, 6000)
@@ -165,12 +170,15 @@ function table(columns: string[], rows: string[][]): string {
 }
 
 /** Shared semantics with InlineDocument::to_markdown; never copy DOM layout. */
-export function inlineDocumentMarkdown(document: InlineDocument): string {
+export function inlineDocumentMarkdown(document: InlineDocument, panelStates: Record<string, UiState> = {}): string {
   const sections = document.title ? [`### ${escape(document.title)}`] : []
   for (const block of document.blocks) {
     let title = 'title' in block ? block.title || '' : '',
       body = ''
     switch (block.type) {
+      case 'panel':
+        body = uiMarkdown(renderUi(block.program, panelStates[block.id] || {}))
+        break
       case 'paragraph':
       case 'details':
         body = escape(block.text)

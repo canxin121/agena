@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "إعادة تعيين المعلمات",
+    noData: "لا توجد بيانات لهذا الاختيار.",
+    invalidInput: "تعذر تطبيق هذا الإدخال.",
+    working: "تحديث مباشر",
+    complete: "مكتمل",
+    error: "بحاجة للمراجعة",
+    reconnecting: "جارٍ إعادة الاتصال…",
+    revision: "الإصدار",
+
     referenceUnavailable: "المحتوى المشار إليه غير متاح في هذه المحادثة.",
     "label": "إجابة غنية",
     "comparison": "مقارنة",

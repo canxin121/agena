@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "Redefinir parâmetros",
+    noData: "Sem dados para esta seleção.",
+    invalidInput: "Não foi possível aplicar esta entrada.",
+    working: "Ao vivo",
+    complete: "Concluído",
+    error: "Requer atenção",
+    reconnecting: "Reconectando…",
+    revision: "Revisão",
+
     referenceUnavailable: "O conteúdo desta referência não está disponível nesta conversa.",
     "label": "Resposta enriquecida",
     "comparison": "Comparação",

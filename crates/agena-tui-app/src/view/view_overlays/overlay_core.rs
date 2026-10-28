@@ -13,6 +13,7 @@ impl App {
         };
 
         match overlay {
+            Overlay::InlineUi(dialog) => self.render_inline_ui_overlay(frame, area, dialog),
             Overlay::HubProject(dialog) => {
                 // Errors remain visible even when a long server path needs
                 // more prompt rows than this terminal can accommodate.

@@ -3185,3 +3185,21 @@ exit-menu-cancel = Cancel (Zurück)
 exit-menu-cancel-detail = Zur TUI zurückkehren ohne Abbruch.
 exit-menu-stopping = Warte auf die Bestätigung des Servers ...
 context-help-key-exit-menu = Beenden-Menü öffnen (trennen, stoppen oder zurück).
+
+# Stateful inline reply controls
+command-inline-ui-summary = Interaktive Oberfläche dieser Unterhaltung öffnen.
+inline-ui-title = Interaktive Antwort
+inline-ui-controls = Steuerelemente
+inline-ui-loading = Oberfläche wird geladen…
+inline-ui-no-content = Zuerst eine Antwort mit inline-ui-Referenz öffnen.
+inline-ui-invalid-number = Eine gültige Zahl im zulässigen Bereich eingeben.
+inline-ui-copied = Aktuelle Zusammenfassung kopiert.
+inline-ui-edit = Bearbeiten
+inline-ui-keys = Tab: Fokus · ←/→: ändern · Leertaste: umschalten · Enter: ausführen/bearbeiten · PgUp/PgDn: blättern · Esc: schließen
+inline-ui-control-changed = Dieses Steuerelement wurde während der Eingabe geändert. Bitte erneut auswählen.
+
+inline-ui-working = Aktualisierung
+inline-ui-complete = Fertig
+inline-ui-error = Prüfen
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R setzt lokale Eingaben zurück.

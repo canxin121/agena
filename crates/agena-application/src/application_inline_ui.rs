@@ -3,9 +3,10 @@
 //! process-global UI registry. Reads do not invoke plugins or write anything.
 use crate::{Application, ApplicationError};
 use agena_domain::{
-    InlineDocument, InlineUiReferences, PreparedInlineUi, inline_reference_candidates,
-    inline_reference_tool_id, is_inline_ui_prepare_tool,
+    InlineDocument, InlineSnapshot, InlineUiReferences, PreparedInlineUi,
+    inline_reference_candidates, inline_reference_tool_id, is_inline_ui_prepare_tool,
 };
+use agena_runtime::plugins::inline_ui::InlineUiStore;
 use agena_storage::kernel::{KernelError, KernelReader, SessionId, ToolPhase};
 
 pub(crate) async fn resolve_inline_reference(
@@ -13,6 +14,21 @@ pub(crate) async fn resolve_inline_reference(
     session: SessionId,
     reference: &str,
 ) -> Result<Option<InlineDocument>, KernelError> {
+    Ok(
+        resolve_inline_snapshot(reader, session, reference, InlineUiStore::default())
+            .await?
+            .map(|snapshot| snapshot.document),
+    )
+}
+
+/// One authorization check and one atomic snapshot read. Keeping revision and
+/// content together avoids mixing two live heads when an update races a read.
+async fn resolve_inline_snapshot(
+    reader: &KernelReader,
+    session: SessionId,
+    reference: &str,
+    store: InlineUiStore,
+) -> Result<Option<InlineSnapshot>, KernelError> {
     let Some(id) = inline_reference_tool_id(reference) else {
         return Ok(None);
     };
@@ -48,7 +64,19 @@ pub(crate) async fn resolve_inline_reference(
     if prepared.reference != reference || prepared.validate().is_err() {
         return Ok(None);
     }
-    Ok(Some(prepared.document))
+    let reference_owned = reference.to_owned();
+    let live = tokio::task::spawn_blocking(move || store.read(session.get(), &reference_owned))
+        .await
+        .map_err(|error| KernelError::Storage(error.to_string()))?
+        .map_err(|error| KernelError::Storage(error.to_string()))?;
+    Ok(Some(live.unwrap_or(InlineSnapshot {
+        reference: reference.into(),
+        revision: 1,
+        phase: agena_domain::InlinePhase::Complete,
+        updated_at_ms: 0,
+        last_call_id: id,
+        document: prepared.document,
+    })))
 }
 
 /// A sidecar for assistant text. Parsing code/quotation boundaries belongs to
@@ -83,6 +111,37 @@ impl Application {
             .ok_or_else(|| {
                 ApplicationError::not_found("Inline content is unavailable in this conversation.")
             })
+    }
+    /// A versioned snapshot; access is checked against the originating tool's
+    /// membership before touching any private live state.
+    pub async fn read_inline_ui_snapshot(
+        &self,
+        session_id: i64,
+        reference: &str,
+    ) -> Result<agena_domain::InlineSnapshot, ApplicationError> {
+        let session = crate::kernel_session_id(session_id)?;
+        resolve_inline_snapshot(
+            &self.session_kernel()?.reader,
+            session,
+            reference,
+            InlineUiStore::default(),
+        )
+        .await
+        .map_err(crate::kernel_error)?
+        .ok_or_else(|| {
+            ApplicationError::not_found("Inline content is unavailable in this conversation.")
+        })
+    }
+    pub async fn watch_inline_ui(
+        &self,
+        session_id: i64,
+        reference: &str,
+    ) -> Result<agena_runtime::plugins::inline_ui::InlineUiSubscription, ApplicationError> {
+        let subscription = agena_runtime::plugins::inline_ui::InlineUiStore::default()
+            .subscribe(session_id, reference)
+            .map_err(|error| ApplicationError::internal_error(&error))?;
+        self.read_inline_ui_reference(session_id, reference).await?;
+        Ok(subscription)
     }
 }
 

@@ -1,3 +1,6 @@
+import { inlineDocumentMarkdown } from './model'
+import { readProgramStates } from './programState'
+import { currentInlineSnapshot, inlineScope } from './live'
 import { apiJson } from '@/lib/api'
 import { readContent, type ContentPage } from '@/lib/content'
 import { readContentForCopy } from '@/lib/contentCopy'
@@ -63,6 +66,8 @@ export async function replyTextForCopy<T extends ReplyCopyPart>(
         ...new Set(splitInlineReferences(text).flatMap((s) => (s.kind === 'reference' ? [s.reference] : []))),
       ]
       for (const reference of references) {
+        const current = sessionId ? currentInlineSnapshot(sessionId, reference) : undefined
+        if (current) documents[reference] = current.document
         if (documents[reference] || !sessionId) continue
         try {
           documents[reference] = await readInlineReference(sessionId, reference)
@@ -70,7 +75,12 @@ export async function replyTextForCopy<T extends ReplyCopyPart>(
           /* explicit fallback below */
         }
       }
-      text = expandInlineReferences(text, documents)
+      text = expandInlineReferences(text, documents, false, (document, reference) =>
+        inlineDocumentMarkdown(
+          document,
+          sessionId ? readProgramStates(inlineScope(sessionId, reference), document) : {},
+        ),
+      )
     }
     if (text.trim()) sections.push(text)
   }

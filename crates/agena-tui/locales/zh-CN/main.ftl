@@ -2713,3 +2713,21 @@ exit-menu-cancel = Cancel（返回）
 exit-menu-cancel-detail = 返回 TUI，AI 工作不受影响。
 exit-menu-stopping = 正在等待 server 确认取消请求…
 context-help-key-exit-menu = 打开退出菜单：断开连接、终止并退出或返回。
+
+# Stateful inline reply controls
+command-inline-ui-summary = 打开当前会话中的交互界面。
+inline-ui-title = 交互式回复
+inline-ui-controls = 操作控件
+inline-ui-loading = 正在读取实时界面…
+inline-ui-no-content = 当前没有可操作的富内容。请先打开含 inline-ui 引用的回复。
+inline-ui-invalid-number = 请输入控件范围内的有效数字。
+inline-ui-copied = 已复制当前界面摘要。
+inline-ui-edit = 编辑
+inline-ui-keys = Tab/Shift+Tab 切换控件 · ←/→ 调整 · 空格 勾选 · Enter 操作/编辑 · PgUp/PgDn 滚动 · Esc 关闭
+inline-ui-control-changed = 这个控件在编辑期间发生变化，请重新选择。
+
+inline-ui-working = 可实时更新
+inline-ui-complete = 已完成
+inline-ui-error = 需要关注
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R 恢复本地初始参数。

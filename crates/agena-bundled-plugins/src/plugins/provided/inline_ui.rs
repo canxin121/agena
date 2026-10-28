@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub(crate) const INLINE_UI_PLUGIN_ID: &str = "agena.inline_ui";
-pub(crate) struct InlineUiPlugin;
+pub(crate) struct InlineUiPlugin {
+    store: agena_runtime_plugins::plugins::inline_ui::InlineUiStore,
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +26,11 @@ enum GuideTopic {
     Table,
     Details,
     Chart,
+    Panel,
+    Layout,
+    State,
+    Actions,
+    Live,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
@@ -42,9 +49,20 @@ struct PrepareInput {
     document: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+struct ReadInput {
+    reference: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+struct UpdateInput {
+    update: agena_domain::InlineUpdate,
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "inline_ui", version = env!("CARGO_PKG_VERSION"),
-    summary = "Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare.",
+    summary = "Inline Generative UI: composable, stateful interfaces and live work updates inside answers. Start with guide; discover layout/state/actions/live progressively, then prepare/read/update.",
     translations(
         locale("zh-CN", summary = "内嵌式生成 UI：在回复中表达步骤、对比、重点与数据。先读 guide，再按需查询类型并 prepare。"),
         locale("zh-TW", summary = "內嵌式生成 UI：在回覆中表達步驟、比較、重點與資料。先讀 guide，再按需查詢並 prepare。"),
@@ -60,7 +78,9 @@ struct PrepareInput {
 )]
 impl InlineUiPlugin {
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            store: Default::default(),
+        }
     }
 
     #[tool(
@@ -100,15 +120,28 @@ impl InlineUiPlugin {
         )
     )]
     async fn guide(&self, input: &GuideInput) -> SdkResult<ToolInvokeOutput> {
+        let specialized = match input.topic {
+            GuideTopic::Layout => Some(include_str!("inline_ui/layout.md")),
+            GuideTopic::State => Some(include_str!("inline_ui/state.md")),
+            GuideTopic::Actions => Some(include_str!("inline_ui/actions.md")),
+            GuideTopic::Live => Some(include_str!("inline_ui/live.md")),
+            _ => None,
+        };
+        if let Some(text) = specialized {
+            return Ok(ToolInvokeOutput::text(text));
+        }
         if matches!(input.topic, GuideTopic::Overview) {
             return Ok(ToolInvokeOutput::text(include_str!("inline_ui/guide.md")));
         }
         let kind = serde_json::to_value(input.topic)
             .map_err(|error| PluginError::internal_error(&error))?;
         let kind = kind.as_str().unwrap_or("overview");
-        let sample: Value =
-            serde_json::from_str(include_str!("../../../../../examples/inline-ui/reply.json"))
-                .map_err(|error| PluginError::internal_error(&error))?;
+        let sample: Value = serde_json::from_str(if matches!(input.topic, GuideTopic::Panel) {
+            include_str!("../../../../../examples/inline-ui/live-dashboard.json")
+        } else {
+            include_str!("../../../../../examples/inline-ui/reply.json")
+        })
+        .map_err(|error| PluginError::internal_error(&error))?;
         let block = sample["blocks"]
             .as_array()
             .and_then(|blocks| blocks.iter().find(|b| b["type"] == kind))
@@ -119,7 +152,7 @@ impl InlineUiPlugin {
             format!("Inline Generative UI · {kind}"),
             format!("{kind}: schema and complete example"),
             format!(
-                "# Inline Generative UI: {kind}\n\nPrepare with {INLINE_UI_TOOL}(document=...). This tool does NOT display content. Paste its entire returned inline-ui fenced block unchanged between paragraphs in your normal Markdown answer. The fence contains only the reference ID. Do not wrap it in an additional code fence. Do not print the document JSON. Text fields are plain text and each prepared document is immutable.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
+                "# Inline Generative UI: {kind}\n\nPrepare with {INLINE_UI_TOOL}(document=...). This tool does NOT display content. Paste its entire returned inline-ui fenced block unchanged between paragraphs in your normal Markdown answer. The fence contains only the reference ID. Do not wrap it in an additional code fence. Do not print the document JSON. Text fields are plain text. Use read/update for versioned live changes; user-local state remains separate.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
                 serde_json::to_string_pretty(&schema)
                     .map_err(|error| PluginError::internal_error(&error))?,
                 serde_json::to_string_pretty(&example)
@@ -161,7 +194,7 @@ impl InlineUiPlugin {
         tags(read_only),
         name = "prepare",
         summary = "Prepare immutable rich content and return an embed reference. Insert it at the desired position in your normal answer; this tool does not display the content.",
-        help = "Read guide for the needed kinds. Prepares one immutable passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.",
+        help = "Read guide for the needed kinds. Prepares one versioned passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.",
         translations(
             locale(
                 "zh-CN",
@@ -215,6 +248,16 @@ impl InlineUiPlugin {
             reference: format!("ui_{}_{}", context.call_id, uuid::Uuid::new_v4().simple()),
             document,
         };
+        let store = self.store.clone();
+        let session = context.session_id;
+        let call = context.call_id;
+        let reference = prepared.reference.clone();
+        let document = prepared.document.clone();
+        let snapshot =
+            tokio::task::spawn_blocking(move || store.create(session, &reference, document, call))
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?
+                .map_err(|error| PluginError::internal_error(&error))?;
         let marker = prepared.marker();
         Ok(ToolInvokeOutput::from_parts(
             "Prepared inline content",
@@ -222,10 +265,88 @@ impl InlineUiPlugin {
             format!(
                 "Insert this entire inline-ui fenced block unchanged between prose paragraphs in your normal answer:\n{marker}\nThis preparation has not displayed the content. Do not print the document JSON or wrap the block in another fence."
             ),
-            Some(json!({"inline_ui_prepared": prepared})),
+            Some(json!({"inline_ui_prepared": prepared, "revision": snapshot.revision})),
             Default::default(),
             Vec::new(),
         ))
+    }
+    #[tool(
+        tags(read_only),
+        name = "read",
+        summary = "Read a prepared UI's latest revision and document before editing. User-local selections are not agent data.",
+        translations(
+            locale("zh-CN", summary = "读取当前界面的版本、数据与结构。"),
+            locale("zh-TW", summary = "讀取目前介面的版本、資料與結構。"),
+            locale("ja-JP", summary = "現在のUIリビジョンと内容を読み取ります。"),
+            locale("ko-KR", summary = "현재 UI 버전과 내용을 읽습니다."),
+            locale("fr-FR", summary = "Lire la révision et le contenu de l’interface."),
+            locale("de-DE", summary = "Aktuelle UI-Version und Inhalte lesen."),
+            locale("es-ES", summary = "Lee la revisión y contenido de la interfaz."),
+            locale("hi-IN", summary = "वर्तमान UI संस्करण और सामग्री पढ़ें।"),
+            locale("ar-SA", summary = "اقرأ إصدار الواجهة ومحتواها الحالي."),
+            locale("pt-BR", summary = "Leia a revisão e o conteúdo da interface.")
+        )
+    )]
+    async fn read(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &ReadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let store = self.store.clone();
+        let session = context.session_id;
+        let reference = input.reference.clone();
+        let snapshot = tokio::task::spawn_blocking(move || store.read(session, &reference))
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?
+            .map_err(|error| PluginError::invalid_params_error(&error))?
+            .ok_or_else(|| PluginError::invalid_params("UI not found in the current session"))?;
+        Ok(ToolInvokeOutput::text(
+            serde_json::to_string(&snapshot)
+                .map_err(|error| PluginError::internal_error(&error))?,
+        ))
+    }
+
+    #[tool(
+        tags(mutate),
+        name = "update",
+        summary = "Atomically update the same inline UI while working: data, nodes, complete document or phase. Requires expected_revision; conflicts apply nothing. Existing user input is preserved.",
+        help = "Read guide(topic=live). Display the prepared reference early in the answer, then call update after actual work changes. Prefer a panel patch with block_id and changed data or whole-node upserts. Never invent progress. Use phase=complete when finished. This changes only agent-authored UI content, not the user's local selections or external services.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "按预期版本原子更新已显示界面；保留用户的本地输入。"
+            ),
+            locale("zh-TW", summary = "依預期版本原子更新介面，保留使用者的本地輸入。"),
+            locale("ja-JP", summary = "表示中のUIをリビジョン確認付きで更新します。"),
+            locale("ko-KR", summary = "버전을 확인하고 표시된 UI를 갱신합니다."),
+            locale(
+                "fr-FR",
+                summary = "Mettre à jour l’interface avec contrôle de révision."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die angezeigte Oberfläche revisionsgeprüft aktualisieren."
+            ),
+            locale("es-ES", summary = "Actualiza la interfaz comprobando su revisión."),
+            locale("hi-IN", summary = "संस्करण जाँचकर दिखाई दे रही UI अपडेट करें।"),
+            locale("ar-SA", summary = "حدّث الواجهة مع التحقق من الإصدار."),
+            locale("pt-BR", summary = "Atualize a interface com controle de revisão.")
+        )
+    )]
+    async fn update(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &UpdateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let store = self.store.clone();
+        let session = context.session_id;
+        let call = context.call_id;
+        let update = input.update.clone();
+        let snapshot = tokio::task::spawn_blocking(move || store.update(session, &update, call))
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        Ok(ToolInvokeOutput::text(json!({"updated":true,"reference":snapshot.reference,"revision":snapshot.revision,"phase":snapshot.phase,"message":"Existing embeds update in place. Do not emit another reference or duplicate the UI."}).to_string()))
     }
 }
 
@@ -299,7 +420,10 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn progressive_guides_and_prepare_use_the_same_validated_contract() {
-        let plugin = InlineUiPlugin::new();
+        let directory = tempfile::tempdir().unwrap();
+        let plugin = InlineUiPlugin {
+            store: agena_runtime_plugins::plugins::inline_ui::InlineUiStore::new(directory.path()),
+        };
         let context = ToolInvokeContext {
             tool_name: "prepare",
             session_id: 1,
@@ -322,6 +446,17 @@ mod tests {
         ] {
             let result = plugin.guide(&GuideInput { topic: kind }).await.unwrap();
             assert!(result.output_text.contains("Complete example"));
+            assert!(result.payload.is_none());
+        }
+        for topic in [
+            GuideTopic::Panel,
+            GuideTopic::Layout,
+            GuideTopic::State,
+            GuideTopic::Actions,
+            GuideTopic::Live,
+        ] {
+            let result = plugin.guide(&GuideInput { topic }).await.unwrap();
+            assert!(!result.output_text.is_empty());
             assert!(result.payload.is_none());
         }
         let result = plugin

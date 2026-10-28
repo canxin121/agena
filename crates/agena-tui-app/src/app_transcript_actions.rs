@@ -17,8 +17,13 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
             return;
         };
+        let inline_ui = self.transcript.inline_ui_copy_state();
         self.dispatch_backend_operation(
-            move |application| async move { application.last_assistant_message_text(session_id).await },
+            move |application| async move {
+                application
+                    .last_assistant_message_text(session_id, inline_ui)
+                    .await
+            },
             move |app, result| {
                 if app.transcript.session_id != Some(session_id) {
                     return;
@@ -28,7 +33,9 @@ impl App {
                         text,
                         ui_text::t(&app.i18n, "flash-copied-assistant-message"),
                     ),
-                    Ok(None) => app.flash_warning(ui_text::t(&app.i18n, "flash-no-assistant-message-text")),
+                    Ok(None) => {
+                        app.flash_warning(ui_text::t(&app.i18n, "flash-no-assistant-message-text"))
+                    }
                     Err(error) => app.flash_error(app.i18n.text_args(
                         "flash-clipboard-copy-failed",
                         &agena_tui::fl_args!("error" => error.to_string()),
@@ -81,6 +88,7 @@ impl App {
             i18n: self.i18n.clone(),
             markdown: destination.is_some(),
             destination: destination.clone(),
+            inline_ui: self.transcript.inline_ui_copy_state(),
             pager_context: self
                 .current_lineage_context_parts()
                 .into_iter()

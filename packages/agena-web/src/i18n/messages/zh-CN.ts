@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "恢复初始参数",
+    noData: "当前选择下暂无数据。",
+    invalidInput: "无法应用这次输入。",
+    working: "实时更新中",
+    complete: "已完成",
+    error: "需要关注",
+    reconnecting: "正在重连…",
+    revision: "版本",
+
     referenceUnavailable: "这份引用内容在当前会话中不可用。",
     "label": "富内容回复",
     "comparison": "方案对比",

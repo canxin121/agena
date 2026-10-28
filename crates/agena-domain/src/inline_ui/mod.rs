@@ -3,8 +3,12 @@
 //! Documents are immutable tool results, not applications. They contain no HTML,
 //! executable code, URLs, commands, remote data bindings, or runtime state. Both
 //! clients render the same facts; layout and disclosure remain client-local.
+mod live;
 mod markdown;
+mod program;
 mod references;
+pub use live::*;
+pub use program::*;
 pub use references::*;
 #[cfg(test)]
 mod tests;
@@ -35,6 +39,10 @@ pub struct InlineDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InlineBlock {
+    Panel {
+        id: String,
+        program: UiProgram,
+    },
     Paragraph {
         id: String,
         text: String,
@@ -162,7 +170,8 @@ pub struct InlineSeries {
 impl InlineBlock {
     pub fn id(&self) -> &str {
         match self {
-            Self::Paragraph { id, .. }
+            Self::Panel { id, .. }
+            | Self::Paragraph { id, .. }
             | Self::Callout { id, .. }
             | Self::Steps { id, .. }
             | Self::Comparison { id, .. }
@@ -175,6 +184,7 @@ impl InlineBlock {
 
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::Panel { .. } => "panel",
             Self::Paragraph { .. } => "paragraph",
             Self::Callout { .. } => "callout",
             Self::Steps { .. } => "steps",
@@ -263,6 +273,9 @@ impl InlineDocument {
                 return Err(format!("{path}.id: duplicate id '{id}'"));
             }
             match block {
+                InlineBlock::Panel { program, .. } => program
+                    .validate()
+                    .map_err(|e| format!("{path}.program: {e}"))?,
                 InlineBlock::Paragraph { text: body, .. } => {
                     text(body, &format!("{path}.text"), 6000, true)?
                 }

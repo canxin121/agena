@@ -342,6 +342,7 @@ impl App {
         if changed {
             self.transcript.invalidate_content_render();
         }
+        self.heal_inline_ui_reads();
     }
 }
 

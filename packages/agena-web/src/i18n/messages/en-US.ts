@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "Reset input parameters",
+    noData: "No data for the current selection.",
+    invalidInput: "This input could not be applied.",
+    working: "Live updates",
+    complete: "Complete",
+    error: "Needs attention",
+    reconnecting: "Reconnecting…",
+    revision: "Revision",
+
     referenceUnavailable: "This referenced content is unavailable in this conversation.",
     "label": "Inline Generative UI",
     "comparison": "Comparison",

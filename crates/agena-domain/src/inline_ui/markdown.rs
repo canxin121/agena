@@ -37,12 +37,26 @@ impl InlineDocument {
     /// Lossless readable content for copy/export and terminal Markdown rendering.
     /// Disclosures are expanded; every chart includes its exact source table.
     pub fn to_markdown(&self) -> String {
+        self.to_markdown_with_states(&Default::default())
+    }
+
+    pub fn to_markdown_with_states(
+        &self,
+        states: &std::collections::BTreeMap<String, super::UiState>,
+    ) -> String {
         let mut sections = Vec::new();
         if !self.title.is_empty() {
             sections.push(format!("### {}", escape(&self.title)));
         }
         for block in &self.blocks {
             let (title, body) = match block {
+                InlineBlock::Panel { id, program } => (
+                    "",
+                    match program.render(states.get(id).unwrap_or(&Default::default())) {
+                        Ok(view) => view.to_markdown(),
+                        Err(error) => format!("> UI unavailable: {}", escape(&error)),
+                    },
+                ),
                 InlineBlock::Paragraph { text, .. } => ("", escape(text)),
                 InlineBlock::Callout { title, text, .. } => {
                     let body = text

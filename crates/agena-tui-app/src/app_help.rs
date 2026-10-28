@@ -173,6 +173,9 @@ impl App {
 
     fn help_for_overlay(&self, overlay: &Overlay) -> HelpOverlay {
         match overlay {
+            Overlay::InlineUi(_) => {
+                self.help_for(HelpPreset::Transcript, self.i18n.text("inline-ui-keys"))
+            }
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)
             }

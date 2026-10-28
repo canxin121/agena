@@ -92,6 +92,7 @@ client_command_actions! {
     Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";
+    InlineUi => "inline-ui", "/ui";
     Side => "side", "/side";
     Btw => "btw", "/btw";
 }

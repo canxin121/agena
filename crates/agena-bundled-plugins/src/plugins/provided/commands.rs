@@ -327,6 +327,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-background-summary",
     },
     BuiltInCommand {
+        action: "inline-ui",
+        slash: "/ui",
+        aliases: &["inline-ui"],
+        usage: Some("[reference]"),
+        summary_key: "command-inline-ui-summary",
+    },
+    BuiltInCommand {
         action: "plan",
         slash: "/plan",
         aliases: &["plan-view", "show-plan"],

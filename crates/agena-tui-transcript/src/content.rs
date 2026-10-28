@@ -12,6 +12,9 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ContentFrame {
+    /// Original text and authorized seed docs for client-local live projections.
+    pub source_text: Arc<str>,
+    pub inline_ui: Option<agena_domain::InlineUiReferences>,
     pub resource: ContentResource,
     pub lines: Vec<Line<'static>>,
     pub wrapped: Vec<bool>,
@@ -389,6 +392,8 @@ impl ContentView {
             },
         );
         self.frame = Some(Arc::new(ContentFrame {
+            source_text: Arc::from(self.text.as_str()),
+            inline_ui: self.inline_ui.clone(),
             resource,
             lines,
             wrapped,

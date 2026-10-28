@@ -138,6 +138,15 @@ pub fn inline_reference_spans(text: &str, streaming: bool) -> Vec<InlineReferenc
 /// A readable TUI/copy/export projection. Original bytes and source cursors never
 /// change. Missing/revoked references remain explicit, rather than silently vanish.
 pub fn expand_inline_references(text: &str, refs: &InlineUiReferences, streaming: bool) -> String {
+    expand_inline_references_with(text, refs, streaming, |_, document| document.to_markdown())
+}
+
+pub fn expand_inline_references_with(
+    text: &str,
+    refs: &InlineUiReferences,
+    streaming: bool,
+    mut render: impl FnMut(&str, &InlineDocument) -> String,
+) -> String {
     let spans = inline_reference_spans(text, streaming);
     if spans.is_empty() {
         return text.to_owned();
@@ -148,7 +157,7 @@ pub fn expand_inline_references(text: &str, refs: &InlineUiReferences, streaming
         output.push_str(&text[previous..span.range.start]);
         if let Some(reference) = span.reference {
             if let Some(document) = refs.get(&reference) {
-                output.push_str(&document.to_markdown());
+                output.push_str(&render(&reference, document));
             } else {
                 output.push_str(&format!("> Inline content unavailable ({reference})."));
             }

@@ -102,6 +102,10 @@ export type ActiveExecutionResource = {
 
 export type InlineBlock = {
   id: string
+  program: UiProgram
+  type: 'panel'
+} | {
+  id: string
   text: string
   type: 'paragraph'
 } | {
@@ -176,6 +180,58 @@ export type InlineStep = {
 }
 
 export type InlineTone = 'note' | 'tip' | 'warning'
+
+export type UiAction = {
+  key: string
+  type: 'set'
+  value: JsonValue
+} | {
+  key: string
+  type: 'toggle'
+} | {
+  type: 'reset'
+} | {
+  text: JsonValue
+  type: 'copy'
+}
+
+export type UiKind = 'stack' | 'row' | 'grid' | 'card' | 'text' | 'heading' | 'metric' | 'badge' | 'divider' | 'tabs' | 'select' | 'checkbox' | 'switch' | 'slider' | 'number' | 'input' | 'button' | 'progress' | 'chart' | 'table' | 'tasks' | 'timeline' | 'callout' | 'details'
+
+export type UiNode = {
+  kind: UiKind
+  action?: string | null
+  bind?: string | null
+  children?: string[]
+  id: string
+  props?: Record<string, JsonValue>
+  visible?: JsonValue
+}
+
+export type UiOption = {
+  label: string
+  value: string
+}
+
+export type UiProgram = {
+  actions?: Record<string, UiAction[]>
+  computed?: Record<string, JsonValue>
+  data?: Record<string, JsonValue>
+  nodes: UiNode[]
+  root: string
+  state?: Record<string, UiStateField>
+}
+
+export type UiStateField = {
+  kind: UiStateKind
+  initial: JsonValue
+  max?: number | null
+  max_length?: number
+  min?: number | null
+  options?: UiOption[]
+  step?: number | null
+}
+
+export type UiStateKind = 'boolean' | 'number' | 'text' | 'choice' | 'selection'
 
 /** Current processing state of a session. This is the single client-facing execution state. Durable session facts are derived from durable parts; the optional live execution and workflow payloads are attached by the application service when it has a full execution snapshot. */
 export type SessionState = {

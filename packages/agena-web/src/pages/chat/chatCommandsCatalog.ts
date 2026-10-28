@@ -56,6 +56,7 @@ export const CLIENT_COMMAND_ACTIONS = [
   'queue',
   'background',
   'plan',
+  'inline-ui',
   'side',
   'btw',
 ] as const

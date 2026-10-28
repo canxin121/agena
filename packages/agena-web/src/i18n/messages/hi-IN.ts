@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "इनपुट पैरामीटर रीसेट करें",
+    noData: "इस चयन के लिए डेटा नहीं है।",
+    invalidInput: "यह इनपुट लागू नहीं हो सका।",
+    working: "लाइव अपडेट",
+    complete: "पूर्ण",
+    error: "ध्यान दें",
+    reconnecting: "दोबारा जुड़ रहा है…",
+    revision: "संस्करण",
+
     referenceUnavailable: "यह संदर्भित सामग्री इस बातचीत में उपलब्ध नहीं है।",
     "label": "समृद्ध उत्तर",
     "comparison": "तुलना",

@@ -166,7 +166,10 @@ fn ensure_dir(path: &Path) -> Result<(), PluginStorageError> {
     Ok(())
 }
 
-fn write_secure_file_unlocked(path: &Path, contents: &[u8]) -> Result<(), PluginStorageError> {
+pub(super) fn write_secure_file_unlocked(
+    path: &Path,
+    contents: &[u8],
+) -> Result<(), PluginStorageError> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -250,7 +253,7 @@ fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, P
     Ok(p)
 }
 
-fn namespace_path(
+pub(super) fn namespace_path(
     root: &Path,
     locator: &StorageLocator,
     namespace: &str,

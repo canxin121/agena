@@ -1,0 +1,29 @@
+{
+  "reference": "REPLACE_WITH_PREPARED_REFERENCE",
+  "expected_revision": 1,
+  "patch": {
+    "block_id": "workspace",
+    "data": {
+      "processed": 6,
+      "workLabel": "检查完成",
+      "timeline": [
+        {
+          "id": "start",
+          "title": "开始处理",
+          "detail": "示例事件：数据已载入。"
+        },
+        {
+          "id": "check",
+          "title": "检查数据结构",
+          "detail": "示例事件：正在检查余下数据。"
+        },
+        {
+          "id": "done",
+          "title": "检查完成",
+          "detail": "演示更新：所有记录已完成检查。"
+        }
+      ]
+    }
+  },
+  "phase": "complete"
+}

@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 189 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 191 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -22,7 +22,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
-- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare. (3 tools)
+- [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: composable, stateful interfaces and live work updates inside answers. Start with guide; discover layout/state/actions/live progressively, then prepare/read/update. (5 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
@@ -13522,9 +13522,9 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 
 ## agena.inline_ui
 
-**Version** `0.1.0` · **Tools** 3
+**Version** `0.1.0` · **Tools** 5
 
-Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and charts inside answers. Start with guide, then query only the needed kind and prepare.
+Inline Generative UI: composable, stateful interfaces and live work updates inside answers. Start with guide; discover layout/state/actions/live progressively, then prepare/read/update.
 
 ### guide
 
@@ -13557,7 +13557,12 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
         "metrics",
         "table",
         "details",
-        "chart"
+        "chart",
+        "panel",
+        "layout",
+        "state",
+        "actions",
+        "live"
       ],
       "type": "string",
       "x-agena-order": "000000"
@@ -13584,7 +13589,7 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read guide for the needed kinds. Prepares one immutable passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
+> Read guide for the needed kinds. Prepares one versioned passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -13603,6 +13608,841 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
   },
   "required": [
     "document"
+  ],
+  "type": "object"
+}
+```
+
+### read
+
+`agena.inline_ui.read` · **Summary**: Read a prepared UI's latest revision and document before editing. User-local selections are not agent data.
+
+**Tags**: `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `reference` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "reference": {
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "reference"
+  ],
+  "type": "object"
+}
+```
+
+### update
+
+`agena.inline_ui.update` · **Summary**: Atomically update the same inline UI while working: data, nodes, complete document or phase. Requires expected_revision; conflicts apply nothing. Existing user input is preserved.
+
+**Tags**: `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read guide(topic=live). Display the prepared reference early in the answer, then call update after actual work changes. Prefer a panel patch with block_id and changed data or whole-node upserts. Never invent progress. Use phase=complete when finished. This changes only agent-authored UI content, not the user's local selections or external services.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `update` | `InlineUpdate` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "InlineBlock": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "program": {
+              "$ref": "#/$defs/UiProgram"
+            },
+            "type": {
+              "const": "panel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "program"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "paragraph",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "tone": {
+              "$ref": "#/$defs/InlineTone",
+              "default": "note"
+            },
+            "type": {
+              "const": "callout",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/InlineStep"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "steps",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "rows": {
+              "items": {
+                "$ref": "#/$defs/InlineComparisonRow"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "comparison",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "columns",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/InlineMetric"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "rows": {
+              "items": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "columns",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "details",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "title",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "chart_type": {
+              "$ref": "#/$defs/InlineChartType"
+            },
+            "id": {
+              "type": "string"
+            },
+            "labels": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "series": {
+              "items": {
+                "$ref": "#/$defs/InlineSeries"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "chart",
+              "type": "string"
+            },
+            "x_label": {
+              "type": "string"
+            },
+            "y_label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "title",
+            "chart_type",
+            "labels",
+            "series"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    },
+    "InlineChartType": {
+      "enum": [
+        "line",
+        "bar",
+        "area",
+        "pie"
+      ],
+      "type": "string"
+    },
+    "InlineComparisonRow": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "label",
+        "values"
+      ],
+      "type": "object"
+    },
+    "InlineDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "description": "Ordered semantic content. Each id is unique within this document.",
+          "items": {
+            "$ref": "#/$defs/InlineBlock"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Optional heading for the whole passage, not a separate app/window title.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Protocol version. Currently exactly 1; unknown versions are rejected.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "blocks"
+      ],
+      "type": "object"
+    },
+    "InlineIcon": {
+      "enum": [
+        "number",
+        "shield",
+        "layers",
+        "sparkles",
+        "link",
+        "check",
+        "search",
+        "code"
+      ],
+      "type": "string"
+    },
+    "InlineMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "description": "A supplied fact including its unit. Never an inferred or invented value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "InlinePanelPatch": {
+      "additionalProperties": false,
+      "properties": {
+        "block_id": {
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "default": {},
+          "properties": {},
+          "type": "object"
+        },
+        "nodes": {
+          "default": [],
+          "description": "Whole-node upserts preserve identity and allow incremental layout growth.",
+          "items": {
+            "$ref": "#/$defs/UiNode"
+          },
+          "type": "array"
+        },
+        "remove": {
+          "default": [],
+          "description": "Explicitly remove a subtree. Dangling/duplicate/cyclic references reject\nthe entire transaction, leaving the previous valid revision visible.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "block_id"
+      ],
+      "type": "object"
+    },
+    "InlinePhase": {
+      "enum": [
+        "working",
+        "complete",
+        "error"
+      ],
+      "type": "string"
+    },
+    "InlineSeries": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "values"
+      ],
+      "type": "object"
+    },
+    "InlineStep": {
+      "additionalProperties": false,
+      "properties": {
+        "icon": {
+          "$ref": "#/$defs/InlineIcon",
+          "default": "number"
+        },
+        "label": {
+          "description": "Optional short stage label, such as \"P0\". Does not imply execution status.",
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "text"
+      ],
+      "type": "object"
+    },
+    "InlineTone": {
+      "enum": [
+        "note",
+        "tip",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "InlineUpdate": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InlineDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "patch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InlinePanelPatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InlinePhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "expected_revision"
+      ],
+      "type": "object",
+      "x-agena-order": "000000"
+    },
+    "UiAction": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "set",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "key",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "toggle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "reset",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "text": true,
+            "type": {
+              "const": "copy",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {},
+      "type": "object"
+    },
+    "UiKind": {
+      "enum": [
+        "stack",
+        "row",
+        "grid",
+        "card",
+        "text",
+        "heading",
+        "metric",
+        "badge",
+        "divider",
+        "tabs",
+        "select",
+        "checkbox",
+        "switch",
+        "slider",
+        "number",
+        "input",
+        "button",
+        "progress",
+        "chart",
+        "table",
+        "tasks",
+        "timeline",
+        "callout",
+        "details"
+      ],
+      "type": "string"
+    },
+    "UiNode": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "description": "Explicitly declared local action; not an arbitrary tool or URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bind": {
+          "description": "A typed local state field. Controls write only this field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "children": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/UiKind"
+        },
+        "props": {
+          "additionalProperties": true,
+          "default": {},
+          "properties": {},
+          "type": "object"
+        },
+        "visible": {
+          "description": "Boolean expression; hidden subtrees do not render or accept events."
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "UiOption": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "type": "object"
+    },
+    "UiProgram": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/UiAction"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "properties": {},
+          "type": "object"
+        },
+        "computed": {
+          "additionalProperties": true,
+          "default": {},
+          "properties": {},
+          "type": "object"
+        },
+        "data": {
+          "additionalProperties": true,
+          "default": {},
+          "properties": {},
+          "type": "object"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/UiNode"
+          },
+          "type": "array"
+        },
+        "root": {
+          "type": "string"
+        },
+        "state": {
+          "additionalProperties": {
+            "$ref": "#/$defs/UiStateField"
+          },
+          "default": {},
+          "properties": {},
+          "type": "object"
+        }
+      },
+      "required": [
+        "root",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "UiStateField": {
+      "additionalProperties": false,
+      "properties": {
+        "initial": true,
+        "kind": {
+          "$ref": "#/$defs/UiStateKind"
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_length": {
+          "default": 1024,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UiOption"
+          },
+          "type": "array"
+        },
+        "step": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "initial"
+      ],
+      "type": "object"
+    },
+    "UiStateKind": {
+      "enum": [
+        "boolean",
+        "number",
+        "text",
+        "choice",
+        "selection"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "update": {
+      "$ref": "#/$defs/InlineUpdate"
+    }
+  },
+  "required": [
+    "update"
   ],
   "type": "object"
 }

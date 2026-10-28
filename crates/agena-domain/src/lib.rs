@@ -250,3 +250,12 @@ pub use inline_ui::{
     PreparedInlineUi, expand_inline_references, inline_reference_candidates,
     inline_reference_spans, inline_reference_tool_id, is_inline_ui_prepare_tool,
 };
+
+pub use inline_ui::{
+    UI_MAX_EVALUATION_STEPS, UI_MAX_NODES, UiAction, UiActionResult, UiKind, UiNode, UiOption,
+    UiProgram, UiResolvedNode, UiState, UiStateField, UiStateKind, UiView, ui_identifier,
+};
+
+pub use inline_ui::{InlinePanelPatch, InlinePhase, InlineSnapshot, InlineUpdate};
+
+pub use inline_ui::expand_inline_references_with;

@@ -1014,6 +1014,7 @@ pub(super) type UiResult<T> = std::result::Result<T, UiFailure>;
 
 #[derive(Debug, Clone)]
 pub(super) enum Overlay {
+    InlineUi(crate::app_inline_ui::InlineUiDialog),
     TranscriptSearch(LineInputOverlay),
     TranscriptFoldLoad(crate::app_transcript_fold::FoldLoadDialog),
     SessionRename(LineInputOverlay),

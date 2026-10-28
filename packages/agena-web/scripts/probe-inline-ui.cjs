@@ -111,6 +111,26 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
               const url = new URL(req.url, 'http://fixture')
               if (/^\/(api|auth|health)(\/|\?|$)/.test(req.url || '')) {
                 apiRequests.push(req.url)
+                const live = /^\/api\/v1\/sessions\/(\d+)\/inline-ui\/([^/]+)\/stream$/.exec(url.pathname)
+                if (live && live[1] === '42' && refs[live[2]]) {
+                  res.setHeader('Content-Type', 'text/event-stream')
+                  res.setHeader('Cache-Control', 'no-store')
+                  res.write(
+                    'event: inline_ui\ndata: ' +
+                      JSON.stringify({
+                        reference: live[2],
+                        revision: 1,
+                        phase: 'complete',
+                        updated_at_ms: 0,
+                        last_call_id: 123,
+                        document: refs[live[2]],
+                      }) +
+                      '\n\n',
+                  )
+                  const timer = setInterval(() => res.write(': alive\n\n'), 1000)
+                  req.on('close', () => clearInterval(timer))
+                  return
+                }
                 const match = /^\/api\/v1\/sessions\/(\d+)\/inline-ui\/(.+)$/.exec(url.pathname)
                 if (match && match[1] === '42' && refs[match[2]]) {
                   res.setHeader('Content-Type', 'application/json')
@@ -160,7 +180,7 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     page.on('pageerror', (error) => errors.push(error.message))
     page.on('request', (request) => requests.push({ url: request.url(), method: request.method() }))
     await page.route('**/*', (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()))
-    await page.goto(origin + '/__inline-ui-probe', { waitUntil: 'networkidle' })
+    await page.goto(origin + '/__inline-ui-probe', { waitUntil: 'domcontentloaded' })
     await page.locator('[data-inline-embed]').nth(1).waitFor({ timeout: 60000 })
     assert.equal(await page.locator('[data-inline-reply]').count(), 2, 'only body references display rich content')
     assert.equal(await page.locator('[data-inline-kind]').count(), 8)
@@ -199,7 +219,10 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.setViewportSize({ width: 375, height: 812 })
     await page.screenshot({ path: path.join(output, 'body-mobile-dark.png'), fullPage: true })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
-    assert.deepEqual(apiRequests, [], 'prepared data sidecars replay without reads/writes')
+    assert(
+      apiRequests.every((url) => url.endsWith('/stream') && url.includes('/inline-ui/')),
+      'display performs only authorized live subscriptions',
+    )
     // Removed formats must stay source, even when the matching document is loaded.
     const obsolete =
       `[[inline-ui:${one}]]\n\n` +
@@ -213,7 +236,10 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.waitForFunction(() => document.querySelectorAll('[data-inline-embed]').length === 0)
     assert.equal(await page.locator('[data-inline-reply]').count(), 0)
     assert.equal(await page.locator('iframe').count(), 0)
-    assert.deepEqual(apiRequests, [], 'obsolete syntax must not fetch content or launch an application')
+    assert(
+      apiRequests.every((url) => url.endsWith('/stream') && url.includes('/inline-ui/')),
+      'obsolete syntax must not fetch content or launch an application',
+    )
     await page.locator('[data-probe-copy]').click()
     await page.waitForFunction(async (expected) => (await navigator.clipboard.readText()) === expected, obsolete)
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), obsolete)
@@ -253,6 +279,9 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
       await page.evaluate(() => window.__inlineProbe.expectedCopy()),
     )
     // Changing sessions must not retain resolved content from the previous session.
+    const denied = page.waitForResponse(
+      (response) => response.url().includes('/api/v1/sessions/43/inline-ui/') && response.status() === 404,
+    )
     await page.evaluate((body) => {
       window.__inlineProbe.setSourceMode(false)
       window.__inlineProbe.setBody(body)
@@ -262,6 +291,13 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
       () =>
         document.querySelectorAll('[data-inline-reply]').length === 0 &&
         document.querySelectorAll('[data-inline-embed] [role="status"]').length === 2,
+    )
+    await page.locator('[data-inline-embed]').first().scrollIntoViewIfNeeded()
+    await denied
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('[data-inline-embed] [role="status"]')).some((node) =>
+        node.textContent.includes('这份引用内容在当前会话中不可用'),
+      ),
     )
     assert(apiRequests.some((url) => url.startsWith('/api/v1/sessions/43/inline-ui/')))
     assert.deepEqual(

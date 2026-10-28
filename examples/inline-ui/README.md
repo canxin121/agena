@@ -34,3 +34,15 @@ content limits, authorization, architecture and verification commands.
 
 Only `inline-ui` reference fences are supported. There is no legacy bracket,
 `present` auto-rendering, or JSON-fence compatibility path.
+
+
+## Stateful live example
+
+`live-dashboard.json` is a 45-node dashboard with overview/tasks/simulation tabs,
+shared filtering, task state, conditional formulas and derived charts/metrics.
+`live-update.json` demonstrates a revision-checked data update; replace its reference
+with the actual `prepare` result. Show the fence first, then apply updates.
+
+`program-cases.json` is the cross-client behavioral oracle emitted by
+`cargo run -p agena-domain --example inline_ui_program_cases --offline`.
+See [the live runtime guide](../../docs/inline-ui-runtime.md).

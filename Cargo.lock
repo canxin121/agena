@@ -946,6 +946,7 @@ dependencies = [
 name = "agena-runtime-plugins"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
  "agena-failure",
  "agena-plugin-host",
  "agena-plugin-sdk",
@@ -955,8 +956,10 @@ dependencies = [
  "agena-secret-store",
  "agena-storage-layout",
  "async-trait",
+ "chrono",
  "hex",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

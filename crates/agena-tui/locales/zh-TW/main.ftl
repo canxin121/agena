@@ -3090,3 +3090,21 @@ exit-menu-cancel = Cancel（返回）
 exit-menu-cancel-detail = 返回 TUI，不停止 AI 工作。
 exit-menu-stopping = 等待伺服器確認取消請求…
 context-help-key-exit-menu = 開啟離開選單：中斷連線、停止或返回。
+
+# Stateful inline reply controls
+command-inline-ui-summary = 開啟目前對話中的互動介面。
+inline-ui-title = 互動式回覆
+inline-ui-controls = 操作控制項
+inline-ui-loading = 正在讀取即時介面…
+inline-ui-no-content = 目前沒有互動內容，請先開啟包含 inline-ui 引用的回覆。
+inline-ui-invalid-number = 請輸入範圍內的有效數字。
+inline-ui-copied = 已複製目前介面摘要。
+inline-ui-edit = 編輯
+inline-ui-keys = Tab 切換 · ←/→ 調整 · 空白鍵 勾選 · Enter 操作/編輯 · PgUp/PgDn 捲動 · Esc 關閉
+inline-ui-control-changed = 這個控制項在編輯期間已變更，請重新選擇。
+
+inline-ui-working = 可即時更新
+inline-ui-complete = 已完成
+inline-ui-error = 需要關注
+inline-ui-keys-short = Tab · ←/→ · Space · Enter · Esc
+inline-ui-reset-help = Ctrl+R 恢復本地初始參數。

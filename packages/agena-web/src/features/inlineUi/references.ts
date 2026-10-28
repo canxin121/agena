@@ -76,14 +76,22 @@ export function mergeInlineReferences(previous: InlineUiReferences | null, value
   return next
 }
 
-export function expandInlineReferences(content: string, refs: InlineUiReferences, streaming = false): string {
+export function expandInlineReferences(
+  content: string,
+  refs: InlineUiReferences,
+  streaming = false,
+  renderDocument: (document: InlineDocument, reference: string) => string = (document) =>
+    inlineDocumentMarkdown(document),
+): string {
   return splitInlineReferences(content, streaming)
     .map((segment) => {
       if (segment.kind === 'markdown') return segment.content
       if (segment.kind === 'pending-reference') return ''
       const document = refs[segment.reference]
       return (
-        (document ? inlineDocumentMarkdown(document) : `> Inline content unavailable (${segment.reference}).`) + '\n'
+        (document
+          ? renderDocument(document, segment.reference)
+          : `> Inline content unavailable (${segment.reference}).`) + '\n'
       )
     })
     .join('')

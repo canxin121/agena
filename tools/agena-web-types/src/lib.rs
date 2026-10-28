@@ -562,7 +562,12 @@ fn render_node(
         }
         Some(_) => Err("`type` must be a string or an array of strings".to_owned()),
         None => {
-            if object.is_empty() {
+            if object.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "description" | "title" | "default" | "examples" | "$comment"
+                )
+            }) {
                 Ok("JsonValue".to_owned())
             } else {
                 Err(format!(
@@ -712,5 +717,17 @@ mod inline_ui_tests {
         let schema = serde_json::json!({"type":"array", "items":{"type":["number","null"]}});
         let result = super::render(&schema, &Default::default(), 0).unwrap();
         assert_eq!(result, "(number | null)[]");
+    }
+}
+
+#[cfg(test)]
+mod dynamic_ui_schema_tests {
+    #[test]
+    fn annotated_unconstrained_expression_is_json_value() {
+        let schema = serde_json::json!({"description":"A declarative expression","default":null});
+        assert_eq!(
+            super::render(&schema, &Default::default(), 0).unwrap(),
+            "JsonValue"
+        );
     }
 }

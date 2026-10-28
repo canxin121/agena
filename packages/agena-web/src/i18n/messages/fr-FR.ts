@@ -1,5 +1,14 @@
 export default {
   inlineUi: {
+    resetInputs: "Réinitialiser les paramètres",
+    noData: "Aucune donnée pour cette sélection.",
+    invalidInput: "Cette saisie ne peut pas être appliquée.",
+    working: "En direct",
+    complete: "Terminé",
+    error: "À vérifier",
+    reconnecting: "Reconnexion…",
+    revision: "Révision",
+
     referenceUnavailable: "Ce contenu référencé n’est pas disponible dans cette conversation.",
     "label": "Réponse enrichie",
     "comparison": "Comparaison",

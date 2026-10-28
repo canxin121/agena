@@ -254,6 +254,7 @@ impl TranscriptState {
             tool_detail_loads: BTreeMap::new(),
             tool_detail_tasks: BTreeMap::new(),
             content_reads: BTreeMap::new(),
+            inline_reads: BTreeMap::new(),
             tool_detail_pending: BTreeSet::new(),
             tool_detail_allowed_at: BTreeMap::new(),
             tool_detail_failures: BTreeMap::new(),
@@ -311,6 +312,7 @@ impl TranscriptState {
         }
         self.tool_detail_tasks.clear();
         self.content_reads.clear();
+        self.inline_reads.clear();
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
@@ -370,6 +372,7 @@ impl TranscriptState {
         }
         self.tool_detail_tasks.clear();
         self.content_reads.clear();
+        self.inline_reads.clear();
         self.tool_detail_pending.clear();
         self.tool_detail_allowed_at.clear();
         self.tool_detail_failures.clear();
@@ -1543,8 +1546,15 @@ impl TranscriptState {
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
         if self.projected_entries.is_none() {
-            let entries =
-                agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
+            let inline_parts = self
+                .parts
+                .iter()
+                .map(|part| self.inline_ui_part(part))
+                .collect::<Vec<_>>();
+            let entries = agena_tui_transcript::parts_entries_with_folds(
+                &inline_parts,
+                &self.transcript_folds,
+            );
 
             self.projected_resource_ids = self
                 .parts
@@ -1591,6 +1601,7 @@ impl TranscriptState {
                     self.content_reads
                         .get(id)
                         .and_then(|read| read.displayed.clone())
+                        .map(|frame| self.inline_ui_frame(frame))
                 })
                 .collect::<Vec<_>>();
             let errors = entry

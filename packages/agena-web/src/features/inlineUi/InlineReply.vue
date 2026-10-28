@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import InteractivePanel from './InteractivePanel.vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiShieldCheckLine,
@@ -16,7 +17,7 @@ import { defineAsyncComponent } from 'vue'
 const InlineChart = defineAsyncComponent(() => import('./InlineChart.vue'))
 import { inlineChartSpec, type InlineDocument } from './model'
 
-defineProps<{ document: InlineDocument }>()
+defineProps<{ document: InlineDocument; scope?: string }>()
 const { t } = useI18n()
 const icons = {
   shield: RiShieldCheckLine,
@@ -41,7 +42,12 @@ const tones = { note: RiInformationLine, tip: RiLightbulbLine, warning: RiAlertL
         >
           {{ block.title }}
         </h4>
-        <p v-if="block.type === 'paragraph'" class="prose-text">{{ block.text }}</p>
+        <InteractivePanel
+          v-if="block.type === 'panel'"
+          :program="block.program"
+          :scope="scope ? `${scope}/${block.id}` : ''"
+        />
+        <p v-else-if="block.type === 'paragraph'" class="prose-text">{{ block.text }}</p>
         <aside v-else-if="block.type === 'callout'" class="reply-callout" :data-tone="block.tone || 'note'">
           <component :is="tones[block.tone || 'note']" class="reply-icon" aria-hidden="true" />
           <div class="min-w-0">

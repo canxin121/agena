@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:mcp:browser": "node ./scripts/probe-mcp.cjs",
+    "test:attachments:browser": "node ./scripts/probe-attachments.cjs",
     "test:skills:browser": "node ./scripts/probe-skills.cjs",
     "test:notifications": "bun test ./tests/browserNotifications.test.ts",
     "test:notifications:browser": "node ./scripts/probe-browser-push.cjs",

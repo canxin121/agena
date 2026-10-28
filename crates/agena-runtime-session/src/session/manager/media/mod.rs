@@ -160,6 +160,11 @@ impl SessionManager {
                 }
             };
             let mut attachment = bound;
+            // A staged upload's disk basename contains a UUID; preserve the
+            // user's display name in its immutable attachment metadata.
+            if !resource.name.trim().is_empty() {
+                attachment.filename = Some(resource.name.clone());
+            }
             attachment.source = AttachmentSource::Base64 {
                 data: String::new(),
             };
@@ -173,6 +178,14 @@ impl SessionManager {
             resource.reference = ResourceReference::Artifact {
                 sha256: prepared.sha256,
                 uri: uri(&binding).map_err(kernel_error)?,
+            };
+            // UI MIME/extension hints cannot override the validated bytes.
+            resource.kind = match prepared.kind {
+                agena_domain::AttachmentKind::Image => agena_domain::ResourceKind::Image,
+                agena_domain::AttachmentKind::Audio => agena_domain::ResourceKind::Audio,
+                agena_domain::AttachmentKind::Video => agena_domain::ResourceKind::Video,
+                agena_domain::AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
+                agena_domain::AttachmentKind::File => agena_domain::ResourceKind::File,
             };
             resource.media_type = Some(prepared.mime);
             resource.size_bytes = Some(prepared.size_bytes);

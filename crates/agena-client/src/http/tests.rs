@@ -288,3 +288,26 @@ async fn proxy_environment_child() {
         }
     }
 }
+
+#[test]
+fn attachment_download_names_prefer_utf8_and_keep_literal_plus() {
+    assert_eq!(
+        download_filename(
+            "attachment; filename=\"fallback.txt\"; filename*=UTF-8''%E5%90%91%E6%97%A5%E8%91%B5%20a+b.txt"
+        ),
+        Some("向日葵 a+b.txt".into())
+    );
+    assert_eq!(
+        download_filename("inline; filename=\"safe.txt\"; filename*=UTF-8''%ZZ"),
+        Some("safe.txt".into())
+    );
+    assert_eq!(
+        download_filename("attachment; filename*=UTF-8''..%2Fprivate.txt"),
+        Some("private.txt".into())
+    );
+    assert_eq!(
+        download_filename("attachment; filename=\"x.txt\""),
+        Some("x.txt".into())
+    );
+    assert!(sanitize_download_filename(&format!("{}.pdf", "文件".repeat(200))).len() <= 200);
+}

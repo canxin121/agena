@@ -9,6 +9,7 @@ import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaResourceLink from '@/components/chat/AgenaResourceLink.vue'
 import { useChatStore } from '@/stores/chat'
+import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import type { ContentFormat, ContentRef } from '@/lib/content'
@@ -35,10 +36,10 @@ function openMedia(path: string, url: string) {
   const attachment = mediaAttachment.value
   if (attachment?.mime.startsWith('image/') && url) {
     ui.openImageViewer([{ src: url, alt: attachment.label, title: attachment.label, key: attachment.key }])
-  } else if (path) {
-    ui.requestWorkspaceDockFile(path, 'open')
-  } else if (url) {
-    window.open(url, '_blank', 'noopener,noreferrer')
+  } else {
+    const dockPath = workspaceAttachmentPath(path, workspaceRoot.value, directory.currentDirectory || '')
+    if (dockPath) ui.requestWorkspaceDockFile(dockPath, 'open')
+    else if (url) window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -250,6 +251,7 @@ const progressCount = computed(() =>
     <AgenaAttachmentPreview
       v-else-if="mediaAttachment"
       :attachment="mediaAttachment"
+      :session-id="sessionId"
       :workspace-root="workspaceRoot"
       @open="openMedia"
     />

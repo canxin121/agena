@@ -144,16 +144,40 @@ impl ApplicationService {
             .map_err(|error| ApplicationError::internal_error(&error))?
     }
 
-    /// Read a runtime-managed image artifact for a session. These files live
-    /// outside the workspace, so the ordinary workspace download endpoint
-    /// must not be widened to expose them. The session-to-workspace relation
-    /// and the managed artifact root are both resolved on the server.
+    /// Read an attachment visible in this session. Frozen media is authorized
+    /// by blob membership; inherited generated files require the exact visible
+    /// tool attachment. Other files keep the owning workspace/upload boundary.
+    /// The server, never a client-provided root or selected model, owns scope.
     pub async fn read_session_media_file(
         &self,
         session_id: i64,
         query: WorkspaceFileDownloadQuery,
     ) -> ApplicationResult<(String, Vec<u8>)> {
         let session = self.ensure_session_model(session_id).await?;
+        if query.path.starts_with("agena:media:") {
+            let (attachment, bytes) = agena_runtime::session::read_managed_attachment(
+                &self.session_kernel.reader,
+                session_id
+                    .try_into()
+                    .map_err(|_| ApplicationError::bad_request("invalid session id"))?,
+                &query.path,
+            )
+            .await
+            .map_err(crate::kernel_error)?;
+            let name = attachment
+                .filename
+                .or(attachment.title)
+                .unwrap_or_else(|| "attachment".to_owned());
+            let name = sanitize_upload_filename(&name);
+            return Ok((
+                if name.is_empty() {
+                    "attachment".into()
+                } else {
+                    name
+                },
+                bytes,
+            ));
+        }
         let workspace_path = self
             .workspace_repository
             .path_by_id(session.workspace_id)
@@ -165,11 +189,51 @@ impl ApplicationService {
                     format!("workspace not found: {}", session.workspace_id),
                 )
             })?;
-        let managed_root = agena_runtime_tools::project_state_dir(Path::new(&workspace_path))
-            .join("generated_images")
-            .join(session_id.to_string());
+        let generated_root = agena_runtime_tools::project_state_dir(Path::new(&workspace_path))
+            .join("generated_images");
+        let managed_root = generated_root.join(session_id.to_string());
+        let requested = Path::new(&query.path);
+        if requested.is_absolute()
+            && !requested.starts_with(&managed_root)
+            && let Some((owner_root, tool_id)) =
+                inherited_generated_attachment(&generated_root, requested)
+        {
+            let attachment = agena_runtime::session::authorized_tool_attachment(
+                &self.session_kernel.reader,
+                session_id
+                    .try_into()
+                    .map_err(|_| ApplicationError::bad_request("invalid session id"))?,
+                tool_id
+                    .try_into()
+                    .map_err(|_| ApplicationError::bad_request("invalid tool id"))?,
+                &query.path,
+            )
+            .await
+            .map_err(crate::kernel_error)?;
+            return WORKSPACE_TRANSFERS
+                .run(move || {
+                    use sha2::Digest as _;
+                    let (filename, bytes) = read_session_media_file_sync(owner_root, query)?;
+                    let hash: String = sha2::Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
+                    if attachment.size_bytes != Some(bytes.len() as u64)
+                        || attachment.sha256.as_deref() != Some(hash.as_str())
+                    {
+                        return Err(ApplicationError::bad_request(
+                            "stored generated attachment checksum does not match",
+                        ));
+                    }
+                    Ok((filename, bytes))
+                })
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?;
+        }
         WORKSPACE_TRANSFERS
-            .run(move || read_session_media_file_sync(managed_root, query))
+            .run(move || {
+                read_attachment_file_sync(PathBuf::from(workspace_path), managed_root, query)
+            })
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?
     }
@@ -435,7 +499,9 @@ fn read_workspace_file_sync(
         let target = requested
             .canonicalize()
             .map_err(|error| workspace_fs_error(&requested, error))?;
-        if agena_runtime_tools::managed_attachment_root(&root, &target).is_none() {
+        if !target.starts_with(&root)
+            && agena_runtime_tools::managed_attachment_root(&root, &target).is_none()
+        {
             return Err(ApplicationError::bad_request(
                 "workspace download path is outside this workspace's managed attachments",
             ));
@@ -486,17 +552,59 @@ fn read_workspace_file_sync(
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("workspace-file")
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
+        .to_owned();
+    let filename = sanitize_upload_filename(&filename);
 
     Ok((filename, bytes))
+}
+
+fn inherited_generated_attachment(root: &Path, path: &Path) -> Option<(PathBuf, i64)> {
+    use std::path::Component;
+    let mut parts = path.strip_prefix(root).ok()?.components();
+    let Component::Normal(owner) = parts.next()? else {
+        return None;
+    };
+    if owner.to_str()?.parse::<i64>().ok()? <= 0 {
+        return None;
+    }
+    let Component::Normal(name) = parts.next()? else {
+        return None;
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    let stem = Path::new(name).file_stem()?.to_str()?;
+    let id = stem
+        .strip_prefix("provider-hosted-image-")
+        .or_else(|| stem.strip_prefix("image-tool-"))?
+        .split('-')
+        .next()?
+        .parse::<i64>()
+        .ok()?;
+    (id > 0).then(|| (root.join(owner), id))
+}
+
+// Generated images stay scoped to the owning session. Other file attachments
+// use the existing workspace/managed-upload authorization boundary.
+fn read_attachment_file_sync(
+    workspace_root: PathBuf,
+    managed_root: PathBuf,
+    query: WorkspaceFileDownloadQuery,
+) -> ApplicationResult<(String, Vec<u8>)> {
+    let requested = PathBuf::from(query.path.trim());
+    if requested.is_absolute() {
+        if requested.starts_with(&managed_root) {
+            return read_session_media_file_sync(managed_root, query);
+        }
+        return read_workspace_file_sync(workspace_root, query);
+    }
+    // Keep the filename-only generated-image API. A rejected existing entry
+    // must never silently resolve to a different workspace file.
+    if fs::symlink_metadata(managed_root.join(&requested)).is_ok() {
+        read_session_media_file_sync(managed_root, query)
+    } else {
+        read_workspace_file_sync(workspace_root, query)
+    }
 }
 
 fn read_session_media_file_sync(
@@ -560,6 +668,22 @@ fn upload_workspace_file_sync(
     request: WorkspaceFileUploadRequest,
     bytes: Option<Vec<u8>>,
 ) -> ApplicationResult<WorkspaceFileUploadResource> {
+    upload_workspace_file_in(
+        workspace_id,
+        root_path,
+        request,
+        bytes,
+        &agena_storage_layout::StorageLayout::current(),
+    )
+}
+
+fn upload_workspace_file_in(
+    workspace_id: i64,
+    root_path: PathBuf,
+    request: WorkspaceFileUploadRequest,
+    bytes: Option<Vec<u8>>,
+    layout: &agena_storage_layout::StorageLayout,
+) -> ApplicationResult<WorkspaceFileUploadResource> {
     const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
     let root = root_path
@@ -606,7 +730,6 @@ fn upload_workspace_file_sync(
         ));
     }
 
-    let layout = agena_storage_layout::StorageLayout::current();
     let upload_dir = layout.uploads_dir(&root);
     agena_storage_layout::secure_directory(&upload_dir).map_err(|error| {
         ApplicationError::bad_request_with_diagnostic(
@@ -625,20 +748,11 @@ fn upload_workspace_file_sync(
     }
     let stored_name = format!("{}-{}", Uuid::new_v4().simple(), filename);
     let target = upload_dir.join(&stored_name);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&target)
+    // Publish only complete, synced bytes. Interrupted uploads must not leave
+    // partially-written final filenames behind.
+    agena_runtime_tools::atomic_create_file(&target, &decoded, None)
         .map_err(|error| workspace_fs_error(&target, error))?;
-    agena_storage_layout::secure_file(&target)
-        .map_err(|error| workspace_fs_error(&target, error))?;
-    use std::io::Write as _;
-    if let Err(error) = file.write_all(&decoded).and_then(|()| file.sync_all()) {
+    if let Err(error) = agena_storage_layout::secure_file(&target) {
         let _ = fs::remove_file(&target);
         return Err(workspace_fs_error(&target, error));
     }
@@ -937,24 +1051,7 @@ fn workspace_relative_path(path: &Path) -> String {
 }
 
 fn sanitize_upload_filename(filename: &str) -> String {
-    let trimmed = filename.trim();
-    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
-        return String::new();
-    }
-    // Keep only the final path component so a client-provided path can never
-    // smuggle directory traversal into the managed uploads directory.
-    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
-    base.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ' ') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .trim()
-        .to_owned()
+    agena_domain::safe_attachment_filename(filename)
 }
 
 fn workspace_fs_error(path: &Path, error: io::Error) -> ApplicationError {
@@ -1030,3 +1127,7 @@ use super::{
     WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, decode_cursor,
     fs, io, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
 };
+
+#[cfg(test)]
+#[path = "workspaces/attachment_tests.rs"]
+mod attachment_tests;

@@ -13,6 +13,7 @@ ipc = ["ws"]
 jsonrpc = ["http"]
 
 [dependencies]
+infer.workspace = true
 blake3.workspace = true
 portable-atomic = { workspace = true }
 agena-async = { workspace = true }

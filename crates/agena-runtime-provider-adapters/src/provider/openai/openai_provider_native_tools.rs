@@ -359,29 +359,36 @@ pub(super) fn openai_image_generation_tool_event(
             .remove("result");
     }
 
-    Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderNativeToolEvent::Started {
-            stream_key,
-            id,
-            invocation,
-            title,
-            raw: Some(metadata),
-        }
-    } else {
-        let details =
-            ToolOutput::from_json_payload(Some(&metadata)).map_err(ProviderError::Provider)?;
-        OpenAiProviderNativeToolEvent::Completed {
-            stream_key,
-            id,
-            invocation,
-            title,
-            summary: format!("{image_count} images"),
-            output_text: revised_prompt.unwrap_or_default().to_owned(),
-            blocks,
-            details,
-            raw: Some(metadata),
-        }
-    }))
+    // Some compatible gateways emit a completed image in the initial item
+    // event and never repeat it in output_item.done. Preserve that terminal
+    // payload instead of discarding its only copy as start-event metadata.
+    let terminal_initial_image = image_count > 0
+        && item.get("status").and_then(serde_json::Value::as_str) == Some("completed");
+    Ok(Some(
+        if event_type == "response.output_item.added" && !terminal_initial_image {
+            OpenAiProviderNativeToolEvent::Started {
+                stream_key,
+                id,
+                invocation,
+                title,
+                raw: Some(metadata),
+            }
+        } else {
+            let details =
+                ToolOutput::from_json_payload(Some(&metadata)).map_err(ProviderError::Provider)?;
+            OpenAiProviderNativeToolEvent::Completed {
+                stream_key,
+                id,
+                invocation,
+                title,
+                summary: format!("{image_count} images"),
+                output_text: revised_prompt.unwrap_or_default().to_owned(),
+                blocks,
+                details,
+                raw: Some(metadata),
+            }
+        },
+    ))
 }
 
 pub(super) fn responses_provider_native_tool_stream_key(
@@ -869,4 +876,40 @@ pub(super) fn responses_output_call_id(call_id: Option<&str>) -> Option<String> 
 
 pub(super) fn responses_input_call_id(raw: &str) -> Option<String> {
     protocol_ids::openai_responses_call_id(raw).map(String::from)
+}
+
+#[cfg(test)]
+mod hosted_image_event_tests {
+    use super::*;
+    #[test]
+    fn terminal_initial_image_is_not_lost_or_duplicated_in_metadata() {
+        let event = serde_json::json!({"type":"response.output_item.added","output_index":0});
+        let item = serde_json::json!({"type":"image_generation_call","id":"ig_test","status":"completed","result":"AAAA","output_format":"png"});
+        let result =
+            openai_image_generation_tool_event("response.output_item.added", &event, &item)
+                .unwrap()
+                .unwrap();
+        let OpenAiProviderNativeToolEvent::Completed {
+            blocks,
+            raw,
+            details,
+            ..
+        } = result
+        else {
+            panic!("terminal image must be completed");
+        };
+        assert_eq!(blocks.len(), 1);
+        assert!(raw.unwrap().get("result").is_none());
+        assert!(details.to_json_payload().unwrap().get("result").is_none());
+    }
+    #[test]
+    fn ordinary_started_image_stays_pending_until_terminal_event() {
+        let event = serde_json::json!({"output_index":0});
+        let item = serde_json::json!({"type":"image_generation_call","id":"ig_test","status":"in_progress"});
+        assert!(matches!(
+            openai_image_generation_tool_event("response.output_item.added", &event, &item)
+                .unwrap(),
+            Some(OpenAiProviderNativeToolEvent::Started { .. })
+        ));
+    }
 }

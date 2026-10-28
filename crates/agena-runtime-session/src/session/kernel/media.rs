@@ -216,6 +216,62 @@ async fn hydrate_uri(
         modeled,
     })
 }
+/// Read a published attachment for presentation or download. Viewing bytes
+/// does not depend on the selected model. The URI is only a descriptor:
+/// open_blob checks session history membership, including forked history.
+pub async fn read_managed_attachment(
+    reader: &KernelReader,
+    session: SessionId,
+    uri: &str,
+) -> Result<(AttachmentItem, Vec<u8>)> {
+    let binding = decode_binding(uri).map_err(KernelError::Invalid)?;
+    if binding.version != 1 {
+        return Err(KernelError::Invalid(
+            "unsupported managed media version".into(),
+        ));
+    }
+    let blob = reader.open_blob(session, binding.blob).await?;
+    let descriptor = blob.descriptor();
+    if descriptor.byte_len > agena_runtime_tools::media_input::MAX_MEDIA_BYTES as u64 {
+        return Err(KernelError::Invalid(
+            "managed attachment exceeds the 20 MiB download limit".into(),
+        ));
+    }
+    let hash = hex::encode(descriptor.sha256);
+    if binding.attachment.sha256.as_deref() != Some(hash.as_str())
+        || binding.attachment.size_bytes != Some(descriptor.byte_len)
+    {
+        return Err(KernelError::Invalid(
+            "managed attachment size or checksum does not match".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(descriptor.byte_len as usize);
+    blob.copy_to(&mut bytes).await?;
+    Ok((binding.attachment, bytes))
+}
+
+/// Resolve a local attachment through a visible tool result. A fork inherits
+/// that history entry, not blanket access to the original session directory.
+pub async fn authorized_tool_attachment(
+    reader: &KernelReader,
+    session: SessionId,
+    tool: ToolId,
+    path: &str,
+) -> Result<AttachmentItem> {
+    let tool = reader.tool(session, tool).await?;
+    let raw = tool
+        .result
+        .as_ref()
+        .and_then(|value| value.get("raw_output"))
+        .ok_or_else(|| KernelError::NotFound("tool attachment".into()))?;
+    let raw: agena_domain::RawOutput = serde_json::from_value(raw.clone())
+        .map_err(|_| KernelError::Invalid("invalid stored tool attachment".into()))?;
+    raw.attachments.into_iter().find(|item| {
+        matches!(&item.source, AttachmentSource::LocalPath { path: recorded } if recorded == path)
+            && item.sha256.is_some() && item.size_bytes.is_some()
+    }).ok_or_else(|| KernelError::NotFound("tool attachment".into()))
+}
+
 /// Decode the immutable binding embedded in a media reference. Every failure is
 /// a per-attachment degradation reason, never a request-level error.
 pub(crate) fn decode_binding(uri: &str) -> std::result::Result<MediaBinding, String> {
@@ -274,5 +330,290 @@ pub(crate) fn completion_attachment(item: &AttachmentItem) -> CompletionInputAtt
         height: item.height,
         duration_ms: item.duration_ms,
         page_count: item.page_count,
+    }
+}
+
+#[cfg(test)]
+mod attachment_download_tests {
+    use super::*;
+    use agena_domain::{ComposerDocument, ComposerNode, ModelId, ProviderId};
+    use std::io::Cursor;
+
+    async fn fixture() -> (
+        agena_storage_sqlite::SqliteKernel,
+        SessionId,
+        SessionId,
+        PreparedBlob,
+        MediaBinding,
+        Vec<u8>,
+    ) {
+        let kernel = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = kernel
+            .workspaces
+            .ensure_id("/attachment-download-test")
+            .await
+            .unwrap();
+        let session = kernel
+            .ports
+            .sessions
+            .create(RequestId::new(), workspace, "owner".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let foreign = kernel
+            .ports
+            .sessions
+            .create(RequestId::new(), workspace, "foreign".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let bytes = b"immutable original attachment".to_vec();
+        let blob = kernel
+            .ports
+            .sessions
+            .prepare_blob(
+                RequestId::new(),
+                session,
+                bytes.len() as u64,
+                &mut Cursor::new(&bytes),
+            )
+            .await
+            .unwrap();
+        let binding = MediaBinding {
+            version: 1,
+            model: ModelRef {
+                provider_id: ProviderId::new("test"),
+                adapter_id: None,
+                model_id: ModelId::new("original-model"),
+            },
+            route: "original-route".into(),
+            blob: blob.descriptor().id,
+            attachment: AttachmentItem {
+                kind: AttachmentKind::File,
+                mime: "text/plain".into(),
+                source: AttachmentSource::Base64 {
+                    data: String::new(),
+                },
+                filename: Some("原始附件.txt".into()),
+                title: None,
+                size_bytes: Some(bytes.len() as u64),
+                sha256: Some(hex::encode(blob.descriptor().sha256)),
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            },
+        };
+        (kernel, session, foreign, blob, binding, bytes)
+    }
+    fn document() -> ComposerDocument {
+        ComposerDocument(vec![ComposerNode::Text {
+            text: "attached".into(),
+        }])
+    }
+
+    #[tokio::test]
+    async fn only_published_session_members_can_download_and_forks_keep_access() {
+        let (kernel, session, foreign, blob, binding, bytes) = fixture().await;
+        let reference = uri(&binding).unwrap();
+        assert!(
+            read_managed_attachment(&kernel.ports.reader, session, &reference)
+                .await
+                .is_err()
+        );
+        let execution = kernel
+            .ports
+            .sessions
+            .send_with_blobs(RequestId::new(), session, document(), &[blob])
+            .await
+            .unwrap()
+            .value;
+        let (metadata, downloaded) =
+            read_managed_attachment(&kernel.ports.reader, session, &reference)
+                .await
+                .unwrap();
+        assert_eq!(downloaded, bytes);
+        assert_eq!(metadata.filename.as_deref(), Some("原始附件.txt"));
+        assert!(matches!(
+            read_managed_attachment(&kernel.ports.reader, foreign, &reference).await,
+            Err(KernelError::Ownership)
+        ));
+        let attempt = kernel
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution.id)
+            .await
+            .unwrap()
+            .value;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let child = kernel
+            .ports
+            .sessions
+            .fork(RequestId::new(), session, execution.message_id)
+            .await
+            .unwrap()
+            .value
+            .id;
+        assert_eq!(
+            read_managed_attachment(&kernel.ports.reader, child, &reference)
+                .await
+                .unwrap()
+                .1,
+            bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn inherited_generated_files_require_the_exact_visible_tool_attachment() {
+        let (kernel, session, foreign, blob, binding, _) = fixture().await;
+        let execution = kernel
+            .ports
+            .sessions
+            .send_with_blobs(RequestId::new(), session, document(), &[blob])
+            .await
+            .unwrap()
+            .value;
+        let attempt = kernel
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let tool = round
+            .begin_provider_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "ig_inherited".into(),
+                    name: "image_generation".into(),
+                    input: serde_json::json!({}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        let path = format!(
+            "/managed/generated_images/{}/provider-hosted-image-{}.png",
+            session.get(),
+            tool.id().get()
+        );
+        let mut attachment = binding.attachment;
+        attachment.source = AttachmentSource::LocalPath { path: path.clone() };
+        let raw = agena_domain::RawOutput {
+            attachments: vec![attachment.clone()],
+            ..Default::default()
+        };
+        tool.complete(
+            RequestId::new(),
+            ToolResult {
+                phase: ToolPhase::Succeeded,
+                value: serde_json::json!({"raw_output":raw}),
+            },
+        )
+        .await
+        .unwrap();
+        let entry = kernel
+            .ports
+            .reader
+            .tool(session, tool.id())
+            .await
+            .unwrap()
+            .entry_id;
+        assert_eq!(
+            authorized_tool_attachment(&kernel.ports.reader, session, tool.id(), &path)
+                .await
+                .unwrap(),
+            attachment
+        );
+        assert!(
+            authorized_tool_attachment(&kernel.ports.reader, foreign, tool.id(), &path)
+                .await
+                .is_err()
+        );
+        assert!(
+            authorized_tool_attachment(
+                &kernel.ports.reader,
+                session,
+                tool.id(),
+                "/private/unrelated.png"
+            )
+            .await
+            .is_err()
+        );
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let child = kernel
+            .ports
+            .sessions
+            .fork(RequestId::new(), session, entry)
+            .await
+            .unwrap()
+            .value
+            .id;
+        assert_eq!(
+            authorized_tool_attachment(&kernel.ports.reader, child, tool.id(), &path)
+                .await
+                .unwrap(),
+            attachment
+        );
+    }
+
+    #[tokio::test]
+    async fn forged_hash_size_version_and_malformed_bindings_are_rejected() {
+        let (kernel, session, _, blob, mut binding, _) = fixture().await;
+        kernel
+            .ports
+            .sessions
+            .send_with_blobs(RequestId::new(), session, document(), &[blob])
+            .await
+            .unwrap();
+        let original_hash = binding.attachment.sha256.clone();
+        binding.attachment.sha256 = Some("0".repeat(64));
+        assert!(
+            read_managed_attachment(&kernel.ports.reader, session, &uri(&binding).unwrap())
+                .await
+                .is_err()
+        );
+        binding.attachment.sha256 = original_hash;
+        let original_size = binding.attachment.size_bytes;
+        binding.attachment.size_bytes = Some(999);
+        assert!(
+            read_managed_attachment(&kernel.ports.reader, session, &uri(&binding).unwrap())
+                .await
+                .is_err()
+        );
+        binding.attachment.size_bytes = original_size;
+        binding.version = 2;
+        assert!(
+            read_managed_attachment(&kernel.ports.reader, session, &uri(&binding).unwrap())
+                .await
+                .is_err()
+        );
+        for reference in [
+            "agena:media:v1:zz".into(),
+            "https://example.org/image".into(),
+            format!("{PREFIX}{}", "a".repeat(16 * 1024 + 1)),
+        ] {
+            assert!(
+                read_managed_attachment(&kernel.ports.reader, session, &reference)
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

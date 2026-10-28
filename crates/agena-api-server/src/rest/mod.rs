@@ -58,6 +58,7 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
 }
 
 mod activities;
+mod attachment_response;
 mod auth;
 mod content;
 mod conversations;

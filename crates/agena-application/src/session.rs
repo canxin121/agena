@@ -151,10 +151,14 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                 resources = resources.saturating_add(1);
                 if resource.delivery == agena_domain::ResourceDelivery::ModelInput
                     && (resource.kind == agena_domain::ResourceKind::Directory
-                        || !matches!(resource.reference, ResourceReference::WorkspacePath { .. }))
+                        || !(matches!(
+                            &resource.reference,
+                            ResourceReference::WorkspacePath { .. }
+                        ) || matches!(&resource.reference, ResourceReference::Artifact { uri, .. }
+                                if uri.starts_with("agena:media:v1:"))))
                 {
                     return Err(ApplicationError::bad_request(
-                        "send-to-model resources must be explicit workspace files; directories, URLs and foreign provider IDs remain references",
+                        "send-to-model resources must be explicit workspace files or session-owned immutable attachments; directories, URLs and foreign provider IDs remain references",
                     ));
                 }
 
@@ -271,4 +275,35 @@ fn valid_workspace_attachment_path(raw: &str) -> bool {
     }
     let mut remaining = parts.peekable();
     remaining.peek().is_some() && remaining.all(|part| matches!(part, Component::Normal(_)))
+}
+
+#[cfg(test)]
+mod immutable_attachment_input_tests {
+    use super::*;
+    fn document(reference: serde_json::Value) -> ComposerDocument {
+        serde_json::from_value(serde_json::json!([{
+            "type":"activity", "activity":{
+                "id":uuid::Uuid::new_v4().to_string(),
+                "payload":{"activity_type":"resource","delivery":"model_input","kind":"image",
+                    "reference":reference,"name":"向日葵.png","media_type":"image/png"}
+            }
+        }]))
+        .unwrap()
+    }
+    #[test]
+    fn queued_immutable_attachments_reach_the_session_ownership_check() {
+        let doc = document(
+            serde_json::json!({"reference_type":"artifact","uri":"agena:media:v1:abcd","sha256":"a".repeat(64)}),
+        );
+        assert!(validate_input_document(&doc).is_ok());
+    }
+    #[test]
+    fn allowing_frozen_attachments_does_not_allow_remote_or_foreign_provider_inputs() {
+        for reference in [
+            serde_json::json!({"reference_type":"url","url":"https://example.org/image.png"}),
+            serde_json::json!({"reference_type":"artifact","uri":"file:///private.png","sha256":"a".repeat(64)}),
+        ] {
+            assert!(validate_input_document(&document(reference)).is_err());
+        }
+    }
 }

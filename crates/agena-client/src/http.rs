@@ -1135,8 +1135,8 @@ impl AgenaClient {
     }
 
     /// Upload one client-local file into the server-owned workspace's managed
-    /// upload directory. The returned JSON contains the workspace-relative path
-    /// clients should persist as a `WorkspacePath` reference.
+    /// upload directory. The returned JSON contains the server-managed path
+    /// clients should preserve verbatim as a `WorkspacePath` reference.
     pub async fn upload_workspace_file(
         &self,
         workspace_id: i64,
@@ -1168,8 +1168,9 @@ impl AgenaClient {
         self.download_binary_file(url).await
     }
 
-    /// Download a runtime-managed image belonging to a server session. The
-    /// server confines this path to that session's generated-media directory.
+    /// Download a session-visible attachment. `path` may be a workspace file,
+    /// generated artifact path, or opaque `agena:media:v1:` reference. The server
+    /// checks the appropriate workspace/history membership before reading.
     pub async fn download_session_media_file(
         &self,
         session_id: i64,
@@ -1200,9 +1201,7 @@ impl AgenaClient {
             .headers()
             .get(reqwest::header::CONTENT_DISPOSITION)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split("filename=\"").nth(1))
-            .and_then(|value| value.split('"').next())
-            .map(sanitize_download_filename)
+            .and_then(download_filename)
             .unwrap_or_else(|| "workspace-file".to_owned());
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
@@ -3266,26 +3265,61 @@ impl AgenaClient {
 }
 
 fn sanitize_download_filename(value: &str) -> String {
-    let filename = value
-        .rsplit(['/', '\\'])
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
-        .unwrap_or("workspace-file");
-    let sanitized = filename
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(240)
-        .collect::<String>();
-    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
-        "workspace-file".to_owned()
+    let name = agena_domain::safe_attachment_filename(value);
+    if name.is_empty() {
+        "workspace-file".into()
     } else {
-        sanitized
+        name
     }
+}
+
+// RFC 6266: prefer UTF-8 filename*; percent decoding is NOT form decoding
+// (a literal '+' in a filename must not become a space).
+fn download_filename(value: &str) -> Option<String> {
+    let mut fallback = None;
+    for parameter in value.split(';').skip(1) {
+        let Some((key, value)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        if key.trim().eq_ignore_ascii_case("filename*") {
+            let mut fields = value.splitn(3, '\'');
+            let charset = fields.next().unwrap_or_default();
+            let _language = fields.next();
+            let Some(encoded) = fields.next() else {
+                continue;
+            };
+            if !charset.eq_ignore_ascii_case("UTF-8") {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            let mut input = encoded.as_bytes().iter().copied();
+            let mut valid = true;
+            while let Some(byte) = input.next() {
+                if byte == b'%' {
+                    let pair = input.next().zip(input.next()).and_then(|(a, b)| {
+                        char::from(a)
+                            .to_digit(16)
+                            .zip(char::from(b).to_digit(16))
+                            .map(|(a, b)| (a * 16 + b) as u8)
+                    });
+                    match pair {
+                        Some(byte) => bytes.push(byte),
+                        None => {
+                            valid = false;
+                            break;
+                        }
+                    }
+                } else {
+                    bytes.push(byte);
+                }
+            }
+            if valid && let Ok(name) = String::from_utf8(bytes) {
+                return Some(sanitize_download_filename(&name));
+            }
+        } else if key.trim().eq_ignore_ascii_case("filename") {
+            fallback = Some(sanitize_download_filename(value));
+        }
+    }
+    fallback
 }

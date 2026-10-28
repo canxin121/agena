@@ -186,45 +186,47 @@ pub async fn download_workspace_file(
     State(state): State<AppState>,
     Path(workspace_id): Path<i64>,
     AxumQuery(query): AxumQuery<WorkspaceFileDownloadQuery>,
-) -> Result<impl IntoResponse, ServerError> {
+    headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+) -> Result<axum::response::Response, ServerError> {
     let (filename, bytes) = state
         .service()
         .read_workspace_file(workspace_id, query)
         .await
         .map_err(server_error_from_application)?;
-    Ok((
-        [
-            ("content-type", "application/octet-stream".to_string()),
-            (
-                "content-disposition",
-                format!("attachment; filename=\"{filename}\""),
-            ),
-        ],
-        bytes,
+    Ok(super::attachment_response::attachment_response(
+        &filename, bytes, false, &headers, &method,
     ))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SessionMediaQuery {
+    path: String,
+    #[serde(default)]
+    download: bool,
 }
 
 pub async fn download_session_media_file(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
-    AxumQuery(query): AxumQuery<WorkspaceFileDownloadQuery>,
-) -> Result<impl IntoResponse, ServerError> {
+    AxumQuery(query): AxumQuery<SessionMediaQuery>,
+    headers: axum::http::HeaderMap,
+    method: axum::http::Method,
+) -> Result<axum::response::Response, ServerError> {
     let (filename, bytes) = state
         .service()
-        .read_session_media_file(session_id, query)
+        .read_session_media_file(session_id, WorkspaceFileDownloadQuery { path: query.path })
         .await
         .map_err(server_error_from_application)?;
-    Ok((
-        [
-            ("content-type", "application/octet-stream".to_string()),
-            (
-                "content-disposition",
-                format!("attachment; filename=\"{filename}\""),
-            ),
-        ],
+    Ok(super::attachment_response::attachment_response(
+        &filename,
         bytes,
+        !query.download,
+        &headers,
+        &method,
     ))
 }
+
 use super::{
     AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileDownloadQuery,
     WorkspaceFileTreeQuery, WorkspaceFileUploadRequest, WorkspaceListQuery, WorkspacePathRequest,

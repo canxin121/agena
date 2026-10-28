@@ -8,7 +8,6 @@ import PartLoadingIndicator from './PartLoadingIndicator.vue'
 import { type ContentFormat, type ContentRef } from '@/lib/content'
 import { observeContent } from '@/lib/contentSubscriptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
-import { useChatStore } from '@/stores/chat'
 
 const props = defineProps<{
   resource: ContentRef
@@ -16,11 +15,10 @@ const props = defineProps<{
   plain?: boolean
   sourcePath?: string
   format?: ContentFormat
-  allowApps?: boolean
+  allowInlineUi?: boolean
 }>()
 const { t } = useI18n()
 const pane = useWorkspacePaneContext()
-const chat = useChatStore()
 const body = shallowRef('')
 const active = ref(true)
 const gap = ref(false)
@@ -100,12 +98,9 @@ onBeforeUnmount(() => {
       :content="body"
       :stream="active"
       :source-path="sourcePath || ''"
-      :allow-apps="allowApps"
-      :allow-inline-ui="allowApps === true"
+      :allow-inline-ui="allowInlineUi === true"
       :inline-documents="inlineDocuments"
       :inline-session-id="sessionId"
-      :app-owner="sessionId"
-      :app-directory="chat.getSessionDirectory(sessionId) || ''"
     />
     <pre
       v-else

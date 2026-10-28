@@ -207,9 +207,7 @@ impl ContentWatch {
             // An empty sidecar also identifies a reply stream while a marker
             // is still incomplete across pages. Tool/user source text stays raw.
             let mut inline_ui = self.inline_reply.then(Default::default);
-            if self.inline_reply
-                && (text.contains(agena_domain::INLINE_UI_REFERENCE_PREFIX) || text.contains(']'))
-            {
+            if self.inline_reply && (text.contains("ui_") || text.contains(['\n', '`', ']'])) {
                 let mut context = String::new();
                 if page.start > page.stream.retained_start {
                     let start = page

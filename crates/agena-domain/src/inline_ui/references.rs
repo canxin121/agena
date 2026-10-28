@@ -6,7 +6,8 @@ use std::{collections::BTreeMap, ops::Range};
 
 pub type InlineUiReferences = BTreeMap<String, InlineDocument>;
 pub const INLINE_UI_MAX_REFERENCES: usize = 32;
-pub const INLINE_UI_REFERENCE_PREFIX: &str = "[[inline-ui:";
+pub const INLINE_UI_REFERENCE_PREFIX: &str = "```inline-ui";
+const INLINE_UI_FENCE_LANGUAGE: &str = "inline-ui";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -21,7 +22,7 @@ impl PreparedInlineUi {
         self.document.validate()
     }
     pub fn marker(&self) -> String {
-        format!("[[inline-ui:{}]]", self.reference)
+        format!("```inline-ui\n{}\n```", self.reference)
     }
 }
 
@@ -50,17 +51,19 @@ pub fn inline_reference_tool_id(reference: &str) -> Option<i64> {
 /// where to render: Markdown AST boundaries are checked by each renderer.
 pub fn inline_reference_candidates(text: &str) -> Vec<String> {
     let mut refs = Vec::new();
-    for (start, _) in text.match_indices(INLINE_UI_REFERENCE_PREFIX) {
-        let tail = &text[start + INLINE_UI_REFERENCE_PREFIX.len()..];
-        let mut limit = tail.len().min(96);
-        while !tail.is_char_boundary(limit) {
-            limit -= 1;
-        }
-        let tail = &tail[..limit];
-        let Some(end) = tail.find("]]").filter(|end| *end <= 80) else {
+    // A reference can arrive before its closing fence, or span transport pages.
+    // Find only bounded opaque IDs here; Markdown boundaries govern display.
+    for (start, _) in text.match_indices("ui_") {
+        if start > 0 && text.as_bytes()[start - 1].is_ascii_alphanumeric() {
             continue;
-        };
-        let reference = &tail[..end];
+        }
+        let tail = &text.as_bytes()[start..];
+        let length = tail
+            .iter()
+            .take(64)
+            .take_while(|byte| byte.is_ascii_alphanumeric() || **byte == b'_')
+            .count();
+        let reference = &text[start..start + length];
         if inline_reference_tool_id(reference).is_some() && !refs.iter().any(|r| r == reference) {
             refs.push(reference.to_owned());
             if refs.len() == INLINE_UI_MAX_REFERENCES {
@@ -78,10 +81,10 @@ pub struct InlineReferenceSpan {
     pub reference: Option<String>,
 }
 
-/// Only a complete, standalone top-level paragraph is an embed. Quoted/listed
-/// examples, inline code, fences (including open fences), HTML and escapes stay text.
+/// A top-level, explicitly closed `inline-ui` backtick fence containing one
+/// opaque reference embeds rich content. Other code/quotes/lists remain literal.
 pub fn inline_reference_spans(text: &str, streaming: bool) -> Vec<InlineReferenceSpan> {
-    if !text.contains(INLINE_UI_REFERENCE_PREFIX) {
+    if !text.contains(INLINE_UI_FENCE_LANGUAGE) {
         return Vec::new();
     }
     let arena = Arena::new();
@@ -95,43 +98,35 @@ pub fn inline_reference_spans(text: &str, streaming: bool) -> Vec<InlineReferenc
     let mut spans = Vec::new();
     for node in root.children() {
         let data = node.data.borrow();
-        if !matches!(data.value, NodeValue::Paragraph)
-            || data.sourcepos.start.line != data.sourcepos.end.line
-        {
-            continue;
-        }
-        let line = data.sourcepos.start.line.saturating_sub(1);
-        let Some(&start) = offsets.get(line) else {
+        let first_line = data.sourcepos.start.line.saturating_sub(1);
+        let Some(&start) = offsets.get(first_line) else {
             continue;
         };
-        let end = offsets.get(line + 1).copied().unwrap_or(text.len());
-        let source = &text[start..end];
-        let trimmed = source.trim();
-        // Restrict the marker to literal unindented/at-most-three-space source.
-        if source.starts_with('\t') || source.starts_with("    ") {
-            continue;
-        }
-        if let Some(reference) = trimmed
-            .strip_prefix(INLINE_UI_REFERENCE_PREFIX)
-            .and_then(|s| s.strip_suffix("]]"))
-        {
-            if inline_reference_tool_id(reference).is_some() {
+        let end = offsets
+            .get(data.sourcepos.end.line)
+            .copied()
+            .unwrap_or(text.len());
+        if let NodeValue::CodeBlock(code) = &data.value {
+            if !code.fenced
+                || code.fence_char != b'`'
+                || code.info.trim() != INLINE_UI_FENCE_LANGUAGE
+            {
+                continue;
+            }
+            let reference = code.literal.trim();
+            if code.closed && inline_reference_tool_id(reference).is_some() {
                 spans.push(InlineReferenceSpan {
                     range: start..end,
                     reference: Some(reference.to_owned()),
                 });
+            } else if !code.closed && streaming && end == text.len() && code.literal.len() <= 512 {
+                // Never flash an unfinished reference as code while its fence
+                // is streaming. A malformed completed block stays literal.
+                spans.push(InlineReferenceSpan {
+                    range: start..end,
+                    reference: None,
+                });
             }
-        } else if streaming
-            && end == text.len()
-            && !source.ends_with('\n')
-            && trimmed.starts_with(INLINE_UI_REFERENCE_PREFIX)
-            && trimmed.len() <= 96
-            && !trimmed[INLINE_UI_REFERENCE_PREFIX.len()..].contains([' ', '\t', '\n', '<', '>'])
-        {
-            spans.push(InlineReferenceSpan {
-                range: start..end,
-                reference: None,
-            });
         }
         if spans.len() == INLINE_UI_MAX_REFERENCES {
             break;

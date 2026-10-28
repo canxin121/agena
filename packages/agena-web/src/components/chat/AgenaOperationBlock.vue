@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import InlineReply from '@/features/inlineUi/InlineReply.vue'
-import { parseInlineDocument } from '@/features/inlineUi/model'
-
 import { computed } from 'vue'
 import { RiFileTextLine, RiGlobalLine } from '@remixicon/vue'
 
@@ -166,21 +163,12 @@ const progressCount = computed(() =>
     ? `${props.block.completed}${typeof props.block.total === 'number' ? `/${props.block.total}` : ''}${stringValue(props.block.unit) ? ` ${stringValue(props.block.unit)}` : ''}`
     : '',
 )
-const inlineDocument = computed(() => {
-  if (kind.value !== 'inline_ui') return null
-  try {
-    return parseInlineDocument(props.block.document)
-  } catch {
-    return null
-  }
-})
 </script>
 
 <template>
   <div class="min-w-0 text-[13px] leading-snug">
-    <InlineReply v-if="inlineDocument" :document="inlineDocument" />
     <AgenaContentOutput
-      v-else-if="kind === 'content' && sessionId"
+      v-if="kind === 'content' && sessionId"
       :key="contentResource.resource_id"
       :resource="contentResource"
       :session-id="sessionId"

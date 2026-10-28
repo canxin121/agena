@@ -13584,7 +13584,7 @@ Inline Generative UI: readable steps, comparisons, callouts, metrics, tables and
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Read guide for the needed kinds. Prepares one immutable passage without displaying it. Insert the returned embed as a standalone paragraph at its intended position in the normal answer. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
+> Read guide for the needed kinds. Prepares one immutable passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

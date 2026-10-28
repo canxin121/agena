@@ -296,9 +296,9 @@ async fn inline_ui_human_export_expands_body_references_but_raw_sdk_reads_preser
         ContentResource, ContentState, InlineDocument,
     };
     let reference = "ui_123_0123456789abcdef0123456789abcdef";
-    let marker = format!("[[inline-ui:{reference}]]");
+    let marker = format!("```inline-ui\n{reference}\n```");
     let document = InlineDocument::from_value(serde_json::json!({"version":1,"blocks":[{"type":"paragraph","id":"fact","text":"Exact embedded content"}]})).unwrap();
-    let original = format!("Before\n\n{marker}\n\nAfter\n\n```\n{marker}\n```\n");
+    let original = format!("Before\n\n{marker}\n\nAfter\n\n````\n{marker}\n````\n");
     let cursor = ContentCursor {
         epoch: uuid::Uuid::new_v4(),
         sequence: original.len() as u64,
@@ -355,7 +355,7 @@ async fn inline_ui_human_export_expands_body_references_but_raw_sdk_reads_preser
     assert_eq!(
         human,
         format!(
-            "Before\n\n{}\n\nAfter\n\n```\n{marker}\n```\n",
+            "Before\n\n{}\n\nAfter\n\n````\n{marker}\n````\n",
             document.to_markdown()
         )
     );

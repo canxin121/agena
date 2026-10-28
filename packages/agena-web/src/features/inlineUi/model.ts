@@ -3,7 +3,6 @@ export type { InlineDocument, InlineBlock } from '@/generated/agenaState'
 
 export const INLINE_UI_MAX_BYTES = 60 * 1024
 export const INLINE_UI_MAX_BLOCKS = 24
-export const isInlineUiTool = (name: unknown) => name === 'agena.inline_ui.present' || name === 'inline_ui.present'
 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const check = (ok: boolean, message: string): void => {
@@ -225,21 +224,6 @@ export function inlineDocumentMarkdown(document: InlineDocument): string {
   return sections.join('\n\n')
 }
 
-/** Read the typed projection, never reinterpret arbitrary tool output as UI. */
-export function inlineDocumentFromPresentation(presentation: unknown): InlineDocument | null {
-  if (!record(presentation) || !Array.isArray(presentation.blocks)) return null
-  for (const block of presentation.blocks) {
-    if (record(block) && block.type === 'inline_ui') {
-      try {
-        return parseInlineDocument(block.document)
-      } catch {
-        return null
-      }
-    }
-  }
-  return null
-}
-
 export function inlineChartSpec(block: Extract<InlineBlock, { type: 'chart' }>) {
   return {
     type: block.chart_type,
@@ -249,18 +233,4 @@ export function inlineChartSpec(block: Extract<InlineBlock, { type: 'chart' }>) 
     xLabel: block.x_label,
     yLabel: block.y_label,
   }
-}
-
-/** Preserve the order of prose and rich passages when copying a whole reply. */
-export function replyTextWithInline<T extends { agenaPresentation?: unknown }>(
-  parts: readonly T[],
-  plainText: (part: T) => string,
-): string {
-  return parts
-    .map((part) => {
-      const document = inlineDocumentFromPresentation(part.agenaPresentation)
-      return document ? inlineDocumentMarkdown(document) : plainText(part)
-    })
-    .filter((text) => text.trim())
-    .join('\n\n')
 }

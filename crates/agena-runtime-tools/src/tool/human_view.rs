@@ -42,8 +42,8 @@ impl BuiltinHumanRenderer {
     const GENERIC_MAX_VALUE_CHARS: usize = 1_200;
     const HUMAN_TEXT_MAX_CHARS: usize = 12_000;
 
-    /// A published passage is already visible. A compact acknowledgement avoids
-    /// repeating the full document into the model context; raw facts stay stored.
+    /// Preparing content returns only a reference. Nothing is displayed until
+    /// the normal answer contains the fenced embed.
     pub fn inline_reply_model(tool_name: &str, raw: &RawOutput) -> Option<String> {
         if agena_domain::is_inline_ui_prepare_tool(tool_name) {
             let prepared = raw.payload.as_ref()?.get("inline_ui_prepared")?;
@@ -52,20 +52,10 @@ impl BuiltinHumanRenderer {
             prepared.validate().ok()?;
             return Some(serde_json::json!({
                 "prepared": true, "reference": prepared.reference, "embed": prepared.marker(),
-                "message": "Not displayed yet. Insert the embed verbatim on a standalone line in your normal answer, with blank lines before and after. Write Markdown prose around it. Do not print the JSON or put the embed in a code fence."
+                "message": "Not displayed yet. Paste the entire returned inline-ui fenced block unchanged between Markdown paragraphs in your answer. The block contains only the reference ID, not JSON. Do not wrap it in an additional code fence."
             }).to_string());
         }
-        if !agena_domain::is_inline_ui_tool(tool_name) {
-            return None;
-        }
-        let value = raw.payload.as_ref()?.get("inline_ui")?;
-        let document = agena_domain::InlineDocument::from_value(value.clone()).ok()?;
-        Some(serde_json::json!({
-            "published": true,
-            "title": document.title,
-            "blocks": document.blocks.len(),
-            "message": "This passage is already visible inside the answer on Web and TUI. Continue only with useful additional prose; do not repeat the passage or print its JSON."
-        }).to_string())
+        None
     }
 
     pub fn new(tool_name: impl Into<String>) -> Self {
@@ -5893,18 +5883,6 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
                 text: "Prepared rich content for a reference in the answer. No content is displayed by this tool call.".into(),
             }]);
         }
-        if agena_domain::is_inline_ui_tool(&self.tool_name)
-            && let Some(value) = raw
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("inline_ui"))
-            && let Ok(document) = agena_domain::InlineDocument::from_value(value.clone())
-        {
-            return Ok(vec![ViewBlock::InlineUi {
-                id: Some("inline-reply".into()),
-                document,
-            }]);
-        }
         let output = match ToolOutput::from_json_payload(raw.payload.as_ref()) {
             Ok(output) => output,
             Err(_) => return Ok(Self::compact_blocks(Self::fallback(raw))),
@@ -5979,33 +5957,6 @@ mod terminal_output_tests {
 mod inline_ui_tests {
     use super::*;
     #[test]
-    fn inline_ui_projection_is_typed_and_only_owned_by_the_publishing_tool() {
-        let document: Value =
-            serde_json::from_str(include_str!("../../../../examples/inline-ui/reply.json"))
-                .unwrap();
-        let raw = RawOutput {
-            payload: Some(json!({"inline_ui": document})),
-            ..Default::default()
-        };
-        let blocks = BuiltinHumanRenderer::new("inline_ui.present")
-            .render_human(&RenderContext::default(), &raw)
-            .unwrap();
-        assert!(matches!(blocks.as_slice(), [ViewBlock::InlineUi { .. }]));
-        let acknowledgement =
-            BuiltinHumanRenderer::inline_reply_model("inline_ui.present", &raw).unwrap();
-        assert!(acknowledgement.contains("\"published\":true"));
-        assert!(acknowledgement.len() < 1024);
-        assert!(BuiltinHumanRenderer::inline_reply_model("some_other.tool", &raw).is_none());
-        let other = BuiltinHumanRenderer::new("some_other.tool")
-            .render_human(&RenderContext::default(), &raw)
-            .unwrap();
-        assert!(
-            !other
-                .iter()
-                .any(|block| matches!(block, ViewBlock::InlineUi { .. }))
-        );
-    }
-    #[test]
     fn inline_ui_prepare_returns_a_body_reference_without_auto_displaying_ui() {
         let reference = "ui_123_0123456789abcdef0123456789abcdef";
         let document: Value =
@@ -6018,16 +5969,15 @@ mod inline_ui_tests {
             ..Default::default()
         };
         let model = BuiltinHumanRenderer::inline_reply_model("inline_ui.prepare", &raw).unwrap();
-        assert!(model.contains(&format!("[[inline-ui:{reference}]]")));
+        let response: Value = serde_json::from_str(&model).unwrap();
+        assert_eq!(response["embed"], format!("```inline-ui\n{reference}\n```"));
+        assert!(!model.contains("[[inline-ui:"));
         assert!(!model.contains("\"document\""));
         assert!(!model.contains("\"published\""));
         let blocks = BuiltinHumanRenderer::new("inline_ui.prepare")
             .render_human(&RenderContext::default(), &raw)
             .unwrap();
-        assert!(
-            !blocks
-                .iter()
-                .any(|block| matches!(block, ViewBlock::InlineUi { .. }))
-        );
+        assert!(matches!(blocks.as_slice(), [ViewBlock::Text { .. }]));
+        assert!(BuiltinHumanRenderer::inline_reply_model("inline_ui.present", &raw).is_none());
     }
 }

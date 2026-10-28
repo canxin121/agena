@@ -338,19 +338,6 @@ impl Application {
             });
         };
         let projection = self.render_tool_result(&invocation, output).await;
-        if agena_domain::is_inline_ui_tool(&content.name)
-            && projection
-                .human
-                .blocks
-                .iter()
-                .any(|block| matches!(block, ViewBlock::InlineUi { .. }))
-        {
-            return Some(PartDocument {
-                title: projection.human.title,
-                summary: projection.human.summary,
-                blocks: projection.human.blocks,
-            });
-        }
 
         if !content
             .resources

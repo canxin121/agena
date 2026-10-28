@@ -1,7 +1,4 @@
 <script setup lang="ts">
-import InlineReplyPart from '@/features/inlineUi/InlineReplyPart.vue'
-import { isInlineUiTool } from '@/features/inlineUi/model'
-
 import { computed, toRef } from 'vue'
 import { RiArrowRightSLine } from '@remixicon/vue'
 
@@ -24,7 +21,6 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
-import { useChatStore } from '@/stores/chat'
 import { useErrorPartHeadline } from '@/composables/useErrorPartHeadline'
 
 const props = defineProps<{
@@ -49,8 +45,6 @@ const emit = defineEmits<{
 
 const directory = useDirectoryStore()
 const ui = useUiStore()
-const chat = useChatStore()
-const appDirectory = computed(() => chat.getSessionDirectory(props.sessionId) || '')
 // A durable Part's kind is stable. Ordinary Markdown Parts need no clock or visibility observer.
 const errorHeadline = props.part.kind === 'error' ? useErrorPartHeadline(toRef(props, 'part')) : computed(() => null)
 const status = computed(() => errorHeadline.value?.status ?? partStatusPresentation(props.part.status))
@@ -79,13 +73,8 @@ function openAttachment(path: string, url: string) {
 </script>
 
 <template>
-  <InlineReplyPart
-    v-if="part.kind === 'operation' && isInlineUiTool(content.name || part.source.tool)"
-    :part="part"
-    :session-id="sessionId"
-  />
   <AgenaOperationPart
-    v-else-if="part.kind === 'operation'"
+    v-if="part.kind === 'operation'"
     :part="part"
     :expanded="expanded"
     :collapse-signal="collapseSignal"
@@ -104,12 +93,9 @@ function openAttachment(path: string, url: string) {
       mode="markdown"
       :stream="Boolean(streaming)"
       :source-path="sourcePath || ''"
-      :allow-apps="part.role === 'assistant'"
       :allow-inline-ui="part.role === 'assistant'"
       :inline-documents="part.source.agenaInlineUi"
       :inline-session-id="sessionId || ''"
-      :app-owner="sessionId || ''"
-      :app-directory="appDirectory"
     />
   </div>
 
@@ -226,7 +212,7 @@ function openAttachment(path: string, url: string) {
             :resource="resource"
             :session-id="sessionId"
             :source-path="sourcePath"
-            :allow-apps="part.role === 'assistant'"
+            :allow-inline-ui="part.role === 'assistant'"
           />
         </template>
         <MarkdownRenderer
@@ -235,12 +221,9 @@ function openAttachment(path: string, url: string) {
           mode="markdown"
           :stream="Boolean(streaming)"
           :source-path="sourcePath || ''"
-          :allow-apps="part.role === 'assistant'"
           :allow-inline-ui="part.role === 'assistant'"
           :inline-documents="part.source.agenaInlineUi"
           :inline-session-id="sessionId || ''"
-          :app-owner="sessionId || ''"
-          :app-directory="appDirectory"
         />
       </div>
 

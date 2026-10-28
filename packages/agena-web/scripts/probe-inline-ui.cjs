@@ -19,7 +19,8 @@ async function main() {
     [one]: { version: 1, title: '建议的实施顺序', blocks: sample.blocks.slice(0, 2) },
     [two]: { version: 1, title: '理解差异，再作选择', blocks: sample.blocks.slice(2) },
   }
-  const body = `这是一条正常的 **Markdown 回答**，富内容出现在正文指定的位置。\n\n[[inline-ui:${one}]]\n\n第二阶段值得特别说明，下面比较两种能力：\n\n[[inline-ui:${two}]]\n\n最后，先解决内容表达，再逐步扩展能力。`
+  const embed = (reference) => '```inline-ui\n' + reference + '\n```'
+  const body = `这是一条正常的 **Markdown 回答**，富内容出现在正文指定的位置。\n\n${embed(one)}\n\n第二阶段值得特别说明，下面比较两种能力：\n\n${embed(two)}\n\n最后，先解决内容表达，再逐步扩展能力。`
   const epoch = '11111111-2222-3333-4444-555555555555',
     resourceId = '11111111-2222-3333-4444-666666666666'
   const byteLength = Buffer.byteLength(body)
@@ -173,8 +174,11 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     assert(visible.indexOf('这是一条正常的') < visible.indexOf('建议的实施顺序'))
     assert(visible.indexOf('第二阶段值得特别说明') < visible.indexOf('理解差异，再作选择'))
     assert(visible.indexOf('理解差异，再作选择') < visible.indexOf('最后，先解决'))
-    assert(!visible.includes('[[inline-ui:'))
+    assert(!visible.includes('```inline-ui'))
     await page.locator('[data-probe-copy]').click()
+    await page.waitForFunction(
+      async () => (await navigator.clipboard.readText()) === window.__inlineProbe.expectedCopy(),
+    )
     assert.equal(
       await page.evaluate(() => navigator.clipboard.readText()),
       await page.evaluate(() => window.__inlineProbe.expectedCopy()),
@@ -196,22 +200,36 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.screenshot({ path: path.join(output, 'body-mobile-dark.png'), fullPage: true })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     assert.deepEqual(apiRequests, [], 'prepared data sidecars replay without reads/writes')
+    // Removed formats must stay source, even when the matching document is loaded.
+    const obsolete =
+      `[[inline-ui:${one}]]\n\n` +
+      '```agena-chart\n' +
+      JSON.stringify({ type: 'bar', labels: ['A'], series: [{ name: 'Example', values: [1] }] }) +
+      '\n```\n\n' +
+      '```agena-ui\n' +
+      JSON.stringify({ id: 'unsupported', title: 'Unsupported app', html: '<h1>Must not run</h1>' }) +
+      '\n```'
+    await page.evaluate((text) => window.__inlineProbe.setBody(text), obsolete)
+    await page.waitForFunction(() => document.querySelectorAll('[data-inline-embed]').length === 0)
+    assert.equal(await page.locator('[data-inline-reply]').count(), 0)
+    assert.equal(await page.locator('iframe').count(), 0)
+    assert.deepEqual(apiRequests, [], 'obsolete syntax must not fetch content or launch an application')
+    await page.locator('[data-probe-copy]').click()
+    await page.waitForFunction(async (expected) => (await navigator.clipboard.readText()) === expected, obsolete)
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), obsolete)
     // Partial streaming markers must not appear as raw protocol text.
-    await page.evaluate(() => window.__inlineProbe.setBody('前文\n\n[[inline-ui:ui_123_', true))
+    await page.evaluate(() => window.__inlineProbe.setBody('前文\n\n```inline-ui\nui_123_', true))
     await page.waitForFunction(() => !!document.querySelector('[data-inline-reference-pending]'))
-    assert(!(await page.locator('main').innerText()).includes('[[inline-ui:'))
+    assert(!(await page.locator('main').innerText()).includes('```inline-ui'))
     await page.evaluate((body) => window.__inlineProbe.setBody(body), body)
     await page.locator('[data-inline-embed]').nth(1).waitFor()
     // Code and user-authored examples stay literal, not live embeds.
-    await page.evaluate(
-      (marker) => window.__inlineProbe.setBody('```text\n' + marker + '\n```'),
-      `[[inline-ui:${one}]]`,
-    )
+    await page.evaluate((marker) => window.__inlineProbe.setBody('````text\n' + marker + '\n````'), embed(one))
     await page.waitForFunction(() => document.querySelectorAll('[data-inline-embed]').length === 0)
     await page.evaluate((marker) => {
       window.__inlineProbe.setRole('user')
       window.__inlineProbe.setBody(marker)
-    }, `[[inline-ui:${one}]]`)
+    }, embed(one))
     assert.equal(await page.locator('[data-inline-embed]').count(), 0)
     await page.evaluate((body) => {
       window.__inlineProbe.setRole('assistant')
@@ -227,6 +245,9 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.evaluate(() => window.__inlineProbe.setSourceMode(true))
     await page.waitForFunction(() => document.querySelectorAll('[data-inline-reply]').length === 2)
     await page.locator('[data-probe-copy]').click()
+    await page.waitForFunction(
+      async () => (await navigator.clipboard.readText()) === window.__inlineProbe.expectedCopy(),
+    )
     assert.equal(
       await page.evaluate(() => navigator.clipboard.readText()),
       await page.evaluate(() => window.__inlineProbe.expectedCopy()),
@@ -259,6 +280,7 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
       'append-only streaming preserves disclosure',
       'light/dark/mobile',
       'incomplete marker hidden',
+      'old bracket and JSON fences are inert',
       'code/user examples inert',
       'history without tool cache',
       'SSE split-reference delivery',

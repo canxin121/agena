@@ -18,12 +18,7 @@ pub const INLINE_UI_VERSION: u8 = 1;
 // Reserve envelope/metadata space below the runtime’s 64 KiB inline payload limit.
 pub const INLINE_UI_MAX_BYTES: usize = 60 * 1024;
 pub const INLINE_UI_MAX_BLOCKS: usize = 24;
-pub const INLINE_UI_TOOL: &str = "agena.inline_ui.present";
-
-/// Recognize only the owning tool's canonical or normal execution name.
-pub fn is_inline_ui_tool(name: &str) -> bool {
-    matches!(name, "agena.inline_ui.present" | "inline_ui.present")
-}
+pub const INLINE_UI_TOOL: &str = "agena.inline_ui.prepare";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]

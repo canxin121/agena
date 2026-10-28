@@ -1,6 +1,5 @@
 //! Progressive discovery and publication of inert, semantic inline reply content.
-use agena_domain::{InlineDocument, PreparedInlineUi};
-const INLINE_UI_TOOL: &str = "agena.inline_ui.prepare";
+use agena_domain::{INLINE_UI_TOOL, InlineDocument, PreparedInlineUi};
 use agena_macros::ToolInput;
 use agena_plugin_host::sdk::{
     PluginError, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
@@ -120,7 +119,7 @@ impl InlineUiPlugin {
             format!("Inline Generative UI · {kind}"),
             format!("{kind}: schema and complete example"),
             format!(
-                "# Inline Generative UI: {kind}\n\nPrepare with {INLINE_UI_TOOL}(document=...). This tool does NOT display content. Insert its returned embed verbatim as a standalone paragraph in your normal Markdown answer. Use blank lines before and after; never put it in a code fence. Do not print the document JSON. Text fields are plain text and each prepared document is immutable.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
+                "# Inline Generative UI: {kind}\n\nPrepare with {INLINE_UI_TOOL}(document=...). This tool does NOT display content. Paste its entire returned inline-ui fenced block unchanged between paragraphs in your normal Markdown answer. The fence contains only the reference ID. Do not wrap it in an additional code fence. Do not print the document JSON. Text fields are plain text and each prepared document is immutable.\n\n## Schema\n```json\n{}\n```\n\n## Complete example (illustrative content, not measured facts)\n```json\n{}\n```\n\nLimits: 60 KiB per document, 1–24 blocks, unique ids. Use validate for an optional dry run. Chart values must match labels; null means a gap, pie needs one nonnegative series with a positive total.",
                 serde_json::to_string_pretty(&schema)
                     .map_err(|error| PluginError::internal_error(&error))?,
                 serde_json::to_string_pretty(&example)
@@ -162,7 +161,7 @@ impl InlineUiPlugin {
         tags(read_only),
         name = "prepare",
         summary = "Prepare immutable rich content and return an embed reference. Insert it at the desired position in your normal answer; this tool does not display the content.",
-        help = "Read guide for the needed kinds. Prepares one immutable passage without displaying it. Insert the returned embed as a standalone paragraph at its intended position in the normal answer. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.",
+        help = "Read guide for the needed kinds. Prepares one immutable passage without displaying it. Paste the entire returned inline-ui fenced block at its intended position between normal Markdown paragraphs. Keep only the reference ID inside; do not add an outer code fence. All text is plain text; no HTML/JS, services, callbacks, or side effects. Use supplied facts, label examples, and keep sources/uncertainty. Do include the returned embed in the final answer; do not print the document JSON. Invalid input creates no reference.",
         translations(
             locale(
                 "zh-CN",
@@ -221,7 +220,7 @@ impl InlineUiPlugin {
             "Prepared inline content",
             "Ready to embed in the answer; not displayed here.",
             format!(
-                "Insert {marker} on its own line in your normal answer, with blank lines before and after. This preparation has not displayed the content. Do not repeat its JSON."
+                "Insert this entire inline-ui fenced block unchanged between prose paragraphs in your normal answer:\n{marker}\nThis preparation has not displayed the content. Do not print the document JSON or wrap the block in another fence."
             ),
             Some(json!({"inline_ui_prepared": prepared})),
             Default::default(),

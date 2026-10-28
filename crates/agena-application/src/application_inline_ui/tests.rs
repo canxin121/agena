@@ -136,7 +136,7 @@ async fn inline_ui_resolution_is_immutable_and_session_scoped() {
             .unwrap()
             .is_none()
     );
-    let body = format!("Before\n\n[[inline-ui:{reference}]]\n\nAfter");
+    let body = format!("Before\n\n```inline-ui\n{reference}\n```\n\nAfter");
     let refs = resolve_inline_text(&runtime.ports.reader, session, &body)
         .await
         .unwrap()

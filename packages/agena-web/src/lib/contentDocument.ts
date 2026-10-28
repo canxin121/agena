@@ -1,4 +1,3 @@
-import { parseInlineDocument, inlineDocumentMarkdown } from '@/features/inlineUi/model'
 import { i18n } from '@/i18n'
 import type { JsonRecord } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
@@ -46,12 +45,10 @@ export function validateDocument(document: ContentDocument): ContentDocument {
         'json',
         'progress',
         'custom',
-        'inline_ui',
       ].includes(block.type)
     )
       throw new Error('Invalid document block identity')
     ids.add(block.id)
-    if (block.type === 'inline_ui') parseInlineDocument(block.document)
     if (block.type === 'table') {
       const columns = block.columns as JsonValue[]
       const rows = block.rows as JsonValue[][]
@@ -116,8 +113,6 @@ export function contentDocumentText(document: ContentDocument): string {
             .join('\n')
         case 'media':
           return JSON.stringify(block.artifact)
-        case 'inline_ui':
-          return inlineDocumentMarkdown(parseInlineDocument(block.document))
         case 'custom':
           return JSON.stringify(block.schema, null, 2)
         case 'file_changes':

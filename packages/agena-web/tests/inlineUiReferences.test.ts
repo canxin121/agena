@@ -15,24 +15,32 @@ const document = parseInlineDocument(
   JSON.parse(readFileSync(new URL('../../../examples/inline-ui/reply.json', import.meta.url), 'utf8')),
 )
 const reference = fixture.reference as string
-const marker = `[[inline-ui:${reference}]]`
+const marker = '```inline-ui\n' + reference + '\n```'
 const refs = { [reference]: document }
 
 describe('references embedded inside a normal answer', () => {
   for (const example of fixture.cases)
     test(example.name, () => {
+      if (example.pending !== undefined)
+        expect(
+          splitInlineReferences(example.text, example.streaming).filter((s) => s.kind === 'pending-reference'),
+        ).toHaveLength(example.pending)
       expect(splitInlineReferences(example.text, example.streaming).filter((s) => s.kind === 'reference')).toHaveLength(
         example.references,
       )
+      if (example.literal) {
+        expect(expandInlineReferences(example.text, refs, example.streaming)).toBe(example.text)
+        expect(splitInlineReferences(example.text, example.streaming).every((s) => s.kind === 'markdown')).toBe(true)
+      }
     })
   test('preserves the exact surrounding Markdown and keeps code examples literal', () => {
-    const text = `**Before**\n\n${marker}\n\nAfter\n\n\`\`\`text\n${marker}\n\`\`\`\n`
+    const text = `**Before**\n\n${marker}\n\nAfter\n\n\`\`\`\`text\n${marker}\n\`\`\`\`\n`
     expect(expandInlineReferences(text, refs)).toBe(
-      `**Before**\n\n${inlineDocumentMarkdown(document)}\n\nAfter\n\n\`\`\`text\n${marker}\n\`\`\`\n`,
+      `**Before**\n\n${inlineDocumentMarkdown(document)}\n\nAfter\n\n\`\`\`\`text\n${marker}\n\`\`\`\`\n`,
     )
   })
   test('does not leak unfinished stream syntax and does not hide invalid final text', () => {
-    const partial = 'Before\n\n[[inline-ui:ui_123_'
+    const partial = 'Before\n\n```inline-ui\nui_123_'
     expect(expandInlineReferences(partial, refs, true)).toBe('Before\n\n')
     expect(expandInlineReferences(partial, refs, false)).toBe(partial)
     expect(expandInlineReferences(marker, {})).toContain('unavailable')

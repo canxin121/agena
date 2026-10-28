@@ -79,9 +79,9 @@ fn inline_ui_plain_text_is_not_a_second_markup_or_command_channel() {
     let text = doc.to_markdown();
     assert!(!text.contains("<script>"));
     assert!(!text.contains("```agena-ui"));
-    assert!(is_inline_ui_tool(INLINE_UI_TOOL));
-    assert!(is_inline_ui_tool("inline_ui.present"));
-    assert!(!is_inline_ui_tool("untrusted.inline_ui.present"));
+    assert!(is_inline_ui_prepare_tool(INLINE_UI_TOOL));
+    assert!(is_inline_ui_prepare_tool("inline_ui.prepare"));
+    assert!(!is_inline_ui_prepare_tool("untrusted.inline_ui.prepare"));
 }
 
 #[test]
@@ -101,10 +101,31 @@ fn inline_ui_body_reference_parser_obeys_shared_markdown_boundaries() {
     ))
     .unwrap();
     for case in fixture["cases"].as_array().unwrap() {
+        if case["literal"] == true {
+            let text = case["text"].as_str().unwrap();
+            assert_eq!(
+                expand_inline_references(
+                    text,
+                    &Default::default(),
+                    case["streaming"].as_bool().unwrap()
+                ),
+                text,
+                "{}",
+                case["name"]
+            );
+        }
         let spans = inline_reference_spans(
             case["text"].as_str().unwrap(),
             case["streaming"].as_bool().unwrap(),
         );
+        if let Some(pending) = case["pending"].as_u64() {
+            assert_eq!(
+                spans.iter().filter(|span| span.reference.is_none()).count(),
+                pending as usize,
+                "{}",
+                case["name"]
+            );
+        }
         assert_eq!(
             spans.iter().filter(|s| s.reference.is_some()).count(),
             case["references"].as_u64().unwrap() as usize,
@@ -117,20 +138,37 @@ fn inline_ui_body_reference_parser_obeys_shared_markdown_boundaries() {
 #[test]
 fn inline_ui_reference_expansion_preserves_prose_order_and_literal_examples() {
     let reference = "ui_123_0123456789abcdef0123456789abcdef";
-    let marker = format!("[[inline-ui:{reference}]]");
+    let marker = format!("```inline-ui\n{reference}\n```");
     let document = InlineDocument::from_value(sample()).unwrap();
     let refs = [(reference.into(), document.clone())].into();
-    let source = format!("**Before**\n\n{marker}\n\nAfter\n\n```text\n{marker}\n```\n");
+    let source = format!("**Before**\n\n{marker}\n\nAfter\n\n````text\n{marker}\n````\n");
     let expanded = expand_inline_references(&source, &refs, false);
     assert!(expanded.starts_with("**Before**\n\n"));
     assert!(expanded.contains(&format!("{}\n\nAfter", document.to_markdown())));
-    assert!(expanded.ends_with(&format!("```text\n{marker}\n```\n")));
+    assert!(expanded.ends_with(&format!("````text\n{marker}\n````\n")));
     let missing = expand_inline_references(&marker, &Default::default(), false);
     assert!(missing.contains("unavailable"));
-    let partial = "Before\n\n[[inline-ui:ui_123_".to_owned();
+    let partial = "Before\n\n```inline-ui\nui_123_".to_owned();
     assert_eq!(
         expand_inline_references(&partial, &refs, true),
         "Before\n\n"
     );
     assert_eq!(expand_inline_references(&partial, &refs, false), partial);
+}
+
+#[test]
+fn inline_ui_tools_emit_only_the_new_reference_fence() {
+    let reference = "ui_123_0123456789abcdef0123456789abcdef";
+    let prepared = PreparedInlineUi {
+        reference: reference.into(),
+        document: InlineDocument::from_value(sample()).unwrap(),
+    };
+    assert_eq!(prepared.marker(), format!("```inline-ui\n{reference}\n```"));
+    assert!(!prepared.marker().contains("[["));
+    // Discovery works even when the opener was on a previous transport page.
+    assert_eq!(
+        inline_reference_candidates(&format!("{reference}\n```")),
+        vec![reference]
+    );
+    assert!(inline_reference_candidates(&format!("{reference}extra")).is_empty());
 }

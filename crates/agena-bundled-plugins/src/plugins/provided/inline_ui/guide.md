@@ -13,19 +13,28 @@ The AI's normal Markdown answer determines its exact position.
 
 The answer should look like this (REFERENCE is a placeholder, never invent it):
 
-    Here is the proposed sequence:
+````markdown
+Here is the proposed sequence:
 
-    [[inline-ui:REFERENCE]]
+```inline-ui
+REFERENCE
+```
 
-    The second stage is important because ...
+The second stage is important because ...
+````
 
-Put the returned marker on its own line with blank lines before and after it.
-Do not put the actual marker in a code fence, quote, list, heading, or sentence.
-Those contexts intentionally show it as source instead of embedding UI.
-Do not print the document JSON. Do not leave the marker out of the final answer:
-without a reference, the prepared content remains only a tool result, not visible UI.
-You can place several references between ordinary Markdown paragraphs. Normal
-Markdown formatting, links and citations remain available in the surrounding prose.
+The returned `embed` already contains the complete `inline-ui` code fence. Paste
+it unchanged between normal Markdown paragraphs. Keep only the reference ID in
+that block, never the document JSON. Do not wrap it in an additional code fence,
+quote, list or inline code: those show an example instead of embedding the UI.
+The opening and closing backtick fences must both be present.
+
+Do not leave the block out of the final answer: without it, prepared content
+remains only a tool result, not visible UI. You can place several blocks between
+ordinary paragraphs. Normal Markdown formatting, links and citations stay in the
+surrounding prose. Only `inline-ui` reference fences are supported. Bracket
+markers, `agena-chart` / `agena-ui` JSON fences and the old `present` workflow
+are not supported. They do not render rich reply content.
 
 ## Content catalog
 

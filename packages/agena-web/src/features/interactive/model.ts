@@ -1,7 +1,3 @@
-import { parseChartSpec, type ChartSpec } from '@/features/inlineUi/charts'
-export { parseChartSpec, type ChartSpec } from '@/features/inlineUi/charts'
-import MarkdownIt from 'markdown-it'
-
 export type AppService = {
   name: string
   command: string
@@ -18,12 +14,6 @@ export type AppManifest = {
   height?: number
   services?: AppService[]
 }
-export type ReplySegment =
-  | { kind: 'markdown'; key: string; content: string; error?: string }
-  | { kind: 'app'; key: string; manifest: AppManifest }
-  | { kind: 'chart'; key: string; spec: ChartSpec; source: string }
-
-const parser = new MarkdownIt({ html: false })
 const idPattern = /^[a-zA-Z0-9_-]{1,80}$/
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -75,53 +65,6 @@ export function parseAppManifest(raw: unknown): AppManifest {
   return raw as AppManifest
 }
 
-/** Only top-level, explicitly closed CommonMark fences become live components.
- * A longer outer fence, a quoted example, and an unfinished streaming fence stay source. */
-export function splitReplySegments(content: string, allowApps = false): ReplySegment[] {
-  if (!/^[ \t]{0,3}(?:`{3,}|~{3,})(?:agena-chart|agena-ui)\s*$/m.test(content))
-    return [{ kind: 'markdown', key: 'md:0', content }]
-  const lines = content.split('\n')
-  const offsets = [0]
-  for (const line of lines) offsets.push(offsets[offsets.length - 1]! + line.length + 1)
-  const segments: ReplySegment[] = []
-  let previous = 0
-  const seen = new Set<string>()
-  for (const token of parser.parse(content, {})) {
-    if (token.type !== 'fence' || token.level !== 0 || !token.map) continue
-    const language = token.info.trim()
-    if (language !== 'agena-chart' && (language !== 'agena-ui' || !allowApps)) continue
-    const [from, to] = token.map
-    const closing = lines[to - 1]?.trim() || ''
-    const marker = token.markup[0]!
-    if (to - from < 2 || closing.length < token.markup.length || [...closing].some((c) => c !== marker)) continue
-    const start = offsets[from]!
-    const end = Math.min(offsets[to]!, content.length)
-    if (start > previous)
-      segments.push({ kind: 'markdown', key: `md:${previous}`, content: content.slice(previous, start) })
-    try {
-      const raw: unknown = JSON.parse(token.content)
-      if (language === 'agena-ui') {
-        const manifest = parseAppManifest(raw)
-        if (seen.has(manifest.id)) throw new Error('Duplicate app id in this reply; use a unique id per app.')
-        seen.add(manifest.id)
-        segments.push({ kind: 'app', key: `app:${manifest.id}`, manifest })
-      } else segments.push({ kind: 'chart', key: `chart:${start}`, spec: parseChartSpec(raw), source: token.content })
-    } catch (error) {
-      segments.push({
-        kind: 'markdown',
-        key: `md:${start}`,
-        content: content.slice(start, end),
-        error: String(error instanceof Error ? error.message : error),
-      })
-    }
-    previous = end
-  }
-  if (previous < content.length || !segments.length)
-    segments.push({ kind: 'markdown', key: `md:${previous}`, content: content.slice(previous) })
-  return segments
-}
-
-/** Resolve within exactly one declared preview service; no URL/proxy escapes. */
 export function isServicePath(path: string): boolean {
   if (
     !path.startsWith('/') ||

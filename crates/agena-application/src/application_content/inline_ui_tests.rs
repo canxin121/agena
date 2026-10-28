@@ -70,7 +70,7 @@ async fn inline_ui_authorized_sidecars_survive_four_byte_source_pages_without_ch
         .await
         .unwrap()
         .value;
-    let original = format!("开始🌱\n\n[[inline-ui:{reference}]]\n\n结束");
+    let original = format!("开始🌱\n\n```inline-ui\n{reference}\n```\n\n结束");
     source.append(&original).await.unwrap();
     source.finish(RequestId::new()).await.unwrap();
     let changes = runtime

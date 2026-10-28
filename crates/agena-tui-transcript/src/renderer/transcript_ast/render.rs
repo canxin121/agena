@@ -1136,8 +1136,6 @@ pub(super) fn is_diagram_language(language: &str) -> bool {
             | "vega-lite"
             | "svgbob"
             | "svg"
-            | "agena-chart"
-            | "agena-ui"
     )
 }
 
@@ -1176,8 +1174,6 @@ fn render_diagram(
                     .collect::<Vec<_>>()
             })
             .map_err(|error| error.to_string()),
-        "agena-chart" => rich_output::chart(literal, available),
-        "agena-ui" => rich_output::app(literal, available, i18n),
         _ => Err(String::new()),
     };
     match rendered {

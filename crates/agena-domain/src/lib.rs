@@ -242,7 +242,7 @@ pub use availability_outcome::{
 pub use inline_ui::{
     INLINE_UI_MAX_BLOCKS, INLINE_UI_MAX_BYTES, INLINE_UI_TOOL, INLINE_UI_VERSION, InlineBlock,
     InlineChartType, InlineComparisonRow, InlineDocument, InlineIcon, InlineMetric, InlineSeries,
-    InlineStep, InlineTone, is_inline_ui_tool,
+    InlineStep, InlineTone,
 };
 
 pub use inline_ui::{

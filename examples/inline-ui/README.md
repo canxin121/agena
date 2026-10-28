@@ -3,17 +3,20 @@
 `reply.json` is an inert document containing all eight content kinds. Pass it as
 `document` to `agena.inline_ui.prepare`. Preparation returns an immutable reference;
 it does **not** display a rich tool-result card. Insert the returned `embed` marker
-on a standalone line in the normal Markdown answer, surrounded by blank lines.
+as the complete `inline-ui` fenced block between normal Markdown paragraphs.
+The block contains only the reference ID, not the document JSON.
 
 For example (the ID here is illustrative; use the exact returned ID):
 
-```text
+````markdown
 Here is the proposed sequence:
 
-[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]
+```inline-ui
+ui_123_0123456789abcdef0123456789abcdef
+```
 
 The second stage matters because ...
-```
+````
 
 `reply.md` is the canonical copy/TUI fallback generated from the Rust document:
 
@@ -28,3 +31,6 @@ a tool card, including source-backed SSE and complete-answer copying.
 
 See [the feature guide](../../docs/inline-generative-ui.md) for the protocol,
 content limits, authorization, architecture and verification commands.
+
+Only `inline-ui` reference fences are supported. There is no legacy bracket,
+`present` auto-rendering, or JSON-fence compatibility path.

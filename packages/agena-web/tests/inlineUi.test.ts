@@ -1,11 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import {
-  parseInlineDocument,
-  inlineDocumentMarkdown,
-  inlineDocumentFromPresentation,
-  isInlineUiTool,
-} from '../src/features/inlineUi/model'
+import { parseInlineDocument, inlineDocumentMarkdown } from '../src/features/inlineUi/model'
 const fixture = JSON.parse(readFileSync(new URL('../../../examples/inline-ui/reply.json', import.meta.url), 'utf8'))
 const markdown = readFileSync(new URL('../../../examples/inline-ui/reply.md', import.meta.url), 'utf8').trimEnd()
 const sample = () => structuredClone(fixture)
@@ -15,13 +10,6 @@ describe('Inline Generative UI wire contract', () => {
     const doc = parseInlineDocument(sample())
     expect(doc.blocks).toHaveLength(8)
     expect(inlineDocumentMarkdown(doc)).toBe(markdown)
-    expect(inlineDocumentFromPresentation({ blocks: [{ type: 'inline_ui', document: doc }] })).toEqual(doc)
-  })
-  test('does not interpret text, fenced JSON or arbitrary tools as UI', () => {
-    expect(inlineDocumentFromPresentation({ blocks: [{ type: 'markdown', text: JSON.stringify(fixture) }] })).toBeNull()
-    expect(isInlineUiTool('inline_ui.present')).toBe(true)
-    expect(isInlineUiTool('agena.inline_ui.present')).toBe(true)
-    expect(isInlineUiTool('evil.inline_ui.present')).toBe(false)
   })
   test('rejects unknown versions, ids, content and executable fields', () => {
     for (const mutate of [
@@ -96,40 +84,25 @@ describe('Inline Generative UI wire contract', () => {
 })
 
 import { projectLocalPart } from '../src/pages/chat/transcriptProjection'
-import { transcriptPartNavigationText } from '../src/pages/chat/transcriptNavigation'
 
-test('message-level copy and navigation treat rich passages as visible answer content', () => {
+test('preparation is an ordinary tool operation, never an automatically displayed reply', () => {
   const part = projectLocalPart(
     {
       id: '42',
       agenaKind: 'tool_call',
       agenaRole: 'assistant',
       partState: 'completed',
-      agenaContent: { name: 'inline_ui.present', input: { document: fixture } },
+      agenaContent: { name: 'inline_ui.prepare' },
       agenaPresentation: {
-        title: 'Inline Generative UI',
-        summary: '8 rich content blocks',
-        blocks: [{ type: 'inline_ui', document: fixture }],
+        title: 'Prepared inline content',
+        summary: 'Embed it in the answer',
+        blocks: [{ type: 'text', text: 'Prepared' }],
       },
     },
     'assistant',
   )
-  expect(part.toggleable).toBe(false)
-  expect(part.defaultExpanded).toBe(true)
-  expect(part.copyText).toBe(markdown)
-  expect(transcriptPartNavigationText(part, false)).toBe(markdown)
-  expect(part.copyText).not.toContain('Input\n')
-})
-
-import { replyTextWithInline } from '../src/features/inlineUi/model'
-
-test('the message copy action preserves rich content between prose passages', () => {
-  const parts = [
-    { text: 'Before' },
-    { text: '', agenaPresentation: { blocks: [{ type: 'inline_ui', document: fixture }] } },
-    { text: 'After' },
-  ]
-  const result = replyTextWithInline(parts, (part) => part.text)
-  expect(result).toBe(`Before\n\n${markdown}\n\nAfter`)
-  expect(result).not.toContain('"inline_ui"')
+  expect(part.kind).toBe('operation')
+  expect(part.toggleable).toBe(true)
+  expect(part.defaultExpanded).toBe(false)
+  expect(part.copyText).not.toContain(markdown)
 })

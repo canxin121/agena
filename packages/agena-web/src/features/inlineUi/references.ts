@@ -6,7 +6,7 @@ export type InlineTextSegment =
   | { kind: 'markdown'; key: string; content: string }
   | { kind: 'reference'; key: string; reference: string }
   | { kind: 'pending-reference'; key: string }
-export const INLINE_REFERENCE_PREFIX = '[[inline-ui:'
+export const INLINE_REFERENCE_PREFIX = '```inline-ui'
 export const MAX_INLINE_REFERENCES = 32
 const parser = new MarkdownIt({ html: true })
 const referencePattern = /^ui_([1-9][0-9]{0,18})_[0-9a-f]{32}$/
@@ -17,10 +17,11 @@ export function validInlineReference(value: unknown): value is string {
   return !!match && BigInt(match[1]!) <= 9223372036854775807n
 }
 
-/** Only standalone, top-level paragraphs embed. Code, quotes, lists, escaped
- * examples and partial JSON remain ordinary Markdown. Offsets preserve prose. */
+/** Only an explicitly closed, top-level `inline-ui` backtick fence embeds.
+ * Quoted/listed examples and surrounding longer code fences stay literal.
+ * Only this syntax is active; other spellings remain ordinary text. */
 export function splitInlineReferences(content: string, streaming = false): InlineTextSegment[] {
-  if (!content.includes(INLINE_REFERENCE_PREFIX)) return [{ kind: 'markdown', key: 'text:0', content }]
+  if (!content.includes('inline-ui')) return [{ kind: 'markdown', key: 'text:0', content }]
   const lines = content.split('\n'),
     offsets = [0]
   for (const line of lines) offsets.push(offsets[offsets.length - 1]! + line.length + 1)
@@ -28,30 +29,26 @@ export function splitInlineReferences(content: string, streaming = false): Inlin
   let previous = 0,
     count = 0
   for (const token of parser.parse(content, {})) {
-    if (token.type !== 'paragraph_open' || token.level !== 0 || !token.map) continue
+    if (token.level !== 0 || !token.map) continue
     const [from, to] = token.map
-    if (to !== from + 1) continue
-    const source = lines[from] || '',
-      trimmed = source.trim()
-    if (source.startsWith('\t') || source.startsWith('    ')) continue
     const start = offsets[from]!,
       end = Math.min(offsets[to]!, content.length)
-    const reference =
-      trimmed.startsWith(INLINE_REFERENCE_PREFIX) && trimmed.endsWith(']]')
-        ? trimmed.slice(INLINE_REFERENCE_PREFIX.length, -2)
-        : ''
     let next: InlineTextSegment | null = null
-    if (validInlineReference(reference)) next = { kind: 'reference', key: `reference:${start}`, reference }
-    else if (
-      streaming &&
-      end === content.length &&
-      !content.endsWith('\n') &&
-      trimmed.startsWith(INLINE_REFERENCE_PREFIX) &&
-      trimmed.length <= 96 &&
-      !/[\s<>]/.test(trimmed.slice(INLINE_REFERENCE_PREFIX.length)) &&
-      !trimmed.endsWith(']]')
-    )
-      next = { kind: 'pending-reference', key: `pending:${start}` }
+    if (token.type === 'fence' && token.info.trim() === 'inline-ui' && token.markup.startsWith('`')) {
+      const closing = /^ {0,3}(`{3,})[ \t]*\r?$/.exec(lines[to - 1] || '')
+      // Markdown also accepts open fences at EOF; an embed requires an actual
+      // closing line of at least the opener's length, with no trailing text.
+      const closed = to > from + 1 && !!closing && closing[1]!.length >= token.markup.length
+      const reference = token.content.trim()
+      if (closed && validInlineReference(reference)) next = { kind: 'reference', key: `reference:${start}`, reference }
+      else if (
+        !closed &&
+        streaming &&
+        end === content.length &&
+        new TextEncoder().encode(token.content).byteLength <= 512
+      )
+        next = { kind: 'pending-reference', key: `pending:${start}` }
+    }
     if (!next) continue
     if (start > previous)
       segments.push({ kind: 'markdown', key: `text:${previous}`, content: content.slice(previous, start) })

@@ -113,7 +113,7 @@ function download() {
   const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: 'image/svg+xml' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = 'agena-chart.svg'
+  link.download = 'inline-ui-chart.svg'
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

@@ -39,21 +39,23 @@
 {
   "prepared": true,
   "reference": "ui_123_0123456789abcdef0123456789abcdef",
-  "embed": "[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]",
-  "message": "Not displayed yet. Insert the embed verbatim on a standalone line in your normal answer..."
+  "embed": "```inline-ui\nui_123_0123456789abcdef0123456789abcdef\n```",
+  "message": "Not displayed yet. Paste the entire returned inline-ui fenced block unchanged between Markdown paragraphs..."
 }
 ```
 
 以上 ID 仅为说明。真实 ID 来自该次调用，模型不能猜测、重写或引用其他会话的 ID。
 随后 AI 正常输出回答文本：
 
-```text
+````markdown
 我建议分两个阶段推进：
 
-[[inline-ui:ui_123_0123456789abcdef0123456789abcdef]]
+```inline-ui
+ui_123_0123456789abcdef0123456789abcdef
+```
 
 第二阶段应重点检查窄屏和历史回放，因为……
-```
+````
 
 Web 与 TUI 都在这一行的位置展开内容。前后的普通 Markdown 仍可加粗、写链接和引用来源；
 链接的引用定义即使位于另一个富内容块之后，也使用同一回答的解析上下文。
@@ -62,20 +64,27 @@ Web 与 TUI 都在这一行的位置展开内容。前后的普通 Markdown 仍�
 
 ## 引用语法与流式行为
 
-引用必须独占一个顶层段落，前后使用空行。协议格式是：
+使用语言标识为 `inline-ui` 的顶层反引号代码围栏，里面只放一个引用 ID：
 
-```text
-[[inline-ui:ui_<positive-tool-id>_<32-lowercase-hex-nonce>]]
+````markdown
+```inline-ui
+ui_<positive-tool-id>_<32-lowercase-hex-nonce>
 ```
+````
 
-不在下列位置展开：代码围栏（含尚未闭合的围栏）、行内代码、引用块、列表、缩进代码、
-HTML 块、标题、普通句子中间或转义后的示例。用户消息中的引用也只是原文。
+`prepare` 返回完整代码块，直接粘贴到正文所需位置即可，不需要再包一层围栏，
+更不要把 JSON 文档放进代码块。建议前后留空行；普通文字仍按 Markdown 排版。
 
-只有合法完整引用才会解析；流式生成尚未完成的尾部标记暂不泄露为协议文本。
-结束后仍不完整的标记保留原文。不存在、伪造或不属于当前会话的完整引用给出明确的不可用提示，
-不会静默删除正文，也不会自动执行工具来补全。
+只有明确闭合的 `inline-ui` 反引号围栏才会展开；其它语言或无语言的代码块、
+引用块、列表、四空格缩进代码、HTML 块，以及更长外层围栏包住的示例都保持代码原文。
+同一个块只能有一个合法引用，错误 ID、多个 ID 或 JSON 都不会被当作 UI 执行。
+用户消息中的引用代码块也只显示原文。
 
-实际 UI 内容先经完整校验再准备；正文按正常文本流生成，不声称支持半个 JSON 的组件流式执行。
+流式生成尚未闭合的 `inline-ui` 块暂不显示协议代码；生成结束后仍未闭合则保留源码。
+不存在、伪造或不属于当前会话的完整引用给出不可用提示，不会静默删除内容或自动调用工具。
+不保留双中括号的兼容解析：旧引用即使出现在历史回答中，也只显示原文。
+
+UI 文档先完整校验再准备；正文按普通文本流生成，围栏闭合后在原位展开内容。
 
 ## 内容目录与边界
 
@@ -129,11 +138,14 @@ Web 将正文拆成原样的 Markdown 片段与引用组件。TUI 在读时将�
 `write_reply_content_text` 用于面向读者的复制和导出。后者收集一份固定文本快照以保持跨页 Markdown
 边界，再展开授权引用，不会让网络分块改变代码示例的含义。超大原始输出仍可走原有流式接口。
 
-## 历史兼容
+## 单一协议，不保留历史兼容
 
-先前版本的 `inline_ui.present` 结果保留旧的读时渲染，以免破坏已保存的对话；新工具目录只引导 `prepare`。
-旧 `agena-chart`、`agena-ui` 消息也继续兼容。新系统提示不再要求输出 JSON 围栏。
-Web Preview 与运行中的项目仍然独立，不因这次改动变成回答组件。
+唯一的富内容入口是上面定义的 `inline-ui` 引用围栏。双中括号标记、旧 `inline_ui.present`
+自动展示、`agena-chart` / `agena-ui` JSON 围栏都不再解析为富内容；对应适配器、工具结果卡片
+与复制回退已删除。旧格式按普通文本／代码显示，不执行应用代码，也不自动转换或迁移。
+
+`prepare` 只准备文档，`validate` 只校验，UI 必须由正文中的围栏引用触发。
+独立的 Web Preview 和预览应用运行功能没有更改，不属于这套回答协议。
 
 ## 验证
 
@@ -149,7 +161,7 @@ bun run build
 PLAYWRIGHT_MODULE=/path/to/playwright CHROME_BIN=/path/to/chrome bun run test:inline-ui:browser
 ```
 
-共享样例 `examples/inline-ui/references.json` 覆盖正常引用及代码、引用块、列表、HTML、CRLF、
+共享样例 `examples/inline-ui/references.json` 覆盖正常引用及普通代码、嵌套围栏、未闭合围栏、引用块、列表、HTML、CRLF、
 重复标记和未完成流式标记。真实存储测试检查会话授权、不可变结果和 4 字节分页下的引用恢复。
 浏览器检查渲染真实最终回答组件，覆盖正文中两个 UI 与文字交错、准备结果不重复显示、完整回答复制、
 代码／用户示例保持原文、历史缺少工具缓存、跨页 SSE、会话切换、浅／深色和 375px 窄屏。

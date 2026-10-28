@@ -1,16 +1,8 @@
 <script setup lang="ts">
-import InlineReference from '@/features/inlineUi/InlineReference.vue'
-import {
-  splitInlineReferences,
-  inlineMarkdownReferences,
-  mergeInlineReferences,
-  type InlineTextSegment,
-} from '@/features/inlineUi/references'
+import { computed } from 'vue'
 import Markdown from '@/components/Markdown.vue'
-import { computed, defineAsyncComponent } from 'vue'
-import { splitReplySegments, type ReplySegment } from '@/features/interactive/model'
-const InteractiveAppCard = defineAsyncComponent(() => import('@/features/interactive/InteractiveAppCard.vue'))
-const ReplyChart = defineAsyncComponent(() => import('@/features/inlineUi/InlineChart.vue'))
+import InlineReference from '@/features/inlineUi/InlineReference.vue'
+import { splitInlineReferences, inlineMarkdownReferences, mergeInlineReferences } from '@/features/inlineUi/references'
 
 const props = withDefaults(
   defineProps<{
@@ -24,9 +16,6 @@ const props = withDefaults(
     allowInlineUi?: boolean
     inlineDocuments?: unknown
     inlineSessionId?: string
-    allowApps?: boolean
-    appOwner?: string
-    appDirectory?: string
   }>(),
   {
     mode: 'markdown',
@@ -38,31 +27,17 @@ const props = withDefaults(
     allowInlineUi: false,
     inlineDocuments: null,
     inlineSessionId: '',
-    allowApps: false,
-    appOwner: '',
-    appDirectory: '',
   },
 )
 const references = computed(() =>
-  props.allowInlineUi && props.content.includes('[[inline-ui:') ? inlineMarkdownReferences(props.content) : undefined,
+  props.allowInlineUi && props.content.includes('inline-ui') ? inlineMarkdownReferences(props.content) : undefined,
 )
 const documents = computed(() => mergeInlineReferences(null, props.inlineDocuments))
-const segments = computed<Array<ReplySegment | Exclude<InlineTextSegment, { kind: 'markdown' }>>>(() => {
-  if (props.mode === 'plain') return [{ kind: 'markdown' as const, key: 'md:0', content: props.content }]
-  if (!props.allowInlineUi) return splitReplySegments(props.content, props.allowApps)
-  const result: Array<ReplySegment | Exclude<InlineTextSegment, { kind: 'markdown' }>> = []
-  for (const segment of splitInlineReferences(props.content, props.stream)) {
-    if (segment.kind !== 'markdown') result.push(segment)
-    else
-      result.push(
-        ...splitReplySegments(segment.content, props.allowApps).map((child) => ({
-          ...child,
-          key: `${segment.key}:${child.key}`,
-        })),
-      )
-  }
-  return result
-})
+const segments = computed(() =>
+  props.mode !== 'plain' && props.allowInlineUi
+    ? splitInlineReferences(props.content, props.stream)
+    : [{ kind: 'markdown' as const, key: 'text:0', content: props.content }],
+)
 </script>
 
 <template>
@@ -75,28 +50,17 @@ const segments = computed<Array<ReplySegment | Exclude<InlineTextSegment, { kind
         :documents="documents"
       />
       <span v-else-if="segment.kind === 'pending-reference'" aria-hidden="true" data-inline-reference-pending />
-      <InteractiveAppCard
-        v-else-if="segment.kind === 'app'"
-        :manifest="segment.manifest"
-        :owner="appOwner"
-        :directory="appDirectory"
+      <Markdown
+        v-else
+        :content="segment.content"
+        :references="references"
+        :mode="mode"
+        :stream="stream"
+        :stream-debounce-ms="streamDebounceMs"
+        :source-path="sourcePath"
+        :reveal-anchor="revealAnchor"
+        :reveal-request-seq="revealRequestSeq"
       />
-      <ReplyChart v-else-if="segment.kind === 'chart'" :spec="segment.spec" :source="segment.source" />
-      <template v-else>
-        <p v-if="'error' in segment && segment.error" class="my-2 text-xs text-muted-foreground" role="status">
-          {{ segment.error }}
-        </p>
-        <Markdown
-          :content="segment.content"
-          :references="references"
-          :mode="mode"
-          :stream="stream"
-          :stream-debounce-ms="streamDebounceMs"
-          :source-path="sourcePath"
-          :reveal-anchor="revealAnchor"
-          :reveal-request-seq="revealRequestSeq"
-        />
-      </template>
     </template>
   </div>
 </template>

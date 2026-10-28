@@ -1,7 +1,6 @@
 import { apiJson } from '@/lib/api'
 import { readContent, type ContentPage } from '@/lib/content'
 import { readContentForCopy } from '@/lib/contentCopy'
-import { inlineDocumentFromPresentation, inlineDocumentMarkdown } from './model'
 import { readInlineReference } from './api'
 import {
   splitInlineReferences,
@@ -31,11 +30,6 @@ export async function replyTextForCopy<T extends ReplyCopyPart>(
   const sections: string[] = []
   let documents: InlineUiReferences = Object.create(null)
   for (const part of parts) {
-    const legacy = inlineDocumentFromPresentation(part.agenaPresentation)
-    if (legacy) {
-      sections.push(inlineDocumentMarkdown(legacy))
-      continue
-    }
     documents = mergeInlineReferences(documents, part.agenaInlineUi) || documents
     const content = record(part.agenaContent)
     let text = ''

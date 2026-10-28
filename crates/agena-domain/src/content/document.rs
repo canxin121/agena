@@ -61,9 +61,6 @@ fn validate_block(block: &ViewBlock) -> Result<(), &'static str> {
     match block {
         // Resources are attached to their owning Part. A nested content
         // reference would create a second authorization/GC ownership graph.
-        ViewBlock::InlineUi { document, .. } => document
-            .validate()
-            .map_err(|_| "invalid inline UI document"),
         ViewBlock::Content { .. } => Err("nested content references are not document blocks"),
         ViewBlock::Table { columns, rows, .. } => {
             if columns.is_empty()

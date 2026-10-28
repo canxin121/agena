@@ -89,7 +89,7 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
     if !subagent {
         let inline_ui = plugin_tools(tools, "agena.inline_ui", &["guide", "validate", "prepare"]);
         if has("agena.inline_ui.prepare") && !inline_ui.is_empty() {
-            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Preparing content does not display it. Put the exact returned embed on a standalone line in the normal answer, with blank lines before and after. Web and TUI resolve it at that position. Do not print the document JSON. This is explanation, not an app or task-progress system."));
+            paragraphs.push(format!("Use Inline Generative UI ({inline_ui}) only when visual structure makes your answer clearer. Start with guide, then read only the needed content kind. Preparing content does not display it. Paste the entire returned inline-ui code fence unchanged between Markdown paragraphs. Its body contains only the reference ID. Web and TUI resolve it at that position. Do not add an outer fence or print the document JSON. This is explanation, not an app or task-progress system."));
         }
     }
 

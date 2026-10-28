@@ -58,7 +58,7 @@ pub(crate) async fn resolve_inline_text(
     session: SessionId,
     text: &str,
 ) -> Result<Option<InlineUiReferences>, KernelError> {
-    if !text.contains(agena_domain::INLINE_UI_REFERENCE_PREFIX) {
+    if !text.contains("ui_") {
         return Ok(None);
     }
     let mut refs = InlineUiReferences::new();

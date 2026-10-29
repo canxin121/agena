@@ -11,11 +11,12 @@ export type AppSnapshot = {
 }
 export const appApiPath = (owner: string, id: string) =>
   `/api/v1/workbench/apps/${encodeURIComponent(owner)}/${encodeURIComponent(id)}`
-export const saveApp = (owner: string, directory: string, manifest: AppManifest) =>
+export const saveApp = (owner: string, directory: string, manifest: AppManifest, signal?: AbortSignal) =>
   apiJson<AppSnapshot>(appApiPath(owner, manifest.id), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ directory, manifest }),
+    signal,
   })
 
 export async function bridgeFetch(

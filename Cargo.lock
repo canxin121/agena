@@ -138,6 +138,7 @@ dependencies = [
  "agena-failure",
  "agena-git-http",
  "agena-mcp-server",
+ "agena-process",
  "agena-runtime",
  "agena-secret-store",
  "agena-storage",

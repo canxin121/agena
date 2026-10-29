@@ -18,6 +18,7 @@ mod extract;
 mod fetch;
 mod fetch_coordinator;
 mod index;
+pub mod managed_preview;
 mod metadata;
 mod model;
 pub mod network;

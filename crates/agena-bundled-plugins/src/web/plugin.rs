@@ -1,6 +1,7 @@
 mod content;
 mod downloads;
 mod fetch_transport;
+mod managed_preview;
 mod network_policy;
 mod playwright;
 mod rendered_fetch;
@@ -18,6 +19,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use agena_web::managed_preview::ManagedPreviewTarget;
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
@@ -763,6 +765,9 @@ struct BrowserActivityState {
     clients: Arc<tokio::sync::Mutex<BTreeMap<String, CdpClient>>>,
     connecting: Arc<tokio::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     meta: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionMeta>>>,
+    /// Host-issued preview leases are installed before CDP attaches, including
+    /// while an opening page has not yet acquired activity metadata.
+    previews: Arc<tokio::sync::Mutex<BTreeMap<String, ManagedPreviewTarget>>>,
     logs: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionLog>>>,
     root: Arc<tokio::sync::Mutex<Option<CdpClient>>>,
     contexts: Arc<tokio::sync::Mutex<BTreeMap<(PathBuf, Option<i64>), String>>>,
@@ -786,6 +791,7 @@ impl BrowserActivityState {
             clients: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             connecting: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             meta: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            previews: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             logs: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             root: Arc::new(tokio::sync::Mutex::new(None)),
             contexts: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -859,6 +865,7 @@ impl BrowserActivityState {
             return Ok(false);
         }
         self.clients.lock().await.remove(target_id);
+        self.previews.lock().await.remove(target_id);
         self.actions.lock().await.remove(target_id);
         self.connecting.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1170,10 +1177,16 @@ struct CrawlWebSearchInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("url"), non_empty("url"))]
+#[input(trim("url", "preview_id"), non_empty_if_present("url", "preview_id"))]
 #[serde(deny_unknown_fields)]
 struct BrowserOpenInput {
-    url: String,
+    /// Public HTTP(S) URL. Supply exactly one of url and preview_id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    /// Running preview owned by this workspace and Agena session. Use browser_list
+    /// to discover IDs. Private URLs are never accepted through the url field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview_id: Option<String>,
     #[serde(default = "default_browser_action_timeout_ms")]
     #[schemars(range(min = 1, max = 120000))]
     timeout_ms: u64,
@@ -1367,6 +1380,7 @@ impl WebPlugin {
     async fn shutdown(&self) -> SdkResult<()> {
         // Drop CDP sockets before killing the underlying browser process.
         self.browser_state.clients.lock().await.clear();
+        self.browser_state.previews.lock().await.clear();
         *self.browser_state.root.lock().await = None;
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let sessions = std::mem::take(&mut *self.browser_state.meta.lock().await)
@@ -1644,8 +1658,11 @@ impl WebPlugin {
         let gate = self.browser_state.action_gate(target).await;
         let _guard = gate.lock().await;
         self.require_browser_owner(context, target).await?;
+        self.validate_browser_preview_state(target).await?;
         let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        action.await
+        let result = action.await?;
+        self.validate_browser_preview_state(target).await?;
+        Ok(result)
     }
 
     /// `browser_open` creates a target this caller does not own yet, so it
@@ -1678,6 +1695,58 @@ impl WebPlugin {
             ));
         }
         Ok(())
+    }
+
+    async fn browser_preview(&self, target: &str) -> Option<ManagedPreviewTarget> {
+        self.browser_state
+            .previews
+            .lock()
+            .await
+            .get(target)
+            .cloned()
+    }
+
+    async fn validate_browser_preview_lease(&self, target: &str) -> SdkResult<()> {
+        if let Some(preview) = self.browser_preview(target).await {
+            preview.validate().await.map_err(managed_preview::denied)?;
+            managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref())
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn validate_browser_preview_state(&self, target: &str) -> SdkResult<()> {
+        let Some(preview) = self.browser_preview(target).await else {
+            return Ok(());
+        };
+        preview.validate().await.map_err(managed_preview::denied)?;
+        managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref()).await?;
+        let page = self.browser_client(Some(target)).await?;
+        let location = page.evaluate("String(location.href)").await?;
+        let location = location
+            .as_str()
+            .ok_or_else(|| managed_preview::denied("browser did not return a committed URL"))?;
+        let url = url::Url::parse(location)
+            .map_err(|_| managed_preview::denied("browser returned an invalid committed URL"))?;
+        preview
+            .validate_url(&url)
+            .await
+            .map_err(managed_preview::denied)
+    }
+
+    async fn validate_browser_url(&self, target: &str, url: &url::Url) -> SdkResult<()> {
+        let preview = self.browser_preview(target).await;
+        if managed_preview::authorize_request(
+            preview.as_ref(),
+            url,
+            true,
+            self.state()?.host.as_ref(),
+        )
+        .await?
+        {
+            return Ok(());
+        }
+        self.validate_network_target(url).await
     }
 
     async fn browser_context_for_owner(
@@ -1820,17 +1889,32 @@ impl WebPlugin {
         let endpoint = self.browser_endpoint().await?;
         let host = self.state()?.host.clone();
         let network = self.config()?.network.clone();
-        let policy: BrowserRequestPolicy = Arc::new(move |url, _| {
+        let preview = self.browser_preview(target_id).await;
+        let policy: BrowserRequestPolicy = Arc::new(move |raw_url, is_document| {
             let host = host.clone();
             let network = network.clone();
+            let preview = preview.clone();
             Box::pin(async move {
+                let url = prepare_fetch_url(&raw_url).map_err(crawl_error_to_plugin)?;
                 if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
                     return Err(PluginError::internal(
                         "browser network authorization requires an active tool call",
                     ));
                 }
-                host.require_network_permission(url.clone()).await?;
-                let url = prepare_fetch_url(&url).map_err(crawl_error_to_plugin)?;
+                // The run lease limits the private-network exception, while
+                // the live host still authorizes its actual upstream endpoint.
+                // Owning a child is not proof that it owns the selected port.
+                if managed_preview::authorize_request(
+                    preview.as_ref(),
+                    &url,
+                    is_document,
+                    host.as_ref(),
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+                host.require_network_permission(raw_url).await?;
                 validate_public_network_target(&url, &network).await
             })
         });
@@ -2053,7 +2137,7 @@ impl WebPlugin {
         if let Some(final_url) = snapshot.get("url").and_then(serde_json::Value::as_str)
             && let Ok(final_url) = url::Url::parse(final_url)
         {
-            self.validate_network_target(&final_url).await?;
+            self.validate_browser_url(target_id, &final_url).await?;
         }
         Ok(snapshot)
     }
@@ -2557,7 +2641,8 @@ impl WebPlugin {
     #[tool(
         tags(network, interactive, mutate, read_only),
         name = "browser_open",
-        summary = "Open a page in a managed interactive browser session.",
+        summary = "Open a public page or an owned running preview in a managed interactive browser session.",
+        help = "Supply exactly one of url or preview_id. browser_list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.",
         translations(
             locale("ar-SA", summary = "افتح صفحة في جلسة متصفح تفاعلية مُدارة."),
             locale(
@@ -2595,11 +2680,36 @@ impl WebPlugin {
         input: &BrowserOpenInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let owner = browser_owner(context)?;
-        let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
+        let (url, preview) = match managed_preview::open_target(input)? {
+            managed_preview::OpenTarget::Public(raw_url) => {
+                let url = prepare_fetch_url(raw_url).map_err(crawl_error_to_plugin)?;
+                self.validate_network_target(&url).await?;
+                (url, None)
+            }
+            managed_preview::OpenTarget::Preview(preview_id) => {
+                let preview = agena_web::managed_preview::resolve_managed_preview(
+                    &owner.workspace,
+                    &context.session_id.to_string(),
+                    preview_id,
+                )
+                .await
+                .map_err(managed_preview::denied)?;
+                preview.validate().await.map_err(managed_preview::denied)?;
+                managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref())
+                    .await?;
+                (preview.url().clone(), Some(preview))
+            }
+        };
         let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        self.validate_network_target(&url).await?;
         self.ensure_browser_activity_source().await?;
-        let preflight_redirects = self.browser_preflight_redirects(&url).await?;
+        // Do not send the capability through the public HTTP preflight route.
+        // The gateway validates every real request and Fetch checks every
+        // document redirect against this exact origin before dispatch.
+        let preflight_redirects = if preview.is_some() {
+            Vec::new()
+        } else {
+            self.browser_preflight_redirects(&url).await?
+        };
         let browser = self.browser_client(None).await?;
         let browser_context_id = self.browser_context_for_owner(&browser, &owner).await?;
         let created = browser
@@ -2617,6 +2727,18 @@ impl WebPlugin {
         // before attaching; take the target's action gate to keep every later
         // action on this page behind the initialization below.
         let _action_guard = self.lock_new_browser_action(&target_id).await;
+        if let Some(preview) = &preview {
+            self.browser_state
+                .previews
+                .lock()
+                .await
+                .insert(target_id.clone(), preview.clone());
+        }
+        let mut opening_guard = managed_preview::OpeningGuard::new(
+            self.browser_state.clone(),
+            target_id.clone(),
+            self.state()?.host.clone(),
+        );
         let (event_tx, event_rx) = mpsc::channel::<CdpEvent>(512);
         let page = match self
             .browser_client_with_events(Some(target_id.as_str()), Some(event_tx))
@@ -2624,6 +2746,13 @@ impl WebPlugin {
         {
             Ok(page) => page,
             Err(error) => {
+                self.browser_state.previews.lock().await.remove(&target_id);
+                self.browser_state.actions.lock().await.remove(&target_id);
+                self.browser_state
+                    .connecting
+                    .lock()
+                    .await
+                    .remove(&target_id);
                 if let Err(cleanup_error) = browser
                     .command(
                         "Target.closeTarget",
@@ -2648,6 +2777,14 @@ impl WebPlugin {
         }
         .await
         {
+            self.forget_browser_client(&target_id).await;
+            self.browser_state.previews.lock().await.remove(&target_id);
+            self.browser_state.actions.lock().await.remove(&target_id);
+            self.browser_state
+                .connecting
+                .lock()
+                .await
+                .remove(&target_id);
             if let Err(cleanup_error) = browser
                 .command(
                     "Target.closeTarget",
@@ -2689,6 +2826,13 @@ impl WebPlugin {
             .await
         {
             self.forget_browser_client(target_id.as_str()).await;
+            self.browser_state.previews.lock().await.remove(&target_id);
+            self.browser_state.actions.lock().await.remove(&target_id);
+            self.browser_state
+                .connecting
+                .lock()
+                .await
+                .remove(&target_id);
             self.browser_state.meta.lock().await.remove(&target_id);
             self.browser_state.logs.lock().await.remove(&target_id);
             let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -2759,6 +2903,8 @@ impl WebPlugin {
                 return Err(error);
             }
         };
+        self.validate_browser_preview_state(&target_id).await?;
+        opening_guard.disarm();
         Ok(ToolInvokeOutput::from_parts(
             format!("Open browser · {title_target}"),
             browser_snapshot_summary(&snapshot),
@@ -2773,6 +2919,9 @@ impl WebPlugin {
                 "snapshot": snapshot,
                 "preflight_redirects": preflight_redirects,
                 "document_requests_intercepted": true,
+                "preview_id": preview.as_ref().map(ManagedPreviewTarget::preview_id),
+                "preview_generation": preview.as_ref().map(ManagedPreviewTarget::generation),
+                "managed_preview_network_policy": preview.as_ref().map(|_| managed_preview::POLICY_DESCRIPTION),
             })),
             std::collections::BTreeMap::new(),
             Vec::new(),
@@ -2826,6 +2975,12 @@ impl WebPlugin {
         _input: &BrowserListInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let owner = browser_owner(context)?;
+        let previews = agena_web::managed_preview::list_managed_previews(
+            &owner.workspace,
+            &context.session_id.to_string(),
+        )
+        .await
+        .map_err(managed_preview::denied)?;
         let owned: BTreeSet<String> = self
             .browser_state
             .meta
@@ -2864,6 +3019,7 @@ impl WebPlugin {
                     "browser_running": false,
                     "interaction_backend": self.config()?.browser.interaction_backend,
                     "sessions": [],
+                    "previews": previews,
                 })),
                 std::collections::BTreeMap::new(),
                 Vec::new(),
@@ -2902,6 +3058,7 @@ impl WebPlugin {
                 "browser_running": true,
                 "interaction_backend": self.config()?.browser.interaction_backend,
                 "sessions": sessions,
+                "previews": previews,
             })),
             std::collections::BTreeMap::new(),
             Vec::new(),
@@ -2949,16 +3106,19 @@ impl WebPlugin {
         input: &BrowserSessionInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let host = self.state()?.host.clone();
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
+        let gate = self.browser_state.action_gate(&input.session_id).await;
+        let _guard = gate.lock().await;
+        self.require_browser_owner(context, &input.session_id)
+            .await?;
         let closed = self
-            .with_browser_action(context, input.session_id.as_str(), async {
-                self.browser_state
-                    .close_session(
-                        &input.session_id,
-                        &format!("Closed browser session {}.", input.session_id),
-                        host.as_ref(),
-                    )
-                    .await
-            })
+            .browser_state
+            .close_session(
+                &input.session_id,
+                &format!("Closed browser session {}.", input.session_id),
+                host.as_ref(),
+            )
             .await?;
         if !closed {
             return Err(PluginError::invalid_params(format!(
@@ -3636,10 +3796,16 @@ impl WebPlugin {
         let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
         self.require_browser_owner(context, &input.session_id)
             .await?;
+        self.validate_browser_preview_state(&input.session_id)
+            .await?;
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        self.validate_network_target(&url).await?;
-        let preflight_redirects = self.browser_preflight_redirects(&url).await?;
+        self.validate_browser_url(&input.session_id, &url).await?;
+        let preflight_redirects = if self.browser_preview(&input.session_id).await.is_some() {
+            Vec::new()
+        } else {
+            self.browser_preflight_redirects(&url).await?
+        };
         let download_dir = agena_storage_layout::StorageLayout::current()
             .artifacts_dir(self.workspace_root()?)
             .join("browser/downloads")
@@ -3666,6 +3832,8 @@ impl WebPlugin {
             Some(action_guard),
         )
         .await?;
+        self.validate_browser_preview_lease(&input.session_id)
+            .await?;
         let filename = result
             .path
             .file_name()

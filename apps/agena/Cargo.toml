@@ -32,6 +32,7 @@ agena-tui = { workspace = true }
 agena-tui-app = { workspace = true }
 agena-tui-platform = { workspace = true }
 agena-web = { workspace = true }
+agena-process = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
@@ -30,13 +30,12 @@ import SearchInput from '@/components/ui/SearchInput.vue'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import type { WorkspacePreviewSession } from '@/features/workspacePreview/api/workspacePreviewApi'
-import { buildPreviewFrameSrc } from '@/features/workspacePreview/model/previewUrl'
+import { usePreviewSessionForm } from '../model/usePreviewSessionForm'
+import { usePreviewHealth, type PreviewHealthState } from '../model/usePreviewHealth'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
-import { apiUrl } from '@/lib/api'
-import { limitBackgroundReads } from '@/lib/backgroundReads'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useVisibleSubscription } from '@/composables/useVisibleSubscription'
 import { useChatStore } from '@/stores/chat'
@@ -63,15 +62,28 @@ const sidebarQueryNorm = computed(() =>
     .toLowerCase(),
 )
 
-const createDialogOpen = ref(false)
-const createPreviewId = ref('')
-const createRunDirectory = ref('')
-const createCommand = ref('')
-const createArgsText = ref('')
-const createLogsPath = ref('')
-const createTargetUrl = ref('')
-const actionLoading = ref(false)
-const actionError = ref('')
+const {
+  createDialogOpen,
+  createPreviewId,
+  createRunDirectory,
+  createCommand,
+  createArgsText,
+  createArgsError,
+  createLogsPath,
+  createTargetUrl,
+  actionLoading,
+  actionError,
+  canCreateSession,
+  createManagedSession,
+  openCreateDialog,
+} = usePreviewSessionForm({
+  directory: currentDirectory,
+  createSession: (input) => preview.createSession(input),
+  onCreated: () => {
+    clearSessionHealth()
+    probeVisibleSessions()
+  },
+})
 
 const editDialogOpen = ref(false)
 const editSessionId = ref('')
@@ -101,28 +113,6 @@ const canSaveRename = computed(() => !renameBusy.value && renameDraftNorm.value.
 const rowMenuSession = computed(
   () => previewSessions.value.find((session) => session.id === rowMenuSessionId.value) || null,
 )
-
-type SessionHealthState = 'unknown' | 'checking' | 'ok' | 'error'
-type SessionHealthEntry = { state: SessionHealthState; checkedAt: number; target: string; failures: number }
-
-const HEALTH_TTL_MS = 60_000
-const HEALTH_TIMEOUT_MS = 3_500
-
-const healthBySessionId = ref<Record<string, SessionHealthEntry>>({})
-const healthInFlight = new Set<string>()
-const healthControllers = new Map<string, AbortController>()
-
-const createPreviewIdNorm = computed(() => String(createPreviewId.value || '').trim())
-const createPreviewIdValid = computed(() => /^[A-Za-z0-9_-]+$/.test(createPreviewIdNorm.value))
-const createRunDirectoryNorm = computed(() => String(createRunDirectory.value || '').trim())
-const createCommandNorm = computed(() => String(createCommand.value || '').trim())
-const createArgsList = computed(() =>
-  String(createArgsText.value || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean),
-)
-const createLogsPathNorm = computed(() => String(createLogsPath.value || '').trim())
 
 const previewSessions = computed<WorkspacePreviewSession[]>(() =>
   Array.isArray(preview.sessions) ? preview.sessions : [],
@@ -161,49 +151,12 @@ function sessionStateLooksError(state: unknown): boolean {
   return s === 'error' || s === 'failed' || s === 'crashed'
 }
 
-function setSessionHealth(sessionId: string, entry: SessionHealthEntry) {
-  healthBySessionId.value = {
-    ...healthBySessionId.value,
-    [sessionId]: entry,
-  }
-}
-
-function clearSessionHealth(sessionId?: string) {
-  if (!sessionId) {
-    for (const controller of healthControllers.values()) {
-      try {
-        controller.abort()
-      } catch {
-        // ignore
-      }
-    }
-    healthControllers.clear()
-    healthInFlight.clear()
-    healthBySessionId.value = {}
-    return
-  }
-
-  const controller = healthControllers.get(sessionId)
-  if (controller) {
-    try {
-      controller.abort()
-    } catch {
-      // ignore
-    }
-    healthControllers.delete(sessionId)
-  }
-  healthInFlight.delete(sessionId)
-
-  const { [sessionId]: _removed, ...rest } = healthBySessionId.value
-  healthBySessionId.value = rest
-}
-
-function sessionHealthState(sessionId: string): SessionHealthState {
+function sessionHealthState(sessionId: string): PreviewHealthState {
   const entry = healthBySessionId.value[sessionId]
   return entry?.state || 'unknown'
 }
 
-function sessionHealthLabel(state: SessionHealthState): string {
+function sessionHealthLabel(state: PreviewHealthState): string {
   if (state === 'ok') return String(t('header.status.online'))
   if (state === 'error') return String(t('header.status.offline'))
   if (state === 'checking') return String(t('workspaceDock.loading'))
@@ -227,94 +180,6 @@ function sessionDotLabel(session: WorkspacePreviewSession): string {
   const health = sessionHealthState(session.id)
   if (health === 'unknown' && sessionStateLooksError(session.state)) return String(t('header.status.offline'))
   return sessionHealthLabel(health)
-}
-
-async function probeSessionHealth(session: WorkspacePreviewSession) {
-  if (!visible.value) return
-  const sessionId = String(session.id || '').trim()
-  if (!sessionId) return
-  const state = normalizeSessionState(session.state)
-  if (state === 'stopped' || state === 'idle') return
-  if (preview.loading) return
-  if (healthInFlight.has(sessionId)) return
-
-  const now = Date.now()
-  const target = `${session.proxyBasePath}:${session.targetUrl}:${session.state}:${session.pid ?? ''}`
-  const prev = healthBySessionId.value[sessionId]
-  const retryAfter =
-    prev?.state === 'ok' ? HEALTH_TTL_MS : Math.min(300_000, HEALTH_TTL_MS * 2 ** (prev?.failures ?? 0))
-  if (prev?.target === target && now - prev.checkedAt < retryAfter) {
-    return
-  }
-
-  const prevController = healthControllers.get(sessionId)
-  if (prevController) {
-    try {
-      prevController.abort()
-    } catch {
-      // ignore
-    }
-  }
-
-  const controller = new AbortController()
-  healthControllers.set(sessionId, controller)
-  healthInFlight.add(sessionId)
-  setSessionHealth(sessionId, { state: 'checking', checkedAt: now, target, failures: prev?.failures ?? 0 })
-
-  const timeoutId = window.setTimeout(() => {
-    try {
-      controller.abort()
-    } catch {
-      // ignore
-    }
-  }, HEALTH_TIMEOUT_MS)
-
-  try {
-    const src = buildPreviewFrameSrc(session.proxyBasePath, now)
-    if (!src) {
-      setSessionHealth(sessionId, {
-        state: 'error',
-        checkedAt: Date.now(),
-        target,
-        failures: (prev?.failures ?? 0) + 1,
-      })
-      return
-    }
-
-    const resp = await limitBackgroundReads(
-      () =>
-        fetch(apiUrl(src), {
-          method: 'HEAD',
-          credentials: 'include',
-          cache: 'no-store',
-          signal: controller.signal,
-          headers: {
-            accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-          },
-        }),
-      controller.signal,
-    )
-    if (controller.signal.aborted || !visible.value) return
-    const ok = resp.ok || resp.status === 304
-    setSessionHealth(sessionId, {
-      state: ok ? 'ok' : 'error',
-      checkedAt: Date.now(),
-      target,
-      failures: ok ? 0 : (prev?.failures ?? 0) + 1,
-    })
-  } catch {
-    if (visible.value && healthControllers.get(sessionId) === controller)
-      setSessionHealth(sessionId, {
-        state: 'error',
-        checkedAt: Date.now(),
-        target,
-        failures: Math.min(4, (prev?.failures ?? 0) + 1),
-      })
-  } finally {
-    window.clearTimeout(timeoutId)
-    healthInFlight.delete(sessionId)
-    if (healthControllers.get(sessionId) === controller) healthControllers.delete(sessionId)
-  }
 }
 
 const SECTION_PAGE_SIZE = 4
@@ -409,18 +274,15 @@ const visibleSessionsForHealth = computed(() => {
   return out
 })
 
-const visibleSessionIdKey = computed(() =>
-  visibleSessionsForHealth.value
-    .map((session) => `${session.id}:${session.targetUrl}:${session.state}:${session.pid ?? ''}`)
-    .join('|'),
-)
-
-function probeVisibleSessions() {
-  if (preview.loading) return
-  for (const session of visibleSessionsForHealth.value) {
-    void probeSessionHealth(session)
-  }
-}
+const {
+  entries: healthBySessionId,
+  clear: clearSessionHealth,
+  refresh: probeVisibleSessions,
+} = usePreviewHealth({
+  sessions: visibleSessionsForHealth,
+  visible,
+  loading: computed(() => preview.loading),
+})
 
 function canEditTargetUrl(session: WorkspacePreviewSession | null | undefined): boolean {
   return Boolean(String(session?.targetUrl || '').trim())
@@ -496,113 +358,6 @@ async function refreshSessions(opts?: { forceFrameReload?: boolean }) {
   await preview.refreshSessions({ force: true })
   if (opts?.forceFrameReload) preview.bumpRefreshToken()
   probeVisibleSessions()
-}
-
-function openCreateDialog() {
-  actionError.value = ''
-  const suggestedId = createPreviewIdNorm.value || suggestPreviewIdFromDirectory(currentDirectory.value)
-  if (!createPreviewIdNorm.value) {
-    createPreviewId.value = suggestedId
-  }
-  if (!createRunDirectoryNorm.value) {
-    createRunDirectory.value = currentDirectory.value
-  }
-  if (!createLogsPathNorm.value) {
-    createLogsPath.value = suggestLogsPath(suggestedId)
-  }
-  createDialogOpen.value = true
-}
-
-function suggestPreviewIdFromDirectory(directory: string): string {
-  const trimmed = String(directory || '')
-    .trim()
-    .replace(/[\\/]+$/, '')
-  if (!trimmed) return ''
-  const parts = trimmed.split(/[\\/]/).filter(Boolean)
-  const base = String(parts[parts.length - 1] || '').trim()
-  if (!base) return ''
-  const normalized = base
-    .replace(/\s+/g, '-')
-    .replace(/[^A-Za-z0-9_-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-_]+|[-_]+$/g, '')
-  return normalized
-}
-
-function suggestLogsPath(sessionId: string): string {
-  const clean = String(sessionId || '').trim() || 'preview'
-  return `.agena/preview/${clean}.log`
-}
-
-async function createManagedSession() {
-  if (!currentDirectory.value.trim()) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.directoryRequired'))
-    return
-  }
-
-  if (!createPreviewIdNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.sessionIdRequired'))
-    return
-  }
-  if (!createPreviewIdValid.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.sessionIdInvalid'))
-    return
-  }
-
-  if (!createRunDirectoryNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.runDirectoryRequired'))
-    return
-  }
-
-  if (!createCommandNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.commandRequired'))
-    return
-  }
-
-  if (createArgsList.value.length === 0) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.argsRequired'))
-    return
-  }
-
-  if (!createLogsPathNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.logsPathRequired'))
-    return
-  }
-
-  const targetUrl = createTargetUrl.value.trim()
-  if (!targetUrl) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.targetUrlRequired'))
-    return
-  }
-
-  actionLoading.value = true
-  actionError.value = ''
-  try {
-    await preview.createSession({
-      id: createPreviewIdNorm.value,
-      directory: currentDirectory.value,
-      runDirectory: createRunDirectoryNorm.value,
-      command: createCommandNorm.value,
-      args: createArgsList.value,
-      logsPath: createLogsPathNorm.value,
-      targetUrl,
-      select: true,
-    })
-    createPreviewId.value = ''
-    createRunDirectory.value = ''
-    createCommand.value = ''
-    createArgsText.value = ''
-    createLogsPath.value = ''
-    createTargetUrl.value = ''
-    createDialogOpen.value = false
-    clearSessionHealth()
-    probeVisibleSessions()
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    actionError.value = String(t('workspaceDock.preview.emptyState.createFailed', { detail }))
-  } finally {
-    actionLoading.value = false
-  }
 }
 
 function isRenamingSession(session: WorkspacePreviewSession, scope: PreviewSidebarScope): boolean {
@@ -891,22 +646,6 @@ watch(
 )
 
 watch(
-  () => visibleSessionIdKey.value,
-  () => {
-    probeVisibleSessions()
-  },
-  { immediate: true },
-)
-
-watch(
-  () => preview.loading,
-  (loading) => {
-    if (!loading) probeVisibleSessions()
-  },
-  { immediate: true },
-)
-
-watch(
   chatPageCount,
   () => {
     const clamped = chatPageClamped.value
@@ -953,24 +692,6 @@ watch(currentDirectoryNorm, (next, prev) => {
   if (next === prev) return
   directorySectionPage.value = 0
 })
-
-onMounted(() => {
-  probeVisibleSessions()
-})
-
-function onHealthVisibility() {
-  if (visible.value) probeVisibleSessions()
-  else {
-    for (const controller of healthControllers.values()) controller.abort()
-    for (const [id, entry] of Object.entries(healthBySessionId.value))
-      if (entry.state === 'checking') clearSessionHealth(id)
-  }
-}
-
-onBeforeUnmount(() => {
-  clearSessionHealth()
-})
-watch(visible, onHealthVisibility, { flush: 'sync' })
 
 function selectSession(sessionId: string) {
   preview.selectSession(sessionId)
@@ -1712,10 +1433,11 @@ function selectSession(sessionId: string) {
             id="workspace-preview-args-sidebar-dialog"
             v-model="createArgsText"
             type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.argsPlaceholder'))"
+            placeholder='["--host", "127.0.0.1", "--name", "My app"]'
             :disabled="actionLoading"
             class="h-8 bg-background/80 text-xs font-mono"
           />
+          <p v-if="createArgsError" class="text-xs text-destructive" role="alert">{{ createArgsError }}</p>
         </div>
 
         <div class="space-y-1">
@@ -1764,21 +1486,7 @@ function selectSession(sessionId: string) {
           <Button size="sm" variant="outline" :disabled="actionLoading" @click="createDialogOpen = false">
             {{ t('common.cancel') }}
           </Button>
-          <Button
-            size="sm"
-            :disabled="
-              actionLoading ||
-              !currentDirectory.trim() ||
-              !createPreviewIdNorm.trim() ||
-              !createPreviewIdValid ||
-              !createRunDirectoryNorm.trim() ||
-              !createCommandNorm.trim() ||
-              createArgsList.length === 0 ||
-              !createLogsPathNorm.trim() ||
-              !createTargetUrl.trim()
-            "
-            @click="createManagedSession"
-          >
+          <Button size="sm" :disabled="!canCreateSession" @click="createManagedSession">
             {{ t('workspaceDock.preview.emptyState.addAction') }}
           </Button>
         </div>

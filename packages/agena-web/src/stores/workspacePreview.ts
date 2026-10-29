@@ -29,6 +29,13 @@ import {
   writePreviewSessionId,
   type PreviewSessionScope,
 } from '@/stores/previewSessionScope'
+import {
+  createPreviewRefreshScope,
+  forgetPreviewRefreshSession,
+  readPreviewRefreshToken,
+  refreshPreviewSession,
+  refreshPreviewWindow,
+} from '@/stores/previewRefreshScope'
 
 const STORAGE_PREVIEW_ACTIVE_SESSION_ID = localStorageKeys.ui.workspacePreviewActiveSessionId
 const STORAGE_PREVIEW_SIDEBAR_QUERY = localStorageKeys.ui.workspacePreviewSidebarQuery
@@ -174,7 +181,8 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
   let viewportPersistTimer: ReturnType<typeof setTimeout> | null = null
   const loading = ref(false)
   const error = ref('')
-  const refreshToken = ref(0)
+  const refreshScope = ref(createPreviewRefreshScope())
+  const refreshToken = computed(() => readRefreshTokenForWindow(null))
 
   const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value) || null)
 
@@ -378,8 +386,20 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     touchSimulation.value = Boolean(value)
   }
 
+  function readRefreshTokenForWindow(windowId?: string | null): number {
+    return readPreviewRefreshToken(refreshScope.value, windowId, readActiveSessionIdForWindow(windowId))
+  }
+
+  function bumpRefreshTokenForWindow(windowId?: string | null) {
+    refreshScope.value = refreshPreviewWindow(refreshScope.value, windowId)
+  }
+
   function bumpRefreshToken() {
-    refreshToken.value += 1
+    bumpRefreshTokenForWindow(null)
+  }
+
+  function bumpSessionRefreshToken(sessionId: string) {
+    refreshScope.value = refreshPreviewSession(refreshScope.value, sessionId)
   }
 
   let refreshInFlight: Promise<void> | null = null
@@ -430,7 +450,9 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
         applySessionChanges(upsert as WorkspacePreviewSession[], delta.removed, delta.reset === true)
       },
     })
-    liveRefresh.resume()
+    // Resume with one authoritative read even if the earlier read was aborted
+    // before an SSE delta arrived. An idle revalidator has no pending work.
+    liveRefresh.invalidate(0)
   }
 
   function applySessionChanges(upsert: WorkspacePreviewSession[], removed: string[] = [], reset = false) {
@@ -483,17 +505,23 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
         const generation = refreshGeneration
         const controller = new AbortController()
         refreshController = controller
-        const timeout = window.setTimeout(() => controller.abort(), 30_000)
+        const timeout = window.setTimeout(
+          () => controller.abort(new DOMException('Preview session list timed out', 'TimeoutError')),
+          30_000,
+        )
         try {
           const nextSessions = await listWorkspacePreviewSessions(controller.signal, force)
           if (!disposed && generation === refreshGeneration) {
             applySessionChanges(nextSessions, [], true)
           }
         } catch (err) {
-          if (!disposed && generation === refreshGeneration)
+          const cancelled = controller.signal.aborted && controller.signal.reason?.name !== 'TimeoutError'
+          if (!disposed && generation === refreshGeneration && !cancelled)
             error.value = err instanceof Error ? err.message : String(err)
+          if (cancelled) refreshAgain = false
         } finally {
           window.clearTimeout(timeout)
+          if (refreshController === controller) refreshController = null
         }
       } while (refreshAgain && !disposed)
     })().finally(() => {
@@ -555,7 +583,7 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
   ) {
     const session = await updateWorkspacePreviewSession(sessionId, patch)
     applySessionChanges([session])
-    if (isActiveSession(session.id)) bumpRefreshToken()
+    if (isActiveSession(session.id)) bumpSessionRefreshToken(session.id)
     return session
   }
 
@@ -564,12 +592,13 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     // Drop the id from every pane that had selected it, not only the default.
     clearActiveSessionId(sessionId)
     applySessionChanges([], [sessionId])
-    bumpRefreshToken()
+    refreshScope.value = forgetPreviewRefreshSession(refreshScope.value, sessionId)
   }
 
   async function renameSession(sessionId: string, newId: string) {
     const updated = await renameWorkspacePreviewSession(sessionId, newId)
-    if (replaceActiveSessionId(sessionId, updated.id)) bumpRefreshToken()
+    if (replaceActiveSessionId(sessionId, updated.id)) bumpSessionRefreshToken(updated.id)
+    refreshScope.value = forgetPreviewRefreshSession(refreshScope.value, sessionId)
     applySessionChanges([updated], [sessionId])
     return updated
   }
@@ -577,14 +606,14 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
   async function startSession(sessionId: string) {
     const updated = await startWorkspacePreviewSession(sessionId)
     applySessionChanges([updated])
-    if (isActiveSession(updated.id)) bumpRefreshToken()
+    if (isActiveSession(updated.id)) bumpSessionRefreshToken(updated.id)
     return updated
   }
 
   async function stopSession(sessionId: string) {
     const updated = await stopWorkspacePreviewSession(sessionId)
     applySessionChanges([updated])
-    if (isActiveSession(updated.id)) bumpRefreshToken()
+    if (isActiveSession(updated.id)) bumpSessionRefreshToken(updated.id)
     return updated
   }
 
@@ -608,6 +637,8 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     loading,
     error,
     refreshToken,
+    readRefreshTokenForWindow,
+    bumpRefreshTokenForWindow,
     selectSession,
     sessionLabel,
     createSession,
@@ -642,6 +673,8 @@ function scopedPreview(store: WorkspacePreviewStore, pane: WorkspacePaneContext)
     get(target, property, receiver) {
       if (property === 'activeSessionId') return target.readActiveSessionIdForWindow(windowId())
       if (property === 'activeSession') return target.activeSessionForWindow(windowId())
+      if (property === 'refreshToken') return target.readRefreshTokenForWindow(windowId())
+      if (property === 'bumpRefreshToken') return () => target.bumpRefreshTokenForWindow(windowId())
       if (property === 'selectSession') {
         return (sessionId: string) => target.selectSessionForWindow(windowId(), sessionId)
       }
@@ -652,7 +685,7 @@ function scopedPreview(store: WorkspacePreviewStore, pane: WorkspacePaneContext)
           const session = await target.createSession({ ...input, select: false })
           if (input.select !== false) {
             target.selectSessionForWindow(windowId(), session.id)
-            target.bumpRefreshToken()
+            target.bumpRefreshTokenForWindow(windowId())
           }
           return session
         }

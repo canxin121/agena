@@ -13,6 +13,26 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::server::{diagnostics::health, state::AppState};
 
+/// Deployment supervisors normally send SIGTERM. It must follow the same
+/// preview-process cleanup path as an interactive Ctrl-C.
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            signal = terminate.recv() => signal.ok_or_else(|| {
+                std::io::Error::other("the SIGTERM signal stream closed unexpectedly")
+            }),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
+}
+
 fn fs_router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
         .route("/api/v1/workbench/fs/home", get(crate::server::fs::fs_home))
@@ -116,6 +136,10 @@ fn server_api_router() -> Router<Arc<AppState>> {
             get(crate::server::preview::routes::workspace_preview_sessions_by_id_get)
                 .delete(crate::server::preview::routes::workspace_preview_sessions_delete)
                 .put(crate::server::preview::routes::workspace_preview_sessions_put),
+        )
+        .route(
+            "/api/v1/workbench/preview/sessions/{id}/access",
+            post(crate::server::preview::gateway::create_access),
         )
         .route(
             "/api/v1/workbench/preview/sessions/{id}/rename",
@@ -658,6 +682,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             workspace_preview_registry.clone(),
         ),
     );
+    workspace_preview_runtime
+        .reconcile_stale_sessions()
+        .await
+        .map_err(|error| anyhow!("failed to reconcile preview sessions: {error}"))?;
     let interactive_apps = Arc::new(crate::server::preview::apps::InteractiveApps::new(
         server_state_db.clone(),
         workspace_preview_registry.clone(),
@@ -687,6 +715,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let bound_addr = listener
         .local_addr()
         .context("failed to inspect the server listener")?;
+    let workspace_preview_access = Arc::new(
+        crate::server::preview::access::PreviewAccess::from_env(bound_addr.port())
+            .map_err(|error| anyhow!("invalid preview configuration: {error}"))?,
+    );
     let advertised_ip = if bound_addr.ip().is_unspecified() {
         if bound_addr.is_ipv6() {
             std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
@@ -700,6 +732,15 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         "http://{}",
         SocketAddr::new(advertised_ip, bound_addr.port())
     );
+    let _preview_browser_registration =
+        agena_web::managed_preview::register_managed_preview_provider(Arc::new(
+            crate::server::preview::browser::PreviewBrowserProvider {
+                registry: workspace_preview_registry.clone(),
+                runtime: workspace_preview_runtime.clone(),
+                access: workspace_preview_access.clone(),
+                backend_origin: endpoint_url.clone(),
+            },
+        ));
     let mcp_state = Arc::new(
         crate::server::mcp::McpServerState::load(
             application.clone(),
@@ -729,6 +770,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         terminal,
         workspace_preview_registry,
         workspace_preview_runtime,
+        workspace_preview_access,
         interactive_apps,
         server_state_db,
         application: application.clone(),
@@ -770,6 +812,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .merge(crate::server::mcp::router(mcp_state));
     let app = app.layer(TraceLayer::new_for_http());
     let app = crate::server::web_ui::attach(app, ui_dir);
+    let app = app.layer(middleware::from_fn_with_state(
+        shared_state.clone(),
+        crate::server::preview::gateway::dispatch,
+    ));
     let server_record =
         crate::server::server_record::publish_record(endpoint_url.clone(), &server_identity)?;
 
@@ -780,10 +826,11 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     // long-lived and can otherwise make Ctrl-C appear to do nothing forever.
     const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
     let (shutdown_started_tx, mut shutdown_started_rx) = tokio::sync::oneshot::channel();
+    let preview_shutdown_runtime = shared_state.workspace_preview_runtime.clone();
     let mut server_task = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
-                if let Err(error) = tokio::signal::ctrl_c().await {
+                if let Err(error) = wait_for_shutdown_signal().await {
                     // The serve future cannot return an error from its shutdown
                     // signal future, so carry it through a side channel and check
                     // it immediately after the server exits.
@@ -795,6 +842,9 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
                     }
                 }
                 let _ = shutdown_started_tx.send(());
+                if let Err(error) = preview_shutdown_runtime.shutdown().await {
+                    tracing::error!(%error, "failed to shut down preview processes");
+                }
                 runtime.shutdown();
             })
             .await

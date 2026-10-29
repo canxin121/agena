@@ -19,8 +19,8 @@ use url::{Host, Url};
 
 use crate::server::preview::registry::{
     PreviewSessionCreateRequest, PreviewSessionRecord, PreviewSessionUpdatePatch,
-    PreviewSessionsResponse, build_proxy_target_url, preview_target_from_record,
-    validate_preview_target_url, websocket_target_url,
+    PreviewSessionsResponse, build_proxy_target_url, validate_preview_target_url,
+    websocket_target_url,
 };
 use crate::{ApiResult, AppError, AppState};
 
@@ -123,15 +123,20 @@ pub(crate) async fn workspace_preview_url_get(
 }
 
 pub(crate) async fn workspace_preview_proxy_get(
+    State(state): State<Arc<AppState>>,
     Query(query): Query<WorkspacePreviewProxyQuery>,
 ) -> ApiResult<Response> {
     let _ = query.refresh;
     let target = validate_preview_target_url(&query.target)?;
+    state.workspace_preview_access.validate_upstream(&target)?;
     let client = preview_proxy_client()?;
 
-    let upstream = client.get(target.clone()).send().await.map_err(|err| {
-        AppError::bad_gateway(format!("failed to fetch preview target {target}: {err}"))
-    })?;
+    let upstream = tokio::time::timeout(Duration::from_secs(15), client.get(target.clone()).send())
+        .await
+        .map_err(|_| AppError::bad_gateway("preview upstream response timed out"))?
+        .map_err(|err| {
+            AppError::bad_gateway(format!("failed to fetch preview target {target}: {err}"))
+        })?;
 
     response_from_upstream(upstream).await
 }
@@ -255,7 +260,8 @@ pub(crate) async fn workspace_preview_sessions_delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<WorkspacePreviewSessionDeleteResponse>> {
-    state.workspace_preview_registry.delete_by_id(&id).await?;
+    state.workspace_preview_access.revoke(&id).await;
+    state.workspace_preview_runtime.delete_by_id(&id).await?;
     Ok(Json(WorkspacePreviewSessionDeleteResponse { ok: true }))
 }
 
@@ -264,8 +270,12 @@ pub(crate) async fn workspace_preview_sessions_put(
     Path(id): Path<String>,
     Json(body): Json<WorkspacePreviewSessionUpdateBody>,
 ) -> ApiResult<Json<PreviewSessionRecord>> {
+    let previous_hosts = state
+        .workspace_preview_access
+        .hosts_for_preview(id.trim())
+        .await;
     let updated = state
-        .workspace_preview_registry
+        .workspace_preview_runtime
         .update_by_id(
             id.trim(),
             PreviewSessionUpdatePatch {
@@ -279,6 +289,10 @@ pub(crate) async fn workspace_preview_sessions_put(
             },
         )
         .await?;
+    state
+        .workspace_preview_access
+        .revoke_hosts(&previous_hosts)
+        .await;
     Ok(Json(updated))
 }
 
@@ -287,10 +301,18 @@ pub(crate) async fn workspace_preview_sessions_rename_post(
     Path(id): Path<String>,
     Json(body): Json<WorkspacePreviewSessionRenameBody>,
 ) -> ApiResult<Json<PreviewSessionRecord>> {
+    let previous_hosts = state
+        .workspace_preview_access
+        .hosts_for_preview(id.trim())
+        .await;
     let updated = state
-        .workspace_preview_registry
+        .workspace_preview_runtime
         .rename_by_id(id.trim(), body.id.trim())
         .await?;
+    state
+        .workspace_preview_access
+        .revoke_hosts(&previous_hosts)
+        .await;
     Ok(Json(updated))
 }
 
@@ -298,7 +320,15 @@ pub(crate) async fn workspace_preview_sessions_start_post(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<PreviewSessionRecord>> {
+    let previous_hosts = state
+        .workspace_preview_access
+        .hosts_for_preview(id.trim())
+        .await;
     let updated = state.workspace_preview_runtime.start_by_id(&id).await?;
+    state
+        .workspace_preview_access
+        .revoke_hosts_except_generation(&previous_hosts, &super::access::run_generation(&updated))
+        .await;
     Ok(Json(updated))
 }
 
@@ -306,6 +336,7 @@ pub(crate) async fn workspace_preview_sessions_stop_post(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<PreviewSessionRecord>> {
+    state.workspace_preview_access.revoke(&id).await;
     let updated = state.workspace_preview_runtime.stop_by_id(&id).await?;
     Ok(Json(updated))
 }
@@ -315,21 +346,20 @@ pub(crate) async fn workspace_preview_session_proxy_root(
     Path(id): Path<String>,
     request: Request<Body>,
 ) -> ApiResult<Response> {
-    proxy_preview_session(state, id, None, request).await
+    proxy_preview_session(state, id, request).await
 }
 
 pub(crate) async fn workspace_preview_session_proxy_path(
     state: State<std::sync::Arc<AppState>>,
-    Path((id, path)): Path<(String, String)>,
+    Path((id, _path)): Path<(String, String)>,
     request: Request<Body>,
 ) -> ApiResult<Response> {
-    proxy_preview_session(state, id, Some(path), request).await
+    proxy_preview_session(state, id, request).await
 }
 
 async fn proxy_preview_session(
     State(state): State<std::sync::Arc<AppState>>,
     id: String,
-    path: Option<String>,
     request: Request<Body>,
 ) -> ApiResult<Response> {
     let record = state
@@ -338,7 +368,12 @@ async fn proxy_preview_session(
         .await
         .ok_or_else(|| AppError::not_found(format!("preview session not found: {id}")))?;
     let proxy_base_path = record.proxy_base_path.clone();
-    let target = preview_target_from_record(&record)?;
+    let target = state.workspace_preview_access.validate_record(&record)?;
+    if !state.workspace_preview_runtime.can_proxy_record(&record) {
+        return Err(AppError::conflict(
+            "preview process stopped or changed; restart the preview",
+        ));
+    }
 
     let (parts, body) = request.into_parts();
     let original_uri = parts
@@ -346,12 +381,44 @@ async fn proxy_preview_session(
         .get::<OriginalUri>()
         .map(|uri| uri.0.clone())
         .unwrap_or_else(|| parts.uri.clone());
+    // Axum's Path extractor decodes escapes. Proxy paths must preserve the
+    // original representation: a%2Fb and a/b can name different app routes.
+    let path = original_uri
+        .path()
+        .strip_prefix(&proxy_base_path)
+        .map(str::to_owned);
+    let changed = wait_for_preview_change(state.clone(), record.clone());
 
     if is_websocket_upgrade_request(&parts.headers, &parts.method) {
-        return proxy_preview_session_websocket(state, parts, path, target, original_uri).await;
+        return super::gateway::guard_http_response(
+            proxy_preview_session_websocket(state, parts, path, target, original_uri, record),
+            changed,
+        )
+        .await;
     }
 
-    proxy_preview_session_http(parts, body, path, target, original_uri, &proxy_base_path).await
+    super::gateway::guard_http_response(
+        proxy_preview_session_http(parts, body, path, target, original_uri, &proxy_base_path),
+        changed,
+    )
+    .await
+}
+
+async fn wait_for_preview_change(state: Arc<AppState>, original: PreviewSessionRecord) {
+    let generation = super::access::run_generation(&original);
+    loop {
+        let record = state
+            .workspace_preview_registry
+            .get_by_id(&original.id)
+            .await;
+        if record.is_none_or(|record| {
+            super::access::run_generation(&record) != generation
+                || !state.workspace_preview_runtime.can_proxy_record(&record)
+        }) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 async fn proxy_preview_session_http(
@@ -366,19 +433,16 @@ async fn proxy_preview_session_http(
     let upstream_url = build_proxy_target_url(&target, path.as_deref(), original_uri.query());
     let mut request = client
         .request(parts.method, upstream_url.clone())
-        .headers(filtered_request_headers(&parts.headers))
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()));
+        .headers(filtered_request_headers(&parts.headers));
     // The body is forwarded byte-for-byte. Preserve its known length so
     // servers without chunked-request support (including Python's stdlib)
     // receive JSON/form bodies correctly. Hop-by-hop framing stays filtered.
-    if let Some(length) = parts.headers.get(header::CONTENT_LENGTH) {
+    if let Some(length) = parts.headers.get(header::CONTENT_LENGTH)
+        && !super::gateway::hop_header(&header::CONTENT_LENGTH, &parts.headers)
+    {
         request = request.header(header::CONTENT_LENGTH, length);
     }
-    let upstream = request.send().await.map_err(|err| {
-        AppError::bad_gateway(format!(
-            "failed to reach preview target {upstream_url}: {err}"
-        ))
-    })?;
+    let upstream = super::gateway::send_proxy_request(request, body).await?;
 
     response_from_upstream_for_session(upstream, proxy_base_path, &target).await
 }
@@ -531,7 +595,10 @@ fn is_loopback_host(host: Host<&str>) -> bool {
     }
 }
 
-fn is_same_loopback_origin(left: &Url, right: &Url) -> bool {
+pub(super) fn is_same_loopback_origin(left: &Url, right: &Url) -> bool {
+    if left.scheme() != right.scheme() {
+        return false;
+    }
     let left_port = left.port_or_known_default();
     let right_port = right.port_or_known_default();
     if left_port.is_none() || right_port.is_none() {
@@ -622,12 +689,24 @@ async fn response_from_upstream_for_session(
         .map_err(|err| AppError::internal(format!("invalid upstream status code: {err}")))?;
 
     let upstream_headers = upstream.headers().clone();
-    let should_rewrite_html = upstream_headers
-        .get(header::CONTENT_TYPE)
-        .is_some_and(is_html_content_type);
-    let should_rewrite_css = upstream_headers
-        .get(header::CONTENT_TYPE)
-        .is_some_and(is_css_content_type);
+    let can_rewrite = status != StatusCode::PARTIAL_CONTENT
+        && !upstream_headers.contains_key(header::CONTENT_RANGE)
+        && upstream_headers
+            .get_all(header::CONTENT_ENCODING)
+            .iter()
+            .all(|value| {
+                value
+                    .to_str()
+                    .is_ok_and(|value| value.eq_ignore_ascii_case("identity"))
+            });
+    let should_rewrite_html = can_rewrite
+        && upstream_headers
+            .get(header::CONTENT_TYPE)
+            .is_some_and(is_html_content_type);
+    let should_rewrite_css = can_rewrite
+        && upstream_headers
+            .get(header::CONTENT_TYPE)
+            .is_some_and(is_css_content_type);
 
     let mut response_headers = HeaderMap::new();
     copy_safe_response_headers(&upstream_headers, &mut response_headers);
@@ -642,9 +721,7 @@ async fn response_from_upstream_for_session(
     }
 
     if should_rewrite_html || should_rewrite_css {
-        let bytes = upstream.bytes().await.map_err(|err| {
-            AppError::bad_gateway(format!("failed to read preview upstream response: {err}"))
-        })?;
+        let bytes = read_legacy_document(upstream, Duration::from_secs(15)).await?;
         let text = String::from_utf8_lossy(&bytes);
         let rewritten = if should_rewrite_html {
             rewrite_html_proxy_root_urls(&text, proxy_base_path)
@@ -667,12 +744,36 @@ async fn response_from_upstream_for_session(
     Ok(add_preview_frame_headers(response))
 }
 
+async fn read_legacy_document(
+    mut upstream: reqwest::Response,
+    timeout: Duration,
+) -> ApiResult<Vec<u8>> {
+    tokio::time::timeout(timeout, async move {
+        const MAX_REWRITE_BYTES: usize = 8 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = upstream.chunk().await.map_err(|err| {
+            AppError::bad_gateway(format!("failed to read preview upstream response: {err}"))
+        })? {
+            if bytes.len().saturating_add(chunk.len()) > MAX_REWRITE_BYTES {
+                return Err(AppError::bad_gateway(
+                    "legacy preview document exceeds the 8 MiB rewrite limit; use isolated preview access",
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| AppError::bad_gateway("legacy preview document body timed out; use isolated preview access"))?
+}
+
 async fn proxy_preview_session_websocket(
     state: std::sync::Arc<AppState>,
     mut parts: axum::http::request::Parts,
     path: Option<String>,
     target: Url,
     original_uri: Uri,
+    record: PreviewSessionRecord,
 ) -> ApiResult<Response> {
     let websocket = WebSocketUpgrade::from_request_parts(&mut parts, &state)
         .await
@@ -686,11 +787,14 @@ async fn proxy_preview_session_websocket(
     apply_filtered_websocket_headers(upstream_request.headers_mut(), &parts.headers)?;
 
     let (upstream_socket, upstream_response) =
-        connect_async(upstream_request).await.map_err(|err| {
-            AppError::bad_gateway(format!(
-                "failed to connect websocket preview target {upstream_url}: {err}"
-            ))
-        })?;
+        tokio::time::timeout(Duration::from_secs(10), connect_async(upstream_request))
+            .await
+            .map_err(|_| AppError::bad_gateway("preview websocket connection timed out"))?
+            .map_err(|err| {
+                AppError::bad_gateway(format!(
+                    "failed to connect websocket preview target {upstream_url}: {err}"
+                ))
+            })?;
 
     let websocket = if let Some(protocol) = upstream_response
         .headers()
@@ -706,12 +810,15 @@ async fn proxy_preview_session_websocket(
 
     Ok(add_preview_frame_headers(websocket.on_upgrade(
         move |socket| async move {
-            bridge_websocket(socket, upstream_socket).await;
+            tokio::select! {
+                _ = bridge_websocket(socket, upstream_socket) => {},
+                _ = wait_for_preview_change(state, record) => {},
+            }
         },
     )))
 }
 
-async fn bridge_websocket(
+pub(super) async fn bridge_websocket(
     downstream: WebSocket,
     upstream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -837,7 +944,7 @@ fn upstream_message_to_downstream(message: TungsteniteMessage) -> Option<Message
 
 fn apply_filtered_websocket_headers(to: &mut HeaderMap, from: &HeaderMap) -> ApiResult<()> {
     for (name, value) in from {
-        if should_strip_request_header(name) {
+        if should_strip_request_header(name) || super::gateway::hop_header(name, from) {
             continue;
         }
         if is_websocket_handshake_header(name) {
@@ -854,7 +961,7 @@ fn apply_filtered_websocket_headers(to: &mut HeaderMap, from: &HeaderMap) -> Api
 fn filtered_request_headers(from: &HeaderMap) -> HeaderMap {
     let mut to = HeaderMap::new();
     for (name, value) in from {
-        if should_strip_request_header(name) {
+        if should_strip_request_header(name) || super::gateway::hop_header(name, from) {
             continue;
         }
         to.append(name, value.clone());
@@ -943,29 +1050,37 @@ async fn response_from_upstream(upstream: reqwest::Response) -> ApiResult<Respon
 }
 
 fn preview_proxy_client() -> ApiResult<reqwest::Client> {
-    reqwest::Client::builder()
-        // Registered preview upstreams are loopback services.
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| AppError::internal_error_with_context("build preview proxy client", &err))
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(3))
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .cloned()
+        .map_err(|error| AppError::internal(format!("build preview proxy client: {error}")))
 }
 
 fn add_preview_frame_headers(mut response: Response) -> Response {
-    response.headers_mut().insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("SAMEORIGIN"),
-    );
-    response.headers_mut().insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("frame-ancestors 'self'"),
-    );
+    // Legacy same-origin endpoints are data bridges. If opened as documents,
+    // enforce an opaque sandbox even outside the workbench iframe.
+    super::gateway::apply_frame_headers(response.headers_mut(), "'self'", true);
+    // A reachable app may correctly require its own cookies or return an
+    // application error. Diagnostics must distinguish that from control API
+    // authentication failures and a proxy that never reached the upstream.
+    response
+        .headers_mut()
+        .insert("x-agena-preview-upstream", HeaderValue::from_static("1"));
     response
 }
 
 fn copy_safe_response_headers(from: &HeaderMap, to: &mut HeaderMap) {
     for (name, value) in from {
-        if should_strip_response_header(name) {
+        if should_strip_response_header(name) || super::gateway::hop_header(name, from) {
             continue;
         }
         to.append(name, value.clone());
@@ -997,7 +1112,6 @@ fn should_strip_response_header(header_name: &HeaderName) -> bool {
     matches!(
         key.as_str(),
         "connection"
-            | "content-encoding"
             | "content-length"
             | "keep-alive"
             | "proxy-authenticate"
@@ -1034,4 +1148,161 @@ fn is_websocket_upgrade_request(headers: &HeaderMap, method: &axum::http::Method
         });
 
     has_upgrade && has_connection_upgrade
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_proxy_filters_connection_nominated_headers_both_directions() {
+        let mut input = HeaderMap::new();
+        input.append(
+            header::CONNECTION,
+            HeaderValue::from_static("keep-alive, x-request-hop"),
+        );
+        input.append(
+            header::CONNECTION,
+            HeaderValue::from_static("X-Another-Hop"),
+        );
+        input.insert("x-request-hop", HeaderValue::from_static("remove"));
+        input.insert("x-another-hop", HeaderValue::from_static("remove"));
+        input.insert("x-app-header", HeaderValue::from_static("preserve"));
+        input.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer workbench"),
+        );
+        input.insert(header::COOKIE, HeaderValue::from_static("workbench=value"));
+        input.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("vite-hmr"),
+        );
+        let request = filtered_request_headers(&input);
+        assert!(!request.contains_key("x-request-hop"));
+        assert!(!request.contains_key("x-another-hop"));
+        assert!(!request.contains_key(header::AUTHORIZATION));
+        assert!(!request.contains_key(header::COOKIE));
+        assert_eq!(request["x-app-header"], "preserve");
+        let mut websocket = HeaderMap::new();
+        apply_filtered_websocket_headers(&mut websocket, &input).unwrap();
+        assert!(!websocket.contains_key("x-request-hop"));
+        assert!(!websocket.contains_key("x-another-hop"));
+        assert_eq!(websocket[header::SEC_WEBSOCKET_PROTOCOL], "vite-hmr");
+        let mut response = HeaderMap::new();
+        copy_safe_response_headers(&input, &mut response);
+        assert!(!response.contains_key("x-request-hop"));
+        assert!(!response.contains_key("x-another-hop"));
+        assert_eq!(response["x-app-header"], "preserve");
+    }
+
+    #[tokio::test]
+    async fn legacy_proxy_marks_reachable_errors_and_preserves_encoded_or_partial_bodies() {
+        async fn upstream(request: Request<Body>) -> Response {
+            match request.uri().path() {
+                "/encoded" => Response::builder()
+                    .header(header::CONTENT_TYPE, "text/html")
+                    .header(header::CONTENT_ENCODING, "x-test-encoding")
+                    .body(Body::from(vec![0, 255, 128, 65]))
+                    .unwrap(),
+                "/partial" => Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_TYPE, "text/html")
+                    .header(header::CONTENT_RANGE, "bytes 0-12/100")
+                    .body(Body::from("<a href=\"/x\">"))
+                    .unwrap(),
+                _ => Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .header("x-agena-preview-upstream", "untrusted-upstream-value")
+                    .body(Body::from("app login required"))
+                    .unwrap(),
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().fallback(upstream))
+                .await
+                .unwrap();
+        });
+        for (path, status, expected) in [
+            (
+                "error",
+                StatusCode::UNAUTHORIZED,
+                b"app login required".as_slice(),
+            ),
+            ("encoded", StatusCode::OK, &[0, 255, 128, 65][..]),
+            (
+                "partial",
+                StatusCode::PARTIAL_CONTENT,
+                b"<a href=\"/x\">".as_slice(),
+            ),
+        ] {
+            let response = preview_proxy_client()
+                .unwrap()
+                .get(target.join(path).unwrap())
+                .send()
+                .await
+                .unwrap();
+            let response = response_from_upstream_for_session(
+                response,
+                "/api/v1/workbench/preview/s/demo/",
+                &target,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()["x-agena-preview-upstream"], "1");
+            if path == "encoded" {
+                assert_eq!(
+                    response.headers()[header::CONTENT_ENCODING],
+                    "x-test-encoding"
+                );
+            }
+            if path == "partial" {
+                assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 0-12/100");
+            }
+            assert_eq!(
+                &axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap()[..],
+                expected
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_html_rewrite_has_a_body_deadline_even_after_headers_arrive() {
+        async fn upstream() -> Response {
+            let body = futures_util::stream::once(async {
+                Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"<html>"))
+            })
+            .chain(futures_util::stream::pending());
+            Response::builder()
+                .header(header::CONTENT_TYPE, "text/html")
+                .body(Body::from_stream(body))
+                .unwrap()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().fallback(upstream))
+                .await
+                .unwrap();
+        });
+        let upstream = preview_proxy_client()
+            .unwrap()
+            .get(target)
+            .send()
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            read_legacy_document(upstream, Duration::from_millis(25)),
+        )
+        .await
+        .expect("the legacy rewrite must not wait indefinitely for EOF");
+        assert!(result.is_err());
+        server.abort();
+    }
 }

@@ -1,4 +1,7 @@
+pub(crate) mod access;
 pub(crate) mod apps;
+pub(crate) mod browser;
+pub(crate) mod gateway;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;

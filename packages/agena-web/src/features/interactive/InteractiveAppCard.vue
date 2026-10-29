@@ -17,6 +17,7 @@ import CodeBlock from '@/components/ui/CodeBlock.vue'
 import { APP_CHANNEL, appFrameDocument } from './frame'
 import { appApiPath, bridgeFetch, saveApp, type AppSnapshot } from './api'
 import type { AppManifest } from './model'
+import { useAppLifecycle } from './useAppLifecycle'
 
 const props = withDefaults(
   defineProps<{ manifest: AppManifest; owner: string; directory?: string; standalone?: boolean }>(),
@@ -30,7 +31,9 @@ const frame = ref<HTMLIFrameElement>()
 const snapshot = shallowRef<AppSnapshot | null>(null)
 const documentSource = ref('')
 const token = ref('')
-const busy = ref(false)
+const lifecycle = useAppLifecycle()
+const busy = computed(() => lifecycle.phase.value !== '')
+const starting = computed(() => lifecycle.phase.value === 'run')
 const error = ref('')
 const sourceVisible = ref(false)
 const logsVisible = ref(false)
@@ -44,6 +47,8 @@ const running = computed(() =>
 )
 const apiPath = computed(() => appApiPath(props.owner, props.manifest.id))
 const controllers = new Set<AbortController>()
+const lifecycleReads = new Set<AbortController>()
+let initialSave: AbortController | undefined
 let generation = 0
 let disposed = false
 let mounted = false
@@ -55,6 +60,11 @@ let themeObserver: MutationObserver | undefined
 function abortRequests() {
   for (const c of controllers) c.abort()
   controllers.clear()
+}
+function abortLifecycleRequests() {
+  lifecycle.cancel()
+  for (const controller of lifecycleReads) controller.abort()
+  lifecycleReads.clear()
 }
 function renderFrame() {
   abortRequests()
@@ -71,6 +81,10 @@ function renderFrame() {
 async function initialize() {
   const version = ++generation
   abortRequests()
+  abortLifecycleRequests()
+  const controller = new AbortController()
+  initialSave = controller
+  lifecycleReads.add(controller)
   configurationSaved.value = false
   logs.value = {}
   const scope = `${props.owner}/${props.manifest.id}`
@@ -80,17 +94,19 @@ async function initialize() {
   }
   documentSource.value = ''
   token.value = ''
-  busy.value = false
   error.value = ''
   try {
     if (!props.owner) throw new Error(t('interactive.missingSession'))
-    const result = await saveApp(props.owner, props.directory, props.manifest)
-    if (disposed || version !== generation) return
+    const result = await saveApp(props.owner, props.directory, props.manifest, controller.signal)
+    if (disposed || version !== generation || controller.signal.aborted) return
     snapshot.value = result
     configurationSaved.value = true
   } catch (err) {
-    if (disposed || version !== generation) return
+    if (disposed || version !== generation || controller.signal.aborted) return
     error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    lifecycleReads.delete(controller)
+    if (initialSave === controller) initialSave = undefined
   }
   renderFrame()
 }
@@ -118,76 +134,89 @@ watch(
 )
 
 async function run() {
-  if (busy.value) return
+  const operation = lifecycle.begin('run')
+  if (!operation) return
+  initialSave?.abort()
   const version = generation
   const path = apiPath.value
-  busy.value = true
   error.value = ''
   try {
-    await saveApp(props.owner, props.directory, props.manifest)
-    if (disposed || version !== generation) return
+    await saveApp(props.owner, props.directory, props.manifest, operation.signal)
+    if (disposed || version !== generation || !operation.isCurrent()) return
     configurationSaved.value = true
-    const result = await apiJson<AppSnapshot>(`${path}/run`, { method: 'POST' })
-    if (disposed || version !== generation) return
+    const result = await apiJson<AppSnapshot>(`${path}/run`, { method: 'POST', signal: operation.signal })
+    if (disposed || version !== generation || !operation.isCurrent()) return
     snapshot.value = result
     // A fresh document boots against ready services and restored widget state.
     renderFrame()
   } catch (err) {
-    if (!disposed && version === generation) {
+    if (!disposed && version === generation && operation.isCurrent()) {
       error.value = err instanceof Error ? err.message : String(err)
-      await refreshStatus()
+      await refreshStatus(operation.signal)
     }
   } finally {
-    if (version === generation) busy.value = false
+    operation.finish()
   }
 }
-async function refreshStatus() {
+async function refreshStatus(signal?: AbortSignal) {
   const version = generation
   try {
-    const result = await apiJson<AppSnapshot>(apiPath.value)
-    if (!disposed && version === generation) snapshot.value = result
+    const result = await apiJson<AppSnapshot>(apiPath.value, { signal })
+    if (!disposed && version === generation && !signal?.aborted) snapshot.value = result
   } catch {
     /* Keep the actionable lifecycle error. */
   }
 }
 async function stop() {
-  if (busy.value) return
+  const operation = lifecycle.begin('stop')
+  if (!operation) return
+  initialSave?.abort()
   const version = generation
-  busy.value = true
   error.value = ''
   abortRequests()
   try {
-    const result = await apiJson<AppSnapshot>(`${apiPath.value}/stop`, { method: 'POST' })
-    if (!disposed && version === generation) snapshot.value = result
+    const result = await apiJson<AppSnapshot>(`${apiPath.value}/stop`, { method: 'POST', signal: operation.signal })
+    if (!disposed && version === generation && operation.isCurrent()) snapshot.value = result
   } catch (err) {
-    if (version === generation) error.value = err instanceof Error ? err.message : String(err)
+    if (!disposed && version === generation && operation.isCurrent())
+      error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    if (version === generation) busy.value = false
+    operation.finish()
   }
 }
 async function showLogs() {
   logsVisible.value = !logsVisible.value
   if (!logsVisible.value) return
   const version = generation
+  const controller = new AbortController()
+  lifecycleReads.add(controller)
   try {
-    const result = await apiJson<Record<string, string>>(`${apiPath.value}/logs`)
-    if (!disposed && version === generation) logs.value = result
+    const result = await apiJson<Record<string, string>>(`${apiPath.value}/logs`, { signal: controller.signal })
+    if (!disposed && version === generation && !controller.signal.aborted) logs.value = result
   } catch (err) {
-    if (!disposed && version === generation) error.value = err instanceof Error ? err.message : String(err)
+    if (!disposed && version === generation && !controller.signal.aborted)
+      error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    lifecycleReads.delete(controller)
   }
 }
 async function openPreview() {
   const version = generation
+  const controller = new AbortController()
+  lifecycleReads.add(controller)
   try {
-    await saveApp(props.owner, props.directory, props.manifest)
-    if (disposed || version !== generation) return
+    await saveApp(props.owner, props.directory, props.manifest, controller.signal)
+    if (disposed || version !== generation || controller.signal.aborted) return
     ui.openWorkspaceWindow('preview', {
       title: props.manifest.title,
       query: { appOwner: props.owner, appId: props.manifest.id, directory: props.directory },
       matchKeys: ['appOwner', 'appId'],
     })
   } catch (err) {
-    if (!disposed && version === generation) error.value = err instanceof Error ? err.message : String(err)
+    if (!disposed && version === generation && !controller.signal.aborted)
+      error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    lifecycleReads.delete(controller)
   }
 }
 function fullscreen() {
@@ -266,6 +295,11 @@ function sendEnvironment() {
   )
 }
 watch(locale, sendEnvironment)
+watch(hasServices, (enabled) => {
+  if (!mounted || disposed) return
+  releasePreview?.()
+  releasePreview = enabled ? preview.retainLiveSessions() : undefined
+})
 onMounted(() => {
   mounted = true
   window.addEventListener('message', message)
@@ -278,6 +312,7 @@ onBeforeUnmount(() => {
   disposed = true
   generation++
   abortRequests()
+  abortLifecycleRequests()
   releasePreview?.()
   themeObserver?.disconnect()
   if (mounted) window.removeEventListener('message', message)
@@ -304,16 +339,23 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="app-actions flex shrink-0 items-center gap-1" role="group" :aria-label="manifest.title">
-        <span v-if="busy" class="text-xs text-muted-foreground" role="status">{{ t('interactive.starting') }}</span>
+        <span v-if="busy" class="text-xs text-muted-foreground" role="status">{{
+          t(starting ? 'interactive.starting' : 'interactive.loading')
+        }}</span>
         <button
-          v-if="hasServices && !running"
+          v-if="hasServices && !running && !starting"
           class="app-button primary"
           :disabled="busy || !owner || !directory"
           @click="run"
         >
           <RiPlayLine class="h-4 w-4" />{{ t('interactive.run') }}
         </button>
-        <button v-if="hasServices && running" class="app-button" :disabled="busy" @click="stop">
+        <button
+          v-if="hasServices && (running || starting)"
+          class="app-button"
+          :disabled="busy && !starting"
+          @click="stop"
+        >
           <RiStopLine class="h-4 w-4" />{{ t('interactive.stop') }}
         </button>
         <button

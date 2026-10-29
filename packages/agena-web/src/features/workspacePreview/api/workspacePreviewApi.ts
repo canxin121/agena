@@ -3,9 +3,11 @@ import { apiJson } from '@/lib/api'
 import { conditionalJson } from '@/lib/conditionalJson'
 
 import { normalizePreviewProxyBasePath } from '../model/previewUrl'
+import { copyPreviewArgs } from '../model/previewArgs'
 
 export type WorkspacePreviewSession = {
   id: string
+  instanceId?: string
   state: string
   directory: string
   runDirectory: string
@@ -16,6 +18,7 @@ export type WorkspacePreviewSession = {
   args: string[]
   logsPath: string
   pid?: number
+  startedAt?: number
 }
 
 type PreviewSessionsResponse = {
@@ -54,11 +57,17 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
   const pidRaw = typeof record.pid === 'number' ? record.pid : Number(record.pid)
   const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.floor(pidRaw) : undefined
 
+  const startedAt =
+    typeof record.startedAt === 'number' && Number.isFinite(record.startedAt) ? record.startedAt : undefined
+
   const agenaSessionId =
     typeof record.agenaSessionId === 'string' && record.agenaSessionId.trim() ? record.agenaSessionId.trim() : undefined
 
   return {
     id,
+    ...(typeof record.instanceId === 'string' && record.instanceId.trim()
+      ? { instanceId: record.instanceId.trim() }
+      : {}),
     state,
     directory,
     runDirectory,
@@ -69,6 +78,7 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
     args,
     logsPath,
     ...(pid ? { pid } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
   }
 }
 
@@ -127,8 +137,7 @@ export async function createWorkspacePreviewSession(
 
   const trimmedSessionId = String(input?.agenaSessionId || '').trim()
 
-  const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
+  const args = copyPreviewArgs(input.args)
 
   const targetUrl = String(input?.targetUrl || '').trim()
   if (!targetUrl) throw new Error(i18n.global.t('errors.preview.targetUrlRequired'))
@@ -174,8 +183,7 @@ export async function discoverWorkspacePreviewSession(
   if (!trimmedLogsPath) throw new Error(i18n.global.t('errors.preview.logsPathRequired'))
 
   const trimmedSessionId = String(input?.agenaSessionId || '').trim()
-  const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
+  const args = copyPreviewArgs(input.args)
 
   const payload = await apiJson<unknown>('/api/v1/workbench/preview/sessions/discover', {
     method: 'POST',
@@ -231,8 +239,7 @@ export async function updateWorkspacePreviewSession(
   if (typeof patch.targetUrl === 'string' && !targetUrl)
     throw new Error(i18n.global.t('errors.preview.targetUrlRequired'))
 
-  const args = Array.isArray(patch.args) ? patch.args.map((v) => String(v || '').trim()).filter(Boolean) : []
-  if (Array.isArray(patch.args) && args.length === 0) throw new Error(i18n.global.t('errors.preview.argsRequired'))
+  const args = patch.args === undefined ? undefined : copyPreviewArgs(patch.args)
 
   const payload = await apiJson<unknown>(`/api/v1/workbench/preview/sessions/${encodeURIComponent(trimmedId)}`, {
     method: 'PUT',
@@ -244,7 +251,7 @@ export async function updateWorkspacePreviewSession(
       ...(typeof patch.runDirectory === 'string' ? { runDirectory } : {}),
       ...(typeof patch.agenaSessionId === 'string' ? { agenaSessionId: patch.agenaSessionId.trim() } : {}),
       ...(typeof patch.command === 'string' ? { command } : {}),
-      ...(Array.isArray(patch.args) ? { args } : {}),
+      ...(args !== undefined ? { args } : {}),
       ...(typeof patch.logsPath === 'string' ? { logsPath } : {}),
       ...(typeof patch.targetUrl === 'string' ? { targetUrl } : {}),
     }),

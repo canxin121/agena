@@ -21,6 +21,7 @@ export function normalizePreviewProxyBasePath(input: string): string {
   return `${pathname}${parsed.search}${parsed.hash}`
 }
 
+/** Legacy control-origin path for authenticated diagnostics only; never load it in an iframe. */
 export function buildPreviewFrameSrc(proxyBasePath: string, refreshToken: number): string {
   const normalized = normalizePreviewProxyBasePath(proxyBasePath)
   if (!normalized) return ''

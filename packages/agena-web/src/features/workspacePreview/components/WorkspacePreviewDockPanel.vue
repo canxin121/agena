@@ -23,8 +23,10 @@ import Input from '@/components/ui/Input.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
-import { probePreviewProxyResponse } from '@/features/workspacePreview/api/previewProxyProbe'
+import { waitForPreviewProxyReady } from '@/features/workspacePreview/api/previewProxyProbe'
 import type { WorkspacePreviewSession } from '@/features/workspacePreview/api/workspacePreviewApi'
+import { usePreviewSessionForm } from '../model/usePreviewSessionForm'
+import { usePreviewAccess } from '../model/usePreviewAccess'
 import { buildPreviewFrameSrc } from '@/features/workspacePreview/model/previewUrl'
 import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
@@ -744,17 +746,10 @@ async function keepIframeCenterOnZoom() {
 }
 
 const frameSrc = shallowRef('')
+const frameDocumentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
+const frameVisible = computed(() => visible.value && frameDocumentVisible.value)
 const iframeLoading = ref(false)
 const iframeError = ref('')
-const createPreviewId = ref('')
-const createRunDirectory = ref('')
-const createCommand = ref('')
-const createArgsText = ref('')
-const createLogsPath = ref('')
-const createTargetUrl = ref('')
-const createDialogOpen = ref(false)
-const actionLoading = ref<'create' | ''>('')
-const actionError = ref('')
 const sessionMenuOpen = ref(false)
 const sessionMenuQuery = ref('')
 
@@ -768,7 +763,11 @@ let frameRequestId = 0
 
 const activeSession = computed(() => preview.activeSession)
 const activeProxyBasePath = computed(() => activeSession.value?.proxyBasePath || '')
-const previewSrc = computed(() => buildPreviewFrameSrc(activeProxyBasePath.value, preview.refreshToken))
+const { previewSrc, accessError, accessLoading } = usePreviewAccess({
+  session: activeSession,
+  visible,
+  refreshToken: computed(() => preview.refreshToken),
+})
 const canOpenInWindow = computed(() => Boolean(previewSrc.value))
 const currentDirectory = computed(() => String(directoryStore.currentDirectory || '').trim())
 
@@ -789,34 +788,28 @@ const agenaSessionId = computed(() => {
   return String(chat.selectedSessionId || '').trim()
 })
 
-const createPreviewIdNorm = computed(() => String(createPreviewId.value || '').trim())
-const createPreviewIdValid = computed(() => /^[A-Za-z0-9_-]+$/.test(createPreviewIdNorm.value))
+const {
+  createDialogOpen,
+  createPreviewId,
+  createRunDirectory,
+  createCommand,
+  createArgsText,
+  createArgsError,
+  createLogsPath,
+  createTargetUrl,
+  actionLoading,
+  actionError,
+  canCreateSession,
+  createManagedSession,
+  openCreateDialog,
+} = usePreviewSessionForm({
+  directory: currentDirectory,
+  createSession: (input) => preview.createSession(input),
+  agenaSessionId,
+})
 
-const createRunDirectoryNorm = computed(() => String(createRunDirectory.value || '').trim())
-const createCommandNorm = computed(() => String(createCommand.value || '').trim())
-const createArgsList = computed(() =>
-  String(createArgsText.value || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean),
-)
-const createLogsPathNorm = computed(() => String(createLogsPath.value || '').trim())
-
-const canCreateSession = computed(() =>
-  Boolean(
-    currentDirectory.value.trim() &&
-    createPreviewIdNorm.value &&
-    createPreviewIdValid.value &&
-    createRunDirectoryNorm.value &&
-    createCommandNorm.value &&
-    createArgsList.value.length > 0 &&
-    createLogsPathNorm.value &&
-    createTargetUrl.value.trim() &&
-    !actionLoading.value,
-  ),
-)
 const actionLoadingMessage = computed(() => {
-  if (actionLoading.value === 'create') return String(t('workspaceDock.preview.emptyState.createLoading'))
+  if (actionLoading.value) return String(t('workspaceDock.preview.emptyState.createLoading'))
   return ''
 })
 
@@ -828,9 +821,7 @@ const effectiveError = computed(() => {
   if (String(preview.activeSessionId || '').trim() && !activeSession.value) {
     return String(t('workspaceDock.preview.states.activeSessionMissing'))
   }
-  if (activeSession.value && !activeProxyBasePath.value) {
-    return String(t('workspaceDock.preview.states.missingProxyBasePath'))
-  }
+  if (accessError.value && !previewSrc.value) return accessError.value
   if (iframeError.value) return iframeError.value
   return ''
 })
@@ -881,27 +872,6 @@ const sessionMenuGroups = computed<OptionMenuGroup[]>(() => [
   },
 ])
 
-function suggestPreviewIdFromDirectory(directory: string): string {
-  const trimmed = String(directory || '')
-    .trim()
-    .replace(/[\\/]+$/, '')
-  if (!trimmed) return ''
-  const parts = trimmed.split(/[\\/]/).filter(Boolean)
-  const base = String(parts[parts.length - 1] || '').trim()
-  if (!base) return ''
-  const normalized = base
-    .replace(/\s+/g, '-')
-    .replace(/[^A-Za-z0-9_-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-_]+|[-_]+$/g, '')
-  return normalized
-}
-
-function suggestLogsPath(sessionId: string): string {
-  const clean = String(sessionId || '').trim() || 'preview'
-  return `.agena/preview/${clean}.log`
-}
-
 function extractProxyErrorDetail(raw: string, contentType: string): string {
   const body = String(raw || '').trim()
   if (!body) return ''
@@ -934,8 +904,11 @@ function formatProxyHttpError(status: number, detail: string): string {
 
 async function probePreviewProxy(src: string, signal: AbortSignal): Promise<string> {
   try {
-    const response = await probePreviewProxyResponse(src, signal)
-    if (response.ok) return ''
+    const response = await waitForPreviewProxyReady(src, signal)
+    // The diagnostic cannot carry the app's isolated-origin cookies. A live
+    // app may return a login challenge or its own error page; let the actual
+    // iframe render that response with the app's credentials.
+    if (response.ok || response.upstreamResponded) return ''
     const detail = extractProxyErrorDetail(response.body, response.contentType)
     return formatProxyHttpError(response.status, detail)
   } catch {
@@ -951,7 +924,7 @@ function clearFrameTimer() {
 
 async function setFrameUrlNow() {
   clearFrameTimer()
-  if (!visible.value) return
+  if (!frameVisible.value) return
   const src = previewSrc.value
   iframeError.value = ''
   if (!src || effectiveError.value) {
@@ -973,7 +946,9 @@ async function setFrameUrlNow() {
   iframeLoading.value = true
   let proxyError: string
   try {
-    proxyError = await probePreviewProxy(src, controller.signal)
+    // Control-origin diagnostics may carry the workbench token; the iframe URL never does.
+    const probeSrc = buildPreviewFrameSrc(activeProxyBasePath.value, preview.refreshToken)
+    proxyError = probeSrc ? await probePreviewProxy(probeSrc, controller.signal) : ''
   } finally {
     if (frameProbeController === controller) {
       frameProbeController = undefined
@@ -982,7 +957,7 @@ async function setFrameUrlNow() {
   }
   if (
     controller.signal.aborted ||
-    !visible.value ||
+    !frameVisible.value ||
     requestId !== frameRequestId ||
     previewSrc.value !== src ||
     effectiveError.value
@@ -1003,7 +978,7 @@ async function setFrameUrlNow() {
 
 function scheduleFrameUpdate() {
   clearFrameTimer()
-  if (!visible.value) return
+  if (!frameVisible.value) return
   const elapsed = Date.now() - lastFrameUpdateAt
   const waitMs = Math.max(0, FRAME_UPDATE_THROTTLE_MS - elapsed)
   frameTimer = window.setTimeout(() => {
@@ -1018,91 +993,6 @@ async function refreshPreview(opts?: { forceFrameReload?: boolean }) {
   if (opts?.forceFrameReload) {
     preview.bumpRefreshToken()
   }
-}
-
-async function createManagedSession() {
-  if (!currentDirectory.value.trim()) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.directoryRequired'))
-    return
-  }
-
-  if (!createPreviewIdNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.sessionIdRequired'))
-    return
-  }
-  if (!createPreviewIdValid.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.sessionIdInvalid'))
-    return
-  }
-
-  if (!createRunDirectoryNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.runDirectoryRequired'))
-    return
-  }
-
-  if (!createCommandNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.commandRequired'))
-    return
-  }
-
-  if (createArgsList.value.length === 0) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.argsRequired'))
-    return
-  }
-
-  if (!createLogsPathNorm.value) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.logsPathRequired'))
-    return
-  }
-
-  const targetUrl = createTargetUrl.value.trim()
-  if (!targetUrl) {
-    actionError.value = String(t('workspaceDock.preview.emptyState.targetUrlRequired'))
-    return
-  }
-
-  actionLoading.value = 'create'
-  actionError.value = ''
-  try {
-    await preview.createSession({
-      id: createPreviewIdNorm.value,
-      directory: currentDirectory.value,
-      runDirectory: createRunDirectoryNorm.value,
-      command: createCommandNorm.value,
-      args: createArgsList.value,
-      logsPath: createLogsPathNorm.value,
-      targetUrl,
-      ...(agenaSessionId.value ? { agenaSessionId: agenaSessionId.value } : {}),
-      select: true,
-    })
-    createPreviewId.value = ''
-    createRunDirectory.value = ''
-    createCommand.value = ''
-    createArgsText.value = ''
-    createLogsPath.value = ''
-    createTargetUrl.value = ''
-    createDialogOpen.value = false
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    actionError.value = String(t('workspaceDock.preview.emptyState.createFailed', { detail }))
-  } finally {
-    actionLoading.value = ''
-  }
-}
-
-function openCreateDialog() {
-  actionError.value = ''
-  const suggestedId = createPreviewIdNorm.value || suggestPreviewIdFromDirectory(currentDirectory.value)
-  if (!createPreviewIdNorm.value) {
-    createPreviewId.value = suggestedId
-  }
-  if (!createRunDirectoryNorm.value) {
-    createRunDirectory.value = currentDirectory.value
-  }
-  if (!createLogsPathNorm.value) {
-    createLogsPath.value = suggestLogsPath(suggestedId)
-  }
-  createDialogOpen.value = true
 }
 
 function setSessionMenuOpen(open: boolean) {
@@ -1204,11 +1094,17 @@ watch(frameSrc, () => {
 })
 
 watch(
-  () => [activeProxyBasePath.value, preview.refreshToken, preview.error, preview.activeSessionId],
+  () => [previewSrc.value, activeProxyBasePath.value, preview.error, preview.activeSessionId],
   () => {
+    // Cancel immediately on selection/run changes, before the frame throttle.
+    frameRequestId++
+    frameProbeController?.abort()
+    if (!previewSrc.value) {
+      frameSrc.value = ''
+    }
     scheduleFrameUpdate()
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 )
 
 watch(
@@ -1218,12 +1114,18 @@ watch(
   },
 )
 
+function updateFrameDocumentVisibility() {
+  frameDocumentVisible.value = document.visibilityState !== 'hidden'
+}
+
 onMounted(() => {
+  document.addEventListener('visibilitychange', updateFrameDocumentVisibility)
+  updateFrameDocumentVisibility()
   void refreshPreview()
 })
 
 watch(
-  visible,
+  frameVisible,
   (shown) => {
     if (shown) scheduleFrameUpdate()
     else {
@@ -1237,6 +1139,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', updateFrameDocumentVisibility)
   resetKeyboardBridge()
   clearFrameTimer()
   frameRequestId++
@@ -1246,6 +1149,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col gap-2 p-3">
+    <p v-if="accessError && frameSrc" class="px-3 py-2 text-xs text-destructive" role="alert">{{ accessError }}</p>
     <div v-if="frameSrc" class="flex flex-wrap items-center gap-2 text-xs">
       <button
         ref="previewEntry"
@@ -1582,10 +1486,11 @@ onBeforeUnmount(() => {
             id="workspace-preview-args-dialog"
             v-model="createArgsText"
             type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.argsPlaceholder'))"
+            placeholder='["--host", "127.0.0.1", "--name", "My app"]'
             :disabled="Boolean(actionLoading)"
             class="h-8 bg-background/80 text-xs font-mono"
           />
+          <p v-if="createArgsError" class="text-xs text-destructive" role="alert">{{ createArgsError }}</p>
         </div>
 
         <div class="space-y-1">
@@ -1688,6 +1593,8 @@ onBeforeUnmount(() => {
                     v-if="frameSrc"
                     ref="iframeEl"
                     :src="frameSrc"
+                    sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"
+                    referrerpolicy="no-referrer"
                     :tabindex="keyboardBridgeReady ? 0 : -1"
                     class="h-full w-full border-0"
                     :class="resizingViewport ? 'pointer-events-none' : ''"
@@ -1788,6 +1695,8 @@ onBeforeUnmount(() => {
               v-if="frameSrc"
               ref="iframeEl"
               :src="frameSrc"
+              sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"
+              referrerpolicy="no-referrer"
               :tabindex="keyboardBridgeReady ? 0 : -1"
               class="h-full w-full border-0"
               :title="String(t('workspaceDock.preview.iframeTitle'))"
@@ -1800,7 +1709,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div
-        v-if="iframeLoading || preview.loading"
+        v-if="iframeLoading || (accessLoading && !frameSrc) || preview.loading"
         class="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-[1px]"
       >
         <span

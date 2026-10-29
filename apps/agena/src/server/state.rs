@@ -12,6 +12,7 @@ pub(crate) struct AppState {
         Arc<crate::server::preview::registry::WorkspacePreviewRegistry>,
     pub(crate) workspace_preview_runtime:
         Arc<crate::server::preview::runtime::WorkspacePreviewRuntime>,
+    pub(crate) workspace_preview_access: Arc<crate::server::preview::access::PreviewAccess>,
     pub(crate) interactive_apps: Arc<crate::server::preview::apps::InteractiveApps>,
     // Held for construction of the terminal/preview managers; handlers reach
     // the DB through the manager-held clones.

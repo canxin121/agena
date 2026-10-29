@@ -16,6 +16,10 @@ const CACHE_TTL: Duration = Duration::from_millis(750);
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PreviewSessionRecord {
     pub(crate) id: String,
+    /// Server-generated identity of this registration. Reusing a display ID
+    /// after deletion must never revive an old capability for that ID.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) instance_id: String,
     pub(crate) directory: String,
     pub(crate) run_directory: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,15 +132,15 @@ impl PreviewEventSnapshot {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct WorkspacePreviewRegistry {
     db: Arc<crate::server::persistence::db::ServerStateDb>,
     ttl: Duration,
-    cache: RwLock<Option<RegistryCache>>,
+    cache: Arc<RwLock<Option<RegistryCache>>>,
     epoch: uuid::Uuid,
     changes: tokio::sync::watch::Sender<u64>,
-    events: tokio::sync::Mutex<Option<PreviewEventSnapshot>>,
-    mutations: tokio::sync::Mutex<()>,
+    events: Arc<tokio::sync::Mutex<Option<PreviewEventSnapshot>>>,
+    mutations: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl WorkspacePreviewRegistry {
@@ -148,11 +152,11 @@ impl WorkspacePreviewRegistry {
         Self {
             db,
             ttl,
-            cache: RwLock::new(None),
+            cache: Arc::new(RwLock::new(None)),
             epoch: uuid::Uuid::new_v4(),
             changes: tokio::sync::watch::channel(0).0,
-            events: tokio::sync::Mutex::new(None),
-            mutations: tokio::sync::Mutex::new(()),
+            events: Arc::new(tokio::sync::Mutex::new(None)),
+            mutations: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -208,6 +212,84 @@ impl WorkspacePreviewRegistry {
                 .expect("preview event snapshot")
                 .payload(previous),
         ))
+    }
+
+    // Once a write is admitted, its read/modify/write lock and invalidation
+    // belong to the operation, not to the HTTP caller. SQLite can commit after
+    // a waiting request is cancelled; dropping this work would lose revisions
+    // or let the next mutation overwrite that unobserved commit.
+    pub(crate) async fn create_server_session(
+        &self,
+        request: PreviewSessionCreateRequest,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        finish_mutation(async move { registry.create_server_session_inner(request).await }).await
+    }
+
+    pub(crate) async fn delete_by_id(&self, id: &str) -> ApiResult<()> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        finish_mutation(async move { registry.delete_by_id_inner(&id).await }).await
+    }
+
+    pub(crate) async fn update_by_id(
+        &self,
+        id: &str,
+        patch: PreviewSessionUpdatePatch,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        finish_mutation(async move { registry.update_by_id_inner(&id, patch).await }).await
+    }
+
+    pub(crate) async fn rename_by_id(
+        &self,
+        id: &str,
+        new_id: &str,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        let new_id = new_id.to_owned();
+        finish_mutation(async move { registry.rename_by_id_inner(&id, &new_id).await }).await
+    }
+
+    pub(crate) async fn mark_running_by_id(
+        &self,
+        id: &str,
+        pid: u32,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        finish_mutation(async move { registry.mark_running_by_id_inner(&id, pid).await }).await
+    }
+
+    pub(crate) async fn mark_stopped_by_id(
+        &self,
+        id: &str,
+        error: Option<String>,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        finish_mutation(async move { registry.mark_stopped_by_id_inner(&id, error, None).await })
+            .await
+    }
+
+    /// Preserve evidence of an owned launch even when its running-state write
+    /// failed, or an older imported running record omitted its start time.
+    pub(crate) async fn mark_owned_stopped_by_id(
+        &self,
+        id: &str,
+        error: Option<String>,
+        started_at: i64,
+    ) -> ApiResult<PreviewSessionRecord> {
+        let registry = self.clone();
+        let id = id.to_owned();
+        finish_mutation(async move {
+            registry
+                .mark_stopped_by_id_inner(&id, error, Some(started_at))
+                .await
+        })
+        .await
     }
 
     async fn load_server_state_file(&self) -> ApiResult<PreviewSessionsFile> {
@@ -299,16 +381,17 @@ impl WorkspacePreviewRegistry {
         id: &str,
         error: Option<String>,
         updated_at: i64,
+        started_at: Option<i64>,
     ) -> ApiResult<Option<PreviewSessionRecord>> {
         let mut file = self.load_server_state_file().await?;
-        let updated = mark_stopped_in_file(&mut file, id, error, updated_at)?;
+        let updated = mark_stopped_in_file(&mut file, id, error, updated_at, started_at)?;
         if updated.is_some() {
             self.write_server_state_file(&file).await?;
         }
         Ok(updated)
     }
 
-    pub(crate) async fn create_server_session(
+    async fn create_server_session_inner(
         &self,
         request: PreviewSessionCreateRequest,
     ) -> ApiResult<PreviewSessionRecord> {
@@ -368,6 +451,7 @@ impl WorkspacePreviewRegistry {
             .filter(|value| !value.is_empty());
         let record = PreviewSessionRecord {
             id: trimmed_id.to_string(),
+            instance_id: uuid::Uuid::new_v4().to_string(),
             directory: trimmed_directory.to_string(),
             run_directory: resolved_run_directory.to_string(),
             agena_session_id,
@@ -392,7 +476,7 @@ impl WorkspacePreviewRegistry {
         Ok(record)
     }
 
-    pub(crate) async fn delete_by_id(&self, id: &str) -> ApiResult<()> {
+    async fn delete_by_id_inner(&self, id: &str) -> ApiResult<()> {
         let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
@@ -414,7 +498,7 @@ impl WorkspacePreviewRegistry {
         Ok(())
     }
 
-    pub(crate) async fn update_by_id(
+    async fn update_by_id_inner(
         &self,
         id: &str,
         patch: PreviewSessionUpdatePatch,
@@ -440,11 +524,7 @@ impl WorkspacePreviewRegistry {
         )))
     }
 
-    pub(crate) async fn rename_by_id(
-        &self,
-        id: &str,
-        new_id: &str,
-    ) -> ApiResult<PreviewSessionRecord> {
+    async fn rename_by_id_inner(&self, id: &str, new_id: &str) -> ApiResult<PreviewSessionRecord> {
         let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
         if trimmed.is_empty() {
@@ -489,7 +569,7 @@ impl WorkspacePreviewRegistry {
         Ok(updated)
     }
 
-    pub(crate) async fn mark_running_by_id(
+    async fn mark_running_by_id_inner(
         &self,
         id: &str,
         pid: u32,
@@ -515,10 +595,11 @@ impl WorkspacePreviewRegistry {
         )))
     }
 
-    pub(crate) async fn mark_stopped_by_id(
+    async fn mark_stopped_by_id_inner(
         &self,
         id: &str,
         error: Option<String>,
+        started_at: Option<i64>,
     ) -> ApiResult<PreviewSessionRecord> {
         let _mutation = self.mutations.lock().await;
         let trimmed = id.trim();
@@ -529,7 +610,7 @@ impl WorkspacePreviewRegistry {
         let updated_at = now_millis();
 
         if let Some(updated) = self
-            .mark_stopped_in_server_store(trimmed, error.clone(), updated_at)
+            .mark_stopped_in_server_store(trimmed, error.clone(), updated_at, started_at)
             .await?
         {
             self.invalidate().await;
@@ -579,6 +660,22 @@ impl WorkspacePreviewRegistry {
         }
         Ok(snapshot)
     }
+}
+
+async fn finish_mutation<T: Send + 'static>(
+    operation: impl std::future::Future<Output = ApiResult<T>> + Send + 'static,
+) -> ApiResult<T> {
+    tokio::spawn(async move {
+        let result = operation.await;
+        if let Err(error) = &result {
+            tracing::warn!(%error, "preview registry mutation failed");
+        }
+        result
+    })
+    .await
+    .map_err(|error| {
+        AppError::internal_error_with_context("complete preview registry mutation", &error)
+    })?
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -691,6 +788,7 @@ fn mark_stopped_in_file(
     id: &str,
     error: Option<String>,
     updated_at: i64,
+    started_at: Option<i64>,
 ) -> ApiResult<Option<PreviewSessionRecord>> {
     let Some(index) = file.sessions.iter().position(|session| session.id == id) else {
         return Ok(None);
@@ -699,6 +797,7 @@ fn mark_stopped_in_file(
     let mut record = file.sessions[index].clone();
     record.state = "stopped".to_string();
     record.pid = None;
+    record.started_at = record.started_at.or(started_at);
     record.updated_at = updated_at;
     record.error = error.and_then(|v| {
         let trimmed = v.trim().to_string();
@@ -938,4 +1037,236 @@ fn preview_session_delta(
         .filter(|id| !ids.contains(**id))
         .collect::<Vec<_>>();
     serde_json::json!({"reset": previous.is_none(), "upsert": upsert, "removed": removed})
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    struct PausedStore {
+        path: PathBuf,
+        values: std::sync::RwLock<HashMap<String, String>>,
+        pause: AtomicU8,
+        blocked: tokio::sync::Notify,
+        resume: tokio::sync::Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl agena_storage::instance_state::InstanceStateRepository for PausedStore {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        async fn get_payload(
+            &self,
+            key: &str,
+        ) -> Result<Option<String>, agena_storage::instance_state::InstanceStateError> {
+            Ok(self.values.read().unwrap().get(key).cloned())
+        }
+
+        async fn set_payload(
+            &self,
+            key: &str,
+            payload: String,
+        ) -> Result<(), agena_storage::instance_state::InstanceStateError> {
+            let pause = self.pause.swap(0, Ordering::AcqRel);
+            if pause == 1 {
+                self.blocked.notify_one();
+                self.resume.notified().await;
+            }
+            self.values.write().unwrap().insert(key.into(), payload);
+            if pause == 2 {
+                self.blocked.notify_one();
+                self.resume.notified().await;
+            }
+            Ok(())
+        }
+    }
+
+    async fn registry(root: &Path) -> (WorkspacePreviewRegistry, Arc<PausedStore>) {
+        let store = Arc::new(PausedStore {
+            path: root.join("registry-cancellation.sqlite3"),
+            values: Default::default(),
+            pause: AtomicU8::new(0),
+            blocked: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        });
+        let db = Arc::new(db::ServerStateDb::from_store(store.clone()).await.unwrap());
+        (
+            WorkspacePreviewRegistry::new_with_ttl(db, Duration::from_secs(60)),
+            store,
+        )
+    }
+
+    fn request(root: &Path, id: &str) -> PreviewSessionCreateRequest {
+        PreviewSessionCreateRequest {
+            id: id.into(),
+            directory: root.to_string_lossy().into_owned(),
+            run_directory: root.to_string_lossy().into_owned(),
+            agena_session_id: None,
+            command: "node".into(),
+            args: vec![],
+            logs_path: root
+                .join(format!("{id}.log"))
+                .to_string_lossy()
+                .into_owned(),
+            target_url: Url::parse("http://127.0.0.1:39999/").unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_cannot_lose_a_committed_mutations_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry, store) = registry(root.path()).await;
+        registry
+            .create_server_session(request(root.path(), "preview"))
+            .await
+            .unwrap();
+        let (before, _) = registry.event_payload(None).await.unwrap();
+        let mut changes = registry.subscribe();
+        store.pause.store(2, Ordering::Release);
+        let updating = {
+            let registry = registry.clone();
+            tokio::spawn(async move {
+                registry
+                    .update_by_id(
+                        "preview",
+                        PreviewSessionUpdatePatch {
+                            command: Some("node-next".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(2), store.blocked.notified())
+            .await
+            .unwrap();
+        updating.abort();
+        assert!(updating.await.unwrap_err().is_cancelled());
+        store.resume.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), changes.changed())
+            .await
+            .expect("a committed mutation must invalidate even after its caller disappears")
+            .unwrap();
+        let (after, payload) = registry.event_payload(None).await.unwrap();
+        assert_ne!(before, after);
+        assert!(payload.unwrap().contains("node-next"));
+        assert_eq!(
+            registry.get_by_id("preview").await.unwrap().command,
+            "node-next"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_mutation_keeps_serialization_until_its_write_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry, store) = registry(root.path()).await;
+        store.pause.store(1, Ordering::Release);
+        let first = {
+            let registry = registry.clone();
+            let request = request(root.path(), "first");
+            tokio::spawn(async move { registry.create_server_session(request).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), store.blocked.notified())
+            .await
+            .unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let mut second = {
+            let registry = registry.clone();
+            let request = request(root.path(), "second");
+            tokio::spawn(async move { registry.create_server_session(request).await })
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut second)
+                .await
+                .is_err(),
+            "the next read-modify-write must not overtake an admitted write"
+        );
+        store.resume.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let mut ids = registry
+            .list_all()
+            .await
+            .unwrap()
+            .sessions
+            .into_iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, ["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn owned_cleanup_preserves_launch_history_without_reclassifying_manual_attachments() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry, _) = registry(root.path()).await;
+        registry
+            .create_server_session(request(root.path(), "owned"))
+            .await
+            .unwrap();
+        registry
+            .create_server_session(request(root.path(), "attached"))
+            .await
+            .unwrap();
+        let owned = registry
+            .mark_owned_stopped_by_id("owned", None, 123)
+            .await
+            .unwrap();
+        assert_eq!(owned.started_at, Some(123));
+        assert_eq!(owned.pid, None);
+        assert_eq!(
+            registry
+                .mark_owned_stopped_by_id("owned", None, 456)
+                .await
+                .unwrap()
+                .started_at,
+            Some(123)
+        );
+        assert_eq!(
+            registry
+                .mark_stopped_by_id("attached", None)
+                .await
+                .unwrap()
+                .started_at,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn recreating_the_same_preview_id_cannot_revive_an_old_run_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let (registry, _) = registry(root.path()).await;
+        let first = registry
+            .create_server_session(request(root.path(), "reused"))
+            .await
+            .unwrap();
+        registry.delete_by_id("reused").await.unwrap();
+        let second = registry
+            .create_server_session(request(root.path(), "reused"))
+            .await
+            .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.started_at, second.started_at);
+        assert_ne!(first.instance_id, second.instance_id);
+        assert_ne!(
+            super::super::access::run_generation(&first),
+            super::super::access::run_generation(&second)
+        );
+        let mut legacy = serde_json::to_value(first).unwrap();
+        legacy.as_object_mut().unwrap().remove("instanceId");
+        assert!(
+            serde_json::from_value::<PreviewSessionRecord>(legacy)
+                .unwrap()
+                .instance_id
+                .is_empty()
+        );
+    }
 }

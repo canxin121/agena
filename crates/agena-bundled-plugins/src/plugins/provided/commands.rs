@@ -360,7 +360,9 @@ fn built_in_commands() -> Vec<CommandDefinition> {
     BUILT_IN_COMMANDS
         .iter()
         .map(|built_in| CommandDefinition {
-            id: built_in.action.to_string(),
+            // Command identity follows its primary spelling; the client action
+            // may also be an alias, as with /ui and /inline-ui.
+            id: built_in.slash.trim_start_matches('/').to_string(),
             title: built_in_summary_key_title(built_in.summary_key),
             group: GROUP.to_string(),
             category: Some(CATEGORY.to_string()),
@@ -2652,4 +2654,56 @@ fn parse_tool_input<T: serde::de::DeserializeOwned + JsonSchema>(
         &macro_support::json_schema_for::<T>(),
         &format!("{COMMANDS_PLUGIN_ID}.{tool} input field"),
     )
+}
+
+#[cfg(test)]
+mod command_manifest_tests {
+    use super::*;
+
+    #[test]
+    fn builtin_command_manifest_has_valid_unique_declarations() {
+        let manifest = CommandsPlugin::new().manifest();
+        let mut ids = std::collections::BTreeSet::new();
+        for command in &manifest.commands {
+            assert!(
+                ids.insert(&command.id),
+                "duplicate command id: {}",
+                command.id
+            );
+            command
+                .validate()
+                .unwrap_or_else(|error| panic!("invalid built-in command {}: {error}", command.id));
+        }
+
+        let inline_ui = manifest
+            .commands
+            .iter()
+            .find(|command| command.slash.as_deref() == Some("/ui"))
+            .expect("the /ui command must remain available");
+        assert_eq!(inline_ui.id, "ui");
+        assert!(inline_ui.aliases.iter().any(|alias| alias == "inline-ui"));
+        assert!(matches!(
+            &inline_ui.target,
+            CommandTarget::Client { action } if action == "inline-ui"
+        ));
+
+        let compact = manifest
+            .commands
+            .iter()
+            .find(|command| command.slash.as_deref() == Some("/compact"))
+            .expect("the /compact command must remain available");
+        assert!(matches!(
+            &compact.target,
+            CommandTarget::Client { action } if action == "compact"
+        ));
+        assert!(compact.docs.usage.is_none());
+        compact
+            .input
+            .validate_value(&serde_json::json!({}))
+            .unwrap();
+        assert_eq!(
+            compact.input.default_value().unwrap(),
+            serde_json::json!({})
+        );
+    }
 }

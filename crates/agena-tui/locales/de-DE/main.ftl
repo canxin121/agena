@@ -92,14 +92,14 @@ help-composer-line-6 = Ctrl+O sucht Workspace-Dateien zum Anhaengen
 help-composer-line-7 = Ctrl+E oeffnet $VISUAL/$EDITOR fuer die Eingabe
 help-composer-line-8 = Ctrl+T haengt ein Zwischenablagebild an
 help-composer-line-9 = Eingefuegter Text wird direkt eingefuegt; ein einzelner Dateipfad wird angehaengt, und Anhaenge bleiben atomar
-help-composer-line-10 = Up oeffnet am Anfang des Eingabefelds den Verlauf; Ctrl+P bearbeitet die wartende Nachricht und Ctrl+X bricht sie ab; Ctrl+C öffnet das Beenden-Menü
+help-composer-line-10 = Up oeffnet am Anfang des Eingabefelds den Verlauf; Ctrl+P bearbeitet die wartende Nachricht und Ctrl+X bricht sie ab; Ctrl+C leert einen nicht leeren Nachrichtenentwurf oder öffnet bei leerem Eingabefeld das Beenden-Menü
 help-section-actions = Aktionen
 help-actions-line-1 = Ctrl+N erstellt eine Sitzung; n/N navigiert Suchtreffer
 help-actions-line-2 = r setzt eine blockierte oder wartende Sitzung fort; U öffnet die Nutzungsstatistik
 help-actions-line-3 = a/A/d/D antworten auf die erste offene Berechtigungsanfrage
 help-actions-line-4 = Ctrl+R oeffnet die erste offene Benutzereingabeanfrage im Composer
 help-actions-line-5 = Mouse Capture ist deaktiviert, damit normale Terminal-Auswahl und Kopieren weiter funktionieren
-help-actions-line-6 = Ctrl+C öffnet das Beenden-Menü
+help-actions-line-6 = Beim Verfassen leert Ctrl+C einen nicht leeren Nachrichtenentwurf; sonst öffnet es das Beenden-Menü (trennen, stoppen und beenden oder zurück).
 
 overlay-session-search-title = Sitzungssuche
 overlay-session-search-prompt = Sitzungstitel durchsuchen
@@ -3184,7 +3184,7 @@ exit-menu-stop-and-exit-detail = Aktuellen Lauf auf dem Server abbrechen und dan
 exit-menu-cancel = Cancel (Zurück)
 exit-menu-cancel-detail = Zur TUI zurückkehren ohne Abbruch.
 exit-menu-stopping = Warte auf die Bestätigung des Servers ...
-context-help-key-exit-menu = Beenden-Menü öffnen (trennen, stoppen oder zurück).
+context-help-key-exit-menu = Beim Verfassen leert Ctrl+C einen nicht leeren Nachrichtenentwurf; sonst öffnet es das Beenden-Menü (trennen, stoppen und beenden oder zurück).
 
 # Stateful inline reply controls
 command-inline-ui-summary = Interaktive Oberfläche dieser Unterhaltung öffnen.

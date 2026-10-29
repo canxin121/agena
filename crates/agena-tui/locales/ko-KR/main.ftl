@@ -126,14 +126,14 @@ help-composer-line-6 = Ctrl+O 로 워크스페이스 파일 검색 후 첨부
 help-composer-line-7 = Ctrl+E 로 $VISUAL/$EDITOR 열기
 help-composer-line-8 = Ctrl+T 로 클립보드 이미지 첨부
 help-composer-line-9 = 붙여넣은 텍스트는 바로 입력되고, 단일 파일 경로는 첨부되며, 첨부는 원자적으로 유지됩니다
-help-composer-line-10 = 커서가 입력창 맨 앞에 있을 때 Up으로 기록을 열고 Ctrl+P로 대기 메시지를 편집하고 Ctrl+X로 취소합니다; Ctrl+C로 종료 메뉴 열기
+help-composer-line-10 = 커서가 입력창 맨 앞에 있을 때 Up으로 기록을 열고 Ctrl+P로 대기 메시지를 편집하고 Ctrl+X로 취소합니다; Ctrl+C는 메시지 입력창에 내용이 있으면 지우고, 비어 있으면 종료 메뉴를 엽니다
 help-section-actions = 동작
 help-actions-line-1 = Ctrl+N 세션 생성, n/N 검색 결과 이동
 help-actions-line-2 = r 차단되었거나 보류 중인 세션 계속; U 사용량 분석 열기
 help-actions-line-3 = a/A/d/D 로 첫 번째 권한 요청 응답
 help-actions-line-4 = Composer에서 Ctrl+R로 첫 번째 사용자 입력 요청 열기
 help-actions-line-5 = 마우스 캡처가 꺼져 있어 터미널 기본 선택/복사가 그대로 동작합니다
-help-actions-line-6 = Ctrl+C로 종료 메뉴 열기
+help-actions-line-6 = 메시지 작성 중 내용이 있으면 Ctrl+C로 초안을 지우고, 그 외에는 종료 메뉴(연결 해제, 중지 후 종료, 돌아가기)를 엽니다.
 
 overlay-session-search-title = 세션 검색
 overlay-session-search-prompt = 세션 제목 검색
@@ -3034,7 +3034,7 @@ exit-menu-stop-and-exit-detail = 서버에 현재 작업 취소를 요청하고 
 exit-menu-cancel = Cancel (돌아가기)
 exit-menu-cancel-detail = AI 작업을 중지하지 않고 돌아갑니다.
 exit-menu-stopping = 서버의 취소 확인을 기다리는 중…
-context-help-key-exit-menu = 종료 메뉴 열기 (연결 해제, 중지, 돌아가기).
+context-help-key-exit-menu = 메시지 작성 중 내용이 있으면 Ctrl+C로 초안을 지우고, 그 외에는 종료 메뉴(연결 해제, 중지 후 종료, 돌아가기)를 엽니다.
 
 # Stateful inline reply controls
 command-inline-ui-summary = 대화의 인터랙티브 UI를 엽니다.

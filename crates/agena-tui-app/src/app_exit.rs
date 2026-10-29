@@ -112,7 +112,142 @@ impl App {
 mod tests {
     use super::*;
     use agena_tui::choice::{self, ChoicePresentationAction, ChoicePresentationEffect};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use agena_tui::main_focus::Focus;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    fn composer_app() -> (tempfile::TempDir, App) {
+        let temp = tempfile::tempdir().unwrap();
+        let backend = crate::TuiBackend::isolated_test_backend(temp.path().to_path_buf());
+        let mut app =
+            App::new_with_backend(backend, crate::LaunchOptions::default(), I18n::english());
+        app.current_route = Route::Main;
+        app.focus = Focus::Composer;
+        (temp, app)
+    }
+
+    fn ctrl_c() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+    }
+
+    fn assert_exit_menu(app: &App) {
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Choice(dialog)) if matches!(dialog.action, ChoiceOverlayAction::Exit)
+        ));
+        assert!(!app.should_quit);
+        assert!(app.exit_after_cancel_session_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_clears_text_and_whitespace_before_opening_exit_menu() {
+        for draft in ["unfinished draft", " \n "] {
+            let (_temp, mut app) = composer_app();
+            app.transcript.session_id = Some(17);
+            app.composer.set_text(draft.to_owned());
+
+            app.handle_key_event(ctrl_c());
+
+            assert!(app.composer.text().is_empty());
+            assert!(app.overlay.is_none());
+            assert!(!app.should_quit);
+            assert!(app.exit_after_cancel_session_id.is_none());
+
+            app.handle_key_event(ctrl_c());
+            assert_exit_menu(&app);
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_clears_attachments_and_invalidates_pending_media() {
+        use agena_api::part::PartExecutionStatusResource;
+        use agena_domain::{ResourceActivity, ResourceDelivery, ResourceKind, ResourceReference};
+
+        for state in [
+            PartExecutionStatusResource::InProgress,
+            PartExecutionStatusResource::Completed,
+        ] {
+            let (_temp, mut app) = composer_app();
+            app.reserve_pending_composer_media(
+                ResourceActivity {
+                    delivery: ResourceDelivery::Reference,
+                    kind: ResourceKind::File,
+                    reference: ResourceReference::WorkspacePath {
+                        path: "draft.txt".to_owned(),
+                    },
+                    name: "draft.txt".to_owned(),
+                    media_type: None,
+                    size_bytes: Some(1),
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                },
+                None,
+            );
+            app.composer_items[0].state = state;
+            assert!(app.toggle_composer_item_selection());
+            let media_epoch = app.composer_media_epoch;
+
+            app.handle_key_event(ctrl_c());
+
+            assert!(app.composer.text().is_empty());
+            assert!(app.composer.draft_elements().is_empty());
+            assert!(app.composer_items.is_empty());
+            assert!(!app.composer_item_selection.is_active());
+            assert_eq!(app.composer_media_epoch, media_epoch.wrapping_add(1));
+            assert!(app.overlay.is_none());
+
+            app.handle_key_event(ctrl_c());
+            assert_exit_menu(&app);
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_preserves_drafts_outside_the_active_composer() {
+        for surface in ["transcript", "help", "command palette", "exit menu"] {
+            let (_temp, mut app) = composer_app();
+            app.composer.set_text("keep this draft".to_owned());
+            match surface {
+                "transcript" => app.focus = Focus::Transcript,
+                "help" => {
+                    app.toggle_context_help();
+                }
+                "command palette" => {
+                    app.open_command_palette();
+                }
+                "exit menu" => {
+                    app.open_exit_menu();
+                }
+                _ => unreachable!(),
+            }
+
+            app.handle_key_event(ctrl_c());
+
+            assert_eq!(app.composer.text(), "keep this draft", "{surface}");
+            assert_exit_menu(&app);
+            let overlay_stack_len = app.overlay_stack.len();
+
+            app.handle_key_event(ctrl_c());
+
+            assert_eq!(app.composer.text(), "keep this draft", "{surface}");
+            assert_exit_menu(&app);
+            assert_eq!(app.overlay_stack.len(), overlay_stack_len);
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_release_does_not_clear_or_open_exit_menu() {
+        let (_temp, mut app) = composer_app();
+        app.composer.set_text("unfinished draft".to_owned());
+        let mut release = ctrl_c();
+        release.kind = KeyEventKind::Release;
+
+        app.handle_key_event(release);
+
+        assert_eq!(app.composer.text(), "unfinished draft");
+        assert!(app.overlay.is_none());
+        assert!(!app.should_quit);
+    }
 
     #[test]
     fn exit_picker_defaults_to_detach_and_shows_three_actions() {

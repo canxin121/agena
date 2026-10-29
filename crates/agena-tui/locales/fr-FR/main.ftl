@@ -113,14 +113,14 @@ help-composer-line-6 = Ctrl+O recherche des fichiers du workspace a joindre
 help-composer-line-7 = Ctrl+E ouvre $VISUAL/$EDITOR pour la composition
 help-composer-line-8 = Ctrl+T joint une image du presse-papiers
 help-composer-line-9 = Le texte colle est insere directement ; un chemin de fichier unique est joint et les pieces jointes restent atomiques
-help-composer-line-10 = Haut ouvre l'historique quand le curseur est au debut ; Ctrl+P edite le message en attente et Ctrl+X l'annule; Ctrl+C ouvre le menu de sortie
+help-composer-line-10 = Haut ouvre l'historique quand le curseur est au debut ; Ctrl+P edite le message en attente et Ctrl+X l'annule; Ctrl+C efface un brouillon non vide ou ouvre le menu de sortie si le champ de message est vide
 help-section-actions = Actions
 help-actions-line-1 = Ctrl+N cree une session ; n/N parcourt les resultats de recherche
 help-actions-line-2 = r continue une session bloquee ou en attente ; U ouvre les statistiques d’utilisation
 help-actions-line-3 = a/A/d/D repondent a la premiere demande d'autorisation en attente
 help-actions-line-4 = Ctrl+R ouvre la premiere demande d'entree en attente depuis la composition
 help-actions-line-5 = La capture de souris est desactivee pour conserver la selection/copie du terminal
-help-actions-line-6 = Ctrl+C ouvre le menu de sortie
+help-actions-line-6 = Lors de la rédaction, Ctrl+C efface un brouillon non vide ; sinon, il ouvre le menu de sortie (détacher, arrêter et quitter ou revenir).
 
 overlay-session-search-title = Recherche de session
 overlay-session-search-prompt = Rechercher dans les titres de session
@@ -3037,7 +3037,7 @@ exit-menu-stop-and-exit-detail = Demander l’annulation de la tâche au serveur
 exit-menu-cancel = Cancel (Retour)
 exit-menu-cancel-detail = Revenir au TUI sans arrêter le travail.
 exit-menu-stopping = En attente de confirmation du serveur…
-context-help-key-exit-menu = Ouvrir le menu de sortie : détacher, arrêter ou revenir.
+context-help-key-exit-menu = Lors de la rédaction, Ctrl+C efface un brouillon non vide ; sinon, il ouvre le menu de sortie (détacher, arrêter et quitter ou revenir).
 
 # Stateful inline reply controls
 command-inline-ui-summary = Ouvrir l’interface interactive de la conversation.

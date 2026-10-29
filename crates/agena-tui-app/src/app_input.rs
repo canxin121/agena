@@ -18,10 +18,21 @@ impl App {
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
-        // Ctrl+C is a client-level exit choice, not implicit run cancellation.
-        // Offer the same choice from the Hub, focused editors, and overlays.
+        // Clear the focused composer's draft first. An empty composer and
+        // other surfaces keep the client-level exit choice.
         if global_action == Some(KeyAction::Interrupt) {
-            self.open_exit_menu();
+            if self.current_route_is_main()
+                && self.focus == Focus::Composer
+                && self.overlay.is_none()
+                && self.context_help.is_none()
+                && self.interaction_editing.is_none()
+                && (!self.composer.text().is_empty() || !self.composer_items.is_empty())
+            {
+                self.reset_prompt_history_recall();
+                self.clear_composer_state();
+            } else {
+                self.open_exit_menu();
+            }
             return;
         }
 

@@ -124,14 +124,14 @@ help-composer-line-6 = Ctrl+O 搜尋工作區檔案並附加
 help-composer-line-7 = Ctrl+E 用 $VISUAL/$EDITOR 開啟外部編輯器
 help-composer-line-8 = Ctrl+T 附加剪貼簿圖片
 help-composer-line-9 = 貼上的文字會直接插入輸入區；貼上單一檔案路徑會直接附加，附件保持原子化
-help-composer-line-10 = 游標位於輸入框開頭時按上鍵開啟歷史；Ctrl+P 編輯待發訊息、Ctrl+X 取消待發訊息; Ctrl+C 開啟離開選單
+help-composer-line-10 = 游標位於輸入框開頭時按上鍵開啟歷史；Ctrl+P 編輯待發訊息、Ctrl+X 取消待發訊息; Ctrl+C 清空非空的訊息輸入框，輸入框為空時開啟離開選單
 help-section-actions = 操作
 help-actions-line-1 = Ctrl+N 建立工作階段；n/N 跳轉搜尋結果
 help-actions-line-2 = r 繼續被阻擋或待處理的工作階段；U 開啟用量統計
 help-actions-line-3 = a/A/d/D 回覆第一個待處理權限請求
 help-actions-line-4 = 在輸入區用 Ctrl+R 開啟第一個待處理使用者輸入請求
 help-actions-line-5 = 已停用滑鼠捕捉，終端原生選取與複製仍可使用
-help-actions-line-6 = Ctrl+C 開啟離開選單
+help-actions-line-6 = 編輯訊息時，Ctrl+C 清空非空的草稿；其他情況下開啟離開選單（中斷連線、停止並離開或返回）。
 
 overlay-session-search-title = 工作階段搜尋
 overlay-session-search-prompt = 搜尋工作階段標題
@@ -3089,7 +3089,7 @@ exit-menu-stop-and-exit-detail = 要求伺服器取消目前工作，確認後�
 exit-menu-cancel = Cancel（返回）
 exit-menu-cancel-detail = 返回 TUI，不停止 AI 工作。
 exit-menu-stopping = 等待伺服器確認取消請求…
-context-help-key-exit-menu = 開啟離開選單：中斷連線、停止或返回。
+context-help-key-exit-menu = 編輯訊息時，Ctrl+C 清空非空的草稿；其他情況下開啟離開選單（中斷連線、停止並離開或返回）。
 
 # Stateful inline reply controls
 command-inline-ui-summary = 開啟目前對話中的互動介面。

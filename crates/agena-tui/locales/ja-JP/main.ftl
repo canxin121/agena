@@ -238,14 +238,14 @@ help-composer-line-6 = Ctrl+O でワークスペースファイルを検索し�
 help-composer-line-7 = Ctrl+E で $VISUAL/$EDITOR を開く
 help-composer-line-8 = Ctrl+T でクリップボード画像を添付
 help-composer-line-9 = 貼り付けたテキストは直接入力され、単一のファイルパスは添付になり、添付は原子的に扱われます
-help-composer-line-10 = カーソルが入力欄の先頭にあるとき Up で履歴を開き、Ctrl+P で保留メッセージを編集、Ctrl+X でキャンセルします; Ctrl+C で終了メニューを開く
+help-composer-line-10 = カーソルが入力欄の先頭にあるとき Up で履歴を開き、Ctrl+P で保留メッセージを編集、Ctrl+X でキャンセルします; Ctrl+C は入力欄に下書きがあれば消去し、空なら終了メニューを開きます
 help-section-actions = 操作
 help-actions-line-1 = Ctrl+N でセッション作成、n/N で検索結果を移動
 help-actions-line-2 = r ブロック中または保留中のセッションを続行、U 使用状況分析を開く
 help-actions-line-3 = a/A/d/D で最初の保留中の権限リクエストに応答
 help-actions-line-4 = Composer で Ctrl+R を押すと最初の保留中ユーザー入力を開く
 help-actions-line-5 = マウスキャプチャは無効なので、端末本来の選択やコピーが使えます
-help-actions-line-6 = Ctrl+C で終了メニューを開く
+help-actions-line-6 = メッセージ入力中に下書きがある場合、Ctrl+C で消去します。それ以外の場合は終了メニュー（切断、停止して終了、戻る）を開きます。
 
 overlay-session-search-title = セッション検索
 overlay-session-search-prompt = セッションタイトルを検索
@@ -3038,7 +3038,7 @@ exit-menu-stop-and-exit-detail = サーバーに現在の処理のキャンセ�
 exit-menu-cancel = Cancel（戻る）
 exit-menu-cancel-detail = AI 処理を止めずに TUI に戻ります。
 exit-menu-stopping = サーバーのキャンセル確認を待機中…
-context-help-key-exit-menu = 終了メニューを開く（切断、停止して終了、戻る）。
+context-help-key-exit-menu = メッセージ入力中に下書きがある場合、Ctrl+C で消去します。それ以外の場合は終了メニュー（切断、停止して終了、戻る）を開きます。
 
 # Stateful inline reply controls
 command-inline-ui-summary = 会話内の対話型UIを開く。

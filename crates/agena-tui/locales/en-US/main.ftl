@@ -167,7 +167,7 @@ help-composer-line-6 = Ctrl+O or /attach opens the in-TUI file picker
 help-composer-line-7 = Ctrl+E opens $VISUAL/$EDITOR for the composer
 help-composer-line-8 = Ctrl+T pastes clipboard files, images, or text; /image opens the workspace image picker
 help-composer-line-9 = Short pasted text is inserted directly; pasted text of 1000+ characters becomes a workspace .txt ref; a single file path attaches it directly
-help-composer-line-10 = Up opens history when the cursor is at the start; Ctrl+P edits the first queued message and Ctrl+X cancels it; Ctrl+C opens the exit menu
+help-composer-line-10 = Up opens history when the cursor is at the start; Ctrl+P edits the first queued message and Ctrl+X cancels it; Ctrl+C clears a nonempty draft, or opens the exit menu when the composer is empty
 help-composer-line-11 = Ctrl+G opens inline items when available, and slash commands like /model or /rewind run from the composer
 help-section-actions = Actions
 help-section-user-commands = User commands
@@ -176,7 +176,7 @@ help-actions-line-2 = r continue a blocked or pending session; U opens usage ana
 help-actions-line-3 = p opens the permission prompt, Ctrl+L opens it from the composer, and a/A/d/D quickly reply to the first pending permission request
 help-actions-line-4 = Ctrl+R opens the first pending user-input request from the composer; Ctrl+] toggles the workspace panel; ↑↓ select, ←→ switch tabs, Enter open, r refresh, n/p page, s staged, m more diff, x task action, Esc return to input; inside a question part, ←→ turns pages, Space selects, Enter advances or runs the selected summary action, Ctrl+X cancels
 help-actions-line-5 = Click moves the primary cursor and double-click selects its block; dragging creates an independent character range without moving the cursor, with formulas/images snapped whole, then yy copies clean text
-help-actions-line-6 = Ctrl+C opens the exit menu
+help-actions-line-6 = When composing, Ctrl+C clears a nonempty draft; otherwise it opens the exit menu (detach, stop and exit, or return).
 
 overlay-session-search-title = Session Search
 overlay-session-search-prompt = Search session titles
@@ -2712,7 +2712,7 @@ exit-menu-stop-and-exit-detail = Ask the server to cancel the current run, then 
 exit-menu-cancel = Cancel
 exit-menu-cancel-detail = Return to the TUI without stopping AI work.
 exit-menu-stopping = Waiting for the server to acknowledge cancellation...
-context-help-key-exit-menu = Open the exit menu (detach, stop and exit, or return).
+context-help-key-exit-menu = When composing, Ctrl+C clears a nonempty draft; otherwise it opens the exit menu (detach, stop and exit, or return).
 
 # Stateful inline reply controls
 command-inline-ui-summary = Open the interactive UI in this conversation.

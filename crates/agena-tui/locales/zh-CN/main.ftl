@@ -167,7 +167,7 @@ help-composer-line-6 = Ctrl+O 或 /attach 在 TUI 内打开文件选择器
 help-composer-line-7 = Ctrl+E 用 $VISUAL/$EDITOR 打开外部编辑器
 help-composer-line-8 = Ctrl+T 可粘贴剪切板中的文件、图片或文本；/image 打开工作区图片选择器
 help-composer-line-9 = 短文本直接插入输入框；1000 字符以上的粘贴文本会保存为工作区 .txt 引用；单个文件路径仍会直接附加
-help-composer-line-10 = 光标位于输入框开头时按上键打开历史；Ctrl+P 编辑队首待发消息、Ctrl+X 取消该消息；Ctrl+C 打开退出菜单
+help-composer-line-10 = 光标位于输入框开头时按上键打开历史；Ctrl+P 编辑队首待发消息、Ctrl+X 取消该消息；Ctrl+C 清空非空的消息输入框，输入框为空时打开退出菜单
 help-composer-line-11 = Ctrl+G 在可用时打开内联项目列表，/model、/rewind 这类 slash 命令可直接在输入框执行
 help-section-actions = 操作
 help-section-user-commands = 用户命令
@@ -176,7 +176,7 @@ help-actions-line-2 = r 继续被阻塞或待处理的会话；U 打开用量统
 help-actions-line-3 = p 打开权限弹窗；在 composer 中可用 Ctrl+L 打开；a/A/d/D 可快速回复第一个待处理权限请求
 help-actions-line-4 = 在 composer 中用 Ctrl+R 打开第一个待处理用户输入请求；Ctrl+] 展开或收起工作区，↑↓ 选择、←→ 切换页签、Enter 打开、r 刷新、n/p 翻页、s 切换暂存区、m 加载更多差异、x 操作任务、Esc 返回输入框；问题 part 内 ←→ 翻页、空格选择、Enter 下一页或执行汇总行操作、Ctrl+X 取消
 help-actions-line-5 = 单击移动主光标，双击选择整块；拖动建立独立的字符级文字范围且不移动主光标，公式/图片吸附整体，随后按 yy 复制干净文本
-help-actions-line-6 = Ctrl+C 打开退出菜单
+help-actions-line-6 = 编辑消息时，Ctrl+C 清空非空的草稿；其他情况下打开退出菜单（断开连接、终止并退出或返回）。
 
 overlay-session-search-title = 会话搜索
 overlay-session-search-prompt = 搜索会话标题
@@ -2712,7 +2712,7 @@ exit-menu-stop-and-exit-detail = 请求 server 取消当前任务，确认后退
 exit-menu-cancel = Cancel（返回）
 exit-menu-cancel-detail = 返回 TUI，AI 工作不受影响。
 exit-menu-stopping = 正在等待 server 确认取消请求…
-context-help-key-exit-menu = 打开退出菜单：断开连接、终止并退出或返回。
+context-help-key-exit-menu = 编辑消息时，Ctrl+C 清空非空的草稿；其他情况下打开退出菜单（断开连接、终止并退出或返回）。
 
 # Stateful inline reply controls
 command-inline-ui-summary = 打开当前会话中的交互界面。

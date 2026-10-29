@@ -126,14 +126,14 @@ help-composer-line-6 = Ctrl+O busca archivos del workspace para adjuntar
 help-composer-line-7 = Ctrl+E abre $VISUAL/$EDITOR para el editor
 help-composer-line-8 = Ctrl+T adjunta una imagen del portapapeles
 help-composer-line-9 = El texto pegado se inserta directamente; una sola ruta de archivo se adjunta y los adjuntos permanecen atomicos
-help-composer-line-10 = Arriba abre el historial cuando el cursor esta al inicio; Ctrl+P edita el mensaje pendiente y Ctrl+X lo cancela; Ctrl+C abre las opciones de salida
+help-composer-line-10 = Arriba abre el historial cuando el cursor esta al inicio; Ctrl+P edita el mensaje pendiente y Ctrl+X lo cancela; Ctrl+C borra el borrador si el campo de mensaje no está vacío; si está vacío, abre el menú de salida
 help-section-actions = Acciones
 help-actions-line-1 = Ctrl+N crea una sesion; n/N navega resultados de busqueda
 help-actions-line-2 = r continua una sesion bloqueada o pendiente; U abre las estadísticas de uso
 help-actions-line-3 = a/A/d/D responden a la primera solicitud de permiso pendiente
 help-actions-line-4 = Ctrl+R abre la primera solicitud de entrada pendiente desde el editor
 help-actions-line-5 = La captura del raton esta desactivada para conservar la seleccion y copia nativas del terminal
-help-actions-line-6 = Ctrl+C abre las opciones de salida
+help-actions-line-6 = Al redactar, Ctrl+C borra el borrador si no está vacío; en los demás casos abre el menú de salida (desconectar, detener y salir o volver).
 
 overlay-session-search-title = Busqueda de sesiones
 overlay-session-search-prompt = Buscar en los titulos de sesion
@@ -3040,7 +3040,7 @@ exit-menu-stop-and-exit-detail = Solicita cancelar la ejecución actual y luego 
 exit-menu-cancel = Cancel (Volver)
 exit-menu-cancel-detail = Vuelve a la TUI sin detener el trabajo.
 exit-menu-stopping = Esperando confirmación de cancelación...
-context-help-key-exit-menu = Abre opciones para desconectar, detener o volver.
+context-help-key-exit-menu = Al redactar, Ctrl+C borra el borrador si no está vacío; en los demás casos abre el menú de salida (desconectar, detener y salir o volver).
 
 # Stateful inline reply controls
 command-inline-ui-summary = Abre la interfaz interactiva de esta conversación.

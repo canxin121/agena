@@ -79,6 +79,16 @@ struct LiveTool {
     permissions: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
 }
 type ActiveToolMap = HashMap<(i64, i64), LiveTool>;
+
+/// An operator call has a policy principal and a bounded lifetime, but no
+/// transcript, session, or user-interaction authority. Plugin callbacks still
+/// need the plugin host's exact, live callback token before reaching this map.
+struct OperatorInvocationAuthority {
+    executor: ToolExecutor,
+    workspace: i64,
+    cancel: CancellationToken,
+}
+type OperatorInvocationMap = HashMap<i64, Arc<OperatorInvocationAuthority>>;
 #[derive(Default)]
 struct SessionDispatch {
     submission: tokio::sync::Mutex<()>,
@@ -113,6 +123,7 @@ pub struct SessionManager {
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
+    operator_calls: Arc<StdMutex<OperatorInvocationMap>>,
     agent_preparation: Arc<tokio::sync::Mutex<()>>,
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
@@ -146,6 +157,7 @@ impl SessionManager {
             auxiliary_tasks: Arc::new(Semaphore::new(MAX_AUXILIARY_TASKS)),
             sessions: Default::default(),
             tools: Default::default(),
+            operator_calls: Default::default(),
             host_sequences: Default::default(),
             agent_preparation: Default::default(),
             delivery_scan: Default::default(),

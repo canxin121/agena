@@ -6,6 +6,12 @@ use agena_domain::{
 };
 use agena_plugin_host::sdk::host_api::AskUserResponse;
 
+mod operator;
+
+// ToolInvokeInput uses this existing wire sentinel for a call without a
+// session. It never identifies a kernel session or a live transcript tool.
+const OPERATOR_SESSION: i64 = -1;
+
 pub(super) fn parent_interaction_required(
     reason: &str,
 ) -> Box<agena_domain::CapabilityUnavailableResult> {
@@ -21,30 +27,6 @@ pub(super) fn parent_interaction_required(
 }
 
 impl SessionManager {
-    pub async fn execute_unscoped_tool(
-        &self,
-        invocation: ToolInvocation,
-        call_id: i64,
-    ) -> Result<crate::SessionToolExecutionOutcome, AppError> {
-        let executor = self.tool_executor();
-        let execution = executor
-            .execute_invocation(
-                &invocation,
-                crate::tool::ToolRuntimeContext {
-                    session_id: None,
-                    call_id: Some(call_id),
-                    prepared_shell_command: None,
-                    launch_provenance: None,
-                    output: None,
-                    tool: None,
-                },
-            )
-            .await
-            .map_err(tool_error)?;
-        Ok(crate::SessionToolExecutionOutcome::Completed(
-            execution.summary(),
-        ))
-    }
     pub(super) fn live_tool(
         &self,
         session: i64,
@@ -70,6 +52,18 @@ impl SessionManager {
         call: i64,
         invocation: ToolInvocation,
     ) -> Result<(), AppError> {
+        if session == OPERATOR_SESSION {
+            let authority = self.operator_invocation(call).map_err(tool_error)?;
+            let checks = authority
+                .executor
+                .collect_permission_checks_for_invocation_in_session(&invocation, None)
+                .await
+                .map_err(tool_error)?;
+            return self
+                .authorize_operator_checks(&authority, checks)
+                .await
+                .map_err(tool_error);
+        }
         let (tool, control) = self.live_tool(session, call)?;
         let state = control.state.clone();
         let context = self.execution_context_value(session_id(session)?).await?;
@@ -150,6 +144,14 @@ impl SessionManager {
         call: i64,
         check: impl FnOnce(&ToolExecutor) -> Result<agena_tool::ToolPermissionCheck, ToolError>,
     ) -> Result<(), AppError> {
+        if session == OPERATOR_SESSION {
+            let authority = self.operator_invocation(call).map_err(tool_error)?;
+            let check = check(&authority.executor).map_err(tool_error)?;
+            return self
+                .authorize_operator_checks(&authority, vec![check])
+                .await
+                .map_err(tool_error);
+        }
         let (tool, control) = self.live_tool(session, call)?;
         let state = control.state.clone();
         let context = self.execution_context_value(session_id(session)?).await?;
@@ -305,6 +307,12 @@ impl SessionManager {
         call: i64,
         invocation: ToolInvocation,
     ) -> Result<ToolInvocationExecution, AppError> {
+        if session == OPERATOR_SESSION {
+            return self
+                .execute_operator_invocation(call, &invocation)
+                .await
+                .map_err(tool_error);
+        }
         let (tool, control) = self.live_tool(session, call)?;
         let state = self.state.load_full();
         let context = self.execution_context_value(session_id(session)?).await?;

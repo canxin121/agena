@@ -148,7 +148,13 @@ async fn inline_ui_resolution_is_immutable_and_session_scoped() {
     let directory = tempfile::tempdir().unwrap();
     let store = InlineUiStore::new(directory.path());
     store
-        .create(session.get(), &reference, document.clone(), tool.id().get())
+        .create(
+            session.get(),
+            &reference,
+            document.clone(),
+            tool.id().get(),
+            agena_domain::InlinePhase::Working,
+        )
         .unwrap();
     let first = resolve_inline_snapshot(&runtime.ports.reader, session, &reference, store.clone())
         .await
@@ -200,6 +206,7 @@ async fn inline_ui_resolution_is_immutable_and_session_scoped() {
             &reference,
             document.clone(),
             tool.id().get(),
+            agena_domain::InlinePhase::Working,
         )
         .unwrap();
     assert!(

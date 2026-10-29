@@ -16,6 +16,7 @@ import {
   normalizeRunState,
 } from '../../lib/chatRunState'
 import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
+import { toolInputRecord } from '../../lib/toolInput'
 import type { JsonValue } from '@/types/json'
 import { pendingPartInteractions } from '../../lib/interactiveRequests'
 import { conversationMessages, sameAssistantReply } from './conversationMessages'
@@ -164,7 +165,7 @@ function toolCallView(part: MessagePartLike): JsonRecord {
   const invocation = {
     name: firstText(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
-    input: record(content.input),
+    input: toolInputRecord(content.input),
     tool_api_call: record(content.tool_api_call),
   }
   const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
@@ -202,10 +203,8 @@ function operationSummary(part: MessagePartLike): string {
 
 function operationCopyText(part: MessagePartLike): string {
   const content = durablePartContent(part)
-  const operation = toolCallView(part)
-  const invocation = record(operation.invocation)
   const presentation = record(part.agenaPresentation)
-  const input = Object.keys(record(content.input)).length ? record(content.input) : record(invocation.input)
+  const input = toolInputRecord(content.input)
   const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
   const output = firstText(presentation, ['summary']) || (blocks.length ? prettyJson(blocks) : '')
   const sections = [operationTitle(part)]

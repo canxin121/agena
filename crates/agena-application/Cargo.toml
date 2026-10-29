@@ -23,6 +23,7 @@ agena-failure = { workspace = true }
 agena-provider = { workspace = true }
 agena-storage = { workspace = true }
 agena-tool = { workspace = true }
+agena-tool-api = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-api = { workspace = true }
 agena-notification = { workspace = true }

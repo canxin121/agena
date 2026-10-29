@@ -20,6 +20,7 @@ import {
   sessionWasDeleted,
 } from './sessionMutationSync'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
+import { toolInputRecord } from '../../lib/toolInput'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { MessageEntry, MessageFold, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
@@ -371,7 +372,7 @@ function toolCallView(content: JsonObject, presentationValue: JsonValue): JsonOb
   const invocation = {
     name: stringField(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
-    input: asObject(content.input),
+    input: toolInputRecord(content.input),
     tool_api_call: asObject(content.tool_api_call),
   }
   const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
@@ -505,9 +506,7 @@ export function normalizeAgenaPart(
       const operation = toolCallView(asObject(content), agenaPresentation)
       const invocation = asObject(operation.invocation)
       const toolName = stringField(content, ['name']) || stringField(invocation, ['name']) || 'unknown'
-      const canonicalInput = asObject(asObject(content).input)
-      const operationInput = asObject(invocation.input)
-      const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
+      const input = toolInputRecord(asObject(content).input)
       const outputRecord = asObject(operation.output)
       const payloadRecord = asObject(outputRecord.payload)
       const output =

@@ -428,15 +428,21 @@ pub(crate) async fn project_kernel_entry(
                     .get("tool")
                     .and_then(serde_json::Value::as_str)
             {
-                (
-                    name.to_owned(),
-                    None,
-                    tool.call
-                        .input
-                        .get("input")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
-                )
+                let input = tool
+                    .call
+                    .input
+                    .get("input")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                // The durable protocol call keeps the model's exact wire input,
+                // while every transcript consumer expects execution arguments.
+                // Decode accepted strings here just as dispatch does, including
+                // before a result has supplied a normalized invocation. Invalid
+                // inputs stay intact for failure details instead of becoming {}.
+                let input = agena_tool_api::normalize_tool_call_input(name, input.clone())
+                    .map(serde_json::Value::Object)
+                    .unwrap_or(input);
+                (name.to_owned(), None, input)
             } else {
                 (tool.call.name.clone(), None, tool.call.input.clone())
             };
@@ -541,6 +547,229 @@ pub(crate) async fn project_kernel_entry(
             .map_err(crate::kernel_error)?;
     }
     Ok(part)
+}
+
+#[cfg(test)]
+mod tool_input_projection_tests {
+    use super::*;
+    use agena_domain::{
+        ComposerDocument, ComposerNode, StructuredObject, ToolApiCall, ToolApiFunction,
+    };
+    use agena_runtime_contracts::part_content::ToolCallContent;
+    use agena_storage::kernel::{RequestId, ToolHandle, ToolResult, ToolStart};
+    use serde_json::{Value, json};
+
+    async fn read_tool_part(
+        reader: &KernelReader,
+        session: SessionId,
+        tool: &ToolHandle,
+        arguments: &Value,
+    ) -> PartResource {
+        let stored = reader.tool(session, tool.id()).await.unwrap();
+        assert_eq!(
+            &stored.call.input, arguments,
+            "projection must not rewrite the protocol call"
+        );
+        let entry = reader.entry(session, stored.entry_id).await.unwrap();
+        project_kernel_entry(reader, session, &entry).await.unwrap()
+    }
+
+    fn assert_input_projection(
+        part: &PartResource,
+        arguments: &Value,
+        input: &Value,
+        state: &str,
+    ) -> ToolCallContent {
+        assert_eq!(part.kind, "tool_call");
+        assert_eq!(part.state, state);
+        let content = ToolCallContent::try_from(&part.content).unwrap();
+        assert_eq!(content.name, "shell.exec");
+        assert_eq!(&content.input, input);
+        assert_eq!(
+            Value::from(content.tool_api_call.as_ref().unwrap().arguments.clone()),
+            *arguments,
+        );
+        let details =
+            agena_api::live::project_tool_call_content(&part.content, &[ToolDetailSection::Input]);
+        assert_eq!(&details["input"], input);
+        let presentation = agena_api::live::project_tool_call_content(
+            &part.content,
+            &[ToolDetailSection::Presentation],
+        );
+        assert!(presentation.get("input").is_none());
+        assert_eq!(presentation["resources"], part.content["resources"]);
+        content
+    }
+
+    #[tokio::test]
+    async fn tool_input_projection_preserves_commands_across_live_completion_and_history_reads() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/tool-input-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Run a command".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let input = json!({
+            "command": "printf '%s\\n' '\"quoted\"'\nprintf '%s' '你好'",
+            "workdir": "/tmp/a b",
+        });
+        for (encoding, wire_input) in [input.clone(), json!(input.to_string())]
+            .into_iter()
+            .enumerate()
+        {
+            for with_invocation in [false, true] {
+                let arguments = json!({"tool":"shell.exec", "input":wire_input});
+                let draft = round
+                    .begin_tool_draft(
+                        RequestId::new(),
+                        format!("command-{encoding}-{with_invocation}"),
+                        "tools_call".into(),
+                    )
+                    .await
+                    .unwrap()
+                    .value;
+                let pending = reader.tool(session, draft.id()).await.unwrap();
+                assert_eq!(pending.phase, ToolPhase::Preparing);
+                drop(pending);
+                let tool = draft
+                    .finalize(RequestId::new(), arguments.clone())
+                    .await
+                    .unwrap()
+                    .value;
+                let log = tool.begin_log(RequestId::new()).await.unwrap().value;
+                let live = read_tool_part(reader, session, &tool, &arguments).await;
+                let content = assert_input_projection(&live, &arguments, &input, "running");
+                assert_eq!(content.resources[0].resource_id, log.id());
+                let rendered_input = StructuredObject::try_from(content.input).unwrap();
+                assert_eq!(
+                    rendered_input.get("command").unwrap().as_text(),
+                    input["command"].as_str()
+                );
+
+                let mut result = json!({"raw_output":{"payload":{"exit_code":0}}});
+                if with_invocation {
+                    result["invocation"] = serde_json::to_value(agena_domain::ToolInvocation::new(
+                        "shell.exec".to_owned(),
+                        StructuredObject::try_from(input.clone()).unwrap(),
+                    ))
+                    .unwrap();
+                }
+                tool.complete(
+                    RequestId::new(),
+                    ToolResult {
+                        phase: ToolPhase::Succeeded,
+                        value: result,
+                    },
+                )
+                .await
+                .unwrap();
+                let completed = read_tool_part(reader, session, &tool, &arguments).await;
+                let content = assert_input_projection(&completed, &arguments, &input, "completed");
+                assert_eq!(content.resources[0].resource_id, log.id());
+
+                // Reconstruct from the durable history query, including old
+                // completed records that have no persisted invocation object.
+                let history = reader.history_window(session, None, &[], 64).await.unwrap();
+                let entry = history.entries.iter().find(|entry| {
+                    matches!(&entry.payload, EntryPayload::Tool { tool_id } if *tool_id == tool.id())
+                }).unwrap();
+                let rehydrated = project_kernel_entry(reader, session, entry).await.unwrap();
+                assert_input_projection(&rehydrated, &arguments, &input, "completed");
+            }
+        }
+
+        // Rejected calls must keep their actual input and failure details. A
+        // malformed string, non-object JSON or missing input is never {}.
+        for (index, raw_input) in [
+            Some(json!("{")),
+            Some(json!("[]")),
+            Some(json!(r#""{}""#)),
+            Some(Value::Null),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut arguments = json!({"tool":"shell.exec"});
+            if let Some(input) = &raw_input {
+                arguments["input"] = input.clone();
+            }
+            let call = ToolApiCall {
+                function: ToolApiFunction::Call,
+                arguments: StructuredObject::try_from(arguments.clone()).unwrap(),
+            };
+            let failure = agena_tool_api::ToolApiCatalog::default()
+                .dispatch(&call)
+                .unwrap_err()
+                .failure();
+            let tool = round
+                .begin_tool(
+                    RequestId::new(),
+                    ToolStart {
+                        call_id: format!("invalid-{index}"),
+                        name: "tools_call".into(),
+                        input: arguments.clone(),
+                    },
+                )
+                .await
+                .unwrap()
+                .value;
+            tool.complete(
+                RequestId::new(),
+                ToolResult {
+                    phase: ToolPhase::Failed,
+                    value: json!({"failure":failure}),
+                },
+            )
+            .await
+            .unwrap();
+            let failed = read_tool_part(reader, session, &tool, &arguments).await;
+            let content = assert_input_projection(
+                &failed,
+                &arguments,
+                &raw_input.unwrap_or(Value::Null),
+                "failed",
+            );
+            assert!(content.error.is_some());
+        }
+    }
 }
 
 fn project_interaction(

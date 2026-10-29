@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use agena_provider::{CompletionToolCall, CompletionUsage, ProviderCompactionOutput};
+use agena_tool_api::normalize_tool_call_input;
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, Instant, ModelRef, ModelRuntime,
@@ -220,8 +221,9 @@ fn tool_name_repair_guidance(
                 }
                 let direct_arguments = arguments
                     .get("input")
-                    .filter(|value| value.is_object())
                     .cloned()
+                    .and_then(|input| normalize_tool_call_input(tool_name, input).ok())
+                    .map(serde_json::Value::Object)
                     .unwrap_or_else(|| serde_json::json!({}));
                 return Some(format!(
                     "- `{tool_name}` identifies Tool API function `{function_name}`, not an execution tool. Call function `{function_name}` directly with arguments {}; never put a Tool API function name inside `tools_call.arguments.tool`.",
@@ -616,15 +618,21 @@ fn validate_tool_api_argument_semantics(
                     ))
                 })?;
             validate_execution_tool_name(provider_id, name, tool_name)?;
-            if !arguments
-                .get("input")
-                .is_some_and(serde_json::Value::is_object)
-            {
-                return Err(ProviderError::Provider(format!(
-                    "provider `{provider_id}` returned `tools_call` without a complete object in `arguments.input`"
-                )));
-            }
-            Ok(())
+            let input = arguments.get("input").ok_or_else(|| {
+                ProviderError::Provider(format!(
+                    "provider `{provider_id}` returned `tools_call` without an object or a JSON string encoding an object in `arguments.input`"
+                ))
+            })?;
+            // Check both supported wire forms without rewriting the provider's
+            // original arguments. Dispatch still performs normalization before
+            // the selected execution tool's schema validation.
+            normalize_tool_call_input(tool_name, input.clone())
+                .map(|_| ())
+                .map_err(|error| {
+                    ProviderError::Provider(format!(
+                        "provider `{provider_id}` returned invalid `tools_call` input: {error}"
+                    ))
+                })
         }
         ToolApiFunction::List | ToolApiFunction::PluginsList => Ok(()),
     }
@@ -1779,5 +1787,253 @@ impl ProviderRegistry {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tool_input_boundary_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn declared_functions() -> BTreeSet<String> {
+        ["tools_call", "tools_help", "approve_action", "block_action"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn execution_arguments(input: Value) -> String {
+        json!({"tool": "shell.exec", "input": input}).to_string()
+    }
+
+    fn completion_response(arguments_json: String) -> CompletionResponse {
+        CompletionResponse {
+            provider_id: agena_domain::ProviderId::new("test".to_owned()),
+            model: agena_domain::ModelId::new("test-model".to_owned()),
+            text: String::new(),
+            reasoning_text: None,
+            finish_reason: None,
+            tool_calls: vec![CompletionToolCall::Function {
+                id: "call-1".to_owned(),
+                name: "tools_call".to_owned(),
+                arguments_json,
+            }],
+            usage: None,
+            provider_metadata: None,
+        }
+    }
+
+    fn completed_event() -> CompletionStreamEvent {
+        CompletionStreamEvent::Completed {
+            provider_id: agena_domain::ProviderId::new("test".to_owned()),
+            model: agena_domain::ModelId::new("test-model".to_owned()),
+            finish_reason: None,
+            usage: None,
+            provider_metadata: None,
+            end_turn: None,
+        }
+    }
+
+    fn stream_argument_chars(
+        arguments_json: &str,
+        declared: &BTreeSet<String>,
+    ) -> StreamToolApiCalls {
+        let mut calls = StreamToolApiCalls::default();
+        for (index, ch) in arguments_json.chars().enumerate() {
+            let event = CompletionStreamEvent::ToolCallDelta {
+                provider_id: agena_domain::ProviderId::new("test".to_owned()),
+                model: agena_domain::ModelId::new("test-model".to_owned()),
+                stream_key: "call:0".to_owned(),
+                id: Some("call-1".to_owned()),
+                name: (index == 0).then(|| "tools_call".to_owned()),
+                arguments_delta: ch.to_string(),
+            };
+            validate_stream_tool_api_event("test", &event, declared, &mut calls).unwrap();
+        }
+        calls
+    }
+
+    #[test]
+    fn complete_calls_accept_object_and_encoded_inputs_without_rewriting_arguments() {
+        let input = json!({
+            "command": "printf '%s\\n' '\"quoted\"'\nprintf '%s' '你好'",
+            "nested": {"items": [null, true, 7, "\\|"]},
+        });
+        let declared = declared_functions();
+        for wire_input in [input.clone(), json!(input.to_string())] {
+            let arguments_json = execution_arguments(wire_input.clone());
+            let mut response = completion_response(arguments_json.clone());
+
+            validate_completion_tool_calls("test", &response, &declared).unwrap();
+            retain_valid_completion_tool_calls("test", &mut response, &declared);
+
+            assert_eq!(
+                completion_tool_api_calls(&response),
+                vec![RejectedToolApiCall {
+                    name: "tools_call".to_owned(),
+                    arguments_json: arguments_json.clone(),
+                }],
+            );
+            let CompletionToolCall::Function { arguments_json, .. } = &response.tool_calls[0];
+            assert_eq!(
+                serde_json::from_str::<Value>(arguments_json).unwrap()["input"],
+                wire_input,
+            );
+        }
+    }
+
+    #[test]
+    fn streamed_calls_accept_both_input_forms_split_inside_strings_and_escapes() {
+        let input = json!({"command": "printf '%s\\n' '\"quoted\"'\nprintf '%s' '你好'"});
+        let declared = declared_functions();
+        for wire_input in [input.clone(), json!(input.to_string())] {
+            let arguments_json = execution_arguments(wire_input);
+            let mut calls = stream_argument_chars(&arguments_json, &declared);
+
+            validate_stream_tool_api_event("test", &completed_event(), &declared, &mut calls)
+                .unwrap();
+
+            assert_eq!(
+                stream_tool_api_calls(&calls),
+                vec![RejectedToolApiCall {
+                    name: "tools_call".to_owned(),
+                    arguments_json,
+                }],
+            );
+        }
+    }
+
+    #[test]
+    fn stream_snapshots_keep_encoded_input_when_final_snapshot_is_degenerate() {
+        let declared = declared_functions();
+        let arguments_json =
+            execution_arguments(json!(json!({"command": "echo hello"}).to_string()));
+        let mut calls = StreamToolApiCalls::default();
+        for snapshot in [arguments_json.as_str(), "{}"] {
+            let event = CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: agena_domain::ProviderId::new("test".to_owned()),
+                model: agena_domain::ModelId::new("test-model".to_owned()),
+                stream_key: "call:0".to_owned(),
+                id: Some("call-1".to_owned()),
+                name: Some("tools_call".to_owned()),
+                arguments_json: snapshot.to_owned(),
+            };
+            validate_stream_tool_api_event("test", &event, &declared, &mut calls).unwrap();
+        }
+
+        validate_stream_tool_api_event("test", &completed_event(), &declared, &mut calls).unwrap();
+
+        assert_eq!(
+            stream_tool_api_calls(&calls),
+            vec![RejectedToolApiCall {
+                name: "tools_call".to_owned(),
+                arguments_json,
+            }],
+        );
+    }
+
+    #[test]
+    fn streamed_calls_reject_invalid_inner_json_at_completion_without_erasing_it() {
+        let declared = declared_functions();
+        for input in ["", "{", "[]", "null", "true", "7", r#""{}""#] {
+            let arguments_json = execution_arguments(json!(input));
+            let mut calls = stream_argument_chars(&arguments_json, &declared);
+
+            let error =
+                validate_stream_tool_api_event("test", &completed_event(), &declared, &mut calls)
+                    .unwrap_err();
+
+            assert!(error.to_string().contains("shell.exec"), "{error}");
+            assert_eq!(
+                stream_tool_api_calls(&calls)[0].arguments_json,
+                arguments_json
+            );
+        }
+    }
+
+    #[test]
+    fn complete_calls_reject_invalid_encoded_inputs_and_non_object_envelopes() {
+        let declared = declared_functions();
+        for input in [
+            "",
+            "{",
+            "{} trailing",
+            r#"{"command":"\|"}"#,
+            "[]",
+            "null",
+            "true",
+            "7",
+            r#""{}""#,
+        ] {
+            let arguments_json = execution_arguments(json!(input));
+            let error =
+                validate_completion_tool_call("test", "tools_call", &arguments_json, &declared)
+                    .unwrap_err();
+            assert!(error.to_string().contains("shell.exec"), "{error}");
+        }
+        for arguments_json in [
+            json!(execution_arguments(json!({}))).to_string(),
+            "[]".to_owned(),
+            r#"{"tool":"shell.exec","input":{"command":invalid}}"#.to_owned(),
+        ] {
+            assert!(
+                validate_completion_tool_call("test", "tools_call", &arguments_json, &declared,)
+                    .is_err(),
+                "{arguments_json}",
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_inputs_keep_protocol_and_control_target_restrictions() {
+        let declared = declared_functions();
+        for tool in [
+            "tools_call",
+            "tools_help",
+            "tools_list",
+            "plugins_list",
+            "approve_action",
+            "block_action",
+        ] {
+            let arguments_json = json!({"tool": tool, "input": "{}"}).to_string();
+            assert!(
+                validate_completion_tool_call("test", "tools_call", &arguments_json, &declared,)
+                    .is_err(),
+                "{tool}",
+            );
+        }
+        assert!(validate_completion_tool_call("test", "shell.exec", "{}", &declared).is_err());
+    }
+
+    #[test]
+    fn existing_outer_escape_tolerance_and_direct_control_leniency_are_unchanged() {
+        let declared = declared_functions();
+        let arguments_json = r#"{"tool":"shell.exec","input":{"command":"printf '\|'"}}"#;
+        validate_completion_tool_call("test", "tools_call", arguments_json, &declared).unwrap();
+        for name in ["approve_action", "block_action"] {
+            for arguments_json in ["", "{invalid", "[]"] {
+                validate_completion_tool_call("test", name, arguments_json, &declared).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn protocol_name_repair_preserves_object_and_encoded_inner_arguments() {
+        let declared = declared_functions();
+        let input = json!({"tool": ["shell.exec", "fs.read"]});
+        for wire_input in [input.clone(), json!(input.to_string())] {
+            let calls = vec![RejectedToolApiCall {
+                name: "tools_call".to_owned(),
+                arguments_json: json!({"tool": "tools_help", "input": wire_input}).to_string(),
+            }];
+            let original_calls = calls.clone();
+
+            let guidance = tool_name_repair_guidance(&calls, &declared);
+
+            assert_eq!(guidance.len(), 1);
+            assert!(guidance[0].contains("Call function `tools_help` directly"));
+            assert!(guidance[0].contains(&format!("arguments {}", input)));
+            assert_eq!(calls, original_calls);
+        }
     }
 }

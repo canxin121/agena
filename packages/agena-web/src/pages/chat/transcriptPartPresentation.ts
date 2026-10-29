@@ -5,6 +5,7 @@ import type { ToolDetailSection } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
 import { attachmentLabel } from '../../lib/attachmentLabels'
 import { isRunInFlight } from '../../lib/chatRunState'
+import { toolInputRecord } from '../../lib/toolInput'
 import { partOwnsInteractions } from '../../lib/interactiveRequests'
 
 export type JsonRecord = Record<string, JsonValue>
@@ -273,13 +274,21 @@ export function decodeStructuredValue(value: JsonValue): JsonValue {
 
 function inlineValue(value: JsonValue): string {
   if (value === null) return '`null`'
-  if (typeof value === 'string') return value.includes('\n') ? value : `\`${value}\``
+  if (typeof value === 'string') return value.includes('\n') ? '' : `\`${value}\``
   if (typeof value === 'number' || typeof value === 'boolean') return `\`${String(value)}\``
   return ''
 }
 
 function markdownLines(value: JsonValue, depth: number): string[] {
   const indent = '  '.repeat(depth)
+  // Multiline arguments are literal data. Fencing keeps Markdown typography
+  // and syntax from changing commands, quotes, backslashes, or code fences.
+  if (typeof value === 'string' && value.includes('\n')) {
+    return fencedCodeBlock(value, 'text')
+      .trimEnd()
+      .split('\n')
+      .map((line) => `${indent}${line}`)
+  }
   if (Array.isArray(value)) {
     return value.flatMap((item) => {
       const inline = inlineValue(item)
@@ -382,7 +391,7 @@ function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRe
   const invocation = {
     name: firstString(content, ['name']) || 'unknown',
     plugin_name: content.plugin,
-    input: jsonRecord(content.input),
+    input: toolInputRecord(content.input),
     tool_api_call: jsonRecord(content.tool_api_call),
   }
   const blocks = jsonArray(presentation.blocks)
@@ -448,8 +457,7 @@ export function operationPresentation(
     : (part.source.agenaPresentation ?? null)
   const operation = toolCallView(content, presentationValue)
   const invocation = jsonRecord(operation.invocation)
-  const canonicalInput = jsonRecord(content.input)
-  const encodedInput = Object.keys(canonicalInput).length ? canonicalInput : jsonRecord(invocation.input)
+  const encodedInput = toolInputRecord(content.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
   const rawOutput = operation.output ?? null

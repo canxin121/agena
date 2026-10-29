@@ -9,7 +9,9 @@ mod dispatch;
 mod registry;
 
 pub use catalog::{CatalogPlugin, CatalogTool, ToolApiCatalog};
-pub use dispatch::{ExecutionRequest, ToolApiAction, ToolApiError, ToolApiResponse};
+pub use dispatch::{
+    ExecutionRequest, ToolApiAction, ToolApiError, ToolApiResponse, normalize_tool_call_input,
+};
 pub use registry::ToolApiRegistry;
 
 #[cfg(test)]

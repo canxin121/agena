@@ -88,13 +88,70 @@ pub(crate) struct HelpInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum ToolCallInput {
+    Object(serde_json::Map<String, Value>),
+    JsonString(String),
+}
+
+impl ToolCallInput {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Object(input) => Value::Object(input),
+            Self::JsonString(input) => Value::String(input),
+        }
+    }
+}
+
+/// Normalize the two supported wire representations of execution-tool arguments.
+/// The resulting object still needs the selected tool's normal schema validation.
+pub fn normalize_tool_call_input(
+    tool: &str,
+    input: Value,
+) -> Result<serde_json::Map<String, Value>, ToolApiError> {
+    let (input, encoded) = match input {
+        Value::String(input) => (
+            serde_json::from_str::<Value>(&input).map_err(|error| {
+                ToolApiError(format!(
+                    "tools_call `input` for tool `{tool}` contains invalid JSON in its string: {error}"
+                ))
+            })?,
+            true,
+        ),
+        input => (input, false),
+    };
+    match input {
+        Value::Object(input) => Ok(input),
+        input => {
+            let type_name = match input {
+                Value::Null => "null",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => unreachable!("object handled above"),
+            };
+            let requirement = if encoded {
+                "when supplied as a JSON string, must decode to a JSON object"
+            } else {
+                "must be a JSON object or a JSON string encoding an object"
+            };
+            Err(ToolApiError(format!(
+                "tools_call `input` for tool `{tool}` {requirement}; received a JSON {type_name}"
+            )))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CallInput {
     /// Exact execution-tool name from the live catalog; never a protocol function.
     #[schemars(length(min = 1))]
     tool: String,
-    /// One complete JSON object matching the execution tool's input contract.
-    input: serde_json::Map<String, Value>,
+    /// One complete JSON object, or a JSON string encoding that object, matching
+    /// the execution tool's input contract after decoding.
+    input: ToolCallInput,
 }
 
 fn parse<T: DeserializeOwned>(call: &ToolApiCall) -> Result<T, ToolApiError> {
@@ -117,8 +174,11 @@ impl ToolApiCatalog {
                 }
                 Ok(ToolApiAction::Execute(ExecutionRequest {
                     tool: tool.to_owned(),
-                    input: StructuredObject::try_from(Value::Object(input.input))
-                        .map_err(ToolApiError)?,
+                    input: StructuredObject::try_from(Value::Object(normalize_tool_call_input(
+                        tool,
+                        input.input.into_value(),
+                    )?))
+                    .map_err(ToolApiError)?,
                 }))
             }
             ToolApiFunction::List | ToolApiFunction::PluginsList => {
@@ -281,7 +341,7 @@ impl ToolApiCatalog {
             }
         }
         text.push_str(&format!(
-            "\nHelp:\n{}\nInput schema:\n{}\nOutput schema:\n{}\nTo run this execution tool, call tools_call with tool={} and input set to one complete JSON object matching the input schema. Supply all required fields with the user's exact task values; never run an empty or default-input probe. This contract is reusable.",
+            "\nHelp:\n{}\nInput schema:\n{}\nOutput schema:\n{}\nTo run this execution tool, call tools_call with tool={} and input set to one complete JSON object or a JSON string encoding that object. The decoded object must match the input schema. Supply all required fields with the user's exact task values; never run an empty or default-input probe. This contract is reusable.",
             tool.help, tool.input_schema, tool.output_schema, json!(tool.name),
         ));
         text

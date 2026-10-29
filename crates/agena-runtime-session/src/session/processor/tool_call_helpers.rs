@@ -1,7 +1,7 @@
 use super::{AppError, StructuredObject};
 use agena_domain::{ToolApiCall, ToolApiFunction};
 use agena_provider::ToolApiDefinition;
-use agena_tool_api::ToolApiError;
+use agena_tool_api::{ToolApiError, normalize_tool_call_input};
 
 #[derive(Clone)]
 pub(crate) struct ParsedToolApiCall {
@@ -29,7 +29,7 @@ pub(crate) fn parse_tool_api_call_lossy(
         })?;
     let parsed = parse_json_body::<serde_json::Value>(arguments_json);
     let error = if function == ToolApiFunction::Call {
-        tools_call_arguments_diagnostic(arguments_json).map(ToolApiError)
+        tools_call_arguments_diagnostic(&parsed, arguments_json).map(ToolApiError)
     } else {
         match &parsed {
             Ok(value) if value.is_object() => None,
@@ -57,14 +57,17 @@ pub(crate) fn parse_tool_api_call_lossy(
     })
 }
 
-fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
-    match parse_json_body::<serde_json::Value>(arguments_json) {
+fn tools_call_arguments_diagnostic(
+    parsed: &Result<serde_json::Value, AppError>,
+    arguments_json: &str,
+) -> Option<String> {
+    match parsed {
         // The arguments parsed but were not the required object - for example
         // a JSON-encoded string. The model must pass the `{ tool, input }`
         // object itself, never a string that merely contains that JSON.
         Ok(value) if !value.is_object() => {
-            let type_name = json_value_type_name(&value);
-            let raw = bounded_json_preview(&value);
+            let type_name = json_value_type_name(value);
+            let raw = bounded_json_preview(value);
             if value.is_string() {
                 Some(format!(
                     "tools_call arguments must be a JSON object, not a JSON {type_name}: pass \
@@ -74,7 +77,8 @@ fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
             } else {
                 Some(format!(
                     "tools_call arguments must be a JSON object with a string `tool` field and an \
-                     `input` object; received a JSON {type_name} instead of an object: {raw}"
+                     `input` object or JSON string encoding that object; received a JSON \
+                     {type_name} instead of an object: {raw}"
                 ))
             }
         }
@@ -88,38 +92,28 @@ fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
              as \\|), no truncation. Received: {raw}",
             raw = bounded_text_preview(arguments_json)
         )),
-        // A parseable object with an object-shaped `input` falls through to the
-        // protocol dispatcher's envelope validation. When `input` itself has
-        // the wrong JSON shape, surface that instead: a stringified `input` is
-        // the common model mistake, and the generic missing-`tool` message
-        // would hide it.
+        // Validate string-shaped `input` without changing the raw protocol call.
+        // Dispatch normalizes the execution input, which is still subject to the
+        // selected tool's schema validation.
         Ok(value) => {
             let object = value.as_object().expect("non-object handled above");
             let input = object.get("input")?;
             if input.is_object() {
                 return None;
             }
-            let type_name = json_value_type_name(input);
-            let raw = bounded_json_preview(input);
             let tool = object
                 .get("tool")
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .unwrap_or("<unknown>");
-            Some(if input.is_string() {
-                format!(
-                    "tools_call `input` for tool `{tool}` must be a JSON object, not a \
-                     JSON-encoded string. Pass the tool parameters directly as an object inside \
-                     `{{\"tool\": \"{tool}\", \"input\": {{...}}}}`; never stringify the inner \
-                     arguments. Received: {raw}"
-                )
-            } else {
-                format!(
-                    "tools_call `input` for tool `{tool}` must be a JSON object with the tool \
-                     parameters; received a JSON {type_name} instead. Received: {raw}"
-                )
-            })
+            match normalize_tool_call_input(tool, input.clone()) {
+                Ok(_) => None,
+                Err(error) => Some(format!(
+                    "{error}. Received: {}",
+                    bounded_json_preview(input)
+                )),
+            }
         }
     }
 }
@@ -233,24 +227,72 @@ mod protocol_parsing_tests {
     }
 
     #[test]
-    fn stringified_execution_input_keeps_the_protocol_envelope_and_correction() {
+    fn stringified_execution_input_preserves_raw_protocol_and_dispatches_an_object() {
         let definitions = agena_tool_api::ToolApiRegistry.definitions();
-        let parsed = parse_tool_api_call_lossy(
-            "tools_call",
-            r#"{"tool":"fs.read","input":"{}"}"#,
-            &definitions,
-        )
-        .unwrap();
+        let input = serde_json::json!({
+            "command": "printf '%s\\n' '\"quoted\"'\nprintf '%s' '你好'",
+            "nested": {"items": [null, true, 7, "\\|"]},
+        });
+        let arguments = serde_json::json!({"tool":"shell.exec", "input":input.to_string()});
+        let parsed =
+            parse_tool_api_call_lossy("tools_call", &arguments.to_string(), &definitions).unwrap();
+        assert!(parsed.error.is_none());
         assert_eq!(
-            serde_json::Value::from(parsed.call.arguments)["tool"],
-            "fs.read",
+            serde_json::Value::from(parsed.call.arguments.clone()),
+            arguments,
         );
-        assert!(
-            parsed
-                .error
+        let agena_tool_api::ToolApiAction::Execute(request) =
+            agena_tool_api::ToolApiCatalog::default()
+                .dispatch(&parsed.call)
                 .unwrap()
-                .to_string()
-                .contains("never stringify")
-        );
+        else {
+            panic!("expected execution boundary");
+        };
+        assert_eq!(request.tool, "shell.exec");
+        assert_eq!(serde_json::Value::from(request.input), input);
+    }
+
+    #[test]
+    fn invalid_stringified_input_reports_json_failure_and_preserves_raw_protocol() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        for input in ["", "{", r#"{"command":"\|"}"#, "{} trailing"] {
+            let arguments = serde_json::json!({"tool":"shell.exec", "input":input});
+            let parsed =
+                parse_tool_api_call_lossy("tools_call", &arguments.to_string(), &definitions)
+                    .unwrap();
+            assert_eq!(serde_json::Value::from(parsed.call.arguments), arguments);
+            let error = parsed.error.unwrap().to_string();
+            assert!(error.contains("shell.exec"), "{error}");
+            assert!(error.contains("invalid JSON"), "{error}");
+        }
+    }
+
+    #[test]
+    fn input_strings_must_decode_once_to_objects() {
+        let definitions = agena_tool_api::ToolApiRegistry.definitions();
+        for input in ["[]", "null", "true", "7", r#""{}""#] {
+            let arguments = serde_json::json!({"tool":"shell.exec", "input":input});
+            let parsed =
+                parse_tool_api_call_lossy("tools_call", &arguments.to_string(), &definitions)
+                    .unwrap();
+            let error = parsed.error.unwrap().to_string();
+            assert!(error.contains("must decode to a JSON object"), "{error}");
+        }
+        for input in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(7),
+            serde_json::json!([]),
+        ] {
+            let arguments = serde_json::json!({"tool":"shell.exec", "input":input});
+            let parsed =
+                parse_tool_api_call_lossy("tools_call", &arguments.to_string(), &definitions)
+                    .unwrap();
+            let error = parsed.error.unwrap().to_string();
+            assert!(
+                error.contains("JSON object or a JSON string encoding an object"),
+                "{error}"
+            );
+        }
     }
 }

@@ -524,27 +524,29 @@ async fn discovery_persists_and_replays_without_any_plugin_or_execution_tool() {
 
 #[tokio::test]
 async fn invalid_protocol_envelopes_never_become_execution_results() {
-    let fixture = Fixture::new().await;
-    let id = fixture
-        .dispatch(
-            ToolApiFunction::Call,
-            json!({"tool":"fs.read","input":"{}"}),
-        )
-        .await;
-    let tool = fixture
-        .manager
-        .kernel()
-        .reader
-        .tool(fixture.session, id)
-        .await
-        .unwrap();
-    assert_eq!(tool.phase, ToolPhase::Failed);
-    let result = tool.result.as_ref().unwrap();
-    assert!(result.get("failure").is_some());
-    assert!(result.get("invocation").is_none());
-    assert!(result.get("raw_output").is_none());
-    drop(tool);
-    fixture.shutdown().await;
+    for arguments in [
+        json!({"tool":"fs.read","input":"{}","extra":true}),
+        json!({"tool":"fs.read","input":"{"}),
+        json!({"tool":"fs.read","input":"[]"}),
+        json!({"tool":"fs.read","input":[]}),
+    ] {
+        let fixture = Fixture::new().await;
+        let id = fixture.dispatch(ToolApiFunction::Call, arguments).await;
+        let tool = fixture
+            .manager
+            .kernel()
+            .reader
+            .tool(fixture.session, id)
+            .await
+            .unwrap();
+        assert_eq!(tool.phase, ToolPhase::Failed);
+        let result = tool.result.as_ref().unwrap();
+        assert!(result.get("failure").is_some());
+        assert!(result.get("invocation").is_none());
+        assert!(result.get("raw_output").is_none());
+        drop(tool);
+        fixture.shutdown().await;
+    }
 }
 
 #[tokio::test]

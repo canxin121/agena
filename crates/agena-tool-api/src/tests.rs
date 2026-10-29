@@ -91,11 +91,92 @@ fn only_tools_call_produces_an_execution_request_and_preserves_inner_input() {
 }
 
 #[test]
+fn tools_call_accepts_object_and_json_string_inputs_without_changing_values() {
+    let input = json!({
+        "command": "printf '%s\\n' '\"quoted\"'\nprintf '%s' '你好'",
+        "workdir": "a\\b\"c",
+        "nested": {"items": [null, true, 7, "\\|"], "empty": {}},
+    });
+    for (wire_input, expected) in [
+        (input.clone(), input.clone()),
+        (json!(input.to_string()), input),
+        (json!(" \n {} \t "), json!({})),
+    ] {
+        let ToolApiAction::Execute(request) = catalog()
+            .dispatch(&call(
+                ToolApiFunction::Call,
+                json!({"tool":"shell.exec", "input":wire_input}),
+            ))
+            .unwrap()
+        else {
+            panic!("expected execution boundary");
+        };
+        assert_eq!(request.tool, "shell.exec");
+        assert_eq!(serde_json::Value::from(request.input), expected);
+    }
+}
+
+#[test]
+fn tools_call_rejects_invalid_json_and_non_object_encoded_inputs() {
+    for input in ["", "{", r#"{"command":"\|"}"#, "{} trailing"] {
+        let error = catalog()
+            .dispatch(&call(
+                ToolApiFunction::Call,
+                json!({"tool":"shell.exec", "input":input}),
+            ))
+            .unwrap_err();
+        assert!(error.0.contains("shell.exec"), "{error}");
+        assert!(error.0.contains("invalid JSON"), "{error}");
+    }
+    for input in ["[]", "null", "true", "7", r#""{}""#] {
+        let error = catalog()
+            .dispatch(&call(
+                ToolApiFunction::Call,
+                json!({"tool":"shell.exec", "input":input}),
+            ))
+            .unwrap_err();
+        assert!(error.0.contains("must decode to a JSON object"), "{error}");
+    }
+}
+
+#[test]
+fn tools_call_schema_advertises_both_input_representations() {
+    let definition = ToolApiRegistry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "tools_call")
+        .unwrap();
+    let mut input = &definition.input_schema["properties"]["input"];
+    if let Some(reference) = input["$ref"].as_str() {
+        input = definition
+            .input_schema
+            .pointer(reference.strip_prefix('#').unwrap())
+            .unwrap();
+    }
+    let types = input["anyOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|variant| variant["type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(types, ["object", "string"]);
+    assert_eq!(definition.input_schema["additionalProperties"], false);
+    assert!(
+        definition
+            .description
+            .contains("JSON string encoding that object")
+    );
+}
+
+#[test]
 fn malformed_call_envelopes_and_nested_protocol_calls_never_reach_execution() {
     for arguments in [
         json!({}),
         json!({"tool":"fs.read"}),
-        json!({"tool":"fs.read","input":"{}"}),
+        json!({"tool":"fs.read","input":null}),
+        json!({"tool":"fs.read","input":true}),
+        json!({"tool":"fs.read","input":7}),
+        json!({"tool":"fs.read","input":[]}),
         json!({"tool":"fs.read","input":[],"extra":true}),
         json!({"tool":"fs.read","input":{},"extra":true}),
         json!({"tool":" ","input":{}}),
@@ -114,6 +195,35 @@ fn malformed_call_envelopes_and_nested_protocol_calls_never_reach_execution() {
             "{arguments}"
         );
     }
+}
+
+#[test]
+fn stringified_inputs_keep_envelope_and_nested_protocol_restrictions() {
+    for tool in [
+        "tools_call",
+        "tools_help",
+        "tools_list",
+        "plugins_list",
+        "approve_action",
+        "block_action",
+        "agena.tools.call",
+    ] {
+        let error = catalog()
+            .dispatch(&call(
+                ToolApiFunction::Call,
+                json!({"tool":tool, "input":"{}"}),
+            ))
+            .unwrap_err();
+        assert!(error.0.contains("must name an execution tool"), "{error}");
+    }
+    assert!(
+        catalog()
+            .dispatch(&call(
+                ToolApiFunction::Call,
+                json!({"tool":"fs.read", "input":"{}", "extra":true}),
+            ))
+            .is_err()
+    );
 }
 
 #[test]
@@ -159,6 +269,11 @@ fn help_returns_live_contracts_and_batch_failures_without_executing() {
     assert!(response.output_text.contains("file_path: required string"));
     assert!(response.output_text.contains(r#"{"file_path":"a.txt"}"#));
     assert!(response.output_text.contains("missing.tool"));
+    assert!(
+        response
+            .output_text
+            .contains("JSON string encoding that object")
+    );
     assert!(response.summary.contains("1 unavailable"));
     assert!(
         catalog()

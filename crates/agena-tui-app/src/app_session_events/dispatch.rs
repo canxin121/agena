@@ -240,18 +240,11 @@ impl App {
                     self.handle_session_event_arrived(session_id, *live);
                 }
             }
-            AppMessage::RunCancelled { session_id, result } => {
-                let exit_after_cancel = self.exit_after_cancel_session_id == Some(session_id);
-                let cancellation_acknowledged = result.is_ok();
-                self.handle_turn_cancelled(session_id, result);
-                if exit_after_cancel {
-                    self.exit_after_cancel_session_id = None;
-                    // A failed stop must leave the TUI attached, not silently detach.
-                    if cancellation_acknowledged {
-                        self.should_quit = true;
-                    }
-                }
-            }
+            AppMessage::ExitRunCancelled {
+                request_id,
+                target,
+                result,
+            } => self.handle_exit_run_cancelled(request_id, target, result),
             AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
             AppMessage::ForkCreated {
                 parent_id,
@@ -262,6 +255,7 @@ impl App {
                 self.handle_fork_created(parent_id, side, submit_draft, result);
             }
         }
+        self.refresh_exit_menu();
     }
 
     pub(crate) fn handle_status_line_updated(&mut self, output: Option<String>) {
@@ -764,55 +758,65 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_turn_cancelled(
+    pub(crate) fn restore_cancelled_input(
         &mut self,
         session_id: i64,
-        result: UiResult<agena_domain::CancellationOutcome>,
+        outcome: agena_domain::CancellationOutcome,
     ) {
-        self.run_activity.clear_session(session_id);
-        if self.transcript.session_id == Some(session_id) {
-            self.request_refresh(session_id, true);
+        let current = self.transcript.session_id == Some(session_id);
+        if current && let Some(run_id) = outcome.restored_user_run_id {
+            self.transcript.remove_run_parts(run_id);
         }
-        match result {
-            Ok(outcome) => {
-                self.request_message_queue(session_id, true);
-                self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
-                if let Some(run_id) = outcome.restored_user_run_id {
-                    self.transcript.remove_run_parts(run_id);
-                }
-                if let Some(document) = outcome.restored_user_message {
-                    let draft = ComposerDraft { document };
-                    // `restore_composer_draft` is intentionally non-clobbering:
-                    // if the user typed while the stop request was in flight,
-                    // their newer input wins and the recovered draft remains
-                    // available in the session draft slot only when the
-                    // composer was still empty.
-                    let composer_was_empty = self.current_composer_draft().is_empty();
-                    if composer_was_empty {
-                        self.restore_composer_draft(draft.clone());
-                        self.set_draft_for_slot(DraftSlot::Session(session_id), draft);
-                        self.persist_draft_store_with_feedback(true);
-                        self.focus = Focus::Composer;
-                    } else {
-                        // The withdrawn message is still user content: merge it with
-                        // the draft being written instead of dropping it.
-                        self.restore_failed_composer_draft(draft.clone());
-                        self.set_draft_for_slot(DraftSlot::Session(session_id), draft);
-                        self.persist_draft_store_with_feedback(true);
-                    }
-                    self.session_composer.pending_restore_draft = None;
-                }
+        let Some(document) = outcome.restored_user_message else {
+            return;
+        };
+        let mut draft = ComposerDraft { document };
+        let slot = DraftSlot::Session(session_id);
+        if current {
+            let previous = self.current_composer_draft();
+            // The global pending_restore_draft has no session identity and
+            // may belong to a different session that was opened meanwhile.
+            // Only the target session's own in-flight slot is evidence here.
+            let later_submit = self
+                .run_activity
+                .has_operation(
+                    RunActivityTarget::Session(session_id),
+                    RunOperation::SubmitMessage,
+                )
+                .then(|| self.draft_store.get(slot).cloned())
+                .flatten();
+            if let Some(later) = later_submit
+                && !later.is_empty()
+                && later != draft
+                && later != previous
+            {
+                // A newer send may have cleared the editor while its receipt
+                // is still pending. Preserve that recovery copy on disk too.
+                draft.document.0.push(agena_domain::ComposerNode::Text {
+                    text: "\n\n".to_owned(),
+                });
+                draft.document.0.extend(later.document.0);
             }
-            Err(error) => {
-                // Even on error we already cleared local activity state —
-                // surface the failure but don't try to recover state.
-                self.flash_warning(format!(
-                    "{}: {}",
-                    ui_text::t(&self.i18n, "flash-cancel-failed"),
-                    error
-                ));
+            if previous.is_empty() {
+                self.restore_composer_draft(draft);
+                self.focus = Focus::Composer;
+            } else if previous != draft {
+                self.restore_failed_composer_draft(draft);
             }
+            draft = self.current_composer_draft();
+        } else if let Some(saved) = self.draft_store.get(slot)
+            && !saved.is_empty()
+            && *saved != draft
+        {
+            // Switching sessions while the request is pending must neither
+            // overwrite the new composer nor discard the old session's draft.
+            draft.document.0.push(agena_domain::ComposerNode::Text {
+                text: "\n\n".to_owned(),
+            });
+            draft.document.0.extend(saved.document.0.iter().cloned());
         }
+        self.set_draft_for_slot(slot, draft);
+        self.persist_draft_store_with_feedback(true);
     }
 
     pub(crate) fn handle_session_execution_updated(
@@ -883,6 +887,6 @@ impl App {
 use crate::{
     App, AppMessage, ComposerDraft, DraftSlot, RunActivityTarget, RunOperation, RunOptionsState,
     SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiResult,
-    execution_update_is_stale, ui_text,
+    execution_update_is_stale,
 };
 use agena_tui::main_focus::Focus;

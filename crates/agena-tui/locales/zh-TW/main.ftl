@@ -1,4 +1,5 @@
 cli-about = Agena 終端聊天應用程式
+tool-error-unavailable = 此工具執行失敗，但伺服器未提供具體原因。
 
 pane-sessions = 工作階段
 pane-sessions-search = 工作階段 [{$query}]
@@ -3082,14 +3083,18 @@ settings-mcp-shared-password-detail = Web、TUI 與 MCP OAuth 使用同一個伺
 # TUI exit menu (Ctrl+C)
 exit-menu-title = 離開 Agena
 exit-menu-prompt = 選擇如何離開 TUI。AI 工作由伺服器執行。
-exit-menu-detach = Detach（中斷連線）
-exit-menu-detach-detail = 僅關閉 TUI，AI 工作繼續執行。
-exit-menu-stop-and-exit = Stop & Exit（停止並離開）
-exit-menu-stop-and-exit-detail = 要求伺服器取消目前工作，確認後離開。
-exit-menu-cancel = Cancel（返回）
-exit-menu-cancel-detail = 返回 TUI，不停止 AI 工作。
+exit-menu-detach = 離開 TUI
+exit-menu-detach-detail = 僅關閉目前的 TUI，不變更伺服器工作。
+exit-menu-stop-and-exit = 停止並離開
+exit-menu-stop-and-exit-detail = 要求伺服器停止目前這一輪，確認後離開。
+exit-menu-cancel = 返回
+exit-menu-cancel-detail = 留在 TUI。
 exit-menu-stopping = 等待伺服器確認取消請求…
-context-help-key-exit-menu = 編輯訊息時，Ctrl+C 清空非空的草稿；其他情況下開啟離開選單（中斷連線、停止並離開或返回）。
+exit-menu-draft-prompt = 還有未傳送的內容或正在準備的附件。要離開 TUI，還是返回繼續處理？
+exit-menu-pending-prompt = 請求或工作仍在更新。離開只會關閉 TUI，伺服器保留已接受的工作。
+exit-menu-idle-prompt = 原本的工作已結束或發生變化。要離開 TUI，還是返回？
+exit-menu-target-changed = 原本的工作已發生變化，未停止其他執行。請確認目前狀態後再操作。
+context-help-key-exit-menu = Ctrl+C 優先處理目前的彈出視窗或局部操作；編輯訊息時先清空非空的草稿。閒置且沒有待處理內容時直接離開，其他情況只顯示目前可用的離開選項。
 
 # Stateful inline reply controls
 command-inline-ui-summary = 開啟目前對話中的互動介面。

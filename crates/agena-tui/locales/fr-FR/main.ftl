@@ -1,4 +1,5 @@
 cli-about = Application de chat terminal Agena
+tool-error-unavailable = Cet outil a échoué, mais le serveur n’a pas fourni la raison de l’erreur.
 
 pane-sessions = Sessions
 pane-sessions-search = Sessions [{$query}]
@@ -3030,14 +3031,18 @@ settings-mcp-shared-password-detail = Web, TUI et MCP OAuth utilisent le même m
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Quitter Agena
 exit-menu-prompt = Comment quitter le TUI ? Le travail IA est exécuté sur le serveur.
-exit-menu-detach = Detach (Se détacher)
-exit-menu-detach-detail = Fermer le TUI seulement ; le travail IA continue.
+exit-menu-detach = Quitter le TUI
+exit-menu-detach-detail = Fermer ce TUI sans modifier les tâches du serveur.
 exit-menu-stop-and-exit = Stop & Exit (Arrêter et quitter)
-exit-menu-stop-and-exit-detail = Demander l’annulation de la tâche au serveur, puis quitter.
-exit-menu-cancel = Cancel (Retour)
-exit-menu-cancel-detail = Revenir au TUI sans arrêter le travail.
+exit-menu-stop-and-exit-detail = Demander au serveur d’arrêter cette exécution, puis quitter après confirmation.
+exit-menu-cancel = Retour
+exit-menu-cancel-detail = Rester dans le TUI.
 exit-menu-stopping = En attente de confirmation du serveur…
-context-help-key-exit-menu = Lors de la rédaction, Ctrl+C efface un brouillon non vide ; sinon, il ouvre le menu de sortie (détacher, arrêter et quitter ou revenir).
+exit-menu-draft-prompt = Du contenu n’a pas été envoyé ou une pièce jointe est encore en préparation. Quitter le TUI ou revenir ?
+exit-menu-pending-prompt = Une requête ou une tâche est en cours de mise à jour. Quitter ferme uniquement le TUI ; le serveur conserve le travail déjà accepté.
+exit-menu-idle-prompt = L’exécution initiale est terminée ou a changé. Quitter le TUI ou revenir ?
+exit-menu-target-changed = L’exécution initiale a changé. Aucune autre exécution n’a été arrêtée. Vérifiez l’état actuel avant de réessayer.
+context-help-key-exit-menu = Ctrl+C traite d’abord la fenêtre ou l’action locale active. Dans l’éditeur de message, il efface un brouillon non vide. Sans brouillon ni tâche en cours, il quitte directement ; sinon, il affiche les actions de sortie disponibles.
 
 # Stateful inline reply controls
 command-inline-ui-summary = Ouvrir l’interface interactive de la conversation.

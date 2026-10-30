@@ -1,4 +1,5 @@
 cli-about = Agena unified terminal workspace
+tool-error-unavailable = This tool failed, but the server did not provide an error reason.
 
 pane-sessions = Sessions
 pane-sessions-search = Sessions [{$query}]
@@ -2705,14 +2706,18 @@ settings-mcp-shared-password-detail = Web, TUI, and MCP OAuth use the same serve
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Exit Agena
 exit-menu-prompt = Choose how to leave this TUI. AI work runs on the server.
-exit-menu-detach = Detach
-exit-menu-detach-detail = Close the TUI; AI work continues on the server.
+exit-menu-detach = Exit TUI
+exit-menu-detach-detail = Close this TUI without changing server tasks.
 exit-menu-stop-and-exit = Stop & Exit
-exit-menu-stop-and-exit-detail = Ask the server to cancel the current run, then exit.
-exit-menu-cancel = Cancel
-exit-menu-cancel-detail = Return to the TUI without stopping AI work.
+exit-menu-stop-and-exit-detail = Ask the server to stop this run, then exit after acknowledgement.
+exit-menu-cancel = Return
+exit-menu-cancel-detail = Stay in the TUI.
 exit-menu-stopping = Waiting for the server to acknowledge cancellation...
-context-help-key-exit-menu = When composing, Ctrl+C clears a nonempty draft; otherwise it opens the exit menu (detach, stop and exit, or return).
+exit-menu-draft-prompt = There is unsent content or an attachment still being prepared. Exit the TUI or return to it?
+exit-menu-pending-prompt = A request or task is still being updated. Exiting closes only the TUI; work already accepted by the server remains there.
+exit-menu-idle-prompt = The original run has ended or changed. Exit the TUI or return to it?
+exit-menu-target-changed = The original run has changed. No other execution was stopped. Review the current state before trying again.
+context-help-key-exit-menu = Ctrl+C first handles the focused popup or local action. In the message editor it clears a nonempty draft. With no draft or current task, it exits directly; otherwise it shows the available exit actions.
 
 # Stateful inline reply controls
 command-inline-ui-summary = Open the interactive UI in this conversation.

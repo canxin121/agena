@@ -157,8 +157,8 @@ impl App {
             transcript_last_find: None,
             transcript_text_object_pending: None,
             transcript_search_forward: true,
-            exit_suspended_help: None,
-            exit_after_cancel_session_id: None,
+            exit_menu_target: None,
+            exit_cancellation: None,
             terminal_integration: TerminalIntegrationState::default(),
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {

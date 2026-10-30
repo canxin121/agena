@@ -40,6 +40,7 @@ impl App {
     }
 
     pub(crate) fn refresh_input_derived_state(&mut self) {
+        self.refresh_exit_menu();
         self.sync_composer_suggestions();
         if let Route::SessionModelChooser(dialog) = &mut self.current_route {
             agena_tui::model_chooser::refresh(dialog, false);

@@ -1,4 +1,5 @@
 cli-about = Agena 터미널 채팅 애플리케이션
+tool-error-unavailable = 도구 실행에 실패했지만 서버가 오류 원인을 제공하지 않았습니다.
 
 pane-sessions = 세션
 pane-sessions-search = 세션 [{$query}]
@@ -3027,14 +3028,18 @@ settings-mcp-shared-password-detail = Web, TUI, MCP OAuth는 AGENA_SERVER_PASSWO
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Agena 종료
 exit-menu-prompt = TUI 종료 방법을 선택하세요. AI 작업은 서버에서 실행됩니다.
-exit-menu-detach = Detach (연결 해제)
-exit-menu-detach-detail = TUI만 닫습니다. AI 작업은 계속됩니다.
+exit-menu-detach = TUI 종료
+exit-menu-detach-detail = 서버 작업을 변경하지 않고 이 TUI만 닫습니다.
 exit-menu-stop-and-exit = Stop & Exit (중지 후 종료)
-exit-menu-stop-and-exit-detail = 서버에 현재 작업 취소를 요청하고 확인 후 종료합니다.
-exit-menu-cancel = Cancel (돌아가기)
-exit-menu-cancel-detail = AI 작업을 중지하지 않고 돌아갑니다.
+exit-menu-stop-and-exit-detail = 서버에 이 실행의 중지를 요청하고 확인 후 종료합니다.
+exit-menu-cancel = 돌아가기
+exit-menu-cancel-detail = TUI에 머무릅니다.
 exit-menu-stopping = 서버의 취소 확인을 기다리는 중…
-context-help-key-exit-menu = 메시지 작성 중 내용이 있으면 Ctrl+C로 초안을 지우고, 그 외에는 종료 메뉴(연결 해제, 중지 후 종료, 돌아가기)를 엽니다.
+exit-menu-draft-prompt = 아직 보내지 않은 내용이나 준비 중인 첨부 파일이 있습니다. TUI를 종료할까요, 아니면 돌아갈까요?
+exit-menu-pending-prompt = 요청 또는 작업 상태가 아직 갱신 중입니다. 종료하면 TUI만 닫히며, 서버가 이미 수락한 작업은 유지됩니다.
+exit-menu-idle-prompt = 원래 실행이 끝났거나 변경되었습니다. TUI를 종료할까요, 아니면 돌아갈까요?
+exit-menu-target-changed = 원래 실행이 변경되었습니다. 다른 실행은 중지하지 않았습니다. 현재 상태를 확인한 후 다시 시도하세요.
+context-help-key-exit-menu = Ctrl+C는 먼저 현재 팝업이나 로컬 작업을 처리합니다. 메시지 작성 중에는 비어 있지 않은 초안을 지웁니다. 초안이나 현재 작업이 없으면 바로 종료하고, 그 외에는 가능한 종료 동작만 표시합니다.
 
 # Stateful inline reply controls
 command-inline-ui-summary = 대화의 인터랙티브 UI를 엽니다.

@@ -1,4 +1,5 @@
 cli-about = Agena Terminal-Chat-Anwendung
+tool-error-unavailable = Dieses Werkzeug ist fehlgeschlagen, aber der Server hat keinen Fehlergrund angegeben.
 
 pane-sessions = Sitzungen
 pane-sessions-search = Sitzungen [{$query}]
@@ -3177,14 +3178,18 @@ settings-mcp-shared-password-detail = Web, TUI und MCP OAuth verwenden dasselbe 
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Agena verlassen
 exit-menu-prompt = Wie möchten Sie die TUI verlassen? KI-Aufgaben laufen auf dem Server.
-exit-menu-detach = Detach (Trennen)
-exit-menu-detach-detail = Nur die TUI schließen; die KI arbeitet weiter.
+exit-menu-detach = TUI beenden
+exit-menu-detach-detail = Diese TUI schließen, ohne Serveraufgaben zu ändern.
 exit-menu-stop-and-exit = Stop & Exit (Stoppen und Beenden)
-exit-menu-stop-and-exit-detail = Aktuellen Lauf auf dem Server abbrechen und dann beenden.
-exit-menu-cancel = Cancel (Zurück)
-exit-menu-cancel-detail = Zur TUI zurückkehren ohne Abbruch.
+exit-menu-stop-and-exit-detail = Diesen Lauf vom Server stoppen lassen und nach der Bestätigung beenden.
+exit-menu-cancel = Zurück
+exit-menu-cancel-detail = In der TUI bleiben.
 exit-menu-stopping = Warte auf die Bestätigung des Servers ...
-context-help-key-exit-menu = Beim Verfassen leert Ctrl+C einen nicht leeren Nachrichtenentwurf; sonst öffnet es das Beenden-Menü (trennen, stoppen und beenden oder zurück).
+exit-menu-draft-prompt = Es gibt noch ungesendeten Inhalt oder einen Anhang in Vorbereitung. Die TUI beenden oder zurückkehren?
+exit-menu-pending-prompt = Eine Anfrage oder Aufgabe wird noch aktualisiert. Beenden schließt nur die TUI; bereits angenommene Arbeit bleibt auf dem Server.
+exit-menu-idle-prompt = Der ursprüngliche Lauf ist beendet oder hat sich geändert. Die TUI beenden oder zurückkehren?
+exit-menu-target-changed = Der ursprüngliche Lauf hat sich geändert. Kein anderer Lauf wurde gestoppt. Prüfen Sie den aktuellen Zustand, bevor Sie es erneut versuchen.
+context-help-key-exit-menu = Ctrl+C behandelt zuerst den aktiven Dialog oder die lokale Aktion. Im Nachrichteneditor leert es einen nicht leeren Entwurf. Ohne Entwurf oder aktuelle Aufgabe beendet es die TUI direkt; sonst zeigt es die verfügbaren Beenden-Aktionen.
 
 # Stateful inline reply controls
 command-inline-ui-summary = Interaktive Oberfläche dieser Unterhaltung öffnen.

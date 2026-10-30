@@ -1,4 +1,5 @@
 cli-about = Agena のターミナルチャットアプリ
+tool-error-unavailable = このツールの実行に失敗しましたが、サーバーからエラーの理由が提供されませんでした。
 
 pane-sessions = セッション
 pane-sessions-search = セッション [{$query}]
@@ -3031,14 +3032,18 @@ settings-mcp-shared-password-detail = Web、TUI、MCP OAuth は同じサーバ�
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Agena を終了
 exit-menu-prompt = TUI の終了方法を選択してください。AI 処理はサーバーで実行されます。
-exit-menu-detach = Detach（切断）
-exit-menu-detach-detail = TUI のみ閉じます。AI 処理は続行します。
+exit-menu-detach = TUI を終了
+exit-menu-detach-detail = サーバーのタスクを変更せず、この TUI のみ閉じます。
 exit-menu-stop-and-exit = Stop & Exit（停止して終了）
-exit-menu-stop-and-exit-detail = サーバーに現在の処理のキャンセルを要求し、確認後に終了。
-exit-menu-cancel = Cancel（戻る）
-exit-menu-cancel-detail = AI 処理を止めずに TUI に戻ります。
+exit-menu-stop-and-exit-detail = サーバーにこの実行の停止を要求し、確認後に終了します。
+exit-menu-cancel = 戻る
+exit-menu-cancel-detail = TUI に留まります。
 exit-menu-stopping = サーバーのキャンセル確認を待機中…
-context-help-key-exit-menu = メッセージ入力中に下書きがある場合、Ctrl+C で消去します。それ以外の場合は終了メニュー（切断、停止して終了、戻る）を開きます。
+exit-menu-draft-prompt = 未送信の内容、または準備中の添付ファイルがあります。TUI を終了しますか、それとも戻りますか？
+exit-menu-pending-prompt = リクエストまたはタスクの状態を更新中です。終了すると TUI のみ閉じられ、サーバーが受け付けた処理は保持されます。
+exit-menu-idle-prompt = 元の実行は終了したか、変更されました。TUI を終了しますか、それとも戻りますか？
+exit-menu-target-changed = 元の実行が変更されました。他の実行は停止していません。現在の状態を確認してから操作してください。
+context-help-key-exit-menu = Ctrl+C は、まず現在のポップアップやローカル操作を処理します。メッセージ入力中は空でない下書きを消去します。下書きや現在のタスクがなければ直接終了し、それ以外は利用可能な終了操作のみ表示します。
 
 # Stateful inline reply controls
 command-inline-ui-summary = 会話内の対話型UIを開く。

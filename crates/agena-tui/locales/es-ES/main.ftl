@@ -1,4 +1,5 @@
 cli-about = Aplicacion de chat en terminal de Agena
+tool-error-unavailable = Esta herramienta falló, pero el servidor no proporcionó el motivo del error.
 
 pane-sessions = Sesiones
 pane-sessions-search = Sesiones [{$query}]
@@ -3033,14 +3034,18 @@ settings-mcp-shared-password-detail = Web, TUI y MCP OAuth usan la misma contras
 # TUI exit menu (Ctrl+C)
 exit-menu-title = Salir de Agena
 exit-menu-prompt = ¿Cómo salir de la TUI? El trabajo de IA sigue en el servidor.
-exit-menu-detach = Detach (Desconectar)
-exit-menu-detach-detail = Cierra la TUI; el trabajo de IA continúa.
+exit-menu-detach = Salir de la TUI
+exit-menu-detach-detail = Cierra esta TUI sin modificar las tareas del servidor.
 exit-menu-stop-and-exit = Stop & Exit (Detener y salir)
-exit-menu-stop-and-exit-detail = Solicita cancelar la ejecución actual y luego sal.
-exit-menu-cancel = Cancel (Volver)
-exit-menu-cancel-detail = Vuelve a la TUI sin detener el trabajo.
+exit-menu-stop-and-exit-detail = Pide al servidor que detenga esta ejecución y sal cuando lo confirme.
+exit-menu-cancel = Volver
+exit-menu-cancel-detail = Permanecer en la TUI.
 exit-menu-stopping = Esperando confirmación de cancelación...
-context-help-key-exit-menu = Al redactar, Ctrl+C borra el borrador si no está vacío; en los demás casos abre el menú de salida (desconectar, detener y salir o volver).
+exit-menu-draft-prompt = Hay contenido sin enviar o un archivo adjunto aún en preparación. ¿Salir de la TUI o volver?
+exit-menu-pending-prompt = Una solicitud o tarea sigue actualizándose. Salir solo cierra la TUI; el servidor conserva el trabajo que ya ha aceptado.
+exit-menu-idle-prompt = La ejecución original ha terminado o cambiado. ¿Salir de la TUI o volver?
+exit-menu-target-changed = La ejecución original ha cambiado. No se ha detenido ninguna otra ejecución. Revisa el estado actual antes de volver a intentarlo.
+context-help-key-exit-menu = Ctrl+C atiende primero el diálogo o la acción local activos. Al redactar, borra un borrador no vacío. Sin borrador ni tarea actual, sale directamente; en los demás casos muestra las acciones de salida disponibles.
 
 # Stateful inline reply controls
 command-inline-ui-summary = Abre la interfaz interactiva de esta conversación.

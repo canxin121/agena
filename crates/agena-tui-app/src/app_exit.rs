@@ -1,8 +1,34 @@
-//! Client exit menu. Detaching a TUI is never a request to stop server work.
+//! Context-aware client exit. Leaving a TUI never implicitly stops server work.
 
-use crate::{App, ChoiceItem, ChoiceOverlayAction, Overlay, Route, ui_text};
-use agena_tui::choice::{ChoicePresentationStyle, ChoiceSelection};
+use crate::{
+    App, AppMessage, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, Overlay, RunActivityTarget,
+    UiResult, ui_text,
+};
+use agena_domain::{CancellationOutcome, CancellationResult, ExecutionId, ExecutionPhase};
+use agena_tui::choice::{self, ChoicePresentationStyle, ChoiceSelection};
 use agena_tui::i18n::I18n;
+use agena_tui::main_focus::Focus;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+#[cfg(test)]
+mod http_tests;
+#[cfg(test)]
+mod tests;
+
+/// Captured when the menu opens; never retarget an open menu to a newer run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExitCancelTarget {
+    pub(crate) session_id: i64,
+    pub(crate) execution_id: ExecutionId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExitCancellation {
+    pub(crate) target: ExitCancelTarget,
+    pub(crate) request_id: uuid::Uuid,
+    pub(crate) awaiting_ack: bool,
+    pub(crate) quit_on_ack: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitChoice {
@@ -22,7 +48,7 @@ impl ExitChoice {
     }
 }
 
-fn exit_menu_items(i18n: &I18n) -> Vec<ChoiceItem> {
+fn exit_menu_items(i18n: &I18n, can_stop: bool) -> Vec<ChoiceItem> {
     [
         ("detach", "exit-menu-detach", "exit-menu-detach-detail"),
         (
@@ -33,6 +59,7 @@ fn exit_menu_items(i18n: &I18n) -> Vec<ChoiceItem> {
         ("cancel", "exit-menu-cancel", "exit-menu-cancel-detail"),
     ]
     .into_iter()
+    .filter(|(value, _, _)| can_stop || *value != "stop-and-exit")
     .map(|(value, label, detail)| {
         let label = ui_text::t(i18n, label);
         ChoiceItem {
@@ -47,329 +74,348 @@ fn exit_menu_items(i18n: &I18n) -> Vec<ChoiceItem> {
 }
 
 impl App {
-    pub(crate) fn open_exit_menu(&mut self) {
-        if self.exit_after_cancel_session_id.is_some() {
-            self.flash_info(ui_text::t(&self.i18n, "exit-menu-stopping"));
+    /// Interrupt belongs to the topmost local interaction before the client.
+    pub(crate) fn handle_interrupt(&mut self, key: KeyEvent) {
+        if self.context_help.take().is_some() {
             return;
         }
-        if matches!(
+        if self.exit_menu_is_open() {
+            // A repeated key cannot choose an action or bypass the menu.
+            self.refresh_exit_menu();
+            return;
+        }
+        if self.overlay.is_some() {
+            // Reuse each modal's Esc cleanup (including native inline editors)
+            // instead of stacking a second, unrelated modal above it.
+            self.handle_overlay_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            return;
+        }
+        if self.btw_has_focus() {
+            self.handle_btw_route_key(key);
+            return;
+        }
+        if self.current_route_is_main() && self.focus == Focus::Composer {
+            if self.handle_prompt_history_search_key(key) {
+                return;
+            }
+            if self.interaction_editing.is_none()
+                && (!self.composer.text().is_empty() || !self.composer_items.is_empty())
+            {
+                self.reset_prompt_history_recall();
+                self.clear_composer_state();
+                return;
+            }
+        }
+        if self.current_route_is_main()
+            && self.focus == Focus::Transcript
+            && self.interaction_editing.is_some()
+            && self
+                .handle_active_interaction_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        {
+            return;
+        }
+        self.open_exit_menu();
+    }
+
+    fn exit_menu_is_open(&self) -> bool {
+        matches!(
             &self.overlay,
             Some(Overlay::Choice(dialog)) if matches!(dialog.action, ChoiceOverlayAction::Exit)
-        ) {
-            // Repeated Ctrl+C cannot bypass the choice or cancel a run.
+        )
+    }
+
+    fn current_exit_execution(&self) -> Option<(ExitCancelTarget, ExecutionPhase)> {
+        if !self.current_route_is_main() {
+            return None;
+        }
+        let session_id = self.transcript.session_id?;
+        let snapshot = self.transcript.execution.as_ref()?;
+        if snapshot.session.id != session_id {
+            return None;
+        }
+        let execution = snapshot.session.state.active_execution()?;
+        Some((
+            ExitCancelTarget {
+                session_id,
+                execution_id: execution.execution_id.into(),
+            },
+            execution.phase,
+        ))
+    }
+
+    fn current_exit_cancel_target(&self) -> Option<ExitCancelTarget> {
+        let (target, phase) = self.current_exit_execution()?;
+        if phase == ExecutionPhase::Cancelling
+            || self
+                .exit_cancellation
+                .is_some_and(|request| request.awaiting_ack || request.target == target)
+        {
+            return None;
+        }
+        Some(target)
+    }
+
+    fn exit_is_stopping(&self) -> bool {
+        self.exit_cancellation.is_some_and(|request| {
+            request.awaiting_ack
+                || self
+                    .current_exit_execution()
+                    .is_some_and(|(target, _)| target == request.target)
+        }) || self
+            .current_exit_execution()
+            .is_some_and(|(_, phase)| phase == ExecutionPhase::Cancelling)
+    }
+
+    fn exit_has_unsent_input(&self) -> bool {
+        !self.composer.text().is_empty()
+            || !self.composer_items.is_empty()
+            || self.session_composer.pending_submit.is_some()
+            || self
+                .session_composer
+                .pending_restore_draft
+                .as_ref()
+                .is_some_and(|draft| !draft.is_empty())
+    }
+
+    fn exit_has_unsettled_work(&self) -> bool {
+        if !self.current_route_is_main() {
+            return false;
+        }
+        let target = self
+            .transcript
+            .session_id
+            .map(RunActivityTarget::Session)
+            .unwrap_or(RunActivityTarget::NewSession);
+        if self.run_activity.is_active(target) {
+            return true;
+        }
+        let Some(session_id) = self.transcript.session_id else {
+            return false;
+        };
+        let Some(snapshot) = self
+            .transcript
+            .execution
+            .as_ref()
+            .filter(|snapshot| snapshot.session.id == session_id)
+        else {
+            // A selected session without its state is unknown, not idle.
+            return true;
+        };
+        !snapshot.queued_messages.is_empty()
+            || matches!(
+                snapshot.session.state,
+                agena_api::resource::SessionState::Creating
+                    | agena_api::resource::SessionState::Running { .. }
+                    | agena_api::resource::SessionState::AwaitingInteraction { .. }
+            )
+    }
+
+    fn exit_menu_prompt_key(&self) -> &'static str {
+        if self.exit_is_stopping() {
+            "exit-menu-stopping"
+        } else if self.exit_menu_target.is_some() {
+            "exit-menu-prompt"
+        } else if self.exit_has_unsent_input() {
+            "exit-menu-draft-prompt"
+        } else if self.exit_has_unsettled_work() {
+            "exit-menu-pending-prompt"
+        } else {
+            "exit-menu-idle-prompt"
+        }
+    }
+
+    fn exit_tui(&mut self) {
+        // Preserve the existing best-effort persistence contract. A storage
+        // failure must not make it impossible to leave the client; Drop also
+        // attempts the final flush and records any remaining error.
+        self.sync_current_draft_slot();
+        self.persist_draft_store_with_feedback(true);
+        self.should_quit = true;
+    }
+
+    pub(crate) fn open_exit_menu(&mut self) {
+        if self.exit_menu_is_open() {
+            self.refresh_exit_menu();
             return;
         }
-
+        self.exit_menu_target = self.current_exit_cancel_target();
+        if self.exit_menu_target.is_none()
+            && !self.exit_is_stopping()
+            && !self.exit_has_unsent_input()
+            && !self.exit_has_unsettled_work()
+        {
+            self.exit_tui();
+            return;
+        }
         let dialog = self.build_choice_overlay(
             ui_text::t(&self.i18n, "exit-menu-title"),
-            ui_text::t(&self.i18n, "exit-menu-prompt"),
+            ui_text::t(&self.i18n, self.exit_menu_prompt_key()),
             None,
-            exit_menu_items(&self.i18n),
+            exit_menu_items(&self.i18n, self.exit_menu_target.is_some()),
             ChoiceOverlayAction::Exit,
             false,
             ChoicePresentationStyle::SelectOnly,
         );
-        if let Some(previous) = self.overlay.take() {
-            self.overlay_stack.push(previous);
-        }
-        // Contextual help otherwise renders above the choice picker. Restore
-        // it if the user closes the picker without leaving the client.
-        self.exit_suspended_help = self.context_help.take();
         self.overlay = Some(Overlay::Choice(dialog));
     }
 
-    pub(crate) fn commit_exit_menu(&mut self, selection: &ChoiceSelection) {
+    pub(crate) fn refresh_exit_menu(&mut self) {
+        if !self.exit_menu_is_open() {
+            return;
+        }
+        let Some(Overlay::Choice(mut dialog)) = self.overlay.take() else {
+            unreachable!();
+        };
+        self.refresh_exit_menu_dialog(&mut dialog);
+        self.overlay = Some(Overlay::Choice(dialog));
+    }
+
+    pub(crate) fn refresh_exit_menu_dialog(&mut self, dialog: &mut ChoiceOverlay) {
+        if self.exit_menu_target != self.current_exit_cancel_target() {
+            // Once invalidated, this menu cannot silently acquire another run.
+            // Reopening is a new, deliberate choice about the current state.
+            self.exit_menu_target = None;
+        }
+        let selected = choice::selection(&dialog.presentation);
+        dialog.presentation.prompt = ui_text::t(&self.i18n, self.exit_menu_prompt_key());
+        dialog
+            .presentation
+            .replace_items(exit_menu_items(&self.i18n, self.exit_menu_target.is_some()));
+        choice::refresh(&mut dialog.presentation);
+        let value = match selected {
+            Some(ChoiceSelection::Item { value }) => value,
+            _ => "cancel".to_owned(),
+        };
+        if !dialog
+            .presentation
+            .select_item_where(|item| item.value == value)
+        {
+            dialog
+                .presentation
+                .select_item_where(|item| item.value == "cancel");
+        }
+    }
+
+    pub(crate) fn close_exit_menu(&mut self) {
+        self.exit_menu_target = None;
+        if let Some(request) = &mut self.exit_cancellation {
+            // Return/Esc cancels the exit intention, not a cancellation that
+            // has already been sent to the server.
+            request.quit_on_ack = false;
+        }
+    }
+
+    /// Whether the choice overlay should close.
+    pub(crate) fn commit_exit_menu(&mut self, selection: &ChoiceSelection) -> bool {
         match ExitChoice::from_selection(selection) {
             ExitChoice::Detach => {
-                // Only the TUI exits; the server retains every running task.
-                self.should_quit = true;
+                self.exit_tui();
+                true
             }
             ExitChoice::StopAndExit => {
-                // A Hub has no current session to stop. On other screens ask
-                // the server even if the local activity indicator is stale.
-                let session_id = if matches!(self.current_route, Route::Hub(_)) {
-                    None
+                let target = self.exit_menu_target.take();
+                if let Some(target) = target
+                    && self.current_exit_cancel_target() == Some(target)
+                {
+                    self.request_exit_cancel(target);
                 } else {
-                    self.transcript.session_id
-                };
-                if let Some(session_id) = session_id {
-                    self.exit_after_cancel_session_id = Some(session_id);
-                    self.exit_suspended_help = None;
-                    self.request_cancel_run(session_id);
-                    self.flash_info(ui_text::t(&self.i18n, "exit-menu-stopping"));
-                } else {
-                    self.should_quit = true;
+                    self.flash_warning(ui_text::t(&self.i18n, "exit-menu-target-changed"));
                 }
+                // Keep an actionable Exit/Return picker while waiting.
+                false
             }
             ExitChoice::Cancel => {
-                // Esc and this explicit option both restore the previous UI.
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_tui::choice::{self, ChoicePresentationAction, ChoicePresentationEffect};
-    use agena_tui::main_focus::Focus;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-
-    fn composer_app() -> (tempfile::TempDir, App) {
-        let temp = tempfile::tempdir().unwrap();
-        let backend = crate::TuiBackend::isolated_test_backend(temp.path().to_path_buf());
-        let mut app =
-            App::new_with_backend(backend, crate::LaunchOptions::default(), I18n::english());
-        app.current_route = Route::Main;
-        app.focus = Focus::Composer;
-        (temp, app)
-    }
-
-    fn ctrl_c() -> KeyEvent {
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
-    }
-
-    fn assert_exit_menu(app: &App) {
-        assert!(matches!(
-            &app.overlay,
-            Some(Overlay::Choice(dialog)) if matches!(dialog.action, ChoiceOverlayAction::Exit)
-        ));
-        assert!(!app.should_quit);
-        assert!(app.exit_after_cancel_session_id.is_none());
-    }
-
-    #[tokio::test]
-    async fn ctrl_c_clears_text_and_whitespace_before_opening_exit_menu() {
-        for draft in ["unfinished draft", " \n "] {
-            let (_temp, mut app) = composer_app();
-            app.transcript.session_id = Some(17);
-            app.composer.set_text(draft.to_owned());
-
-            app.handle_key_event(ctrl_c());
-
-            assert!(app.composer.text().is_empty());
-            assert!(app.overlay.is_none());
-            assert!(!app.should_quit);
-            assert!(app.exit_after_cancel_session_id.is_none());
-
-            app.handle_key_event(ctrl_c());
-            assert_exit_menu(&app);
-        }
-    }
-
-    #[tokio::test]
-    async fn ctrl_c_clears_attachments_and_invalidates_pending_media() {
-        use agena_api::part::PartExecutionStatusResource;
-        use agena_domain::{ResourceActivity, ResourceDelivery, ResourceKind, ResourceReference};
-
-        for state in [
-            PartExecutionStatusResource::InProgress,
-            PartExecutionStatusResource::Completed,
-        ] {
-            let (_temp, mut app) = composer_app();
-            app.reserve_pending_composer_media(
-                ResourceActivity {
-                    delivery: ResourceDelivery::Reference,
-                    kind: ResourceKind::File,
-                    reference: ResourceReference::WorkspacePath {
-                        path: "draft.txt".to_owned(),
-                    },
-                    name: "draft.txt".to_owned(),
-                    media_type: None,
-                    size_bytes: Some(1),
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                },
-                None,
-            );
-            app.composer_items[0].state = state;
-            assert!(app.toggle_composer_item_selection());
-            let media_epoch = app.composer_media_epoch;
-
-            app.handle_key_event(ctrl_c());
-
-            assert!(app.composer.text().is_empty());
-            assert!(app.composer.draft_elements().is_empty());
-            assert!(app.composer_items.is_empty());
-            assert!(!app.composer_item_selection.is_active());
-            assert_eq!(app.composer_media_epoch, media_epoch.wrapping_add(1));
-            assert!(app.overlay.is_none());
-
-            app.handle_key_event(ctrl_c());
-            assert_exit_menu(&app);
-        }
-    }
-
-    #[tokio::test]
-    async fn ctrl_c_preserves_drafts_outside_the_active_composer() {
-        for surface in ["transcript", "help", "command palette", "exit menu"] {
-            let (_temp, mut app) = composer_app();
-            app.composer.set_text("keep this draft".to_owned());
-            match surface {
-                "transcript" => app.focus = Focus::Transcript,
-                "help" => {
-                    app.toggle_context_help();
-                }
-                "command palette" => {
-                    app.open_command_palette();
-                }
-                "exit menu" => {
-                    app.open_exit_menu();
-                }
-                _ => unreachable!(),
-            }
-
-            app.handle_key_event(ctrl_c());
-
-            assert_eq!(app.composer.text(), "keep this draft", "{surface}");
-            assert_exit_menu(&app);
-            let overlay_stack_len = app.overlay_stack.len();
-
-            app.handle_key_event(ctrl_c());
-
-            assert_eq!(app.composer.text(), "keep this draft", "{surface}");
-            assert_exit_menu(&app);
-            assert_eq!(app.overlay_stack.len(), overlay_stack_len);
-        }
-    }
-
-    #[tokio::test]
-    async fn ctrl_c_release_does_not_clear_or_open_exit_menu() {
-        let (_temp, mut app) = composer_app();
-        app.composer.set_text("unfinished draft".to_owned());
-        let mut release = ctrl_c();
-        release.kind = KeyEventKind::Release;
-
-        app.handle_key_event(release);
-
-        assert_eq!(app.composer.text(), "unfinished draft");
-        assert!(app.overlay.is_none());
-        assert!(!app.should_quit);
-    }
-
-    #[test]
-    fn exit_picker_defaults_to_detach_and_shows_three_actions() {
-        let i18n = I18n::english();
-        let items = exit_menu_items(&i18n);
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| item.value.as_str())
-                .collect::<Vec<_>>(),
-            ["detach", "stop-and-exit", "cancel"]
-        );
-        let mut picker = choice::new_presentation(
-            i18n.text("exit-menu-title"),
-            i18n.text("exit-menu-prompt"),
-            "Enter select / Esc cancel".into(),
-            "No choices".into(),
-            items,
-            None,
-            None,
-            ChoicePresentationStyle::SelectOnly,
-            String::new(),
-            String::new(),
-            String::new(),
-        );
-        assert_eq!(
-            choice::selection(&picker),
-            Some(ChoiceSelection::Item {
-                value: "detach".into()
-            })
-        );
-        assert_eq!(
-            choice::reduce(&mut picker, ChoicePresentationAction::Accept),
-            ChoicePresentationEffect::Commit(ChoiceSelection::Item {
-                value: "detach".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn exit_picker_stop_requires_explicit_selection_and_escape_only_closes() {
-        let i18n = I18n::english();
-        let mut picker = choice::new_presentation(
-            i18n.text("exit-menu-title"),
-            i18n.text("exit-menu-prompt"),
-            String::new(),
-            String::new(),
-            exit_menu_items(&i18n),
-            None,
-            None,
-            ChoicePresentationStyle::SelectOnly,
-            String::new(),
-            String::new(),
-            String::new(),
-        );
-
-        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        assert_eq!(
-            choice::reduce(&mut picker, ChoicePresentationAction::Input(down)),
-            ChoicePresentationEffect::KeepOpen
-        );
-        assert_eq!(
-            ExitChoice::from_selection(&choice::selection(&picker).unwrap()),
-            ExitChoice::StopAndExit
-        );
-        assert_eq!(
-            choice::reduce(&mut picker, ChoicePresentationAction::Accept),
-            ChoicePresentationEffect::Commit(ChoiceSelection::Item {
-                value: "stop-and-exit".into(),
-            })
-        );
-        assert_eq!(
-            choice::reduce(
-                &mut picker,
-                ChoicePresentationAction::Input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-            ),
-            ChoicePresentationEffect::Close
-        );
-    }
-
-    #[test]
-    fn exit_menu_labels_exist_in_all_supported_locales() {
-        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
-            let i18n = I18n::resolve(Some(locale), None);
-            for key in [
-                "exit-menu-title",
-                "exit-menu-prompt",
-                "exit-menu-detach",
-                "exit-menu-detach-detail",
-                "exit-menu-stop-and-exit",
-                "exit-menu-stop-and-exit-detail",
-                "exit-menu-cancel",
-                "exit-menu-cancel-detail",
-                "exit-menu-stopping",
-                "context-help-key-exit-menu",
-            ] {
-                let value = i18n.text(key);
-                assert!(
-                    !value.is_empty() && !value.contains("Unknown localization key"),
-                    "missing or empty {key} for {locale}: {value}"
-                );
+                self.close_exit_menu();
+                true
             }
         }
     }
 
-    #[test]
-    fn cancel_and_unknown_selections_are_safe() {
-        assert_eq!(
-            ExitChoice::from_selection(&ChoiceSelection::Item {
-                value: "cancel".into(),
-            }),
-            ExitChoice::Cancel
-        );
-        assert_eq!(
-            ExitChoice::from_selection(&ChoiceSelection::Clear),
-            ExitChoice::Cancel
-        );
-        assert_eq!(
-            ExitChoice::from_selection(&ChoiceSelection::Item {
-                value: "unexpected".into(),
-            }),
-            ExitChoice::Cancel
-        );
+    fn request_exit_cancel(&mut self, target: ExitCancelTarget) {
+        let request_id = uuid::Uuid::new_v4();
+        self.exit_cancellation = Some(ExitCancellation {
+            target,
+            request_id,
+            awaiting_ack: true,
+            quit_on_ack: true,
+        });
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                crate::app_backend::operations::cancel_run(
+                    &application,
+                    target.session_id,
+                    Some(target.execution_id),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                Err(anyhow::anyhow!(
+                    "timed out waiting for cancellation acknowledgement"
+                ))
+            })
+            .map_err(crate::UiFailure::from_backend);
+            // Never retry with None: that would cancel an unrelated new run.
+            let _ = tx
+                .send(AppMessage::ExitRunCancelled {
+                    request_id,
+                    target,
+                    result,
+                })
+                .await;
+        });
+    }
+
+    pub(crate) fn handle_exit_run_cancelled(
+        &mut self,
+        request_id: uuid::Uuid,
+        target: ExitCancelTarget,
+        result: UiResult<CancellationOutcome>,
+    ) {
+        let Some(request) = self.exit_cancellation.filter(|request| {
+            request.request_id == request_id && request.target == target && request.awaiting_ack
+        }) else {
+            return;
+        };
+        if self.transcript.session_id == Some(target.session_id) {
+            self.request_refresh(target.session_id, true);
+        }
+        match result {
+            Ok(outcome)
+                if matches!(
+                    outcome.result,
+                    CancellationResult::CancellationRequested
+                        | CancellationResult::AlreadyTerminal
+                        | CancellationResult::NotFound
+                ) =>
+            {
+                if let Some(pending) = &mut self.exit_cancellation {
+                    pending.awaiting_ack = false;
+                    pending.quit_on_ack = false;
+                }
+                // Keep the acknowledged target blocked until its state changes,
+                // even if the last snapshot has not reached Cancelling yet.
+                self.restore_cancelled_input(target.session_id, outcome);
+                if request.quit_on_ack {
+                    self.exit_tui();
+                } else {
+                    self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
+                }
+            }
+            Ok(_) => {
+                self.exit_cancellation = None;
+                self.flash_warning(ui_text::t(&self.i18n, "exit-menu-target-changed"));
+            }
+            Err(error) => {
+                self.exit_cancellation = None;
+                self.flash_warning(format!(
+                    "{}: {}",
+                    ui_text::t(&self.i18n, "flash-cancel-failed"),
+                    error
+                ));
+            }
+        }
     }
 }

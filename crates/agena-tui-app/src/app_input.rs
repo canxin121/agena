@@ -18,20 +18,11 @@ impl App {
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
-        // Clear the focused composer's draft first. An empty composer and
-        // other surfaces keep the client-level exit choice.
+        // Interrupt first belongs to the focused local interaction. Ignore
+        // key-repeat so holding Ctrl+C cannot clear a draft and then exit.
         if global_action == Some(KeyAction::Interrupt) {
-            if self.current_route_is_main()
-                && self.focus == Focus::Composer
-                && self.overlay.is_none()
-                && self.context_help.is_none()
-                && self.interaction_editing.is_none()
-                && (!self.composer.text().is_empty() || !self.composer_items.is_empty())
-            {
-                self.reset_prompt_history_recall();
-                self.clear_composer_state();
-            } else {
-                self.open_exit_menu();
+            if key.kind == KeyEventKind::Press {
+                self.handle_interrupt(key);
             }
             return;
         }
@@ -243,13 +234,9 @@ impl App {
         };
 
         if close && exit_menu {
-            // Unlike other choice pickers, Ctrl+C may suspend an overlay on
-            // any route (including Hub). Always restore it on Cancel/Esc and
-            // when a Stop & Exit request fails, even outside the Main route.
-            self.context_help = self.exit_suspended_help.take();
-            if let Some(parent) = self.overlay_stack.pop() {
-                self.overlay = Some(self.refresh_restored_overlay(parent));
-            }
+            // Exit never suspends another modal. Esc/Return withdraws only
+            // the automatic exit intention, not an already-sent cancellation.
+            self.close_exit_menu();
             return true;
         }
         if !close {

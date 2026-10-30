@@ -6,8 +6,11 @@ impl App {
     ) -> bool {
         match dialog.action.clone() {
             ChoiceOverlayAction::Exit => {
-                self.commit_exit_menu(&selection);
-                true
+                let close = self.commit_exit_menu(&selection);
+                if !close {
+                    self.refresh_exit_menu_dialog(dialog);
+                }
+                close
             }
             ChoiceOverlayAction::MessageQueue { session_id } => {
                 let value = choice_selection_value(&selection);

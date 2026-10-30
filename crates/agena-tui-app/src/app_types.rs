@@ -575,10 +575,10 @@ pub struct App {
     pub(super) transcript_text_object_pending: Option<(bool, bool)>,
     /// Direction selected when the transcript search overlay was opened.
     pub(super) transcript_search_forward: bool,
-    /// Suspended contextual help while the Ctrl+C exit chooser is visible.
-    pub(super) exit_suspended_help: Option<HelpOverlay>,
-    /// Wait for the server to acknowledge cancellation before Stop & Exit.
-    pub(super) exit_after_cancel_session_id: Option<i64>,
+    /// Exact execution captured by the current exit menu, never a session-wide stop.
+    pub(super) exit_menu_target: Option<crate::app_exit::ExitCancelTarget>,
+    /// Independent request identity and exit intention for Stop & Exit.
+    pub(super) exit_cancellation: Option<crate::app_exit::ExitCancellation>,
     pub(super) terminal_integration: TerminalIntegrationState,
 }
 
@@ -828,11 +828,10 @@ pub(super) enum AppMessage {
         generation: u64,
         live: Box<LiveEvent>,
     },
-    /// Result of a `request_cancel_run` call. We always treat the in-flight
-    /// run as gone when this lands, regardless of success — the user has
-    /// already signalled cancel intent.
-    RunCancelled {
-        session_id: i64,
+    /// Only this exact request may acknowledge the exit menu's stop action.
+    ExitRunCancelled {
+        request_id: uuid::Uuid,
+        target: crate::app_exit::ExitCancelTarget,
         result: UiResult<agena_domain::CancellationOutcome>,
     },
     StatusLineUpdated {

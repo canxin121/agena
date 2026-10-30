@@ -443,7 +443,14 @@ impl Service<'_> {
         record.sign(key);
         self.save(&record, true).await?;
         let attempt = self.upload_bytes(&media, expiry).await;
-        let response=match attempt{Ok(response)=>response,Err(error)=>return record.output(Some(format!("Upload did not return a confirmed result: {}. Remote acceptance is unknown; do not automatically repeat.",error.failure.user.fallback)))};
+        let response = match attempt {
+            Ok(response) => response,
+            Err(error) => {
+                return record.output(Some(
+                    error.with_remote_effect_unknown().failure.user.fallback,
+                ));
+            }
+        };
         record.request_id = response.request_id;
         if let Err(error) = self.update_remote(&mut record, &response.value) {
             record.state = "response_invalid".into();
@@ -505,12 +512,33 @@ impl Service<'_> {
             )
             .send()
             .await
-            .map_err(|e| PluginError::internal_error(&e))?;
+            .map_err(|error| {
+                official_service::provider_transport_error(
+                    self.provider,
+                    "file upload start",
+                    &error,
+                    Some(&self.connection),
+                )
+                .with_remote_effect_unknown()
+            })?;
         if !begin.status().is_success() {
-            return Err(PluginError::internal(format!(
-                "Google upload initialization failed with HTTP {}",
-                begin.status()
-            )));
+            let (status, request_id, value) = official_service::read_json_response_bounded(
+                begin,
+                self.provider,
+                "file upload start",
+                &self.connection.headers,
+            )
+            .await
+            .map_err(PluginError::with_remote_effect_unknown)?;
+            return Err(official_service::provider_http_error(
+                self.provider,
+                "file upload start",
+                status,
+                request_id.as_deref(),
+                &value,
+                &self.connection.headers,
+            )
+            .with_remote_effect_unknown());
         }
         let target = begin
             .headers()
@@ -566,9 +594,21 @@ impl Service<'_> {
             self.save(&record, false).await?;
         }
         let response = self.authenticated(request).send().await.map_err(|error| {
-            PluginError::internal(format!(
-                "cloud file request failed; completion is not confirmed: {error}"
-            ))
+            let error = official_service::provider_transport_error(
+                self.provider,
+                if delete {
+                    "file deletion"
+                } else {
+                    "file status"
+                },
+                &error,
+                Some(&self.connection),
+            );
+            if delete {
+                error.with_remote_effect_unknown()
+            } else {
+                error
+            }
         })?;
         let status = response.status();
         if delete && (status.is_success() || status == reqwest::StatusCode::NOT_FOUND) {
@@ -580,8 +620,10 @@ impl Service<'_> {
                     response,
                     self.provider,
                     "file deletion",
+                    &self.connection.headers,
                 )
-                .await?;
+                .await
+                .map_err(PluginError::with_remote_effect_unknown)?;
                 record.request_id = request_id;
                 if body.get("deleted").and_then(Value::as_bool) != Some(true)
                     || body.get("id").and_then(Value::as_str) != Some(record.remote_id.as_str())
@@ -593,16 +635,39 @@ impl Service<'_> {
         } else if status == reqwest::StatusCode::NOT_FOUND {
             record.state = "unavailable".into();
         } else {
+            let operation = if delete {
+                "file deletion"
+            } else {
+                "file status"
+            };
             let (status, request_id, value) = official_service::read_json_response_bounded(
                 response,
                 self.provider,
-                "file status",
+                operation,
+                &self.connection.headers,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                if delete {
+                    error.with_remote_effect_unknown()
+                } else {
+                    error
+                }
+            })?;
             if !status.is_success() {
-                return Err(PluginError::internal(format!(
-                    "cloud file status returned HTTP {status}"
-                )));
+                let error = official_service::provider_http_error(
+                    self.provider,
+                    operation,
+                    status,
+                    request_id.as_deref(),
+                    &value,
+                    &self.connection.headers,
+                );
+                return Err(if delete {
+                    error.with_remote_effect_unknown()
+                } else {
+                    error
+                });
             }
             self.update_remote(&mut record, &value)?;
             record.request_id = request_id;

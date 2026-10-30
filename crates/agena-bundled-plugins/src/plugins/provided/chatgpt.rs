@@ -1454,13 +1454,35 @@ impl ChatGptToolsPlugin {
             .multipart(form)
             .send()
             .await
-            .map_err(|error| PluginError::internal(format!("OpenAI image edit failed: {error}")))?;
+            .map_err(|error| {
+                super::official_service::provider_transport_error(
+                    "OpenAI",
+                    "image edit",
+                    &error,
+                    Some(&connection),
+                )
+                .with_remote_effect_unknown()
+            })?;
         let (status, request_id, value) =
-            read_json_response_bounded(response, "OpenAI", "image edit").await?;
+            read_json_response_bounded(response, "OpenAI", "image edit", &connection.headers)
+                .await
+                .map_err(PluginError::with_remote_effect_unknown)?;
         if !status.is_success() {
-            return Err(PluginError::internal(format!(
-                "OpenAI image edit failed (HTTP {status}): {value}"
-            )));
+            let error = super::official_service::provider_http_error(
+                "OpenAI",
+                "image edit",
+                status,
+                request_id.as_deref(),
+                &value,
+                &connection.headers,
+            );
+            return Err(
+                if status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT {
+                    error.with_remote_effect_unknown()
+                } else {
+                    error
+                },
+            );
         }
         provider_output(
             self.host()?,

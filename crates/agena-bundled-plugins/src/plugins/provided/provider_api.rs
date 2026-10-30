@@ -176,10 +176,174 @@ fn invalid(message: impl Into<String>) -> PluginError {
 }
 
 fn ambiguous(message: impl std::fmt::Display) -> PluginError {
-    let mut error = PluginError::internal(message);
-    error.failure.retry = agena_failure::RetryDirective::Never;
-    error.failure.recovery = agena_failure::RecoveryDirective::None;
-    error
+    PluginError::internal(message).with_remote_effect_unknown()
+}
+
+fn request_error(family: Family, method: &reqwest::Method, error: PluginError) -> PluginError {
+    // Token counting uses POST for a structured read; the HTTP verb alone
+    // must not turn an unavailable counting endpoint into partial success.
+    if *method == reqwest::Method::GET
+        || *method == reqwest::Method::HEAD
+        || *method == reqwest::Method::OPTIONS
+        || family == Family::Tokens
+    {
+        error
+    } else {
+        error.with_remote_effect_unknown()
+    }
+}
+
+#[cfg(test)]
+mod request_error_tests {
+    use super::*;
+    use agena_failure::{FailureImpact, RetryDirective};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn resolved_read_routes_keep_failure_identity_while_mutations_remain_uncertain() {
+        let error = official_service::provider_http_error(
+            "provider",
+            "resource API",
+            reqwest::StatusCode::NOT_FOUND,
+            Some("req_fixture-49"),
+            &json!({"error":{"message":"This endpoint is unavailable"}}),
+            &BTreeMap::new(),
+        );
+        for (provider, family, input) in [
+            ("chatgpt", Family::Tokens, json!({"action":"create"})),
+            ("claude", Family::Tokens, json!({"action":"create"})),
+            ("gemini", Family::Tokens, json!({"action":"create"})),
+            ("chatgpt", Family::Files, json!({"action":"list"})),
+            (
+                "chatgpt",
+                Family::Files,
+                json!({"action":"get","id":"file_fixture"}),
+            ),
+        ] {
+            let route =
+                routes::resolve(provider, family, &serde_json::from_value(input).unwrap()).unwrap();
+            let actual = request_error(family, &route.method, error.clone());
+            let received: PluginError =
+                serde_json::from_value(serde_json::to_value(&actual).unwrap()).unwrap();
+            assert_eq!(received, error);
+            assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        }
+        for (family, input) in [
+            (Family::Images, json!({"action":"create"})),
+            (Family::Files, json!({"action":"upload"})),
+            (
+                Family::Files,
+                json!({"action":"delete","id":"file_fixture"}),
+            ),
+        ] {
+            let route = routes::resolve("chatgpt", family, &serde_json::from_value(input).unwrap())
+                .unwrap();
+            let actual = request_error(family, &route.method, error.clone());
+            assert_eq!(actual.failure.retry, RetryDirective::Never);
+            assert_eq!(actual.failure.impact, FailureImpact::PartialSuccess);
+            assert!(actual.failure.user.fallback.contains("HTTP 404"));
+            assert!(actual.failure.user.fallback.contains("req_fixture-49"));
+        }
+    }
+
+    #[tokio::test]
+    async fn get_connection_failure_keeps_read_failure_policy() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let input = serde_json::from_value(json!({"action":"get","id":"file_fixture"})).unwrap();
+        let route = routes::resolve("chatgpt", Family::Files, &input).unwrap();
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .request(
+                route.method.clone(),
+                format!("http://{address}/{}", route.path),
+            )
+            .send()
+            .await
+            .unwrap_err();
+        let error =
+            official_service::provider_transport_error("chatgpt", "resource API", &error, None);
+        let original = error.clone();
+        let error = request_error(Family::Files, &route.method, error);
+        let wire = serde_json::to_string(&error).unwrap();
+        let received: PluginError = serde_json::from_str(&wire).unwrap();
+        assert_eq!(received, original);
+        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        assert!(
+            received
+                .failure
+                .user
+                .fallback
+                .contains("connection refused")
+        );
+        assert!(!wire.contains("remote_effect_unknown"));
+    }
+
+    #[tokio::test]
+    async fn count_tokens_non_json_404_is_not_partial_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..length])
+                    .starts_with("POST /responses/input_tokens HTTP/1.1")
+            );
+            let body = "<html>private-body-canary</html>";
+            let response = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: {}\r\nX-Request-ID: req_count-fixture\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let input = serde_json::from_value(json!({"action":"create"})).unwrap();
+        let route = routes::resolve("chatgpt", Family::Tokens, &input).unwrap();
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .request(
+                route.method.clone(),
+                format!("http://{address}/{}", route.path),
+            )
+            .json(&json!({"model":"fixture","input":"fixture"}))
+            .send()
+            .await
+            .unwrap();
+        let error = official_service::read_json_response_bounded(
+            response,
+            "chatgpt",
+            "resource API",
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap_err();
+        server.await.unwrap();
+        let original = error.clone();
+        let error = request_error(Family::Tokens, &route.method, error);
+        let wire = serde_json::to_string(&error).unwrap();
+        let received: PluginError = serde_json::from_str(&wire).unwrap();
+        assert_eq!(received, original);
+        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        assert!(received.failure.user.fallback.contains("HTTP 404"));
+        assert!(received.failure.user.fallback.contains("req_count-fixture"));
+        assert!(
+            received
+                .failure
+                .user
+                .fallback
+                .contains("Response is not valid JSON")
+        );
+        assert!(!wire.contains("private-body-canary"));
+        assert!(!wire.contains("remote_effect_unknown"));
+    }
 }
 
 /// Reject path traversal, URL syntax and nested names in individual segments.
@@ -641,8 +805,18 @@ async fn request(
     } else if route.method != reqwest::Method::GET && route.method != reqwest::Method::DELETE {
         req = req.json(&body);
     }
-    let response = req.send().await.map_err(|e| ambiguous(format!(
-        "provider request failed; remote acceptance may be unknown, do not automatically repeat: {}", e.without_url())))?;
+    let response = req.send().await.map_err(|error| {
+        request_error(
+            family,
+            &route.method,
+            official_service::provider_transport_error(
+                service.provider,
+                "resource API",
+                &error,
+                Some(&service.connection),
+            ),
+        )
+    })?;
     if response.status().is_success()
         && response
             .headers()
@@ -670,7 +844,9 @@ async fn request(
             .and_then(|s| s.to_str().ok())
             .unwrap_or("application/octet-stream")
             .to_owned();
-        let bytes = response_bytes(response, MAX_DOWNLOAD).await?;
+        let bytes = response_bytes(response, MAX_DOWNLOAD)
+            .await
+            .map_err(|error| request_error(family, &route.method, error))?;
         let attachment = save_binary(service, input.output_path.as_deref(), &mime, bytes).await?;
         return Ok(json!({"download":attachment}));
     }
@@ -685,7 +861,9 @@ async fn request(
             .and_then(|s| s.to_str().ok())
             .unwrap_or("application/x-ndjson")
             .to_owned();
-        let bytes = response_bytes(response, MAX_DOWNLOAD).await?;
+        let bytes = response_bytes(response, MAX_DOWNLOAD)
+            .await
+            .map_err(|error| request_error(family, &route.method, error))?;
         let usage_entries = if service.provider == "claude" {
             accounting::batch_results(&bytes)?
         } else {
@@ -694,25 +872,24 @@ async fn request(
         let attachment = save_binary(service, input.output_path.as_deref(), &mime, bytes).await?;
         return Ok(json!({"download":attachment,"usage_entries":usage_entries}));
     }
-    let (status, request_id, value) =
-        official_service::read_json_response_bounded(response, service.provider, "resource API")
-            .await
-            .map_err(|mut error| {
-                if route.method != reqwest::Method::GET {
-                    error.failure.retry = agena_failure::RetryDirective::Never;
-                }
-                error
-            })?;
+    let (status, request_id, value) = official_service::read_json_response_bounded(
+        response,
+        service.provider,
+        "resource API",
+        &service.connection.headers,
+    )
+    .await
+    .map_err(|error| request_error(family, &route.method, error))?;
     if !status.is_success() {
-        let message = value
-            .pointer("/error/message")
-            .or_else(|| value.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or("provider rejected the operation");
-        return Err(PluginError::internal(format!(
-            "{} API HTTP {status}: {message}",
-            service.provider
-        )));
+        let error = official_service::provider_http_error(
+            service.provider,
+            "resource API",
+            status,
+            request_id.as_deref(),
+            &value,
+            &service.connection.headers,
+        );
+        return Err(request_error(family, &route.method, error));
     }
     Ok(json!({"request_id":request_id,"response":value}))
 }
@@ -854,7 +1031,9 @@ async fn response_bytes(response: reqwest::Response, limit: usize) -> Result<Vec
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| PluginError::internal_error(&e.without_url()))?;
+        let chunk = chunk.map_err(|error| {
+            official_service::provider_transport_error("provider", "download", &error, None)
+        })?;
         if bytes.len().saturating_add(chunk.len()) > limit {
             return Err(invalid("provider file exceeds download limit"));
         }

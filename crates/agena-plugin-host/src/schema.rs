@@ -150,7 +150,7 @@ pub fn output_contract_failure() -> agena_failure::Failure {
         FailureImpact::PartialSuccess,
         UserPresentation::new(
             "tool.output_contract_violation",
-            "The tool executed but returned a result that violates its output contract. Its effects may already be committed. Inspect the result before taking further action; do not repeat the operation automatically.",
+            "The tool ran but its output is invalid. Effects may be committed; do not repeat automatically.",
         ),
     )
 }
@@ -160,7 +160,7 @@ pub fn output_contract_error(diagnostic: impl std::fmt::Display) -> crate::sdk::
         .with_public_problem(OUTPUT_CONTRACT_VIOLATION_MARKER);
     let mut failure = output_contract_failure();
     let detail =
-        agena_failure::diagnostic::user_message_with_context(&error.diagnostic.message, 320);
+        agena_failure::diagnostic::user_message_with_context(&error.diagnostic.message, 128);
     if !detail.is_empty() {
         failure.user = agena_failure::UserPresentation::validated(
             "tool.output_contract_violation-detail",

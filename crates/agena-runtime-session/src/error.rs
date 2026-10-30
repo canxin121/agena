@@ -209,10 +209,10 @@ impl AppError {
             Self::Database(error) if is_database_busy(error) => {
                 "The database is busy. Try again in a moment."
             }
+            Self::CapabilityUnavailable(_) => "The required execution capability is unavailable.",
+            Self::ToolUnavailable(_) => "The requested tool is unavailable.",
             Self::PolicyDenied(_)
             | Self::UserDeclined(_)
-            | Self::CapabilityUnavailable(_)
-            | Self::ToolUnavailable(_)
             | Self::Tool(_)
             | Self::Database(_)
             | Self::SerdeJson(_)
@@ -241,6 +241,44 @@ impl AppError {
             && let crate::tool::ToolError::Plugin(problem) = error.as_ref()
         {
             return problem.public.clone();
+        }
+        let unavailable = match self {
+            Self::CapabilityUnavailable(value) => Some((
+                "tool.capability_unavailable",
+                agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable,
+                value.reason.as_str(),
+            )),
+            Self::ToolUnavailable(value) => Some((
+                "tool.unavailable",
+                agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable,
+                value.reason.as_str(),
+            )),
+            Self::Tool(error) => match error.as_ref() {
+                crate::tool::ToolError::CapabilityUnavailable(value) => Some((
+                    "tool.capability_unavailable",
+                    agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable,
+                    value.reason.as_str(),
+                )),
+                crate::tool::ToolError::ToolUnavailable(value) => Some((
+                    "tool.unavailable",
+                    agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable,
+                    value.reason.as_str(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((code, kind, reason)) = unavailable {
+            // Availability is a typed expected outcome. Reuse the SDK's
+            // host-owned policy, keeping its specific safe reason instead of
+            // converting an unknown tool into an unexplained internal fault.
+            let mut failure = *agena_plugin_host::sdk::PluginError::from_kind(kind, "").failure;
+            failure.code = FailureCode::new(code);
+            failure.user.key = code.into();
+            if !reason.trim().is_empty() {
+                failure.user = agena_failure::UserPresentation::validated(code, reason);
+            }
+            return failure.with_model_feedback(agena_failure::ModelFeedback::tool_unavailable());
         }
         let access_failure = match self {
             Self::PolicyDenied(denial) => Some((
@@ -292,6 +330,23 @@ impl AppError {
                 Retry::CorrectInput,
                 Recovery::OpenSettings,
             ),
+            Self::Tool(error)
+                if matches!(
+                    error.as_ref(),
+                    crate::tool::ToolError::InvalidInput { .. }
+                        | crate::tool::ToolError::InvalidPatch(_)
+                        | crate::tool::ToolError::InvalidGlobPattern(_)
+                        | crate::tool::ToolError::InvalidRegexPattern(_)
+                ) =>
+            {
+                (
+                    "tool.invalid_input",
+                    Category::InvalidInput,
+                    Responsibility::Caller,
+                    Retry::CorrectInput,
+                    Recovery::None,
+                )
+            }
             Self::ProviderClassified {
                 kind: ProviderErrorKind::ContextOverflow,
                 ..
@@ -791,5 +846,129 @@ mod permission_tests {
             agena_failure::FailureCategory::PermissionDenied
         );
         assert_eq!(failure.retry, agena_failure::RetryDirective::Never);
+    }
+
+    #[test]
+    fn unavailable_tool_reason_survives_direct_and_wrapped_runtime_errors() {
+        for wrapped in [false, true] {
+            let unavailable = Box::new(agena_domain::ToolUnavailableResult {
+                tool_name: "custom.missing".into(),
+                reason: "tool 'custom.missing' is not registered; token=private-token-sentinel"
+                    .into(),
+                suggestions: vec![],
+                source: "tool_registry".into(),
+                retryable: false,
+            });
+            let error = if wrapped {
+                AppError::Tool(Box::new(crate::tool::ToolError::ToolUnavailable(
+                    unavailable,
+                )))
+            } else {
+                AppError::ToolUnavailable(unavailable)
+            };
+            let failure = error.failure();
+            assert_eq!(failure.code.as_str(), "tool.unavailable");
+            assert_eq!(failure.category, agena_failure::FailureCategory::NotFound);
+            assert_eq!(failure.retry, agena_failure::RetryDirective::UseAlternative);
+            assert_eq!(
+                failure.recovery,
+                agena_failure::RecoveryDirective::ChooseAlternative
+            );
+            assert!(failure.user.fallback.contains("custom.missing"));
+            assert!(failure.user.fallback.contains("not registered"));
+            assert!(!failure.user.fallback.contains("private-token-sentinel"));
+            let persisted: agena_failure::Failure =
+                serde_json::from_value(serde_json::to_value(&failure).unwrap()).unwrap();
+            assert_eq!(
+                agena_failure::UserProblem::from(&persisted),
+                agena_failure::UserProblem::from(&failure)
+            );
+            assert_eq!(
+                serde_json::to_value(persisted).unwrap()["model"]["kind"],
+                "tool_unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_capability_preserves_runtime_boundary_reason() {
+        for wrapped in [false, true] {
+            let unavailable = Box::new(agena_domain::CapabilityUnavailableResult {
+                capability: "interactive_permission".into(),
+                tool_name: Some("shell.exec".into()),
+                reason: "Delegated agents cannot request interactive permission; ask the parent session.".into(),
+                source: agena_domain::CapabilitySourceKind::AgentProfile,
+                retryable: false,
+            });
+            let error = if wrapped {
+                AppError::Tool(Box::new(crate::tool::ToolError::CapabilityUnavailable(
+                    unavailable,
+                )))
+            } else {
+                AppError::CapabilityUnavailable(unavailable)
+            };
+            let failure = error.failure();
+            assert_eq!(failure.code.as_str(), "tool.capability_unavailable");
+            assert_eq!(failure.category, agena_failure::FailureCategory::NotFound);
+            assert_eq!(failure.retry, agena_failure::RetryDirective::UseAlternative);
+            assert_eq!(
+                failure.recovery,
+                agena_failure::RecoveryDirective::ChooseAlternative
+            );
+            assert!(failure.user.fallback.contains("ask the parent session"));
+            assert!(failure.model.is_some());
+        }
+    }
+
+    #[test]
+    fn typed_tool_input_errors_are_actionable_caller_failures() {
+        let error = AppError::Tool(Box::new(crate::tool::ToolError::invalid_field(
+            "file_path",
+            agena_failure::FieldIssueKind::Invalid,
+            "file_path is required; token=private-token-sentinel",
+        )));
+        let failure = error.failure();
+        assert_eq!(failure.code.as_str(), "tool.invalid_input");
+        assert_eq!(
+            failure.category,
+            agena_failure::FailureCategory::InvalidInput
+        );
+        assert_eq!(
+            failure.responsibility,
+            agena_failure::FailureResponsibility::Caller
+        );
+        assert_eq!(failure.retry, agena_failure::RetryDirective::CorrectInput);
+        assert!(failure.user.fallback.contains("file_path is required"));
+        assert!(!failure.user.fallback.contains("private-token-sentinel"));
+        let persisted: agena_failure::Failure =
+            serde_json::from_value(serde_json::to_value(&failure).unwrap()).unwrap();
+        let feedback = agena_domain::OperationError { failure: persisted }
+            .model_message()
+            .unwrap();
+        assert!(feedback.contains("file_path"));
+        assert!(!feedback.contains("private-token-sentinel"));
+
+        let invalid_patch = AppError::Tool(Box::new(crate::tool::ToolError::invalid_patch(
+            "invalid patch hunk",
+        )))
+        .failure();
+        assert_eq!(
+            invalid_patch.category,
+            agena_failure::FailureCategory::InvalidInput
+        );
+        assert_eq!(
+            invalid_patch.retry,
+            agena_failure::RetryDirective::CorrectInput
+        );
+        assert!(invalid_patch.user.fallback.contains("invalid patch hunk"));
+
+        let unexpected = AppError::Tool(Box::new(crate::tool::ToolError::Io(
+            std::io::Error::other("storage failure"),
+        )))
+        .failure();
+        assert_eq!(
+            unexpected.category,
+            agena_failure::FailureCategory::Internal
+        );
     }
 }

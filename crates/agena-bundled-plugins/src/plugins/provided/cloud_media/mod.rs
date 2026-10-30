@@ -144,14 +144,52 @@ impl<'a> Service<'a> {
             .build()
             .map_err(|error| PluginError::internal_error(&error))?;
         official_service::validate_provider_endpoint(self.host, request.url().as_str()).await?;
-        let response=self.client.execute(request).await.map_err(|error|PluginError::internal(format!("cloud {operation} transport failed; remote acceptance is unknown, do not automatically repeat: {}",error.without_url())))?;
-        let (status, request_id, value) =
-            official_service::read_json_response_bounded(response, self.provider, operation)
-                .await?;
+        let may_have_effects = request.method() != reqwest::Method::GET;
+        let response = self.client.execute(request).await.map_err(|error| {
+            let error = official_service::provider_transport_error(
+                self.provider,
+                operation,
+                &error,
+                Some(&self.connection),
+            );
+            if may_have_effects {
+                error.with_remote_effect_unknown()
+            } else {
+                error
+            }
+        })?;
+        let (status, request_id, value) = official_service::read_json_response_bounded(
+            response,
+            self.provider,
+            operation,
+            &self.connection.headers,
+        )
+        .await
+        .map_err(|error| {
+            if may_have_effects {
+                error.with_remote_effect_unknown()
+            } else {
+                error
+            }
+        })?;
         if !status.is_success() {
-            return Err(PluginError::internal(format!(
-                "cloud {operation} returned HTTP {status}; inspect status before retrying"
-            )));
+            let error = official_service::provider_http_error(
+                self.provider,
+                operation,
+                status,
+                request_id.as_deref(),
+                &value,
+                &self.connection.headers,
+            );
+            return Err(
+                if may_have_effects
+                    && (status.is_server_error() || status == reqwest::StatusCode::REQUEST_TIMEOUT)
+                {
+                    error.with_remote_effect_unknown()
+                } else {
+                    error
+                },
+            );
         }
         Ok(ProviderHttpResponse { value, request_id })
     }

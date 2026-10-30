@@ -55,17 +55,33 @@ pub(super) async fn file_search(
         .json(&metadata)
         .send()
         .await
-        .map_err(|e| {
-            ambiguous(format!(
-                "File Search upload initialization failed; do not automatically repeat: {}",
-                e.without_url()
-            ))
+        .map_err(|error| {
+            official_service::provider_transport_error(
+                service.provider,
+                "File Search upload start",
+                &error,
+                Some(&service.connection),
+            )
+            .with_remote_effect_unknown()
         })?;
     if !begin.status().is_success() {
-        return Err(ambiguous(format!(
-            "File Search upload initialization returned HTTP {}",
-            begin.status()
-        )));
+        let (status, request_id, value) = official_service::read_json_response_bounded(
+            begin,
+            "gemini",
+            "File Search upload start",
+            &service.connection.headers,
+        )
+        .await
+        .map_err(PluginError::with_remote_effect_unknown)?;
+        return Err(official_service::provider_http_error(
+            "gemini",
+            "File Search upload start",
+            status,
+            request_id.as_deref(),
+            &value,
+            &service.connection.headers,
+        )
+        .with_remote_effect_unknown());
     }
     let target = begin
         .headers()
@@ -94,19 +110,33 @@ pub(super) async fn file_search(
         .body(bytes)
         .send()
         .await
-        .map_err(|e| {
-            ambiguous(format!(
-                "File Search upload acceptance is unknown; do not automatically repeat: {}",
-                e.without_url()
-            ))
+        .map_err(|error| {
+            official_service::provider_transport_error(
+                service.provider,
+                "File Search upload",
+                &error,
+                Some(&service.connection),
+            )
+            .with_remote_effect_unknown()
         })?;
-    let (status, request_id, value) =
-        official_service::read_json_response_bounded(response, "gemini", "File Search upload")
-            .await?;
+    let (status, request_id, value) = official_service::read_json_response_bounded(
+        response,
+        "gemini",
+        "File Search upload",
+        &service.connection.headers,
+    )
+    .await
+    .map_err(PluginError::with_remote_effect_unknown)?;
     if !status.is_success() {
-        return Err(ambiguous(format!(
-            "File Search upload returned HTTP {status}"
-        )));
+        return Err(official_service::provider_http_error(
+            "gemini",
+            "File Search upload",
+            status,
+            request_id.as_deref(),
+            &value,
+            &service.connection.headers,
+        )
+        .with_remote_effect_unknown());
     }
     Ok(json!({"request_id":request_id,"response":value}))
 }

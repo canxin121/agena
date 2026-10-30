@@ -333,6 +333,23 @@ impl ToolExecutor {
             }
             rendered.human = Some(human);
         }
+        if invocation.name == "image_generation"
+            && let Some(human) = rendered.human.as_mut()
+        {
+            let title = human.title.trim();
+            let summary = human.summary.trim();
+            // The hosted image title already carries its compact result fact.
+            // Clear only an exact repeated segment, preserving independent
+            // plugin summaries and every body block.
+            if !summary.is_empty()
+                && (title == summary
+                    || title
+                        .strip_suffix(summary)
+                        .is_some_and(|prefix| prefix.trim_end().ends_with('·')))
+            {
+                human.summary.clear();
+            }
+        }
         rendered
     }
 
@@ -466,6 +483,57 @@ mod output_contract_tests {
             ToolOutput::default(),
             crate::tool::ToolExecutionView::simple("Run", "Completed", ""),
         )
+    }
+
+    #[tokio::test]
+    async fn hosted_image_projection_has_one_caption_and_no_repeated_headline_summary() {
+        let (executor, _) = executor(json!({"type": "object"}));
+        let invocation = ToolInvocation::new(
+            "image_generation",
+            agena_domain::StructuredObject::try_from(json!({"prompt": "Draw a rose"})).unwrap(),
+        );
+        let output: agena_domain::RawOutput = serde_json::from_value(json!({
+            "payload": {
+                "text": "A rose in a vase, lit from the left",
+                "warning": "The provider adjusted the requested dimensions",
+            },
+            "attachments": [{
+                "kind": "image", "mime": "image/png", "filename": "rose.png",
+                "source": {"source": "local_path", "path": "/generated/rose.png"},
+            }],
+        }))
+        .unwrap();
+        let original = output.clone();
+        let rendered = executor.render_tool_result(&invocation, &output).await;
+        let human = rendered.human.unwrap();
+        assert_eq!(human.title, "Generate image · 1 image");
+        assert!(human.summary.is_empty());
+        let body = human
+            .blocks
+            .iter()
+            .filter_map(agena_domain::ViewBlock::text_value)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            body.matches("A rose in a vase, lit from the left").count(),
+            1
+        );
+        assert!(body.contains("The provider adjusted the requested dimensions"));
+        assert_eq!(
+            human
+                .blocks
+                .iter()
+                .filter(|block| matches!(block, agena_domain::ViewBlock::Media { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            rendered
+                .model
+                .unwrap()
+                .contains("A rose in a vase, lit from the left")
+        );
+        assert_eq!(output, original);
     }
 
     #[tokio::test]

@@ -620,7 +620,7 @@ pub(super) async fn tool(
 ) -> Result<ToolView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT t.round_id,t.execution_kind,t.phase,t.call_id,t.name,t.input_json,t.result_json,e.id AS entry_id,e.revision FROM agena_tool_calls t JOIN agena_entries e ON e.tool_id=t.id AND e.kind='tool' WHERE t.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT t.round_id,t.execution_kind,t.phase,t.call_id,t.name,t.input_json,t.result_json,t.created_at_ms,t.finished_at_ms,e.id AS entry_id,e.revision FROM agena_tool_calls t JOIN agena_entries e ON e.tool_id=t.id AND e.kind='tool' WHERE t.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(tool.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("tool".into()))?;
     let entry: i64 = row.try_get("entry_id").map_err(storage)?;
     metrics::add(&diagnostics.0.detail_queries, 1);
@@ -684,6 +684,8 @@ pub(super) async fn tool(
         return Err(storage("tool interaction identity budget is corrupt"));
     }
     Ok(ToolView {
+        created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
+        finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
         entry_id: EntryId::try_from(entry).map_err(storage)?,
         execution_kind: decode(&encode(
             &row.try_get::<&str, _>("execution_kind").map_err(storage)?,

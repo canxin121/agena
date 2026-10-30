@@ -248,8 +248,8 @@ pub fn result_title_fragment_for_tool(tool_name: &str, output: &RawOutput) -> St
     // keeping the provider envelope intentionally text-light. Surface the
     // artifact count before inspecting the generic response envelope so a
     // completed generation reads as `1 image`, not merely `response received`.
-    if is_provider_tool_identity(key.as_str())
-        && key.contains("image")
+    if (key == "image_generation"
+        || (is_provider_tool_identity(key.as_str()) && key.contains("image")))
         && !output.attachments.is_empty()
     {
         return finalize_result_fragment(format_count(output.attachments.len(), "images"), output);
@@ -2340,7 +2340,9 @@ fn tool_action_label(tool_name: &str) -> String {
         "claude.advisor" => "Consult advisor".to_owned(),
         "chatgpt.file_search" | "gemini.file_search" => "Search files".to_owned(),
         "chatgpt.responses_image_generation" => "Generate image via OpenAI Responses".to_owned(),
-        "chatgpt.image_generate" | "gemini.image_generation" => "Generate image".to_owned(),
+        "image_generation" | "chatgpt.image_generate" | "gemini.image_generation" => {
+            "Generate image".to_owned()
+        }
         "chatgpt.image_edit" | "gemini.image_edit" => "Edit image".to_owned(),
         "snapshot.enter" | "enter_snapshot" => "Enter snapshot".to_owned(),
         "snapshot.exit" | "exit_snapshot" => "Exit snapshot".to_owned(),
@@ -2458,6 +2460,12 @@ fn humanize_tool_leaf(key: &str) -> String {
 
 fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> String {
     let key = normalized_tool_identity(tool_name);
+    if key == "image_generation" {
+        // A hosted image prompt is a document-sized instruction, not a
+        // compact subject. Its result description belongs beside the image;
+        // the original prompt remains available in the input details.
+        return String::new();
+    }
     if key.ends_with("fs.apply_patch") {
         return patch_title_subject(input);
     }
@@ -3309,4 +3317,46 @@ pub enum ShellError {
     Spawn(#[source] std::io::Error),
     #[error("failed to wait for child process: {0}")]
     Wait(#[source] std::io::Error),
+}
+
+#[cfg(test)]
+mod hosted_image_title_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn hosted_image_titles_keep_prompts_out_of_the_headline() {
+        for prompt in [
+            "A rose".to_owned(),
+            "一朵玫瑰，柔和自然光，背景中的细节保持清晰。".repeat(20),
+        ] {
+            let invocation = ToolInvocation::new(
+                "image_generation",
+                agena_domain::StructuredObject::try_from(json!({"prompt": prompt})).unwrap(),
+            );
+            let mut output: RawOutput = serde_json::from_value(json!({
+                "payload": {"text": prompt},
+                "attachments": [{
+                    "kind": "image", "mime": "image/png", "filename": "rose.png",
+                    "source": {"source": "local_path", "path": "/generated/rose.png"},
+                }],
+            }))
+            .unwrap();
+            assert_eq!(initial_tool_title(&invocation), "Generate image");
+            assert_eq!(
+                completed_tool_title(&invocation, &output),
+                "Generate image · 1 image"
+            );
+            assert_eq!(
+                completed_tool_title_for_state(&invocation, ToolResultState::Failed, &output),
+                "Generate image · 1 image · failed",
+            );
+            output.attachments.push(output.attachments[0].clone());
+            assert_eq!(
+                completed_tool_title(&invocation, &output),
+                "Generate image · 2 images"
+            );
+            assert_eq!(output.text_content(), prompt);
+        }
+    }
 }

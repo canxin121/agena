@@ -80,10 +80,15 @@ pub(crate) async fn append_execution_failures(
     }
     let mut failures = Vec::new();
     for (run_id, execution, generation, owner, candidate_created_at_ms, message_id) in candidates {
-        if parts
-            .iter()
-            .any(|existing| existing.kind == "error" && existing.run_id == Some(run_id))
-        {
+        if parts.iter().any(|existing| {
+            existing.kind == "error"
+                && existing.run_id == Some(run_id)
+                && existing
+                    .content
+                    .get("projection_error")
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(true)
+        }) {
             continue;
         }
         let round = reader
@@ -210,6 +215,71 @@ fn requested_sections(sections: &[ToolDetailSection]) -> &[ToolDetailSection] {
     } else {
         sections
     }
+}
+
+/// Only presentation decoding is recoverable here. Membership, storage and
+/// permission failures must still propagate from their authoritative readers.
+#[derive(Debug)]
+struct ToolResultProjectionError {
+    field: &'static str,
+    source: serde_json::Error,
+}
+
+fn decode_tool_result_field<T: serde::de::DeserializeOwned>(
+    field: &'static str,
+    value: Option<serde_json::Value>,
+) -> Result<Option<T>, ToolResultProjectionError> {
+    value
+        .filter(|value| !value.is_null())
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|source| ToolResultProjectionError { field, source })
+}
+
+fn tool_result_projection_error_content(
+    tool_id: i64,
+    result: Option<&serde_json::Value>,
+    error: &ToolResultProjectionError,
+) -> Result<serde_json::Value, ApplicationError> {
+    tracing::warn!(
+        tool_id,
+        field = error.field,
+        category = ?error.source.classify(),
+        line = error.source.line(),
+        column = error.source.column(),
+        "stored tool result could not be displayed; preserving the record and other transcript parts"
+    );
+    let message = format!(
+        "This stored tool result cannot be displayed because its {} field is invalid. \
+         The original record has been preserved; other messages can still be opened.",
+        error.field,
+    );
+    // A malformed output/metadata field must not erase a valid execution
+    // failure. Keep its complete public problem, never the private raw result.
+    let failure = result
+        .and_then(|value| value.get("failure"))
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::from_value::<agena_failure::Failure>(value.clone()).ok());
+    let mut content = if let Some(failure) = failure {
+        let mut content = failure_content(&failure)?;
+        content["message"] = serde_json::Value::String(format!(
+            "{}\n\n{message}",
+            content["message"].as_str().unwrap_or_default(),
+        ));
+        content["detail"] = serde_json::Value::String(message);
+        content
+    } else {
+        agena_runtime_contracts::part_content::ErrorContent {
+            category: Some("internal".into()),
+            message,
+            ..Default::default()
+        }
+        .as_value()
+    };
+    content["projection_error"] = serde_json::Value::Bool(true);
+    content["tool_call_id"] = serde_json::Value::from(tool_id);
+    content["invalid_field"] = serde_json::Value::from(error.field);
+    Ok(content)
 }
 
 pub(crate) async fn project_kernel_entry(
@@ -352,7 +422,7 @@ pub(crate) async fn project_kernel_entry(
                 }
             }
         }
-        EntryPayload::Tool { tool_id } => {
+        EntryPayload::Tool { tool_id } => 'tool_projection: {
             let tool = reader
                 .tool(session, *tool_id)
                 .await
@@ -373,46 +443,110 @@ pub(crate) async fn project_kernel_entry(
             }
             .into();
             part.revision = part.revision.max(tool.revision.get());
+            // Tool lifetimes are independent of the enclosing execution. A
+            // finished tool can belong to a still-running attempt, and an old
+            // terminal record may have no recorded end. Preserve those facts
+            // even if its result later fails the presentation projection.
+            part.started_at_ms = tool.created_at_ms;
+            part.finished_at_ms = match tool.phase {
+                ToolPhase::Preparing | ToolPhase::Running => None,
+                _ => tool.finished_at_ms,
+            };
+            part.updated_at_ms = part.finished_at_ms.unwrap_or(tool.created_at_ms);
+            // Authoritative reads and interaction validation are deliberately
+            // outside the recoverable result-presentation boundary below.
+            let mut authorization = agena_domain::OperationAuthorization::default();
+            let mut user_input = agena_domain::OperationUserInput::default();
+            for id in &tool.interactions {
+                let interaction = reader
+                    .interaction(session, *id)
+                    .await
+                    .map_err(crate::kernel_error)?;
+                project_interaction(session, &interaction, &mut authorization, &mut user_input)?;
+            }
             let result = tool.result.as_ref();
-            let decode = |key: &str| result.and_then(|value| value.get(key)).cloned();
-            let output = decode("raw_output")
-                .or_else(|| {
-                    decode("tool_api_response").and_then(|response| {
-                        response
-                            .get("output_text")
-                            .and_then(serde_json::Value::as_str)
-                            .map(|text| serde_json::json!({"payload": {"text": text}}))
-                    })
-                })
-                .map(serde_json::from_value::<agena_domain::RawOutput>)
-                .transpose()
-                .map_err(|error| ApplicationError::internal_error(&error))?;
-            let invocation = decode("invocation")
-                .map(|mut value| {
-                    if let Some(object) = value.as_object_mut() {
-                        object.remove("tool_api_call");
-                    }
-                    serde_json::from_value::<agena_domain::ToolInvocation>(value)
-                })
-                .transpose()
-                .map_err(|error| ApplicationError::internal_error(&error))?;
-            let tool_api_call = decode("tool_api_call")
-                .filter(|value| !value.is_null())
-                .map(serde_json::from_value::<agena_domain::ToolApiCall>)
-                .transpose()
-                .map_err(|error| ApplicationError::internal_error(&error))?
-                .or_else(|| {
-                    agena_domain::ToolApiFunction::from_function_name(&tool.call.name).and_then(
-                        |function| {
-                            agena_domain::StructuredObject::try_from(tool.call.input.clone())
-                                .ok()
-                                .map(|arguments| agena_domain::ToolApiCall {
-                                    function,
-                                    arguments,
-                                })
-                        },
-                    )
-                });
+            let decode = |key: &str| {
+                result
+                    .and_then(|value| value.get(key))
+                    .filter(|value| !value.is_null())
+                    .cloned()
+            };
+            let decoded = (|| -> Result<_, ToolResultProjectionError> {
+                if result.is_some_and(|value| !value.is_null() && !value.is_object()) {
+                    return Err(ToolResultProjectionError {
+                        field: "result",
+                        source: <serde_json::Error as serde::de::Error>::custom(
+                            "stored tool result must be a JSON object",
+                        ),
+                    });
+                }
+                let output = if let Some(raw_output) = decode("raw_output") {
+                    // Canonical output wins; legacy preview fields may be
+                    // unrelated or obsolete and are not consumed in this case.
+                    Some(raw_output)
+                } else {
+                    let response = decode_tool_result_field::<
+                        serde_json::Map<String, serde_json::Value>,
+                    >(
+                        "tool_api_response", decode("tool_api_response")
+                    )?;
+                    let text = decode_tool_result_field::<String>(
+                        "tool_api_response.output_text",
+                        response.and_then(|mut response| response.remove("output_text")),
+                    )?;
+                    text.map(|text| serde_json::json!({"payload": {"text": text}}))
+                };
+                let output =
+                    decode_tool_result_field::<agena_domain::RawOutput>("raw_output", output)?;
+                let invocation = decode_tool_result_field::<agena_domain::ToolInvocation>(
+                    "invocation",
+                    decode("invocation").map(|mut value| {
+                        if let Some(object) = value.as_object_mut() {
+                            object.remove("tool_api_call");
+                        }
+                        value
+                    }),
+                )?;
+                let tool_api_call = decode_tool_result_field::<agena_domain::ToolApiCall>(
+                    "tool_api_call",
+                    decode("tool_api_call"),
+                )?;
+                let error = decode_tool_result_field::<agena_failure::Failure>(
+                    "failure",
+                    decode("failure"),
+                )?
+                .map(|failure| agena_domain::OperationError { failure });
+                let metadata = decode_tool_result_field::<
+                    std::collections::BTreeMap<String, serde_json::Value>,
+                >("metadata", decode("metadata"))?
+                .unwrap_or_default();
+                Ok((output, invocation, tool_api_call, error, metadata))
+            })();
+            let (output, invocation, tool_api_call, error, metadata) = match decoded {
+                Ok(fields) => fields,
+                Err(error) => {
+                    // Keep the durable part identity, history ordering and
+                    // execution state. This is a visible projection failure,
+                    // not a fabricated successful tool or a rewritten record.
+                    part.kind = "error".into();
+                    part.state = "failed".into();
+                    part.content =
+                        tool_result_projection_error_content(tool.id.get(), result, &error)?;
+                    break 'tool_projection;
+                }
+            };
+            let tool_api_call = tool_api_call.or_else(|| {
+                agena_domain::ToolApiFunction::from_function_name(&tool.call.name).and_then(
+                    |function| {
+                        agena_domain::StructuredObject::try_from(tool.call.input.clone())
+                            .ok()
+                            .map(|arguments| agena_domain::ToolApiCall {
+                                function,
+                                arguments,
+                            })
+                    },
+                )
+            });
             let (name, plugin, input) = if let Some(invocation) = invocation {
                 (
                     invocation.name,
@@ -446,25 +580,6 @@ pub(crate) async fn project_kernel_entry(
             } else {
                 (tool.call.name.clone(), None, tool.call.input.clone())
             };
-            let error = decode("failure")
-                .map(serde_json::from_value::<agena_failure::Failure>)
-                .transpose()
-                .map_err(|error| ApplicationError::internal_error(&error))?
-                .map(|failure| agena_domain::OperationError { failure });
-            let metadata = decode("metadata")
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|error| ApplicationError::internal_error(&error))?
-                .unwrap_or_default();
-            let mut authorization = agena_domain::OperationAuthorization::default();
-            let mut user_input = agena_domain::OperationUserInput::default();
-            for id in &tool.interactions {
-                let interaction = reader
-                    .interaction(session, *id)
-                    .await
-                    .map_err(crate::kernel_error)?;
-                project_interaction(session, &interaction, &mut authorization, &mut user_input)?;
-            }
             part.summary = result
                 .and_then(|value| value.get("summary"))
                 .and_then(serde_json::Value::as_str)
@@ -491,8 +606,8 @@ pub(crate) async fn project_kernel_entry(
                 error,
                 metadata,
                 lifecycle: agena_domain::TimeRange {
-                    start_ms: entry.created_at_ms,
-                    end_ms: None,
+                    start_ms: part.started_at_ms,
+                    end_ms: part.finished_at_ms,
                 },
             }
             .as_value();
@@ -537,7 +652,9 @@ pub(crate) async fn project_kernel_entry(
             .saturating_mul(8)
             .saturating_add(phase_revision),
     );
-    part.updated_at_ms = part.created_at_ms.saturating_add(part.revision);
+    if !matches!(&entry.payload, EntryPayload::Tool { .. }) {
+        part.updated_at_ms = part.created_at_ms.saturating_add(part.revision);
+    }
     if part.kind == "text"
         && part.role == "assistant"
         && let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str)
@@ -599,6 +716,206 @@ mod tool_input_projection_tests {
         assert!(presentation.get("input").is_none());
         assert_eq!(presentation["resources"], part.content["resources"]);
         content
+    }
+
+    #[tokio::test]
+    async fn tool_timing_projection_preserves_stored_lifetimes_and_membership() {
+        use agena_storage::kernel::ExecutionPhase;
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/tool-timing-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let foreign = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "B".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Check tool timing".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let tool = round
+            .begin_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "timed-tool".into(),
+                    name: "shell.exec".into(),
+                    input: json!({"command":"true"}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        let running = reader.tool(session, tool.id()).await.unwrap();
+        assert!(running.created_at_ms > 0);
+        assert_eq!(running.finished_at_ms, None);
+        let running_entry = reader.entry(session, running.entry_id).await.unwrap();
+        let live = project_kernel_entry(reader, session, &running_entry)
+            .await
+            .unwrap();
+        assert_eq!(live.started_at_ms, running.created_at_ms);
+        assert_eq!(live.finished_at_ms, None);
+        assert_eq!(live.updated_at_ms, running.created_at_ms);
+        let lifecycle = ToolCallContent::try_from(&live.content).unwrap().lifecycle;
+        assert_eq!(lifecycle.start_ms, running.created_at_ms);
+        assert_eq!(lifecycle.end_ms, None);
+
+        // A real SQLite completion records a measurable interval, with no
+        // fabricated result timestamps or production database mutation.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tool.complete(
+            RequestId::new(),
+            ToolResult {
+                phase: ToolPhase::Succeeded,
+                value: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+        let completed = reader.tool(session, tool.id()).await.unwrap();
+        let end_ms = completed.finished_at_ms.unwrap();
+        assert!(end_ms > completed.created_at_ms);
+        let entry = reader.entry(session, completed.entry_id).await.unwrap();
+        assert_eq!(entry.execution_phase, ExecutionPhase::Running);
+        let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(projected.started_at_ms, completed.created_at_ms);
+        assert_eq!(projected.finished_at_ms, Some(end_ms));
+        assert_eq!(projected.updated_at_ms, end_ms);
+        assert_eq!(projected.created_at_ms, entry.created_at_ms);
+        assert!(projected.revision > live.revision);
+        for sections in [
+            vec![],
+            vec![ToolDetailSection::Input],
+            vec![ToolDetailSection::Output],
+            vec![ToolDetailSection::Metadata],
+            vec![ToolDetailSection::Presentation],
+        ] {
+            let content = agena_api::live::project_tool_call_content(&projected.content, &sections);
+            assert_eq!(content["lifecycle"]["start_ms"], completed.created_at_ms);
+            assert_eq!(content["lifecycle"]["end_ms"], end_ms);
+        }
+
+        let broken = round
+            .begin_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "timed-projection-error".into(),
+                    name: "shell.exec".into(),
+                    input: json!({}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        broken
+            .complete(
+                RequestId::new(),
+                ToolResult {
+                    phase: ToolPhase::Succeeded,
+                    value: json!({"raw_output":17}),
+                },
+            )
+            .await
+            .unwrap();
+        let broken_stored = reader.tool(session, broken.id()).await.unwrap();
+        let broken_entry = reader.entry(session, broken_stored.entry_id).await.unwrap();
+        let broken_part = project_kernel_entry(reader, session, &broken_entry)
+            .await
+            .unwrap();
+        assert_eq!(broken_part.kind, "error");
+        assert_eq!(broken_part.started_at_ms, broken_stored.created_at_ms);
+        assert_eq!(broken_part.finished_at_ms, broken_stored.finished_at_ms);
+        assert_eq!(
+            broken_part.updated_at_ms,
+            broken_stored.finished_at_ms.unwrap()
+        );
+
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let history_entry = history
+            .entries
+            .iter()
+            .find(|entry| entry.id == completed.entry_id)
+            .unwrap();
+        let historical = project_kernel_entry(reader, session, history_entry)
+            .await
+            .unwrap();
+        assert_eq!(historical.started_at_ms, completed.created_at_ms);
+        assert_eq!(historical.finished_at_ms, Some(end_ms));
+        assert_eq!(historical.updated_at_ms, end_ms);
+        assert!(historical.revision > projected.revision);
+        let child = runtime
+            .ports
+            .sessions
+            .fork(RequestId::new(), session, broken_stored.entry_id)
+            .await
+            .unwrap()
+            .value
+            .id;
+        let inherited_entry = reader.entry(child, completed.entry_id).await.unwrap();
+        let inherited = project_kernel_entry(reader, child, &inherited_entry)
+            .await
+            .unwrap();
+        assert_eq!(inherited.started_at_ms, historical.started_at_ms);
+        assert_eq!(inherited.finished_at_ms, historical.finished_at_ms);
+        assert_eq!(inherited.origin_session_id, session.get());
+        assert!(reader.tool(foreign, tool.id()).await.is_err());
+        assert!(
+            project_kernel_entry(reader, foreign, history_entry)
+                .await
+                .is_err()
+        );
+
+        // Older serialized views remain readable after adding timestamps.
+        let mut legacy = serde_json::to_value(&*completed).unwrap();
+        legacy.as_object_mut().unwrap().remove("created_at_ms");
+        legacy.as_object_mut().unwrap().remove("finished_at_ms");
+        let legacy: agena_storage::kernel::ToolView = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.created_at_ms, 0);
+        assert_eq!(legacy.finished_at_ms, None);
     }
 
     #[tokio::test]
@@ -685,6 +1002,9 @@ mod tool_input_projection_tests {
 
                 let mut result = json!({"raw_output":{"payload":{"exit_code":0}}});
                 if with_invocation {
+                    // Successful tool serializers can retain an explicit null.
+                    // It must project like an omitted failure, also from history.
+                    result["failure"] = Value::Null;
                     result["invocation"] = serde_json::to_value(agena_domain::ToolInvocation::new(
                         "shell.exec".to_owned(),
                         StructuredObject::try_from(input.clone()).unwrap(),
@@ -702,6 +1022,7 @@ mod tool_input_projection_tests {
                 .unwrap();
                 let completed = read_tool_part(reader, session, &tool, &arguments).await;
                 let content = assert_input_projection(&completed, &arguments, &input, "completed");
+                assert!(content.error.is_none());
                 assert_eq!(content.resources[0].resource_id, log.id());
 
                 // Reconstruct from the durable history query, including old
@@ -767,8 +1088,384 @@ mod tool_input_projection_tests {
                 &raw_input.unwrap_or(Value::Null),
                 "failed",
             );
-            assert!(content.error.is_some());
+            let document =
+                crate::application_tools::tool_document_with_failure(&content, None).unwrap();
+            assert_eq!(
+                document.blocks[0].text_value(),
+                Some(failure.user.fallback.as_str())
+            );
+            for section in [
+                ToolDetailSection::Presentation,
+                ToolDetailSection::Input,
+                ToolDetailSection::Output,
+                ToolDetailSection::Metadata,
+            ] {
+                let projected =
+                    agena_api::live::project_tool_call_content(&failed.content, &[section]);
+                let error: agena_domain::OperationError =
+                    serde_json::from_value(projected["error"].clone()).unwrap();
+                assert_eq!(
+                    agena_failure::UserProblem::from(error.failure),
+                    agena_failure::UserProblem::from(&failure),
+                    "loading {section:?} must retain the failure even without output",
+                );
+            }
+            assert_eq!(
+                agena_failure::UserProblem::from(content.error.unwrap().failure),
+                agena_failure::UserProblem::from(failure),
+            );
         }
+
+        // A malformed result is visibly isolated at its original entry. The
+        // original facts remain available for repair; neighboring history must
+        // not disappear because one optional field has the wrong shape.
+        let invalid_fields = [
+            ("result", json!([])),
+            ("failure", json!("private-invalid-value")),
+            ("failure", json!({})),
+            ("failure", json!({"id":null})),
+            ("raw_output", json!(17)),
+            ("raw_output", json!({"attachments":[null]})),
+            ("tool_api_response", json!(17)),
+            ("tool_api_response.output_text", json!(17)),
+            ("invocation", json!([])),
+            ("tool_api_call", json!(false)),
+            ("metadata", json!([])),
+        ];
+        for (index, (field, value)) in invalid_fields.iter().enumerate() {
+            let tool = round
+                .begin_tool(
+                    RequestId::new(),
+                    ToolStart {
+                        call_id: format!("invalid-projection-{index}"),
+                        name: "shell.exec".into(),
+                        input: input.clone(),
+                    },
+                )
+                .await
+                .unwrap()
+                .value;
+            let result = match *field {
+                "result" => value.clone(),
+                "tool_api_response.output_text" => json!({
+                    "raw_output":null,
+                    "tool_api_response":{"output_text":value},
+                }),
+                _ => {
+                    let mut result = json!({});
+                    result[*field] = value.clone();
+                    result
+                }
+            };
+            tool.complete(
+                RequestId::new(),
+                ToolResult {
+                    phase: ToolPhase::Succeeded,
+                    value: result.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            let stored = reader.tool(session, tool.id()).await.unwrap();
+            let entry = reader.entry(session, stored.entry_id).await.unwrap();
+            let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
+            assert_eq!(projected.part_id, entry.id.get());
+            assert_eq!(projected.kind, "error");
+            assert_eq!(projected.state, "failed");
+            assert_eq!(projected.content["projection_error"], true);
+            assert_eq!(projected.content["invalid_field"], *field);
+            assert!(
+                !projected
+                    .content
+                    .to_string()
+                    .contains("private-invalid-value")
+            );
+            assert_eq!(stored.phase, ToolPhase::Succeeded);
+            assert_eq!(stored.result.as_ref(), Some(&result));
+        }
+
+        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let mut projected = Vec::new();
+        for entry in &history.entries {
+            projected.push(project_kernel_entry(reader, session, entry).await.unwrap());
+        }
+        assert_eq!(
+            projected.iter().filter(|part| part.kind == "error").count(),
+            invalid_fields.len(),
+        );
+        assert!(
+            projected
+                .iter()
+                .any(|part| { part.kind == "tool_call" && part.state == "completed" })
+        );
+        assert!(
+            projected
+                .iter()
+                .any(|part| { part.kind == "tool_call" && part.state == "failed" })
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_result_projection_preserves_media_nulls_and_real_failures() {
+        use agena_storage::kernel::ExecutionPhase;
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/tool-result-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let foreign = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "B".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Create an image".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let input = json!({"prompt":"An image"});
+        let attachment = json!({
+            "kind":"image", "mime":"image/png",
+            "source":{"source":"local_path", "path":"/managed/session/image.png"},
+            "filename":"image.png", "size_bytes":1024, "sha256":"abc123",
+        });
+        for explicit_nulls in [false, true] {
+            for with_attachment in [false, true] {
+                let tool = round
+                    .begin_tool(
+                        RequestId::new(),
+                        ToolStart {
+                            call_id: format!("media-{explicit_nulls}-{with_attachment}"),
+                            name: "image_generation".into(),
+                            input: input.clone(),
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .value;
+                let mut result = json!({
+                    "tool_api_response":{"output_text":"Legacy output preview"},
+                });
+                if explicit_nulls {
+                    for field in [
+                        "raw_output",
+                        "invocation",
+                        "tool_api_call",
+                        "failure",
+                        "metadata",
+                    ] {
+                        result[field] = Value::Null;
+                    }
+                }
+                if with_attachment {
+                    result["raw_output"] = json!({
+                        "payload":{"text":"Generated image"},
+                        "attachments":[attachment.clone()],
+                        "truncated":false,
+                    });
+                    // An unused malformed legacy preview must not override
+                    // or invalidate valid canonical image output.
+                    result["tool_api_response"] = if explicit_nulls {
+                        json!(17)
+                    } else {
+                        json!({"output_text":17})
+                    };
+                }
+                tool.complete(
+                    RequestId::new(),
+                    ToolResult {
+                        phase: ToolPhase::Succeeded,
+                        value: result.clone(),
+                    },
+                )
+                .await
+                .unwrap();
+                let stored = reader.tool(session, tool.id()).await.unwrap();
+                assert_eq!(stored.result.as_ref(), Some(&result));
+                let entry = reader.entry(session, stored.entry_id).await.unwrap();
+                let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
+                let content = ToolCallContent::try_from(&projected.content).unwrap();
+                assert_eq!(content.name, "image_generation");
+                assert_eq!(content.input, input);
+                assert!(content.error.is_none());
+                assert!(content.metadata.is_empty());
+                let output = content.output.unwrap();
+                if with_attachment {
+                    assert_eq!(output.attachments.len(), 1);
+                    assert_eq!(
+                        serde_json::to_value(&output.attachments[0]).unwrap(),
+                        attachment
+                    );
+                    assert_eq!(output.text_content(), "Generated image");
+                } else {
+                    assert!(output.attachments.is_empty());
+                    assert_eq!(output.text_content(), "Legacy output preview");
+                }
+            }
+        }
+
+        for (index, response) in [Value::Null, json!({"output_text":null}), json!({})]
+            .into_iter()
+            .enumerate()
+        {
+            let tool = round
+                .begin_tool(
+                    RequestId::new(),
+                    ToolStart {
+                        call_id: format!("empty-legacy-output-{index}"),
+                        name: "image_generation".into(),
+                        input: input.clone(),
+                    },
+                )
+                .await
+                .unwrap()
+                .value;
+            let result = json!({"raw_output":null,"tool_api_response":response});
+            tool.complete(
+                RequestId::new(),
+                ToolResult {
+                    phase: ToolPhase::Succeeded,
+                    value: result.clone(),
+                },
+            )
+            .await
+            .unwrap();
+            let stored = reader.tool(session, tool.id()).await.unwrap();
+            let entry = reader.entry(session, stored.entry_id).await.unwrap();
+            let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
+            let content = ToolCallContent::try_from(&projected.content).unwrap();
+            assert!(content.output.is_none());
+            assert!(content.error.is_none());
+            assert_eq!(stored.result.as_ref(), Some(&result));
+        }
+
+        let failure = agena_tool_api::ToolApiCatalog::default()
+            .dispatch(&ToolApiCall {
+                function: ToolApiFunction::Call,
+                arguments: StructuredObject::try_from(json!({
+                    "tool":"shell.exec", "input":null,
+                }))
+                .unwrap(),
+            })
+            .unwrap_err()
+            .failure();
+        let problem = serde_json::to_value(agena_failure::UserProblem::from(&failure)).unwrap();
+        let broken = round
+            .begin_tool(
+                RequestId::new(),
+                ToolStart {
+                    call_id: "bad-output-with-real-failure".into(),
+                    name: "shell.exec".into(),
+                    input: json!({}),
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        let broken_result = json!({
+            "raw_output":"private-corrupt-output",
+            "failure":failure,
+        });
+        broken
+            .complete(
+                RequestId::new(),
+                ToolResult {
+                    phase: ToolPhase::Failed,
+                    value: broken_result.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let stored = reader.tool(session, broken.id()).await.unwrap();
+        let entry = reader.entry(session, stored.entry_id).await.unwrap();
+        assert!(project_kernel_entry(reader, foreign, &entry).await.is_err());
+        let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(projected.part_id, entry.id.get());
+        assert_eq!(projected.kind, "error");
+        assert_eq!(projected.content["problem"], problem);
+        assert_eq!(projected.content["invalid_field"], "raw_output");
+        assert!(
+            !projected
+                .content
+                .to_string()
+                .contains("private-corrupt-output")
+        );
+        assert_eq!(stored.result.as_ref(), Some(&broken_result));
+
+        round
+            .finish(RequestId::new(), Some(json!({"failure":failure})), false)
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let mut parts = Vec::new();
+        for entry in &history.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
+        }
+        append_execution_failures(reader, &history.entries, &mut parts)
+            .await
+            .unwrap();
+        let errors = parts
+            .iter()
+            .filter(|part| part.kind == "error")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            errors.len(),
+            2,
+            "projection errors must not suppress the real round failure"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|part| part.content["projection_error"] == true)
+        );
+        assert!(errors.iter().any(|part| {
+            part.content.get("projection_error").is_none() && part.content["problem"] == problem
+        }));
+        assert_eq!(
+            parts.iter().filter(|part| part.kind == "tool_call").count(),
+            7
+        );
     }
 }
 

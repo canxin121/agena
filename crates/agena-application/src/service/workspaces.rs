@@ -145,8 +145,8 @@ impl ApplicationService {
     }
 
     /// Read an attachment visible in this session. Frozen media is authorized
-    /// by blob membership; inherited generated files require the exact visible
-    /// tool attachment. Other files keep the owning workspace/upload boundary.
+    /// by blob membership; inherited or historical generated files require the
+    /// exact visible tool attachment. Other files keep the workspace boundary.
     /// The server, never a client-provided root or selected model, owns scope.
     pub async fn read_session_media_file(
         &self,
@@ -193,40 +193,41 @@ impl ApplicationService {
             .join("generated_images");
         let managed_root = generated_root.join(session_id.to_string());
         let requested = Path::new(&query.path);
+        let layout = agena_storage_layout::StorageLayout::current();
         if requested.is_absolute()
             && !requested.starts_with(&managed_root)
             && let Some((owner_root, tool_id)) =
                 inherited_generated_attachment(&generated_root, requested)
+                    .or_else(|| historical_generated_attachment(layout.root(), requested))
         {
-            let attachment = agena_runtime::session::authorized_tool_attachment(
+            return read_authorized_generated_attachment(
                 &self.session_kernel.reader,
-                session_id
-                    .try_into()
-                    .map_err(|_| ApplicationError::bad_request("invalid session id"))?,
-                tool_id
-                    .try_into()
-                    .map_err(|_| ApplicationError::bad_request("invalid tool id"))?,
+                session_id,
+                owner_root,
+                tool_id,
+                query,
+            )
+            .await;
+        }
+        // Provider tools may export their result to an explicit path outside
+        // the workspace. A path alone grants no access: the exact immutable
+        // attachment must be a member of this session's visible tool history.
+        if requested.is_absolute()
+            && !requested.starts_with(Path::new(&workspace_path))
+            && !requested.starts_with(&managed_root)
+            && let Some(attachment) = visible_exported_tool_attachment(
+                &self.session_kernel.reader,
+                session_id,
                 &query.path,
             )
-            .await
-            .map_err(crate::kernel_error)?;
+            .await?
+        {
+            let owner_root = requested
+                .parent()
+                .ok_or_else(|| ApplicationError::bad_request("attachment path has no parent"))?
+                .to_path_buf();
             return WORKSPACE_TRANSFERS
-                .run(move || {
-                    use sha2::Digest as _;
-                    let (filename, bytes) = read_session_media_file_sync(owner_root, query)?;
-                    let hash: String = sha2::Sha256::digest(&bytes)
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect();
-                    if attachment.size_bytes != Some(bytes.len() as u64)
-                        || attachment.sha256.as_deref() != Some(hash.as_str())
-                    {
-                        return Err(ApplicationError::bad_request(
-                            "stored generated attachment checksum does not match",
-                        ));
-                    }
-                    Ok((filename, bytes))
-                })
+                .run(move || read_verified_generated_attachment(owner_root, query, &attachment))
                 .await
                 .map_err(|error| ApplicationError::internal_error(&error))?;
         }
@@ -584,6 +585,211 @@ fn inherited_generated_attachment(root: &Path, path: &Path) -> Option<(PathBuf, 
     (id > 0).then(|| (root.join(owner), id))
 }
 
+/// A historical tool can retain a generated-image path from a former
+/// workspace or worktree. Recognize only the instance's managed layout and
+/// writer-owned filename convention. This is a candidate, never permission
+/// to read: the exact attachment still needs visible tool membership below.
+fn historical_generated_attachment(storage_root: &Path, path: &Path) -> Option<(PathBuf, i64)> {
+    use std::path::Component;
+
+    if !storage_root.is_absolute() || !path.is_absolute() {
+        return None;
+    }
+    let mut parts = path.strip_prefix(storage_root).ok()?.components();
+    let Component::Normal(workspaces) = parts.next()? else {
+        return None;
+    };
+    let Component::Normal(key) = parts.next()? else {
+        return None;
+    };
+    let Component::Normal(generated) = parts.next()? else {
+        return None;
+    };
+    let Component::Normal(owner) = parts.next()? else {
+        return None;
+    };
+    let Component::Normal(filename) = parts.next()? else {
+        return None;
+    };
+    if parts.next().is_some()
+        || workspaces != std::ffi::OsStr::new("workspaces")
+        || generated != std::ffi::OsStr::new("generated_images")
+    {
+        return None;
+    }
+    let key_text = key.to_str()?;
+    if key_text.len() != 64
+        || !key_text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let positive_id = |value: &str| {
+        let id = value.parse::<i64>().ok()?;
+        (id > 0 && id.to_string() == value).then_some(id)
+    };
+    positive_id(owner.to_str()?)?;
+    let name = Path::new(filename);
+    if !matches!(
+        name.extension()?.to_str()?,
+        "png" | "jpeg" | "jpg" | "gif" | "webp"
+    ) {
+        return None;
+    }
+    let stem = name.file_stem()?.to_str()?;
+    let mut suffix = stem
+        .strip_prefix("provider-hosted-image-")
+        .or_else(|| stem.strip_prefix("image-tool-"))?
+        .split('-');
+    let tool_id = positive_id(suffix.next()?)?;
+    if let Some(index) = suffix.next() {
+        let parsed = index.parse::<usize>().ok()?;
+        if parsed == 0 || parsed.to_string() != index || suffix.next().is_some() {
+            return None;
+        }
+    }
+    let owner_root = storage_root
+        .join(workspaces)
+        .join(key)
+        .join(generated)
+        .join(owner);
+    // Reject alternate spellings (./, doubled separators, trailing slash)
+    // rather than normalizing a user-supplied locator into another identity.
+    (owner_root.join(filename).as_os_str() == path.as_os_str()).then_some((owner_root, tool_id))
+}
+
+/// Legacy exported paths do not encode a tool identity. Walk bounded history
+/// pages, checking only visible tool memberships; never search other sessions
+/// or accept a similarly named path. Newest matching records take precedence,
+/// so a replaced file cannot silently reuse an older authorization record.
+async fn visible_exported_tool_attachment(
+    reader: &agena_storage::kernel::KernelReader,
+    session_id: i64,
+    path: &str,
+) -> ApplicationResult<Option<agena_domain::AttachmentItem>> {
+    use agena_storage::kernel::EntryPayload;
+
+    let session = session_id
+        .try_into()
+        .map_err(|_| ApplicationError::bad_request("invalid session id"))?;
+    let mut cursor = None;
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let page = reader
+            .history(session, cursor, 128)
+            .await
+            .map_err(crate::kernel_error)?;
+        for entry in page.entries.iter().rev() {
+            let EntryPayload::Tool { tool_id } = entry.payload else {
+                continue;
+            };
+            if !seen.insert(tool_id) {
+                continue;
+            }
+            let tool = reader
+                .tool(session, tool_id)
+                .await
+                .map_err(crate::kernel_error)?;
+            let Some(attachments) = tool
+                .result
+                .as_ref()
+                .and_then(|value| value.get("raw_output"))
+                .and_then(|value| value.get("attachments"))
+                .and_then(serde_json::Value::as_array)
+            else {
+                continue;
+            };
+            for value in attachments {
+                let Some(source) = value.get("source") else {
+                    continue;
+                };
+                if source.get("source").and_then(serde_json::Value::as_str) != Some("local_path")
+                    || source.get("path").and_then(serde_json::Value::as_str) != Some(path)
+                {
+                    continue;
+                }
+                let attachment: agena_domain::AttachmentItem =
+                    serde_json::from_value(value.clone()).map_err(|_| {
+                        ApplicationError::bad_request("invalid stored tool attachment")
+                    })?;
+                if attachment.size_bytes.is_none()
+                    || !attachment.sha256.as_deref().is_some_and(|hash| {
+                        hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                {
+                    return Err(ApplicationError::bad_request(
+                        "stored tool attachment is missing its size or checksum",
+                    ));
+                }
+                return Ok(Some(attachment));
+            }
+        }
+        if !page.has_more {
+            return Ok(None);
+        }
+        let next = page
+            .next
+            .ok_or_else(|| ApplicationError::bad_request("attachment history cursor is missing"))?;
+        if cursor == Some(next) {
+            return Err(ApplicationError::bad_request(
+                "attachment history cursor did not advance",
+            ));
+        }
+        cursor = Some(next);
+    }
+}
+
+async fn read_authorized_generated_attachment(
+    reader: &agena_storage::kernel::KernelReader,
+    session_id: i64,
+    owner_root: PathBuf,
+    tool_id: i64,
+    query: WorkspaceFileDownloadQuery,
+) -> ApplicationResult<(String, Vec<u8>)> {
+    let attachment = agena_runtime::session::authorized_tool_attachment(
+        reader,
+        session_id
+            .try_into()
+            .map_err(|_| ApplicationError::bad_request("invalid session id"))?,
+        tool_id
+            .try_into()
+            .map_err(|_| ApplicationError::bad_request("invalid tool id"))?,
+        &query.path,
+    )
+    .await
+    .map_err(crate::kernel_error)?;
+    WORKSPACE_TRANSFERS
+        .run(move || read_verified_generated_attachment(owner_root, query, &attachment))
+        .await
+        .map_err(|error| ApplicationError::internal_error(&error))?
+}
+
+fn read_verified_generated_attachment(
+    owner_root: PathBuf,
+    query: WorkspaceFileDownloadQuery,
+    attachment: &agena_domain::AttachmentItem,
+) -> ApplicationResult<(String, Vec<u8>)> {
+    use sha2::Digest as _;
+
+    // This reader also enforces canonical directory containment, rejects
+    // symlink escapes, and caps metadata and actual reads at the shared
+    // generated-image size limit.
+    let (filename, bytes) = read_session_media_file_sync(owner_root, query)?;
+    let hash: String = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if attachment.size_bytes != Some(bytes.len() as u64)
+        || attachment.sha256.as_deref() != Some(hash.as_str())
+    {
+        return Err(ApplicationError::bad_request(
+            "stored generated attachment checksum does not match",
+        ));
+    }
+    Ok((filename, bytes))
+}
+
 // Generated images stay scoped to the owning session. Other file attachments
 // use the existing workspace/managed-upload authorization boundary.
 fn read_attachment_file_sync(
@@ -611,7 +817,8 @@ fn read_session_media_file_sync(
     managed_root: PathBuf,
     query: WorkspaceFileDownloadQuery,
 ) -> ApplicationResult<(String, Vec<u8>)> {
-    const MAX_SESSION_MEDIA_BYTES: u64 = 20 * 1024 * 1024;
+    // Every image accepted by the writer must also fit the reader's budget.
+    const MAX_SESSION_MEDIA_BYTES: u64 = agena_runtime_tools::MAX_GENERATED_IMAGE_BYTES as u64;
 
     let canonical_root = managed_root
         .canonicalize()
@@ -650,7 +857,7 @@ fn read_session_media_file_sync(
     }
     if metadata.len() > MAX_SESSION_MEDIA_BYTES {
         return Err(ApplicationError::bad_request(
-            "session media exceeds the 20 MiB presentation limit",
+            "session media exceeds the generated image size limit",
         ));
     }
     let filename = target

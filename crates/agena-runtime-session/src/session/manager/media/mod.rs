@@ -9,6 +9,29 @@ use agena_runtime_tools::media_input;
 pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+/// The run owns the media destination. Tool arguments can choose local input
+/// bytes, but cannot choose a provider, adapter, or authorization scope.
+pub(super) fn tool_media_input_binder(
+    model: ModelRef,
+    providers: Arc<ProviderRegistry>,
+) -> Arc<crate::tool::MediaInputBinder> {
+    Arc::new(move |mut attachment| {
+        let AttachmentSource::Base64 { data } = attachment.source else {
+            return Err(ToolError::invalid_input(
+                "media input must contain an immutable local byte snapshot",
+            ));
+        };
+        let route = providers
+            .media_route_binding(&model)
+            .map_err(|error| ToolError::invalid_input_error(&error))?;
+        attachment.source = AttachmentSource::ProviderData { route, data };
+        providers
+            .validate_media_inputs(&model, std::slice::from_ref(&attachment))
+            .map_err(|error| ToolError::invalid_input_error(&error))?;
+        Ok(attachment)
+    })
+}
+
 impl SessionManager {
     pub(super) async fn prepare_user_media(
         &self,
@@ -194,5 +217,207 @@ impl SessionManager {
             blobs.push(blob);
         }
         Ok((document, blobs))
+    }
+}
+
+#[cfg(test)]
+mod tool_media_tests {
+    use super::*;
+    use agena_domain::{
+        AdapterId, AttachmentItem, CapabilitySupport, Model, ModelCapabilities, ModelId, ProviderId,
+    };
+    use agena_provider::{CompletionRequest, PromptCacheShape};
+    use agena_runtime_provider::{
+        ProviderError,
+        provider::{CompletionResponse, ModelRuntime},
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    type Observed = Arc<StdMutex<Vec<(Option<AdapterId>, ModelId, AttachmentItem)>>>;
+
+    struct MediaProvider {
+        default: ModelId,
+        image_support: CapabilitySupport,
+        route_revision: Option<&'static str>,
+        reject_transport: bool,
+        observed: Observed,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for MediaProvider {
+        fn id(&self) -> &str {
+            "media-test"
+        }
+        fn default_model(&self) -> &ModelId {
+            &self.default
+        }
+        fn model_capabilities(&self, _: &ModelId) -> ModelCapabilities {
+            ModelCapabilities {
+                image_input: self.image_support,
+                ..Default::default()
+            }
+        }
+        fn prompt_cache_shape(&self, _: &ModelId) -> Option<PromptCacheShape> {
+            self.route_revision.map(|revision| {
+                PromptCacheShape::from_fields(self.id(), [("destination_revision", revision)])
+            })
+        }
+        fn validate_media_inputs_for_adapter(
+            &self,
+            adapter: Option<&AdapterId>,
+            model: &ModelId,
+            items: &[AttachmentItem],
+        ) -> Result<(), ProviderError> {
+            for item in items {
+                assert!(matches!(
+                    &item.source,
+                    AttachmentSource::ProviderData { .. }
+                ));
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push((adapter.cloned(), model.clone(), item.clone()));
+            }
+            if self.reject_transport {
+                return Err(ProviderError::Config(
+                    "the selected adapter rejects image input".into(),
+                ));
+            }
+            Ok(())
+        }
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+        async fn complete(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            panic!("binding local media must never invoke a model")
+        }
+    }
+
+    fn registry(
+        support: CapabilitySupport,
+        revision: Option<&'static str>,
+        reject_transport: bool,
+    ) -> (Arc<ProviderRegistry>, Observed) {
+        let observed = Observed::default();
+        let mut providers = ProviderRegistry::new();
+        providers.register(MediaProvider {
+            default: ModelId::new("server-default"),
+            image_support: support,
+            route_revision: revision,
+            reject_transport,
+            observed: observed.clone(),
+        });
+        (Arc::new(providers), observed)
+    }
+
+    fn selected() -> ModelRef {
+        ModelRef {
+            provider_id: ProviderId::new("media-test"),
+            model_id: ModelId::new("session-vision"),
+            adapter_id: Some(AdapterId::new("session-adapter")),
+        }
+    }
+
+    fn snapshot() -> media_input::PreparedMedia {
+        let bytes = STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+        ).unwrap();
+        media_input::from_bytes("image.png", bytes, None).unwrap()
+    }
+
+    #[test]
+    fn tool_media_uses_the_owning_model_adapter_and_immutable_bytes() {
+        let (providers, observed) = registry(CapabilitySupport::Supported, Some("first"), false);
+        let model = selected();
+        let prepared = snapshot();
+        let bound =
+            tool_media_input_binder(model.clone(), providers.clone())(prepared.attachment(None))
+                .unwrap();
+        let route = providers.media_route_binding(&model).unwrap();
+        assert_eq!(bound, prepared.attachment(Some(&route)));
+        let recorded = observed.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, model.adapter_id);
+        assert_eq!(recorded[0].1, model.model_id);
+        assert_eq!(recorded[0].2, bound);
+        drop(recorded);
+
+        // A different session's model/adapter and a changed destination each
+        // require a different authorization scope for the same local bytes.
+        let other = ModelRef {
+            model_id: ModelId::new("other-model"),
+            adapter_id: None,
+            ..model.clone()
+        };
+        let other_bound =
+            tool_media_input_binder(other, providers)(prepared.attachment(None)).unwrap();
+        assert_ne!(bound.source, other_bound.source);
+        let (changed, _) = registry(CapabilitySupport::Supported, Some("changed"), false);
+        let changed_bound =
+            tool_media_input_binder(model, changed)(prepared.attachment(None)).unwrap();
+        assert_ne!(bound.source, changed_bound.source);
+        assert_eq!(bound.sha256, changed_bound.sha256);
+        assert_eq!(bound.size_bytes, changed_bound.size_bytes);
+    }
+
+    #[test]
+    fn tool_media_requires_supported_transport_and_a_trusted_route() {
+        let prepared = snapshot();
+        for (support, revision, reject_transport, expected) in [
+            (
+                CapabilitySupport::Unsupported,
+                Some("first"),
+                false,
+                "no confirmed support",
+            ),
+            (
+                CapabilitySupport::Unknown,
+                Some("first"),
+                false,
+                "no confirmed support",
+            ),
+            (
+                CapabilitySupport::Supported,
+                Some("first"),
+                true,
+                "selected adapter rejects",
+            ),
+            (
+                CapabilitySupport::Supported,
+                None,
+                false,
+                "stable media destination",
+            ),
+        ] {
+            let (providers, _) = registry(support, revision, reject_transport);
+            let error = tool_media_input_binder(selected(), providers)(prepared.attachment(None))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let missing = tool_media_input_binder(selected(), Arc::new(ProviderRegistry::new()));
+        assert!(missing(prepared.attachment(None)).is_err());
+
+        let (providers, observed) = registry(CapabilitySupport::Supported, Some("first"), false);
+        let binder = tool_media_input_binder(selected(), providers);
+        for source in [
+            AttachmentSource::ProviderData {
+                route: "foreign-route".into(),
+                data: STANDARD.encode(&prepared.bytes),
+            },
+            AttachmentSource::Url {
+                url: "https://example.invalid/image.png".into(),
+            },
+            AttachmentSource::LocalPath {
+                path: "/unread/image.png".into(),
+            },
+        ] {
+            let mut item = prepared.attachment(None);
+            item.source = source;
+            assert!(binder(item).is_err());
+        }
+        assert!(observed.lock().unwrap().is_empty());
     }
 }

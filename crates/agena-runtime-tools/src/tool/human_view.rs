@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::tool::payload::ToolPayloadOutput;
+use crate::tool::payload::{ReadAttachmentOutput, ToolPayloadOutput};
 
 /// A renderer for one built-in tool result. `tool_name` follows the same
 /// resolution rules as [`ToolPayloadOutput::from_tool_output`]; `command` and
@@ -285,7 +285,8 @@ impl BuiltinHumanRenderer {
     fn fallback(raw: &RawOutput) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         let text_json = Self::json_document(raw.text_content());
-        if !raw.text_content().trim().is_empty() && text_json.is_none() {
+        let text_rendered = !raw.text_content().trim().is_empty() && text_json.is_none();
+        if text_rendered {
             blocks.push(ViewBlock::Markdown {
                 id: Some("text".into()),
                 text: Self::bounded_human_text(raw.text_content()),
@@ -295,7 +296,7 @@ impl BuiltinHumanRenderer {
         let payload = raw.payload.as_ref().or(text_json.as_ref());
         let generic = payload
             .filter(|payload| !payload.is_null())
-            .map(|payload| Self::generic_payload_blocks(payload, "result"))
+            .map(|payload| Self::generic_payload_blocks(payload, "result", text_rendered))
             .unwrap_or_default();
         // A plugin's text channel is often a deliberately concise list or
         // document preview. Keep it as the first human-facing block, but do
@@ -606,7 +607,7 @@ impl BuiltinHumanRenderer {
 
     fn generic_value_blocks(id: &str, title: &str, value: &Value, depth: usize) -> Vec<ViewBlock> {
         match value {
-            Value::Object(object) => Self::generic_object_blocks(id, title, object, depth),
+            Value::Object(object) => Self::generic_object_blocks(id, title, object, depth, false),
             Value::Array(values) => {
                 if values.is_empty() {
                     return vec![Self::markdown_block(
@@ -730,12 +731,14 @@ impl BuiltinHumanRenderer {
         title: &str,
         object: &serde_json::Map<String, Value>,
         depth: usize,
+        text_rendered: bool,
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         let fields = object
             .iter()
             .filter(|(key, value)| {
                 !Self::generic_skip_key(key)
+                    && !(text_rendered && key.as_str() == "text")
                     && !Self::technical_field(&Self::humanize_key(key))
                     && Self::generic_scalar(value)
             })
@@ -777,8 +780,96 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
-    fn generic_payload_blocks(payload: &Value, id: &str) -> Vec<ViewBlock> {
-        Self::generic_value_blocks(id, "Details", payload, 0)
+    fn generic_payload_blocks(payload: &Value, id: &str, text_rendered: bool) -> Vec<ViewBlock> {
+        // RawOutput::text_content reads this exact string or top-level text
+        // field. Once it is the body, Details should contain only additional
+        // facts. Nested text fields and other descriptions remain untouched.
+        match payload {
+            Value::String(_) if text_rendered => Vec::new(),
+            Value::Object(object) if text_rendered => {
+                Self::generic_object_blocks(id, "Details", object, 0, true)
+            }
+            _ => Self::generic_value_blocks(id, "Details", payload, 0),
+        }
+    }
+
+    fn read_attachment_has_media_card(
+        description: &ReadAttachmentOutput,
+        read_info: Option<&Value>,
+        loaded_paths: &[String],
+        raw: &RawOutput,
+    ) -> bool {
+        // Keep the original path visible even when the durable attachment is
+        // now an opaque blob reference. Matching names alone cannot establish
+        // that a media card represents this particular read result.
+        if description.path.trim().is_empty()
+            || !loaded_paths.iter().any(|path| path == &description.path)
+        {
+            return false;
+        }
+        let read_hash = read_info
+            .filter(|info| {
+                info.get("path").and_then(Value::as_str) == Some(description.path.as_str())
+            })
+            .and_then(|info| info.get("sha256"))
+            .and_then(Value::as_str)
+            .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        raw.attachments.iter().any(|item| {
+            if item.kind != description.kind
+                || item.mime != description.mime
+                || item.size_bytes != Some(description.size_bytes)
+                || description
+                    .filename
+                    .as_ref()
+                    .is_some_and(|name| item.filename.as_ref() != Some(name))
+                || description
+                    .width
+                    .is_some_and(|width| item.width != Some(width))
+                || description
+                    .height
+                    .is_some_and(|height| item.height != Some(height))
+                || description
+                    .duration_ms
+                    .is_some_and(|duration| item.duration_ms != Some(duration))
+                || description
+                    .page_count
+                    .is_some_and(|pages| item.page_count != Some(pages))
+            {
+                return false;
+            }
+            let same_bytes = read_hash.is_some_and(|hash| {
+                item.sha256
+                    .as_deref()
+                    .is_some_and(|value| hash.eq_ignore_ascii_case(value))
+            });
+            match &item.source {
+                AttachmentSource::LocalPath { path } => path == &description.path,
+                AttachmentSource::Url { url } => {
+                    if let Some(path) = url.strip_prefix("file://") {
+                        path == description.path.as_str()
+                    } else {
+                        same_bytes
+                            && ["agena:media:", "https://", "http://"]
+                                .iter()
+                                .any(|prefix| url.starts_with(prefix))
+                    }
+                }
+                AttachmentSource::DataUrl { url } => {
+                    same_bytes
+                        && url.starts_with("data:")
+                        && url
+                            .split_once(',')
+                            .is_some_and(|(_, data)| !data.is_empty())
+                }
+                AttachmentSource::Base64 { data } => same_bytes && !data.is_empty(),
+                // These sources need their descriptive fallback; a Media
+                // block alone does not make provider-only or expired bytes
+                // available to either human client.
+                AttachmentSource::FileId { .. }
+                | AttachmentSource::ProviderData { .. }
+                | AttachmentSource::Unavailable { .. } => false,
+            }
+        })
     }
 
     fn attachment_artifact(attachment: &agena_domain::AttachmentItem) -> ArtifactRef {
@@ -823,6 +914,7 @@ impl BuiltinHumanRenderer {
         match &attachment.source {
             // The bytes belong to the media preview, not the metadata table.
             AttachmentSource::DataUrl { .. } => format!("data:{}", attachment.mime),
+            AttachmentSource::Unavailable { reason } => Self::bounded_generic_text(reason),
             _ => attachment
                 .source
                 .summary_hint()
@@ -833,6 +925,18 @@ impl BuiltinHumanRenderer {
 
     fn raw_attachment_blocks(blocks: &mut Vec<ViewBlock>, raw: &RawOutput) {
         if raw.attachments.is_empty()
+            // Resolvable attachments already have a first-class preview/file
+            // card. Repeating their Kind/Label/Source table obscures that card.
+            // Retain the textual fallback for unavailable/provider-only bytes.
+            || raw.attachments.iter().all(|attachment| {
+                !matches!(
+                    &attachment.source,
+                    AttachmentSource::Unavailable { .. } | AttachmentSource::ProviderData { .. }
+                ) && blocks.iter().any(|block| {
+                    matches!(block, ViewBlock::Media { artifact, .. }
+                        if artifact.uri == Self::attachment_artifact(attachment).uri)
+                })
+            })
             || blocks.iter().any(|block| {
                 matches!(
                     block.block_id(),
@@ -5166,6 +5270,7 @@ impl BuiltinHumanRenderer {
                     }
                 }
                 ToolPayloadOutput::Read {
+                    read_info,
                     preview,
                     loaded_paths,
                     truncated,
@@ -5192,7 +5297,14 @@ impl BuiltinHumanRenderer {
                             language,
                         ));
                     }
-                    if let Some(attachment) = attachment {
+                    if let Some(attachment) = attachment
+                        && !Self::read_attachment_has_media_card(
+                            &attachment,
+                            read_info.as_ref(),
+                            &loaded_paths,
+                            raw,
+                        )
+                    {
                         let mut fields = vec![
                             ("Path", attachment.path),
                             ("Type", attachment.kind.to_string()),
@@ -5865,6 +5977,17 @@ impl BuiltinHumanRenderer {
         }
         blocks.retain(|block| match block {
             ViewBlock::Table { columns, rows, .. } => !columns.is_empty() && !rows.is_empty(),
+            ViewBlock::Markdown { id: Some(id), text } if id == "provider-meta" => {
+                // The operation title already names the provider action. Drop
+                // only its empty metadata heading, after the specific result
+                // has been classified and media blocks have been appended.
+                // Removing it earlier would trigger the generic JSON fallback.
+                let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+                !matches!(
+                    (lines.next(), lines.next()),
+                    (Some(title), None) if title.trim_start().starts_with("### ")
+                )
+            }
             _ => true,
         });
         blocks
@@ -5900,6 +6023,370 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
             return Ok(Self::compact_blocks(Self::fallback(raw)));
         }
         Ok(Self::compact_blocks(blocks))
+    }
+}
+
+#[cfg(test)]
+mod attachment_output_tests {
+    use super::*;
+
+    #[test]
+    fn generated_images_render_media_without_redundant_attachment_metadata() {
+        let raw: RawOutput = serde_json::from_value(json!({
+            "payload": {"text": "Generated image"},
+            "attachments": [{
+                "kind": "image", "mime": "image/png", "filename": "image.png",
+                "source": {"source": "local_path", "path": "/generated/image.png"},
+                "size_bytes": 2401099,
+            }],
+        }))
+        .unwrap();
+        let blocks = BuiltinHumanRenderer::new("image_generation")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| matches!(block, ViewBlock::Media { .. }))
+                .count(),
+            1,
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| block.block_id() == Some("attachments"))
+        );
+        assert!(blocks.iter().any(|block| matches!(block,
+            ViewBlock::Markdown { text, .. } if text.contains("Generated image")
+        )));
+        assert_eq!(
+            blocks
+                .iter()
+                .filter_map(ViewBlock::text_value)
+                .map(|text| text.matches("Generated image").count())
+                .sum::<usize>(),
+            1,
+            "the text payload must not also appear in a Details/Text block",
+        );
+    }
+
+    #[test]
+    fn fallback_keeps_distinct_details_but_displays_its_text_only_once() {
+        for payload in [
+            json!("A rose in a vase"),
+            json!({"text": "A rose in a vase"}),
+        ] {
+            let raw = RawOutput {
+                payload: Some(payload),
+                ..Default::default()
+            };
+            let blocks = BuiltinHumanRenderer::new("image_generation")
+                .render_human(&RenderContext::default(), &raw)
+                .unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks[0].text_value(), Some("A rose in a vase"));
+        }
+
+        let raw = RawOutput {
+            payload: Some(json!({
+                "text": "A rose in a vase",
+                "description": "The provider revised the lighting",
+                "warning": "The requested dimensions were adjusted",
+                "width": 1024,
+                "revision": {"text": "A different, earlier description"},
+            })),
+            ..Default::default()
+        };
+        let original = raw.clone();
+        let blocks = BuiltinHumanRenderer::new("image_generation")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        let text = blocks
+            .iter()
+            .filter_map(ViewBlock::text_value)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(text.matches("A rose in a vase").count(), 1);
+        assert!(text.contains("The provider revised the lighting"));
+        assert!(text.contains("The requested dimensions were adjusted"));
+        assert!(text.contains("1024"));
+        assert!(text.contains("A different, earlier description"));
+        assert_eq!(raw, original, "deduplication is presentation-only");
+    }
+
+    #[test]
+    fn unavailable_attachments_keep_their_explanation() {
+        let raw: RawOutput = serde_json::from_value(json!({
+            "attachments": [{
+                "kind": "image", "mime": "image/png", "filename": "missing.png",
+                "source": {"source": "unavailable", "reason": "Original bytes expired"},
+            }],
+        }))
+        .unwrap();
+        let blocks = BuiltinHumanRenderer::new("image_generation")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        assert!(
+            blocks
+                .iter()
+                .any(|block| block.block_id() == Some("attachments"))
+        );
+        assert!(blocks.iter().any(|block| matches!(block,
+            ViewBlock::Markdown { text, .. } if text.contains("Original bytes expired")
+        )));
+    }
+}
+
+#[cfg(test)]
+mod read_attachment_output_tests {
+    use super::*;
+
+    const PATH: &str = "ai-drawings/watercolor-cat.png";
+    const HASH: &str = "732d6bec7729d4b2ca21b1c8e0cf68b4037177199c80ceb8232263555070ff28";
+
+    fn read_media_result() -> RawOutput {
+        serde_json::from_value(json!({
+            "payload": {
+                "read_info": {"path": PATH, "sha256": HASH, "delivery": "model_input"},
+                "loaded_paths": [PATH],
+                "attachment": {
+                    "path": PATH, "kind": "image", "mime": "image/png",
+                    "filename": "watercolor-cat.png", "size_bytes": 1690348,
+                    "width": 1254, "height": 1254,
+                },
+            },
+            "attachments": [{
+                "kind": "image", "mime": "image/png", "filename": "watercolor-cat.png",
+                "size_bytes": 1690348, "sha256": HASH, "width": 1254, "height": 1254,
+                "source": {"source": "url", "url": "agena:media:v1:7b7d"},
+            }],
+        }))
+        .unwrap()
+    }
+
+    fn render(raw: &RawOutput) -> Vec<ViewBlock> {
+        BuiltinHumanRenderer::new("fs.read_media")
+            .render_human(&RenderContext::default(), raw)
+            .unwrap()
+    }
+
+    fn has_read_metadata(blocks: &[ViewBlock]) -> bool {
+        blocks
+            .iter()
+            .any(|block| block.block_id() == Some("attachment"))
+    }
+
+    #[test]
+    fn matching_immutable_read_media_keeps_path_and_preview_without_metadata_list() {
+        let mut raw = read_media_result();
+        assert_eq!(
+            render(&raw)
+                .iter()
+                .filter_map(ViewBlock::block_id)
+                .collect::<Vec<_>>(),
+            ["loaded-paths", "media"],
+            "a normal immutable media read is one path and one preview",
+        );
+        // Other Read output remains useful even when its attachment facts are
+        // represented by a media card instead of the old metadata list.
+        let payload = raw.payload.as_mut().unwrap();
+        payload["preview"] = json!("A separate readable note");
+        payload["truncated"] = json!(true);
+        let original = raw.clone();
+        let blocks = render(&raw);
+        assert!(!has_read_metadata(&blocks), "{blocks:?}");
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| block.block_id() == Some("attachments"))
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| matches!(block, ViewBlock::Media { .. }))
+                .count(),
+            1
+        );
+        let paths = blocks
+            .iter()
+            .find(|block| block.block_id() == Some("loaded-paths"))
+            .and_then(ViewBlock::text_value)
+            .unwrap();
+        assert!(paths.contains(PATH));
+        let text = blocks
+            .iter()
+            .filter_map(ViewBlock::text_value)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("A separate readable note"));
+        assert!(text.contains("Preview truncated"));
+        assert!(
+            !text.contains("**MIME**") && !text.contains("**Size**") && !text.contains("**Width**")
+        );
+        assert_eq!(
+            raw, original,
+            "presentation never rewrites the stored result"
+        );
+    }
+
+    #[test]
+    fn read_metadata_keeps_distinct_or_unidentified_attachment_facts() {
+        let mut cases = Vec::new();
+        let mut raw = read_media_result();
+        raw.attachments[0].sha256 = Some("a".repeat(64));
+        cases.push(("different content", raw));
+        let mut raw = read_media_result();
+        raw.attachments[0].filename = Some("different.png".into());
+        cases.push(("different filename", raw));
+        let mut raw = read_media_result();
+        raw.attachments[0].width = Some(1024);
+        cases.push(("different dimensions", raw));
+        let mut raw = read_media_result();
+        raw.attachments[0].size_bytes = Some(42);
+        cases.push(("different size", raw));
+        let mut raw = read_media_result();
+        raw.payload.as_mut().unwrap()["loaded_paths"] = json!([]);
+        cases.push(("path is not shown elsewhere", raw));
+        let mut raw = read_media_result();
+        raw.payload.as_mut().unwrap()["read_info"]["path"] = json!("another/image.png");
+        cases.push(("hash belongs to another read", raw));
+        let mut raw = read_media_result();
+        raw.payload.as_mut().unwrap()["read_info"]["sha256"] = Value::Null;
+        cases.push(("no immutable identity", raw));
+        for (reason, raw) in cases {
+            let blocks = render(&raw);
+            assert!(has_read_metadata(&blocks), "{reason}: {blocks:?}");
+            assert!(
+                blocks
+                    .iter()
+                    .any(|block| matches!(block, ViewBlock::Media { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_provider_only_and_descriptor_only_reads_keep_metadata() {
+        for source in [
+            AttachmentSource::Unavailable {
+                reason: "Original bytes expired".into(),
+            },
+            AttachmentSource::FileId {
+                file_id: "provider-file-123".into(),
+            },
+            AttachmentSource::ProviderData {
+                route: "provider-only".into(),
+                data: "AA==".into(),
+            },
+            AttachmentSource::Url {
+                url: "unknown:provider-file-123".into(),
+            },
+            AttachmentSource::Base64 {
+                data: String::new(),
+            },
+        ] {
+            let mut raw = read_media_result();
+            raw.attachments[0].source = source;
+            let original = raw.clone();
+            assert!(
+                has_read_metadata(&render(&raw)),
+                "{:?}",
+                raw.attachments[0].source
+            );
+            assert_eq!(raw, original);
+        }
+        let mut raw = read_media_result();
+        raw.attachments.clear();
+        let blocks = render(&raw);
+        assert!(has_read_metadata(&blocks));
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, ViewBlock::Media { .. }))
+        );
+    }
+
+    #[test]
+    fn local_read_media_card_requires_the_exact_visible_path() {
+        let mut raw = read_media_result();
+        raw.payload.as_mut().unwrap()["read_info"] = Value::Null;
+        raw.attachments[0].sha256 = None;
+        raw.attachments[0].source = AttachmentSource::LocalPath { path: PATH.into() };
+        assert!(!has_read_metadata(&render(&raw)));
+        raw.attachments[0].source = AttachmentSource::LocalPath {
+            path: "another-directory/watercolor-cat.png".into(),
+        };
+        assert!(
+            has_read_metadata(&render(&raw)),
+            "a shared filename is not a shared path"
+        );
+    }
+}
+
+#[cfg(test)]
+mod provider_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn provider_metadata_does_not_repeat_the_image_operation_title_without_facts() {
+        let raw: RawOutput = serde_json::from_value(json!({
+            "payload": {
+                "provider": "chatgpt",
+                "pending": false,
+                "continuation_required": false,
+                "response": {"response": {"data": [{"b64_json": "[saved as attachment]"}]}},
+            },
+            "attachments": [{
+                "kind": "image", "mime": "image/png", "filename": "image.png",
+                "source": {"source": "local_path", "path": "/generated/image.png"},
+                "size_bytes": 2401099,
+            }],
+        }))
+        .unwrap();
+        let original = raw.clone();
+        let blocks = BuiltinHumanRenderer::new("chatgpt.image_generate")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        assert!(
+            matches!(blocks.as_slice(), [ViewBlock::Media { .. }]),
+            "the image must remain without a repeated title or generic payload fallback: {blocks:?}",
+        );
+        assert_eq!(raw, original, "the durable output is unchanged");
+
+        // This rule belongs only to the generated provider metadata block;
+        // a plugin's intentional standalone heading must retain its content.
+        let custom =
+            BuiltinHumanRenderer::compact_blocks(vec![BuiltinHumanRenderer::markdown_block(
+                "custom-heading",
+                "### A useful section",
+            )]);
+        assert_eq!(custom.len(), 1);
+        assert_eq!(custom[0].text_value(), Some("### A useful section"));
+    }
+
+    #[test]
+    fn provider_metadata_keeps_status_model_and_continuation_facts() {
+        let raw = RawOutput {
+            payload: Some(json!({
+                "provider": "chatgpt",
+                "model": "image-model-test",
+                "status": "failed",
+                "continuation_required": true,
+            })),
+            ..Default::default()
+        };
+        let original = raw.clone();
+        let blocks = BuiltinHumanRenderer::new("chatgpt.image_generate")
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        let metadata = blocks
+            .iter()
+            .find(|block| block.block_id() == Some("provider-meta"))
+            .and_then(ViewBlock::text_value)
+            .expect("provider metadata with useful fields remains visible");
+        assert!(metadata.contains("**Status**: failed"));
+        assert!(metadata.contains("**Model**: ` image-model-test `"));
+        assert!(metadata.contains("**Continuation required**: true"));
+        assert_eq!(raw, original, "the durable output is unchanged");
     }
 }
 

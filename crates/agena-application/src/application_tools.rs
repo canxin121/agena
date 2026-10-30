@@ -88,6 +88,177 @@ fn project_tool_content(
     projected
 }
 
+/// Rejected inputs may not form a renderable invocation. Keep their public
+/// failure visible even when there is no tool document, without repeating the
+/// ordinary error band in otherwise valid tool presentations.
+pub(super) fn tool_document_with_failure(
+    content: &agena_runtime_contracts::part_content::ToolCallContent,
+    document: Option<agena_domain::PartDocument>,
+) -> Option<agena_domain::PartDocument> {
+    use agena_domain::{PartDocument, ViewBlock};
+
+    if document.is_some() {
+        return document;
+    }
+    let Some(error) = &content.error else {
+        return document;
+    };
+    let message = error.user_message();
+    if message.trim().is_empty() {
+        return document;
+    }
+    Some(PartDocument {
+        title: content.name.clone(),
+        summary: String::new(),
+        blocks: std::iter::once(ViewBlock::Text {
+            id: Some("tool-error".into()),
+            // Model feedback and private diagnostics are deliberately not
+            // part of the human document.
+            text: message.to_owned(),
+        })
+        .chain(content.resources.iter().map(|resource| ViewBlock::Content {
+            id: format!("output:{}", resource.resource_id),
+            resource: resource.clone(),
+            format: agena_domain::ContentFormat::Plain,
+        }))
+        .collect(),
+    })
+}
+
+/// The final state-aware title can already include the human summary as one
+/// complete result suffix. Keep that fact once, without treating substrings,
+/// truncated titles or independent plugin summaries as duplicates.
+fn deduplicate_tool_document_summary(
+    mut document: agena_domain::PartDocument,
+) -> agena_domain::PartDocument {
+    let title = document.title.trim();
+    let summary = document.summary.trim();
+    if !summary.is_empty()
+        && (title == summary
+            || title
+                .strip_suffix(summary)
+                .is_some_and(|prefix| prefix.ends_with(" · ")))
+    {
+        document.summary.clear();
+    }
+    document
+}
+
+#[cfg(test)]
+mod tool_document_summary_tests {
+    use super::*;
+    use agena_domain::{
+        ArtifactRef, PartDocument, RawOutput, StructuredObject, ToolInvocation, ToolResultState,
+        ViewBlock,
+    };
+    use serde_json::json;
+
+    fn document(title: &str, summary: &str) -> PartDocument {
+        PartDocument {
+            title: title.to_owned(),
+            summary: summary.to_owned(),
+            blocks: vec![ViewBlock::Text {
+                id: Some("output".into()),
+                text: "Independent output remains available.".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn completed_read_media_count_is_displayed_once_and_keeps_its_media() {
+        let invocation = ToolInvocation::new(
+            "fs.read_media",
+            StructuredObject::try_from(json!({"path":"ai-drawings/watercolor-cat.png"})).unwrap(),
+        );
+        let output = RawOutput {
+            payload: Some(json!({"loaded_paths":["ai-drawings/watercolor-cat.png"]})),
+            ..Default::default()
+        };
+        let title = agena_tool::completed_tool_title_for_state(
+            &invocation,
+            ToolResultState::Completed,
+            &output,
+        );
+        let summary = agena_tool::result_title_fragment_for_tool(&invocation.name, &output);
+        assert_eq!(
+            title,
+            "Read media · ai-drawings/watercolor-cat.png · 1 file loaded"
+        );
+        assert_eq!(summary, "1 file loaded");
+        let mut before = document(&title, &summary);
+        before.blocks.push(ViewBlock::Media {
+            id: Some("media".into()),
+            artifact: ArtifactRef {
+                uri: "agena:media:v1:test-reference".into(),
+                mime: "image/png".into(),
+                name: Some("watercolor-cat.png".into()),
+                size_bytes: Some(1690348),
+                sha256: None,
+            },
+        });
+        let after = deduplicate_tool_document_summary(before.clone());
+        assert_eq!(after.title, before.title);
+        assert!(after.summary.is_empty());
+        assert_eq!(after.blocks, before.blocks);
+    }
+
+    #[test]
+    fn summary_deduplication_requires_an_exact_complete_title_suffix() {
+        for (title, summary) in [
+            ("1 file loaded", "1 file loaded"),
+            ("Read media · file.png · 1 file loaded", "1 file loaded"),
+            (
+                "Read · 1 file loaded · truncated",
+                "1 file loaded · truncated",
+            ),
+            ("  Read · 1 file loaded  ", " 1 file loaded "),
+            ("读取媒体 · 已载入 1 个文件", "已载入 1 个文件"),
+        ] {
+            let before = document(title, summary);
+            let after = deduplicate_tool_document_summary(before.clone());
+            assert!(after.summary.is_empty(), "{title:?} / {summary:?}");
+            assert_eq!(after.title, before.title);
+            assert_eq!(after.blocks, before.blocks);
+        }
+        for (title, summary) in [
+            ("Read · 11 files loaded", "1 files loaded"),
+            ("Read · cached1 file loaded", "1 file loaded"),
+            ("Read ·1 file loaded", "1 file loaded"),
+            ("Read · 1 file lo…", "1 file loaded"),
+            ("Read · 1 file loaded", "1 File Loaded"),
+            ("Read · 1 file loaded", "1 file loaded from cache"),
+            ("Read · 1 file loaded", "1 file loaded · all bytes verified"),
+            ("Read · 1 file loaded", ""),
+        ] {
+            let before = document(title, summary);
+            assert_eq!(deduplicate_tool_document_summary(before.clone()), before);
+        }
+    }
+
+    #[test]
+    fn running_and_failed_titles_keep_independent_result_or_failure_summaries() {
+        let invocation = ToolInvocation::new(
+            "fs.read_media",
+            StructuredObject::try_from(json!({"path":"ai-drawings/watercolor-cat.png"})).unwrap(),
+        );
+        let output = RawOutput {
+            payload: Some(json!({"loaded_paths":["ai-drawings/watercolor-cat.png"]})),
+            ..Default::default()
+        };
+        for state in [
+            ToolResultState::Pending,
+            ToolResultState::Running,
+            ToolResultState::Failed,
+        ] {
+            let title = agena_tool::completed_tool_title_for_state(&invocation, state, &output);
+            for summary in ["1 file loaded", "The remaining file could not be read."] {
+                let before = document(&title, summary);
+                assert_eq!(deduplicate_tool_document_summary(before.clone()), before);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod terminal_presentation_tests {
     use super::*;
@@ -126,6 +297,122 @@ mod terminal_presentation_tests {
                 .unwrap()
                 .resources,
             vec![log]
+        );
+    }
+}
+
+#[cfg(test)]
+mod failure_presentation_tests {
+    use super::*;
+    use agena_domain::{ContentId, ContentKind, ContentRef, PartDocument, ViewBlock};
+    use agena_runtime_contracts::part_content::ToolCallContent;
+
+    fn failed_content(name: &str) -> ToolCallContent {
+        use agena_failure::*;
+        ToolCallContent {
+            name: name.into(),
+            state: agena_domain::ToolResultState::Failed,
+            error: Some(agena_domain::OperationError {
+                failure: Failure::new(
+                    FailureCode::new("tool.invalid_input"),
+                    FailureCategory::InvalidInput,
+                    FailureResponsibility::Caller,
+                    RetryDirective::CorrectInput,
+                    RecoveryDirective::None,
+                    FailureImpact::RequestRejected,
+                    UserPresentation::new("tool.invalid_input", "file_path is required"),
+                )
+                .with_model_feedback(
+                    ModelFeedback::invalid_input().with_text("private-model-sentinel"),
+                ),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn failed_tools_without_output_have_public_reason_and_keep_resources() {
+        for name in [
+            "shell.exec",
+            "fs.read",
+            "fs.read_media",
+            "chatgpt.image_understanding",
+            "tools_list",
+            "custom.plugin.tool",
+        ] {
+            let mut content = failed_content(name);
+            // A rejected scalar is intentionally kept as input. It cannot be
+            // made into a ToolInvocation merely to render the failure.
+            content.input = serde_json::json!(17);
+            let resource = ContentRef {
+                resource_id: ContentId::new(),
+                kind: ContentKind::Text,
+            };
+            content.resources.push(resource.clone());
+            let document = tool_document_with_failure(&content, None).unwrap();
+            assert_eq!(document.title, name);
+            assert_eq!(
+                document.blocks[0].text_value(),
+                Some("file_path is required")
+            );
+            assert!(matches!(
+                &document.blocks[1],
+                ViewBlock::Content { resource: retained, .. } if retained == &resource
+            ));
+            assert!(
+                !serde_json::to_string(&document)
+                    .unwrap()
+                    .contains("private-model-sentinel")
+            );
+            assert!(content.output.is_none());
+        }
+        assert!(tool_document_with_failure(&ToolCallContent::default(), None).is_none());
+    }
+
+    #[test]
+    fn existing_tool_document_is_preserved_when_failure_is_available() {
+        let content = failed_content("custom.plugin.tool");
+        let distinct = ViewBlock::Text {
+            id: Some("partial-output".into()),
+            text: "Two files were already processed.".into(),
+        };
+        let base = PartDocument {
+            title: "Custom tool".into(),
+            summary: "Partial result".into(),
+            blocks: vec![distinct.clone()],
+        };
+        assert_eq!(
+            tool_document_with_failure(&content, Some(base.clone())),
+            Some(base)
+        );
+        for same in [
+            ViewBlock::Text {
+                id: None,
+                text: " file_path is required ".into(),
+            },
+            ViewBlock::Markdown {
+                id: None,
+                text: "file_path is required".into(),
+            },
+        ] {
+            let base = PartDocument {
+                title: "Custom tool".into(),
+                summary: String::new(),
+                blocks: vec![same, distinct.clone()],
+            };
+            assert_eq!(
+                tool_document_with_failure(&content, Some(base.clone())),
+                Some(base)
+            );
+        }
+        let base = PartDocument {
+            title: "Custom tool".into(),
+            summary: "file_path is required".into(),
+            blocks: vec![distinct],
+        };
+        assert_eq!(
+            tool_document_with_failure(&content, Some(base.clone())),
+            Some(base)
         );
     }
 }
@@ -231,7 +518,6 @@ impl Application {
         summary: Option<&str>,
     ) -> Option<agena_domain::PartDocument> {
         use agena_domain::PartDocument;
-        use agena_domain::{ContentKind, ViewBlock};
         use agena_runtime_contracts::part_content::ToolCallContent;
 
         if kind != ToolCallContent::kind() {
@@ -244,6 +530,17 @@ impl Application {
                 });
         }
         let content = tool_content_for_presentation(value)?;
+        let document = self.render_tool_part_presentation(&content, summary).await;
+        tool_document_with_failure(&content, document).map(deduplicate_tool_document_summary)
+    }
+
+    async fn render_tool_part_presentation(
+        &self,
+        content: &agena_runtime_contracts::part_content::ToolCallContent,
+        summary: Option<&str>,
+    ) -> Option<agena_domain::PartDocument> {
+        use agena_domain::{ContentKind, PartDocument, ViewBlock};
+
         if let Some(call) = &content.tool_api_call
             && call.function != agena_domain::ToolApiFunction::Call
         {

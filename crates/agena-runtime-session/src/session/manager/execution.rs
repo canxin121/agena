@@ -396,7 +396,7 @@ impl SessionManager {
                 // Managed image artifacts use the owning workspace root: the
                 // session-media download route resolves this same workspace
                 // regardless of a child session's effective working directory.
-                let workspace_root=state.executor.workspace_root().to_path_buf();
+                let workspace_root=self.session_workspace_root(control.session.get()).await?;
                 let mut run=state.processor.kernel_round(request,self.kernel().reader.clone(),state.providers.clone(),workspace_root).map_err(kernel_error)?;
                 provider_calls+=1;
                 control.phase(agena_domain::ExecutionPhase::StreamingModel);
@@ -553,6 +553,10 @@ impl SessionManager {
         let authority_tool = tool.clone();
         let authority_control = control.clone();
         let authority_state = state.clone();
+        let executor = executor.with_media_input_binder(super::media::tool_media_input_binder(
+            model.clone(),
+            state.providers.clone(),
+        ));
         let executor = executor.with_read_path_authorizer(Arc::new(move |path| {
             let check = authorizer
                 .path_permission_check(agena_domain::AccessKind::Read, &path.to_string_lossy());
@@ -690,10 +694,15 @@ impl SessionManager {
             _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
             granted = permissions.lock() => granted,
         };
+        // Persisted workspace rules follow the owning session, independently
+        // of the server's default workspace or this tool's effective cwd.
         let workspace = self
-            .current_workspace_id()
+            .kernel()
+            .reader
+            .metadata(control.session)
             .await
-            .map_err(|e| ToolError::invalid_input(e.to_string()))?;
+            .map_err(|e| ToolError::invalid_input(e.to_string()))?
+            .workspace_id;
         for check in checks {
             if control.cancel.is_cancelled() {
                 return Err(ToolError::Cancelled);

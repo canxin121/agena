@@ -9,6 +9,28 @@ use agena_domain::{
 };
 
 impl SessionManager {
+    /// Managed session artifacts belong to the workspace recorded on the
+    /// session, not the server's default executor or a child task's cwd.
+    /// Resolve the same durable identity used by the session-media reader.
+    pub async fn session_workspace_root(&self, id: i64) -> Result<std::path::PathBuf, AppError> {
+        let metadata = self
+            .kernel()
+            .reader
+            .metadata(session_id(id)?)
+            .await
+            .map_err(kernel_error)?;
+        let path = self
+            .kernel_runtime
+            .workspaces
+            .path_by_id(metadata.workspace_id)
+            .await
+            .map_err(|error| AppError::internal_error(&error))?
+            .ok_or_else(|| {
+                AppError::Config("The session's owning workspace was not found.".into())
+            })?;
+        Ok(std::path::PathBuf::from(path))
+    }
+
     pub async fn get_session(&self, id: i64) -> Result<Session, AppError> {
         let session = session_id(id)?;
         let (metadata, summary, configuration, pending) = tokio::try_join!(

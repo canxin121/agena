@@ -1010,6 +1010,13 @@ impl HostClient for RuntimeHostClient {
             .get_session(callback_session_id)
             .await
             .map_err(plugin_error)?;
+        // Input paths follow the callback's effective cwd, but durable image
+        // outputs must use the owning session workspace consumed by downloads.
+        // Resolve it before making the provider request, not after its effect.
+        let workspace_root = manager
+            .session_workspace_root(callback_session_id)
+            .await
+            .map_err(plugin_error)?;
         let snapshot = self.snapshot()?;
         let provider_registry = snapshot.provider_registry();
         let model = provider_registry
@@ -1096,13 +1103,6 @@ impl HostClient for RuntimeHostClient {
             .execute_image(&model, provider_request)
             .await
             .map_err(plugin_error)?;
-        let workspace_root = self
-            .callback_context()?
-            .workspace_root
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| {
-                host_unavailable("host callback context is missing workspace_root for image output")
-            })?;
         let attachments = persist_provider_image_artifacts(
             workspace_root.as_path(),
             callback_session_id,

@@ -11,6 +11,20 @@ const STORAGE_KEY = localStorageKeys.auth.serverTokenByBaseUrl
 // login: requests started by the locked page can finish after a new token has
 // been issued and must not invalidate that new session.
 let serverAuthTokenVersion = 0
+const tokenVersionListeners = new Set<(version: number) => void>()
+
+function advanceServerAuthTokenVersion() {
+  serverAuthTokenVersion += 1
+  // Auth changes synchronously invalidate in-flight reads and object URLs.
+  // A subscriber must never prevent a successful login/token update.
+  for (const listener of [...tokenVersionListeners]) {
+    try {
+      listener(serverAuthTokenVersion)
+    } catch {
+      /* isolate subscriber failures */
+    }
+  }
+}
 
 function normalizeKey(baseUrl: string): string {
   const trimmed = String(baseUrl || '').trim()
@@ -28,6 +42,13 @@ function writeMap(next: TokenMap) {
 
 export function readServerAuthTokenVersion(): number {
   return serverAuthTokenVersion
+}
+
+export function subscribeServerAuthTokenVersion(listener: (version: number) => void): () => void {
+  tokenVersionListeners.add(listener)
+  return () => {
+    tokenVersionListeners.delete(listener)
+  }
 }
 
 export function readServerAuthTokenForBaseUrl(baseUrl: string): string {
@@ -49,7 +70,7 @@ export function writeServerAuthTokenForBaseUrl(baseUrl: string, token: string) {
   const map = readMap()
   if (map[key] === value) return
   writeMap({ ...map, [key]: value })
-  serverAuthTokenVersion += 1
+  advanceServerAuthTokenVersion()
 }
 
 export function clearServerAuthTokenForBaseUrl(baseUrl: string) {
@@ -62,11 +83,11 @@ export function clearServerAuthTokenForBaseUrl(baseUrl: string) {
   // Keep storage tidy.
   if (Object.keys(next).length === 0) {
     removeLocalKey(STORAGE_KEY)
-    serverAuthTokenVersion += 1
+    advanceServerAuthTokenVersion()
     return
   }
   writeMap(next)
-  serverAuthTokenVersion += 1
+  advanceServerAuthTokenVersion()
 }
 
 export function readActiveServerAuthToken(): string {

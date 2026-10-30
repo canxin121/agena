@@ -784,21 +784,23 @@ watch(
   () => {
     return [rawApiPath.value, usesBlobPreview.value, blobPreviewReloadKey.value] as const
   },
-  async ([path, needsBlob]) => {
+  async ([path, needsBlob], _, onCleanup) => {
     rawUrlSeq += 1
     const seq = rawUrlSeq
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
 
     revokeRawUrl()
     if (!needsBlob) return
     if (!path) return
 
     try {
-      const blob = await apiBlob(path, { cache: 'no-store' })
-      if (seq !== rawUrlSeq) return
+      const blob = await apiBlob(path, { cache: 'no-store', signal: controller.signal, redirect: 'error' })
+      if (seq !== rawUrlSeq || controller.signal.aborted) return
       const href = URL.createObjectURL(blob)
       rawUrl.value = href
     } catch (err) {
-      if (seq !== rawUrlSeq) return
+      if (seq !== rawUrlSeq || controller.signal.aborted) return
       fileError.value =
         err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
       rawUrl.value = ''

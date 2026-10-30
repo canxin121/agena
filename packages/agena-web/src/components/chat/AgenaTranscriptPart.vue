@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, toRef } from 'vue'
+import { computed, ref, toRef } from 'vue'
 import { RiArrowRightSLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
@@ -21,6 +21,8 @@ import {
   commandPresentations,
 } from '@/pages/chat/transcriptPartPresentation'
 import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
+import { openResource } from '@/lib/authenticatedResources'
+import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import { useErrorPartHeadline } from '@/composables/useErrorPartHeadline'
@@ -47,6 +49,9 @@ const emit = defineEmits<{
 
 const directory = useDirectoryStore()
 const ui = useUiStore()
+const chat = useChatStore()
+const appDirectory = computed(() => chat.getSessionDirectory(props.sessionId) || '')
+const attachmentOpenError = ref('')
 // A durable Part's kind is stable. Ordinary Markdown Parts need no clock or visibility observer.
 const errorHeadline = props.part.kind === 'error' ? useErrorPartHeadline(toRef(props, 'part')) : computed(() => null)
 const status = computed(() => errorHeadline.value?.status ?? partStatusPresentation(props.part.status))
@@ -64,8 +69,9 @@ function toggle() {
   emit('toggle')
 }
 
-function openAttachment(attachment: AttachmentPresentation, path: string, url: string) {
-  if (attachment.mime.startsWith('image/') && url) {
+async function openAttachment(attachment: AttachmentPresentation, path: string, url: string) {
+  attachmentOpenError.value = ''
+  if ((attachment.kind === 'image' || attachment.mime.startsWith('image/')) && url) {
     ui.openImageViewer([{ src: url, alt: attachment.label, title: attachment.label, key: attachment.key }])
     return
   }
@@ -75,7 +81,13 @@ function openAttachment(attachment: AttachmentPresentation, path: string, url: s
     directory.currentDirectory || '',
   )
   if (dockPath) ui.requestWorkspaceDockFile(dockPath, 'open')
-  else if (url) window.open(url, '_blank', 'noopener,noreferrer')
+  else if (url) {
+    try {
+      await openResource(url, attachment.label)
+    } catch (error) {
+      attachmentOpenError.value = error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 </script>
 
@@ -250,6 +262,7 @@ function openAttachment(attachment: AttachmentPresentation, path: string, url: s
       >
 
       <div v-else-if="part.kind === 'resource'" class="space-y-2 py-1">
+        <p v-if="attachmentOpenError" class="text-xs text-destructive" role="alert">{{ attachmentOpenError }}</p>
         <AgenaAttachmentPreview
           v-for="attachment in attachments"
           :key="attachment.key"

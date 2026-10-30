@@ -1,16 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  RiArrowRightSLine,
-  RiExternalLinkLine,
-  RiFileTextLine,
-  RiImageLine,
-  RiVideoLine,
-  RiVolumeUpLine,
-} from '@remixicon/vue'
+import { RiArrowRightSLine, RiFileTextLine, RiImageLine, RiVideoLine, RiVolumeUpLine } from '@remixicon/vue'
 
 import { attachmentPreviewUrl, attachmentDownloadUrl } from '@/lib/attachmentLinks'
+import { downloadResource } from '@/lib/authenticatedResources'
+import { useAuthenticatedResource } from '@/lib/useAuthenticatedResource'
 import type { AttachmentPresentation } from '@/pages/chat/transcriptPartPresentation'
 
 const props = withDefaults(
@@ -35,19 +30,30 @@ const linkInput = computed(() => ({
 }))
 const href = computed(() => attachmentPreviewUrl(linkInput.value))
 const downloadHref = computed(() => attachmentDownloadUrl(linkInput.value))
+const actionError = ref('')
+const saving = ref(false)
 
 const displayMime = computed(() => props.attachment.mime || props.attachment.kind)
 const isImage = computed(() =>
   props.attachment.mime && props.attachment.mime !== 'application/octet-stream'
     ? props.attachment.mime.startsWith('image/')
-    : /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?)$/i.test(props.attachment.label),
+    : props.attachment.kind === 'image' ||
+      /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico|tiff?)$/i.test(props.attachment.label),
 )
 const isVideo = computed(
-  () => props.attachment.mime.startsWith('video/') || /\.(mp4|webm|mov|m4v|ogv)$/i.test(props.attachment.label),
+  () =>
+    props.attachment.kind === 'video' ||
+    props.attachment.mime.startsWith('video/') ||
+    /\.(mp4|webm|mov|m4v|ogv)$/i.test(props.attachment.label),
 )
 const isAudio = computed(
   () =>
-    props.attachment.mime.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|flac|aac|opus)$/i.test(props.attachment.label),
+    props.attachment.kind === 'audio' ||
+    props.attachment.mime.startsWith('audio/') ||
+    /\.(mp3|wav|m4a|ogg|flac|aac|opus)$/i.test(props.attachment.label),
+)
+const { url: previewUrl, error: previewError } = useAuthenticatedResource(() =>
+  isImage.value || isVideo.value || isAudio.value ? href.value : '',
 )
 
 function formatBytes(value: number | null): string {
@@ -96,7 +102,20 @@ const fullTitle = computed(() =>
 )
 
 function openAttachment() {
-  emit('open', props.attachment.path, href.value || props.attachment.url)
+  emit('open', props.attachment.path, href.value)
+}
+
+async function saveAttachment() {
+  if (saving.value) return
+  saving.value = true
+  actionError.value = ''
+  try {
+    await downloadResource(downloadHref.value, props.attachment.label)
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 
@@ -105,7 +124,7 @@ function openAttachment() {
     <div class="interaction-width">
       <button
         tabindex="0"
-        v-if="attachment.path && !unavailable"
+        v-if="(attachment.path || href) && !unavailable"
         type="button"
         class="part-link"
         :title="fullTitle"
@@ -120,24 +139,6 @@ function openAttachment() {
         </span>
         <RiArrowRightSLine class="interaction-choice-arrow" aria-hidden="true" />
       </button>
-      <a
-        tabindex="0"
-        v-else-if="href"
-        :href="href"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="part-link"
-        :title="fullTitle"
-        :aria-label="`${t('common.open')}: ${attachment.label}`"
-        :aria-description="facts || undefined"
-      >
-        <span class="interaction-choice-marker" aria-hidden="true"><component :is="attachmentIcon" /></span>
-        <span class="interaction-choice-copy">
-          <span class="interaction-choice-label font-mono">{{ attachment.label }}</span>
-          <span v-if="facts" class="interaction-choice-description">{{ facts }}</span>
-        </span>
-        <RiExternalLinkLine class="interaction-choice-arrow" aria-hidden="true" />
-      </a>
       <div v-else class="flex min-w-0 items-center gap-2 py-1.5" :title="fullTitle">
         <component :is="attachmentIcon" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div class="min-w-0">
@@ -148,27 +149,30 @@ function openAttachment() {
       </div>
     </div>
 
-    <a
+    <button
       v-if="downloadHref && !unavailable"
-      :href="downloadHref"
-      :download="attachment.label"
-      :target="downloadHref.startsWith('/api/') ? undefined : '_blank'"
+      type="button"
       class="part-link text-xs"
-      rel="noopener noreferrer"
+      :disabled="saving"
+      data-attachment-download
+      @click="saveAttachment"
     >
       {{ t('common.save') }}
-    </a>
+    </button>
+    <p v-if="previewError || actionError" class="text-xs text-destructive" role="alert">
+      {{ previewError || actionError }}
+    </p>
 
     <button
       tabindex="0"
-      v-if="isImage && href"
+      v-if="isImage && previewUrl"
       type="button"
       class="relative block max-w-full overflow-hidden rounded-md border border-border bg-card outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :aria-label="`${t('common.open')}: ${attachment.label}`"
       @click="openAttachment"
     >
       <img
-        :src="href"
+        :src="previewUrl"
         alt=""
         aria-hidden="true"
         loading="lazy"
@@ -183,13 +187,13 @@ function openAttachment() {
       </span>
     </button>
     <video
-      v-else-if="isVideo && href"
-      :src="href"
+      v-else-if="isVideo && previewUrl"
+      :src="previewUrl"
       controls
       preload="metadata"
       class="mt-2 max-h-96 max-w-full rounded-md"
     />
-    <audio v-else-if="isAudio && href" :src="href" controls preload="metadata" class="mt-2 w-full" />
+    <audio v-else-if="isAudio && previewUrl" :src="previewUrl" controls preload="metadata" class="mt-2 w-full" />
     <div v-if="attachment.pageCount !== null" class="mt-1 text-[10px] text-muted-foreground">
       {{ attachment.pageCount }} pages
     </div>

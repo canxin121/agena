@@ -10,6 +10,9 @@
       import { createApp, h } from 'vue'
       import { createI18n } from 'vue-i18n'
       import Preview from '../../src/components/chat/AgenaAttachmentPreview.vue'
+      import { writeServerAuthTokenForBaseUrl } from '../../src/lib/serverAuthToken'
+      import { openResource } from '../../src/lib/authenticatedResources'
+      writeServerAuthTokenForBaseUrl(location.origin, 'attachment-fixture-token')
       const common = {
         kind: 'image',
         mime: 'image/png',
@@ -32,6 +35,50 @@
         { ...common, key: 'immutable', path: '', url: 'agena:media:v1:7b7d' },
         {
           ...common,
+          key: 'audio',
+          kind: 'audio',
+          mime: 'audio/wav',
+          label: 'clip.wav',
+          path: '/private/clip.wav',
+          url: '',
+          width: null,
+          height: null,
+        },
+        {
+          ...common,
+          key: 'video',
+          kind: 'video',
+          mime: 'video/webm',
+          label: 'clip.webm',
+          path: '/private/clip.webm',
+          url: '',
+          width: 16,
+          height: 16,
+        },
+        {
+          ...common,
+          key: 'file',
+          kind: 'file',
+          mime: 'text/plain',
+          label: 'report.txt',
+          path: '/private/report.txt',
+          url: '',
+          width: null,
+          height: null,
+        },
+        {
+          ...common,
+          key: 'active',
+          kind: 'file',
+          mime: 'text/html',
+          label: 'active.html',
+          path: '/private/active.html',
+          url: '',
+          width: null,
+          height: null,
+        },
+        {
+          ...common,
           key: 'unavailable',
           path: '/not-available.png',
           url: '',
@@ -51,7 +98,10 @@
                   attachment: item,
                   sessionId: '43',
                   workspaceRoot: '/repo',
-                  onOpen: (path, url) => window.attachmentOpened.push({ path, url }),
+                  onOpen: (path, url) => {
+                    window.attachmentOpened.push({ path, url })
+                    if (item.key === 'file' || item.key === 'active') void openResource(url)
+                  },
                 }),
               ]),
             ),

@@ -7,12 +7,16 @@ import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiSubtract
 import IconButton from '@/components/ui/IconButton.vue'
 import { useUiStore } from '@/stores/ui'
 import { isImeComposing } from '@/lib/imeKeyboard'
+import { useAuthenticatedResource } from '@/lib/useAuthenticatedResource'
 
 const ui = useUiStore()
 const { t } = useI18n()
 
 const items = computed(() => ui.imageViewerItems)
 const activeItem = computed(() => ui.imageViewerActiveItem)
+const { url: activeImageUrl, error: activeImageError } = useAuthenticatedResource(() =>
+  ui.isImageViewerOpen ? activeItem.value?.src || '' : '',
+)
 const activeIndex = computed(() => ui.imageViewerActiveIndex)
 const total = computed(() => items.value.length)
 const canNavigate = computed(() => total.value > 1)
@@ -534,11 +538,12 @@ onBeforeUnmount(() => {
             @touchcancel="onTouchEnd"
           >
             <div class="flex h-full min-h-0 w-full items-center justify-center p-4 sm:p-6">
+              <p v-if="activeImageError" class="text-sm text-destructive" role="alert">{{ activeImageError }}</p>
               <img
-                v-if="activeItem"
+                v-if="activeItem && activeImageUrl"
                 ref="imageEl"
                 :key="activeItem.key || activeItem.src"
-                :src="activeItem.src"
+                :src="activeImageUrl"
                 :alt="activeItem.alt || activeItem.title || ''"
                 class="max-h-full max-w-full select-none object-contain"
                 :style="activeImageStyle"

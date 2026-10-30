@@ -11,6 +11,9 @@ import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { resolveWorkspaceFileLink, resolveWorkspaceMediaUrl } from '@/lib/workspaceLinks'
+import { loadBrowserResource, openResource, downloadResource } from '@/lib/authenticatedResources'
+import { browserResourceUrl, isAuthenticatedResourceUrl } from '@/lib/resourceUrls'
+import { attachmentPreviewUrl } from '@/lib/attachmentLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useChatStore } from '@/stores/chat'
 import { queryText, resourceDirectory } from '@/app/workspace/resourceDirectory'
@@ -24,6 +27,7 @@ const props = withDefaults(
     references?: MarkdownReferences
     mode?: 'markdown' | 'plain'
     sourcePath?: string
+    sessionId?: string
     revealAnchor?: string
     revealRequestSeq?: number
     // When true, debounce markdown parsing to avoid re-rendering on every SSE chunk.
@@ -33,6 +37,7 @@ const props = withDefaults(
   {
     mode: 'markdown',
     sourcePath: '',
+    sessionId: '',
     revealAnchor: '',
     revealRequestSeq: 0,
     stream: false,
@@ -55,6 +60,58 @@ let copiedTimer: number | null = null
 let mermaidTimer: number | null = null
 let lastRevealAnchorKey = ''
 let imageObserver: IntersectionObserver | null = null
+const mediaResources = new Map<
+  HTMLElement,
+  { source: string; controller: AbortController; release: () => void; url?: string }
+>()
+
+function releaseMarkdownMedia(all = false) {
+  for (const [node, resource] of mediaResources) {
+    if (!all && rootEl.value?.contains(node)) continue
+    resource.controller.abort()
+    resource.release()
+    mediaResources.delete(node)
+  }
+}
+
+function loadMarkdownMediaSource(node: HTMLElement, source: string, ready: (url: string) => void, failed: () => void) {
+  const previous = mediaResources.get(node)
+  if (previous?.source === source) {
+    if (previous.url) ready(previous.url)
+    return
+  }
+  previous?.controller.abort()
+  previous?.release()
+  mediaResources.delete(node)
+  if (!isAuthenticatedResourceUrl(source)) {
+    const safeUrl = browserResourceUrl(source)
+    if (safeUrl) ready(safeUrl)
+    else failed()
+    return
+  }
+  const resource = { source, controller: new AbortController(), release: () => {}, url: '' }
+  mediaResources.set(node, resource)
+  void loadBrowserResource(source, resource.controller.signal)
+    .then((loaded) => {
+      if (
+        resource.controller.signal.aborted ||
+        mediaResources.get(node) !== resource ||
+        !rootEl.value?.contains(node)
+      ) {
+        loaded.release()
+        return
+      }
+      resource.release = loaded.release
+      resource.url = loaded.url
+      ready(loaded.url)
+    })
+    .catch(() => {
+      if (!resource.controller.signal.aborted && mediaResources.get(node) === resource) {
+        mediaResources.delete(node)
+        failed()
+      }
+    })
+}
 
 type MarkdownImageSizeMeta = {
   width: number
@@ -302,6 +359,7 @@ function scrollToHeading(id: string) {
 const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
 const chat = useChatStore()
+const mediaSessionId = computed(() => props.sessionId || queryText(pane?.route.value.query.sessionId))
 const linkWorkspaceRoot = computed(() => {
   const query = pane?.route.value.query || {}
   return (
@@ -461,11 +519,15 @@ function loadMarkdownImageElement(image: HTMLImageElement) {
 
   image.addEventListener('load', handleLoad)
   image.addEventListener('error', handleError)
-  image.setAttribute('src', src)
-
-  if (image.complete && image.naturalWidth > 0) {
-    handleLoad()
-  }
+  loadMarkdownMediaSource(
+    image,
+    src,
+    (url) => {
+      image.setAttribute('src', url)
+      if (image.complete && image.naturalWidth > 0) handleLoad()
+    },
+    handleError,
+  )
 }
 
 function ensureMarkdownImageObserver(): IntersectionObserver | null {
@@ -511,6 +573,7 @@ function hydrateMarkdownImage(image: HTMLImageElement) {
   const src = resolveImageSrcForViewer(currentRaw || markdownImageSourceFromNode(image))
   if (!src) return
 
+  if (image.getAttribute('data-oc-md-src') !== src) setMarkdownImageStateClass(image, 'pending')
   image.setAttribute('data-oc-md-src', src)
   image.setAttribute('decoding', 'async')
   image.setAttribute('draggable', 'false')
@@ -521,7 +584,7 @@ function hydrateMarkdownImage(image: HTMLImageElement) {
     applyFallbackMarkdownImagePlaceholder(image)
   }
 
-  if (hasMarkdownImageLoaded(src)) {
+  if (hasMarkdownImageLoaded(src) && !isAuthenticatedResourceUrl(src)) {
     if (String(image.getAttribute('src') || '').trim() !== src) {
       image.setAttribute('src', src)
     }
@@ -548,28 +611,74 @@ function hydrateMarkdownImage(image: HTMLImageElement) {
 function hydrateWorkspaceMedia() {
   const root = rootEl.value
   if (!root) return
+  releaseMarkdownMedia()
 
   const markdownImages = root.querySelectorAll<HTMLImageElement>('img')
   for (const image of markdownImages) {
     hydrateMarkdownImage(image)
   }
 
-  const mediaNodes = root.querySelectorAll<HTMLElement>('video[src], audio[src], video source[src], audio source[src]')
+  const mediaNodes = root.querySelectorAll<HTMLElement>(
+    'video[src], audio[src], video source[src], audio source[src], video source[data-oc-md-raw-src], audio source[data-oc-md-raw-src]',
+  )
   for (const node of mediaNodes) {
-    const src = String(node.getAttribute('src') || '').trim()
+    const src = String(node.getAttribute('data-oc-md-raw-src') || node.getAttribute('src') || '').trim()
     if (!src) continue
+    node.setAttribute('data-oc-md-raw-src', src)
     const next = resolveImageSrcForViewer(src)
-    if (!next || next === src) continue
-    node.setAttribute('src', next)
+    if (!next) continue
+    loadMarkdownMediaSource(
+      node,
+      next,
+      (url) => {
+        if (node.getAttribute('src') === url) return
+        node.setAttribute('src', url)
+        node.closest<HTMLMediaElement>('video, audio')?.load()
+      },
+      () => {
+        node.removeAttribute('src')
+      },
+    )
+  }
+  // Native links cannot attach bearer headers. Keep them keyboard accessible,
+  // and resolve protected destinations only when the reader opens them.
+  for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href], a[data-oc-resource-href]')) {
+    const href = link.getAttribute('data-oc-resource-original') || link.getAttribute('href') || ''
+    const destination = protectedMarkdownLink(href)
+    if (!destination) {
+      if (link.hasAttribute('data-oc-resource-original')) {
+        link.setAttribute('href', href)
+        link.removeAttribute('data-oc-resource-original')
+        link.removeAttribute('data-oc-resource-href')
+        link.removeAttribute('role')
+        link.removeAttribute('tabindex')
+      }
+      continue
+    }
+    link.setAttribute('data-oc-resource-original', href)
+    link.setAttribute('data-oc-resource-href', destination)
+    link.removeAttribute('href')
+    link.setAttribute('role', 'button')
+    link.setAttribute('tabindex', '0')
   }
 }
 
 function resolveImageSrcForViewer(rawSrc: string): string {
   const src = String(rawSrc || '').trim()
   if (!src) return ''
-  if (src.startsWith('data:') || src.startsWith('blob:')) return src
+  if (/^(?:https?:|data:|blob:)/i.test(src) || isAuthenticatedResourceUrl(src)) return src
+
+  const sessionId = mediaSessionId.value
+  if (sessionId && src.startsWith('agena:media:')) return attachmentPreviewUrl({ url: src, sessionId })
 
   const workspaceRoot = linkWorkspaceRoot.value
+  if (sessionId) {
+    const resolved = workspaceRoot
+      ? resolveWorkspaceFileLink(src, { workspaceRoot, baseFilePath: props.sourcePath })
+      : null
+    const path = resolved?.path || (src.startsWith('file://') ? src.slice(7) : src)
+    return attachmentPreviewUrl({ path, sessionId, workspaceRoot })
+  }
   if (!workspaceRoot) return src
 
   const mediaUrl = resolveWorkspaceMediaUrl(src, {
@@ -577,6 +686,21 @@ function resolveImageSrcForViewer(rawSrc: string): string {
     baseFilePath: props.sourcePath,
   })
   return mediaUrl || src
+}
+
+function protectedMarkdownLink(href: string): string {
+  if (isAuthenticatedResourceUrl(href)) return href
+  if (!mediaSessionId.value) return ''
+  if (href.startsWith('agena:media:')) return attachmentPreviewUrl({ url: href, sessionId: mediaSessionId.value })
+  // Links inside the workspace retain the file dock, including line/column
+  // navigation. Managed session files outside it need the session media route.
+  if (!href.startsWith('file://') && (!href.startsWith('/') || href.startsWith('//'))) return ''
+  if (resolveWorkspaceFileLink(href, { workspaceRoot: linkWorkspaceRoot.value, baseFilePath: props.sourcePath }))
+    return ''
+  return attachmentPreviewUrl({
+    path: href.startsWith('file://') ? href.slice(7) : href,
+    sessionId: mediaSessionId.value,
+  })
 }
 
 function openMarkdownImagePreview(targetImage: HTMLImageElement): boolean {
@@ -718,7 +842,7 @@ function scheduleHydrateMermaid() {
   }, 50)
 }
 
-async function handleRootClick(event: MouseEvent) {
+async function handleRootClick(event: Event) {
   const target = event.target as HTMLElement | null
   if (!target) return
 
@@ -731,7 +855,18 @@ async function handleRootClick(event: MouseEvent) {
   // Handle TOC anchor links
   const link = target.closest('a')
   if (link) {
-    const href = link.getAttribute('href')
+    const href = link.getAttribute('data-oc-resource-href') || link.getAttribute('href')
+    if (href && isAuthenticatedResourceUrl(href)) {
+      event.preventDefault()
+      try {
+        if (link.hasAttribute('download'))
+          await downloadResource(href, link.getAttribute('download') || link.textContent || 'attachment')
+        else await openResource(href, link.textContent || 'attachment')
+      } catch (error) {
+        toasts.push('error', error instanceof Error ? error.message : String(error))
+      }
+      return
+    }
     if (href && href.startsWith('#')) {
       event.preventDefault()
       const rawId = href.substring(1)
@@ -817,9 +952,17 @@ function applyRequestedAnchorReveal() {
   }
 }
 
+function handleResourceKeydown(event: KeyboardEvent) {
+  if (!['Enter', ' '].includes(event.key) || !(event.target instanceof Element)) return
+  if (!event.target.closest('a[data-oc-resource-href]')) return
+  event.preventDefault()
+  void handleRootClick(event)
+}
+
 onMounted(() => {
   // Event delegation: rendered markdown comes from v-html.
   rootEl.value?.addEventListener('click', handleRootClick)
+  rootEl.value?.addEventListener('keydown', handleResourceKeydown)
   scheduleHydrateMermaid()
 })
 
@@ -830,6 +973,7 @@ watch(
       props.content,
       props.references,
       props.sourcePath,
+      mediaSessionId.value,
       props.stream,
       props.streamDebounceMs,
       nearViewport.value,
@@ -844,6 +988,7 @@ watch(
       return
     }
     if (props.mode !== 'markdown') {
+      releaseMarkdownMedia(true)
       resetMermaid()
       clearTimer()
       if (imageObserver) {
@@ -873,7 +1018,7 @@ watch(
 )
 
 watch(
-  () => [directoryStore.currentDirectory, props.sourcePath] as const,
+  () => [directoryStore.currentDirectory, props.sourcePath, mediaSessionId.value] as const,
   () => {
     void nextTick(() => hydrateWorkspaceMedia())
   },
@@ -887,6 +1032,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  releaseMarkdownMedia(true)
   parseController?.abort()
   releaseMarkdownStream(markdownStreamKey)
   resetMermaid()
@@ -904,6 +1050,7 @@ onBeforeUnmount(() => {
     imageObserver = null
   }
   rootEl.value?.removeEventListener('click', handleRootClick)
+  rootEl.value?.removeEventListener('keydown', handleResourceKeydown)
 })
 </script>
 

@@ -1357,6 +1357,7 @@ export default {
       sideChip: 'Side',
     },
     toolDetails: {
+      errorUnavailable: "此工具执行失败，但服务器未提供具体原因。",
       copyDiff: '复制 diff',
       diffChangeA: '新增',
       diffChangeM: '修改',

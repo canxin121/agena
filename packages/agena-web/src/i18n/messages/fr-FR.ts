@@ -381,6 +381,7 @@ export default {
       sideDescription: 'Ouvrir une branche séparée avec le contexte actuel', sectionTitle: 'BTW', sideChip: 'Branche',
     },
     toolDetails: {
+      errorUnavailable: "Cet outil a échoué, mais le serveur n’a pas fourni la raison de l’erreur.",
       copyDiff: 'Copier les différences', diffChangeA: 'Ajouté', diffChangeM: 'Modifié', diffChangeD: 'Supprimé', diffChangeR: 'Renommé',
       presentation: 'Données de présentation', diff: 'Modifications', expandDiff: 'Afficher {count} lignes supplémentaires', collapseDiff: 'Afficher moins de lignes',
       label: 'Détails techniques', input: 'Entrée', output: 'Sortie', metadata: 'Métadonnées',

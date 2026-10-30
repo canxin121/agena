@@ -41,3 +41,23 @@ export function resolveBackendUrl(path: string, baseUrl?: string | null): string
 export function readActiveBackendBaseUrl(): string {
   return currentServerOrigin() || ''
 }
+
+/** A user-provided resource URL must never receive this server's bearer token. */
+export function isBackendUrl(path: string, baseUrl = readActiveBackendBaseUrl()): boolean {
+  const value = String(path || '').trim()
+  if (!value || value.includes('\\')) return false
+  // Relative API calls also work in non-browser tests and during startup.
+  if (!baseUrl) return value.startsWith('/') && !value.startsWith('//')
+  try {
+    const base = new URL(baseUrl)
+    const target = new URL(value, base)
+    return (
+      (target.protocol === 'http:' || target.protocol === 'https:') &&
+      !target.username &&
+      !target.password &&
+      target.origin === base.origin
+    )
+  } catch {
+    return false
+  }
+}

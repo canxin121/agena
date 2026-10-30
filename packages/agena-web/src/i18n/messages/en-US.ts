@@ -1364,6 +1364,7 @@ export default {
       sideChip: 'Side',
     },
     toolDetails: {
+      errorUnavailable: "This tool failed, but the server did not provide an error reason.",
       copyDiff: 'Copy diff',
       diffChangeA: 'Added',
       diffChangeM: 'Modified',

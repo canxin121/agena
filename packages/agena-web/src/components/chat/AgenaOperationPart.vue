@@ -27,6 +27,7 @@ import {
 import { getToolPartDetail, type ToolDetailSection } from '@/stores/chat/api'
 import { isDocumentVisible } from '@/lib/backgroundReads'
 import { ApiError } from '@/lib/api'
+import { isDeferredAttachmentOutput } from '@/lib/toolAttachments'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import {
   canReuseResource,
@@ -128,7 +129,9 @@ function sectionLoaded(section: ToolDetailSection): boolean {
 function sectionHasValue(section: ToolDetailSection): boolean {
   if (Object.prototype.hasOwnProperty.call(sectionValues.value, section)) return true
   if (section === 'presentation') return props.part.source.agenaPresentation !== undefined
-  return Object.prototype.hasOwnProperty.call(jsonRecord(props.part.source.agenaContent), section)
+  const content = jsonRecord(props.part.source.agenaContent)
+  if (section === 'output' && isDeferredAttachmentOutput(content.output)) return false
+  return Object.prototype.hasOwnProperty.call(content, section)
 }
 
 function sectionLoading(section: ToolDetailSection): boolean {
@@ -591,7 +594,7 @@ function toggleOuter() {
         />
       </section>
 
-      <section v-if="operation.error" class="py-1.5">
+      <section v-if="operation.error" class="py-1.5" data-tool-error>
         <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">
           › {{ t('chat.activityLog.errorBand') }}
         </div>
@@ -662,6 +665,12 @@ function toggleOuter() {
         {{ t('chat.toolDetails.label') }}
       </button>
       <div v-if="detailsExpanded" class="min-w-0 space-y-0.5 pl-3" data-tool-details>
+        <section v-if="operation.errorDetails" class="min-w-0 space-y-1 py-1" data-tool-error-details>
+          <div class="text-xs font-semibold text-rose-600 dark:text-rose-400">
+            {{ t('chat.activityLog.errorBand') }}
+          </div>
+          <CodeBlock :code="prettyJson(operation.errorDetails)" lang="json" compact />
+        </section>
         <section v-for="section in toolDetailSections" :key="section" class="min-w-0">
           <button
             tabindex="0"

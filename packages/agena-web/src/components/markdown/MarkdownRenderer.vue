@@ -58,6 +58,7 @@ const segments = computed(() =>
         :stream="stream"
         :stream-debounce-ms="streamDebounceMs"
         :source-path="sourcePath"
+        :session-id="inlineSessionId"
         :reveal-anchor="revealAnchor"
         :reveal-request-seq="revealRequestSeq"
       />

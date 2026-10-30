@@ -200,10 +200,10 @@ function renderEmbeddedMediaFromImage(kind: 'video' | 'audio', src: string, titl
   const ariaAttr = alt ? ` aria-label="${escapeHtml(alt)}"` : ''
 
   if (kind === 'video') {
-    return `<video class="oc-md-media oc-md-media--video" controls preload="none"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></video>`
+    return `<video class="oc-md-media oc-md-media--video" controls preload="none"${titleAttr}${ariaAttr}><source data-oc-md-raw-src="${srcEsc}" /></video>`
   }
 
-  return `<audio class="oc-md-media oc-md-media--audio" controls preload="none"${titleAttr}${ariaAttr}><source src="${srcEsc}" /></audio>`
+  return `<audio class="oc-md-media oc-md-media--audio" controls preload="none"${titleAttr}${ariaAttr}><source data-oc-md-raw-src="${srcEsc}" /></audio>`
 }
 
 const md = new MarkdownIt({

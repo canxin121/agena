@@ -1695,6 +1695,7 @@ export default {
       sideDescription: 'मौजूदा संदर्भ के साथ एक अलग शाखा खोलें', sectionTitle: 'BTW', sideChip: 'साइड',
     },
     toolDetails: {
+      errorUnavailable: "यह टूल विफल हुआ, लेकिन सर्वर ने त्रुटि का कारण नहीं दिया।",
       copyDiff: 'अंतर कॉपी करें', diffChangeA: 'जोड़ा गया', diffChangeM: 'बदला गया', diffChangeD: 'मिटाया गया', diffChangeR: 'नाम बदला गया',
       presentation: 'प्रस्तुति डेटा', diff: 'बदलाव', expandDiff: '{count} और पंक्तियाँ दिखाएँ', collapseDiff: 'कम पंक्तियाँ दिखाएँ',
       label: 'तकनीकी विवरण', input: 'इनपुट', output: 'आउटपुट', metadata: 'मेटाडेटा',

@@ -1496,6 +1496,7 @@ export default {
       "sideChip": "Paralela"
     },
     "toolDetails": {
+      errorUnavailable: "Esta herramienta falló, pero el servidor no proporcionó el motivo del error.",
       "copyDiff": "Copiar diferencias",
       "diffChangeA": "Añadido",
       "diffChangeM": "Modificado",

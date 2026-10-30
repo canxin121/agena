@@ -17,6 +17,7 @@ import {
 } from '../../lib/chatRunState'
 import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
 import { toolInputRecord } from '../../lib/toolInput'
+import { hasToolAttachmentOutput } from '../../lib/toolAttachments'
 import type { JsonValue } from '@/types/json'
 import { pendingPartInteractions } from '../../lib/interactiveRequests'
 import { conversationMessages, sameAssistantReply } from './conversationMessages'
@@ -197,6 +198,10 @@ function operationTitle(part: MessagePartLike, labels?: TranscriptProjectionLabe
 }
 
 function operationSummary(part: MessagePartLike): string {
+  const presentation = record(part.agenaPresentation)
+  // A projected empty summary is intentional when the title/body already
+  // contains that text. Do not revive the older stored summary in its place.
+  if (typeof presentation.summary === 'string') return text(presentation.summary)
   const operation = toolCallView(part)
   return firstText(operation, ['summary']) || text(part.agenaSummary) || firstText(record(part.state), ['title'])
 }
@@ -349,8 +354,10 @@ function displayFields(
               ? text(presentationLabels?.textSegment) || 'Text'
               : ''),
       summary: presentedSummary || firstLine || '',
-      copyText: kind !== 'reasoning' && (text(part.agenaRole) || 'assistant') === 'assistant'
-        ? expandInlineReferences(body, mergeInlineReferences(null, part.agenaInlineUi) || {}) : body,
+      copyText:
+        kind !== 'reasoning' && (text(part.agenaRole) || 'assistant') === 'assistant'
+          ? expandInlineReferences(body, mergeInlineReferences(null, part.agenaInlineUi) || {})
+          : body,
     }
   }
   if (kind === 'operation') {
@@ -448,7 +455,12 @@ function projectPart(
     source: part,
     ...fields,
     toggleable,
-    defaultExpanded: kind === 'answer' || kind === 'text' || partHasInteraction(part),
+    defaultExpanded:
+      kind === 'answer' ||
+      kind === 'text' ||
+      kind === 'resource' ||
+      partHasInteraction(part) ||
+      (kind === 'operation' && hasToolAttachmentOutput(part.agenaContent, part.agenaPresentation)),
   }
   if (kind === 'operation') {
     const copy = computed(() => operationCopyText(part))
@@ -566,31 +578,67 @@ function finalAnswerPartId(role: string, parts: MessagePartLike[]): string | nul
   return null
 }
 
-function expandComposerActivities(part:MessagePartLike):MessagePartLike[] {
+function expandComposerActivities(part: MessagePartLike): MessagePartLike[] {
   const document = durablePartContent(part).document
   if (!Array.isArray(document)) return [part]
-  const activities:MessagePartLike[]=[]
+  const activities: MessagePartLike[] = []
   for (const node of document) {
-    const activity=record(record(node).activity)
-    const payload=record(activity.payload)
-    const id=text(activity.id)
+    const activity = record(record(node).activity)
+    const payload = record(activity.payload)
+    const id = text(activity.id)
     if (!id) continue
-    const base={...part,id,agenaRole:'user'}
-    if(payload.activity_type==='resource') {
-      const reference=record(payload.reference)
-      const path=firstText(reference,['path'])
-      const url=firstText(reference,['url','uri'])
-      const source:JsonRecord=path?{source:'local_path',path}:url?{source:'url',url}:{source:'file_id',file_id:reference.file_id??''}
-      const attachment:JsonRecord={...payload,mime:payload.media_type??'',filename:payload.name??'',source,sha256:reference.sha256??null}
-      activities.push({...base,type:'file',agenaKind:'file_ref',filename:text(payload.name),mime:text(payload.media_type),serverPath:path,url:url||path,
-        agenaContent:{...payload,name:payload.name??'',path,url,mime:payload.media_type??'',attachments:[attachment]}})
-    } else if(payload.activity_type==='command_reference') {
-      activities.push({...base,type:'tool',agenaKind:'skill_ref',agenaContent:{...payload,command:payload.name}})
-    } else if(payload.activity_type==='text_artifact') {
-      activities.push({...base,type:'text',agenaKind:'paste_ref',text:rawText(payload.text),agenaContent:payload})
+    const base = { ...part, id, agenaRole: 'user' }
+    if (payload.activity_type === 'resource') {
+      const reference = record(payload.reference)
+      const path = firstText(reference, ['path'])
+      const url = firstText(reference, ['url', 'uri'])
+      const source: JsonRecord = path
+        ? { source: 'local_path', path }
+        : url
+          ? { source: 'url', url }
+          : { source: 'file_id', file_id: reference.file_id ?? '' }
+      const attachment: JsonRecord = {
+        ...payload,
+        mime: payload.media_type ?? '',
+        filename: payload.name ?? '',
+        source,
+        sha256: reference.sha256 ?? null,
+      }
+      activities.push({
+        ...base,
+        type: 'file',
+        agenaKind: 'file_ref',
+        filename: text(payload.name),
+        mime: text(payload.media_type),
+        serverPath: path,
+        url: url || path,
+        agenaContent: {
+          ...payload,
+          name: payload.name ?? '',
+          path,
+          url,
+          mime: payload.media_type ?? '',
+          attachments: [attachment],
+        },
+      })
+    } else if (payload.activity_type === 'command_reference') {
+      activities.push({
+        ...base,
+        type: 'tool',
+        agenaKind: 'skill_ref',
+        agenaContent: { ...payload, command: payload.name },
+      })
+    } else if (payload.activity_type === 'text_artifact') {
+      activities.push({
+        ...base,
+        type: 'text',
+        agenaKind: 'paste_ref',
+        text: rawText(payload.text),
+        agenaContent: payload,
+      })
     }
   }
-  return [...activities,part]
+  return [...activities, part]
 }
 
 export function projectTranscriptBlocks(

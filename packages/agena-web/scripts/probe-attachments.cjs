@@ -73,23 +73,54 @@ async function freePort() {
     await page.locator('[data-case=generated] img').click()
     const opened = await page.evaluate(() => window.attachmentOpened)
     assert.ok(opened[0].url.startsWith('/api/v1/sessions/43/media?'))
+    assert.ok(await page.locator('[data-case=generated] img').evaluate((image) => image.src.startsWith('blob:')))
+    await page.waitForFunction(() =>
+      ['audio', 'video'].every((kind) => {
+        const media = document.querySelector(`[data-case=${kind}] ${kind}`)
+        return media && media.src.startsWith('blob:') && media.readyState >= 1 && !media.error
+      }),
+    )
     const downloadEvent = page.waitForEvent('download')
-    await page.locator('[data-case=immutable] a[download]').click()
+    await page.locator('[data-case=immutable] [data-attachment-download]').click()
     const download = await downloadEvent
     assert.equal(download.suggestedFilename(), '向日葵.png')
     const destination = path.join(output, 'downloaded.png')
     await download.saveAs(destination)
     assert.deepEqual(fs.readFileSync(destination), png)
     assert.equal(await page.locator('[data-case=unavailable] img').count(), 0)
-    assert.equal(await page.locator('[data-case=unavailable] a[download]').count(), 0)
+    assert.equal(await page.locator('[data-case=unavailable] [data-attachment-download]').count(), 0)
+    const fileDownloadEvent = page.waitForEvent('download')
+    await page.locator('[data-case=file] [data-attachment-download]').click()
+    const fileDownload = await fileDownloadEvent
+    assert.equal(fileDownload.suggestedFilename(), 'report.txt')
+    const fileDestination = path.join(output, 'report.txt')
+    await fileDownload.saveAs(fileDestination)
+    assert.equal(fs.readFileSync(fileDestination, 'utf8'), 'fixture report\n')
+    const popupEvent = page.waitForEvent('popup')
+    await page.locator('[data-case=file] button.part-link').first().click()
+    const popup = await popupEvent
+    await popup.waitForURL('blob:**')
+    await popup.waitForFunction(() => document.body.textContent.includes('fixture report'))
+    await popup.close()
+    const activeDownloadEvent = page.waitForEvent('download')
+    await page.locator('[data-case=active] button.part-link').first().click()
+    const activeDownload = await activeDownloadEvent
+    assert.equal(activeDownload.suggestedFilename(), 'active.html')
+    const unsafeExecutions = await (await fetch(`http://127.0.0.1:${port}/probe/executions`)).json()
+    assert.equal(unsafeExecutions, 0, 'active attachment must download without executing in the app origin')
     const mediaRequests = await (
       await fetch(`http://127.0.0.1:${port}/probe/requests`, { signal: AbortSignal.timeout(3000) })
     ).json()
     assert.ok(!mediaRequests.some((request) => request.path.includes('not-available')))
     assert.ok(mediaRequests.some((request) => request.path.startsWith('agena:media:') && request.download === 'true'))
+    assert.ok(
+      mediaRequests.every((request) => request.authenticated && !request.url.includes('attachment-fixture-token')),
+    )
+    for (const extension of ['.wav', '.webm', '.txt'])
+      assert.ok(mediaRequests.some((request) => request.path.endsWith(extension)))
     assert.deepEqual(errors, [])
     await page.screenshot({ path: path.join(output, 'attachments.png'), fullPage: true })
-    const report = { passed: true, assertions: 10, mediaRequests, consoleErrors: errors, screenshot: 'attachments.png' }
+    const report = { passed: true, assertions: 21, mediaRequests, consoleErrors: errors, screenshot: 'attachments.png' }
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
     console.log(JSON.stringify(report, null, 2))
   } finally {

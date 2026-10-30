@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { RiFileTextLine, RiGlobalLine } from '@remixicon/vue'
+import { computed, ref } from 'vue'
+import { RiGlobalLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
@@ -10,6 +10,7 @@ import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue
 import AgenaResourceLink from '@/components/chat/AgenaResourceLink.vue'
 import { useChatStore } from '@/stores/chat'
 import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
+import { openResource } from '@/lib/authenticatedResources'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 import type { ContentFormat, ContentRef } from '@/lib/content'
@@ -31,15 +32,23 @@ const directory = useDirectoryStore()
 const ui = useUiStore()
 const mediaAttachment = computed(() => mediaAttachmentPresentation(props.block))
 const workspaceRoot = computed(() => chat.getSessionDirectory(props.sessionId) || directory.currentDirectory || '')
+const mediaOpenError = ref('')
 
-function openMedia(path: string, url: string) {
+async function openMedia(path: string, url: string) {
+  mediaOpenError.value = ''
   const attachment = mediaAttachment.value
-  if (attachment?.mime.startsWith('image/') && url) {
+  if ((attachment?.kind === 'image' || attachment?.mime.startsWith('image/')) && url) {
     ui.openImageViewer([{ src: url, alt: attachment.label, title: attachment.label, key: attachment.key }])
   } else {
     const dockPath = workspaceAttachmentPath(path, workspaceRoot.value, directory.currentDirectory || '')
     if (dockPath) ui.requestWorkspaceDockFile(dockPath, 'open')
-    else if (url) window.open(url, '_blank', 'noopener,noreferrer')
+    else if (url) {
+      try {
+        await openResource(url, attachment?.label)
+      } catch (error) {
+        mediaOpenError.value = error instanceof Error ? error.message : String(error)
+      }
+    }
   }
 }
 
@@ -123,8 +132,6 @@ const fileChanges = computed(() => {
   })
 })
 
-const mediaUrl = computed(() => stringValue(props.block.url) || stringValue(jsonRecord(props.block.source).url))
-const mediaMime = computed(() => stringValue(props.block.mime) || stringValue(props.block.media_type))
 const artifact = computed(() => jsonRecord(props.block.artifact))
 const resourceUri = computed(
   () =>
@@ -139,9 +146,6 @@ const resourceTitle = computed(
     stringValue(props.block.filename) ||
     stringValue(artifact.value.name) ||
     resourceUri.value,
-)
-const resourceMime = computed(
-  () => stringValue(props.block.mime) || stringValue(props.block.mime_type) || stringValue(artifact.value.mime),
 )
 const checklistItems = computed(() =>
   jsonArray(props.block.items).map((raw, index) => {
@@ -248,63 +252,14 @@ const progressCount = computed(() =>
       </div>
     </div>
 
-    <AgenaAttachmentPreview
-      v-else-if="mediaAttachment"
-      :attachment="mediaAttachment"
-      :session-id="sessionId"
-      :workspace-root="workspaceRoot"
-      @open="openMedia"
-    />
-
-    <div v-else-if="kind === 'media' && mediaUrl" class="space-y-1">
-      <img
-        v-if="mediaMime.startsWith('image/')"
-        :src="mediaUrl"
-        alt=""
-        loading="lazy"
-        decoding="async"
-        class="max-h-96 max-w-full object-contain"
+    <div v-else-if="mediaAttachment" class="space-y-1">
+      <AgenaAttachmentPreview
+        :attachment="mediaAttachment"
+        :session-id="sessionId"
+        :workspace-root="workspaceRoot"
+        @open="openMedia"
       />
-      <video
-        v-else-if="mediaMime.startsWith('video/')"
-        :src="mediaUrl"
-        controls
-        preload="none"
-        class="max-h-96 max-w-full"
-      />
-      <audio v-else-if="mediaMime.startsWith('audio/')" :src="mediaUrl" controls preload="none" class="w-full" />
-      <AgenaResourceLink
-        v-else
-        :href="mediaUrl"
-        :label="resourceTitle || mediaUrl"
-        :description="mediaUrl"
-        :icon="RiFileTextLine"
-      />
-    </div>
-
-    <div v-else-if="kind === 'image' || kind === 'audio' || kind === 'file' || kind === 'media'" class="space-y-1">
-      <img
-        v-if="resourceMime.startsWith('image/') && resourceUri"
-        :src="resourceUri"
-        :alt="resourceTitle"
-        loading="lazy"
-        decoding="async"
-        class="max-h-96 max-w-full object-contain"
-      />
-      <audio
-        v-else-if="resourceMime.startsWith('audio/') && resourceUri"
-        :src="resourceUri"
-        controls
-        preload="none"
-        class="w-full"
-      />
-      <AgenaResourceLink
-        v-else-if="resourceUri"
-        :href="resourceUri"
-        :label="resourceTitle || resourceUri"
-        :description="resourceUri"
-        :icon="RiFileTextLine"
-      />
+      <p v-if="mediaOpenError" class="text-xs text-destructive" role="alert">{{ mediaOpenError }}</p>
     </div>
 
     <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="interaction-width space-y-1">
@@ -352,12 +307,17 @@ const progressCount = computed(() =>
     </div>
 
     <MarkdownRenderer
-      v-else-if="kind === 'custom'"
+      v-else-if="kind === 'custom' && Object.keys(jsonRecord(block.presentation)).length"
       :content="structuredValueMarkdown(block.presentation ?? {})"
       mode="markdown"
       :stream="false"
     />
 
-    <CodeBlock v-else :code="prettyJson(block.value ?? block.presentation ?? block)" lang="json" compact />
+    <CodeBlock
+      v-else
+      :code="prettyJson(kind === 'custom' ? (block.schema ?? block) : (block.value ?? block.presentation ?? block))"
+      lang="json"
+      compact
+    />
   </div>
 </template>

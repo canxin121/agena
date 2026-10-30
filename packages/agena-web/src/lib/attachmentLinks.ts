@@ -1,4 +1,5 @@
 import { buildWorkspaceRawFileUrl } from './workspaceLinks'
+import { browserResourceUrl } from './resourceUrls'
 
 export type AttachmentLinkInput = {
   url?: string
@@ -27,7 +28,7 @@ export function attachmentPreviewUrl(input: AttachmentLinkInput): string {
     return ''
   }
   // Unknown executable/custom schemes must not become browser navigation.
-  return /^(?:https?:|data:|blob:)/i.test(url) ? url : ''
+  return /^(?:https?:|data:|blob:|\/api\/)/i.test(url) ? browserResourceUrl(url) : ''
 }
 
 export function attachmentDownloadUrl(input: AttachmentLinkInput): string {

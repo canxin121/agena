@@ -6,6 +6,8 @@ import type { JsonValue } from '@/types/json'
 import { attachmentLabel } from '../../lib/attachmentLabels'
 import { isRunInFlight } from '../../lib/chatRunState'
 import { toolInputRecord } from '../../lib/toolInput'
+import { toolOutputAttachments } from '../../lib/toolAttachments'
+import { toolFailurePresentation } from '../../lib/toolFailures'
 import { partOwnsInteractions } from '../../lib/interactiveRequests'
 
 export type JsonRecord = Record<string, JsonValue>
@@ -37,6 +39,7 @@ export type OperationPresentation = {
   inputMarkdown: string
   commandMarkdown: string
   error: string
+  errorDetails: JsonRecord | null
   rawOutput: JsonValue | null
   blocks: JsonRecord[]
   presentationBlocks: JsonRecord[]
@@ -311,17 +314,6 @@ export function structuredValueMarkdown(value: JsonValue): string {
   return markdownLines(decodeStructuredValue(value), 0).join('\n')
 }
 
-function problemMessage(value: JsonValue): string {
-  const problem = jsonRecord(value)
-  const user = jsonRecord(problem.user)
-  return firstString(user, ['fallback']) || firstString(problem, ['message'])
-}
-
-function operationFailureMessage(value: JsonValue): string {
-  const error = jsonRecord(value)
-  return problemMessage(error.failure) || problemMessage(error.problem) || firstString(error, ['message', 'detail'])
-}
-
 function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresentation | null {
   const item = jsonRecord(value)
   if (!Object.keys(item).length) return null
@@ -331,14 +323,14 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   const unavailable = sourceKind === 'unavailable'
   const unavailableReason = unavailable ? firstString(source, ['reason']) : ''
   const path = firstString(source, ['path']) || firstString(item, ['path'])
-  const directUrl =
-    unavailable ? '' : firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
-  const base64 =
-    unavailable
-      ? ''
-      : (sourceKind === 'base64' || sourceKind === 'provider_data'
-          ? firstString(source, ['data'])
-          : firstString(source, ['base64'])) || firstString(item, ['base64'])
+  const directUrl = unavailable
+    ? ''
+    : firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
+  const base64 = unavailable
+    ? ''
+    : (sourceKind === 'base64' || sourceKind === 'provider_data'
+        ? firstString(source, ['data'])
+        : firstString(source, ['base64'])) || firstString(item, ['base64'])
   const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
   const label =
@@ -369,16 +361,21 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
 
 /** Media blocks carry the shared ArtifactRef, including inline and local images. */
 export function mediaAttachmentPresentation(block: JsonRecord): AttachmentPresentation | null {
-  if (block.type !== 'media') return null
+  const kind = stringValue(block.type) || stringValue(block.kind)
+  if (!['media', 'image', 'audio', 'video', 'file'].includes(kind)) return null
   const artifact = jsonRecord(block.artifact)
-  const uri = stringValue(artifact.uri)
-  if (!uri) return null
+  const originalSource = jsonRecord(block.source)
+  const uri =
+    firstString(artifact, ['uri', 'url']) || firstString(block, ['uri', 'url']) || firstString(originalSource, ['url'])
   const path = uri.startsWith('file://') ? uri.slice('file://'.length) : ''
   return attachmentFromRecord(
     {
+      ...block,
       ...artifact,
-      filename: artifact.name ?? null,
-      source: path ? { source: 'local_path', path } : { source: 'url', url: uri },
+      kind: kind === 'media' ? firstString(artifact, ['kind']) || firstString(block, ['kind']) : kind,
+      mime: firstString(artifact, ['mime']) || firstString(block, ['mime', 'mime_type', 'media_type']),
+      filename: artifact.name ?? block.filename ?? null,
+      source: path ? { source: 'local_path', path } : uri ? { source: 'url', url: uri } : originalSource,
     },
     0,
   )
@@ -455,15 +452,39 @@ export function operationPresentation(
   const presentationValue = hasSection('presentation')
     ? (sectionValues.presentation as JsonValue)
     : (part.source.agenaPresentation ?? null)
+  const presentationSummary = jsonRecord(presentationValue).summary
   const operation = toolCallView(content, presentationValue)
   const invocation = jsonRecord(operation.invocation)
   const encodedInput = toolInputRecord(content.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
   const rawOutput = operation.output ?? null
+  const failure = toolFailurePresentation(operation.error)
+  const error =
+    failure.message ||
+    (['failed', 'error'].includes(part.status.trim().toLowerCase())
+      ? i18n.global.t('chat.toolDetails.errorUnavailable')
+      : '')
   const blocks = jsonArray(operation.blocks)
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
+
+  // Older tool results may only have an Attachment metadata table. Render the
+  // durable descriptors too, while keeping modern media presentations unique.
+  const presentedAttachments = new Set(
+    blocks.flatMap((block) => {
+      const attachment = mediaAttachmentPresentation(block)
+      return attachment ? [attachment.path || attachment.url] : []
+    }),
+  )
+  for (const [index, item] of toolOutputAttachments(rawOutput).entries()) {
+    const block = { ...item, type: 'media', id: `output-attachment-${index}` } as JsonRecord
+    const attachment = mediaAttachmentPresentation(block)
+    const reference = attachment?.path || attachment?.url || ''
+    if (!attachment || (reference && presentedAttachments.has(reference))) continue
+    if (reference) presentedAttachments.add(reference)
+    blocks.push(block)
+  }
 
   const startMs = numericValue(jsonRecord(operation.lifecycle).start_ms) ?? part.source.time?.start ?? null
   const endMs = numericValue(jsonRecord(operation.lifecycle).end_ms) ?? part.source.time?.end ?? null
@@ -530,18 +551,21 @@ export function operationPresentation(
     if (userInputs.length && ['answers', 'interaction-answers', 'interaction-meta'].includes(stringValue(block.id)))
       return []
     const text = stringValue(block.text)
-    if (text && text.trim() === operationFailureMessage(operation.error ?? null).trim()) return []
+    if (text && text.trim() === error.trim()) return []
     return [block]
   })
 
   return {
     title: firstString(operation, ['title']) || part.title,
-    summary: firstString(operation, ['summary']) || part.summary,
+    // Empty is a loaded presentation value, not a reason to restore the
+    // snapshot's older summary after a lazy detail read.
+    summary: typeof presentationSummary === 'string' ? presentationSummary.trim() : part.summary,
     toolName,
     input,
     inputMarkdown: !details || input === null ? '' : structuredValueMarkdown(input),
     commandMarkdown: !details || hasCommandBlock(presentationBlocks) ? '' : commandMarkdownFromInput(input),
-    error: operationFailureMessage(operation.error ?? null),
+    error,
+    errorDetails: failure.details || (error ? { message: error } : null),
     rawOutput,
     blocks,
     presentationBlocks,

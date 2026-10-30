@@ -1,7 +1,7 @@
 import type { JsonValue as JsonLike } from '@/types/json'
 
 import { emitAuthRequired } from './authEvents.ts'
-import { readActiveBackendBaseUrl, resolveBackendUrl } from './backend'
+import { isBackendUrl, readActiveBackendBaseUrl, resolveBackendUrl } from './backend'
 import { buildActiveServerAuthHeaders, readServerAuthTokenVersion } from './serverAuthToken'
 
 export class ApiError extends Error {
@@ -119,7 +119,8 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
 /** Authenticated fetch with standard HTTP status semantics and an unread body.
  * Callers that consume streamed bodies can impose a limit before reading them. */
 export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const authHeaders = buildActiveServerAuthHeaders()
+  const trustedBackend = isBackendUrl(url)
+  const authHeaders = trustedBackend ? buildActiveServerAuthHeaders() : {}
   const headers = new Headers(init?.headers)
   if (!headers.has('accept')) headers.set('accept', 'application/json')
   if (authHeaders.authorization && !headers.has('authorization'))
@@ -127,7 +128,7 @@ export async function apiFetch(url: string, init?: RequestInit): Promise<Respons
   return await fetch(apiUrl(url), {
     ...init,
     // Token auth works without cookies; keep cookie compatibility unless caller overrides.
-    credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
+    credentials: init?.credentials ?? (!trustedBackend || authHeaders.authorization ? 'omit' : 'include'),
     headers,
   })
 }
@@ -179,11 +180,12 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export async function apiText(url: string, init?: RequestInit): Promise<string> {
-  const authHeaders = buildActiveServerAuthHeaders()
+  const trustedBackend = isBackendUrl(url)
+  const authHeaders = trustedBackend ? buildActiveServerAuthHeaders() : {}
   const authTokenVersion = readServerAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
-    credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
+    credentials: init?.credentials ?? (!trustedBackend || authHeaders.authorization ? 'omit' : 'include'),
     headers: {
       ...(init?.headers ?? {}),
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
@@ -228,11 +230,12 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
 }
 
 export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
-  const authHeaders = buildActiveServerAuthHeaders()
+  const trustedBackend = isBackendUrl(url)
+  const authHeaders = trustedBackend ? buildActiveServerAuthHeaders() : {}
   const authTokenVersion = readServerAuthTokenVersion()
   const resp = await fetch(apiUrl(url), {
     ...init,
-    credentials: init?.credentials ?? (authHeaders.authorization ? 'omit' : 'include'),
+    credentials: init?.credentials ?? (!trustedBackend || authHeaders.authorization ? 'omit' : 'include'),
     headers: {
       ...(init?.headers ?? {}),
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),

@@ -118,8 +118,22 @@ pub(crate) fn operation_block_copy_text(block: &ViewBlock, i18n: &I18n) -> Strin
             };
             format!("[{stream}]\n{text}")
         }
-        ViewBlock::Custom { presentation, .. } => {
-            json_value_to_markdown(&serde_json::json!(presentation))
+        ViewBlock::Custom {
+            kind,
+            schema,
+            presentation,
+            ..
+        } => {
+            if !presentation.is_empty() {
+                json_value_to_markdown(&serde_json::json!(presentation))
+            } else if schema.is_null() {
+                kind.clone()
+            } else {
+                format!(
+                    "{kind}\n{}",
+                    serde_json::to_string_pretty(schema).expect("JSON is serializable")
+                )
+            }
         }
     }
 }

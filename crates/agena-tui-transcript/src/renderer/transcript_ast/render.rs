@@ -1514,7 +1514,7 @@ fn render_image_block(
 ) {
     let MarkdownRenderContext { width, i18n } = context;
     let caption = markdown_image_caption(alt, title, url, i18n);
-    if layout_config().native_graphics
+    if image_rendering_enabled()
         && let Ok(artifact) = render_markdown_image(url)
     {
         let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
@@ -1528,15 +1528,27 @@ fn render_image_block(
         );
         let (render_width, render_height) = (size.width, size.height);
         let column = prefix_width + available.saturating_sub(render_width) / 2;
-        let start = out.len();
-        for _ in 0..render_height {
-            out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+        if layout_config().native_graphics {
+            let start = out.len();
+            for _ in 0..render_height {
+                out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+            }
+            out[start].math.push(MathLinePlacement {
+                column,
+                artifact,
+                size,
+            });
+        } else {
+            let inset = format!("{prefix}{}", " ".repeat(usize::from(column - prefix_width)));
+            for line in image_halfblock_lines(&artifact, size) {
+                let mut spans = vec![Span::raw(inset.clone())];
+                spans.extend(line.spans);
+                out.push(
+                    RenderedLine::rich(Line::from(spans))
+                        .with_copy_projection(String::new(), usize::from(column)),
+                );
+            }
         }
-        out[start].math.push(MathLinePlacement {
-            column,
-            artifact,
-            size,
-        });
         push_single_line(
             out,
             prefix,
@@ -1551,7 +1563,7 @@ fn render_image_block(
     }
 
     // Remote images use an asynchronous bounded cache. Until a download
-    // completes—or when no native image protocol exists—retain an accessible
+    // completes—or during a text-only export—retain an accessible
     // source preview without blocking terminal input.
     let image_line = out.len();
     push_wrapped_rich_line(
@@ -1577,7 +1589,7 @@ fn render_image_block(
     if let Some(link_url) = link_url {
         push_image_source_line(out, prefix, "↗", link_url, width);
     }
-    if layout_config().native_graphics
+    if image_rendering_enabled()
         && (url.starts_with("http://") || url.starts_with("https://"))
         && let Some(line) = out.get_mut(image_line)
     {

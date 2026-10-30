@@ -39,6 +39,11 @@ use crate::{
     TranscriptPartContent,
 };
 
+/// Client-only provenance for a localized attachment preview. The transport
+/// strips this key from server values before adding it after localization.
+/// It never becomes a persisted AttachmentSource or part of raw tool output.
+pub const LOCALIZED_ATTACHMENT_SOURCE_FIELD: &str = "_agena_local_attachment_source";
+
 /// Client-owned disclosure state derived from bounded run windows.
 #[derive(Debug, Clone)]
 pub struct TranscriptFold {
@@ -383,8 +388,12 @@ fn composer_resource_attachment(resource: &agena_domain::ResourceActivity) -> Pa
     };
     let (source, sha256) = match &resource.reference {
         agena_domain::ResourceReference::Artifact { sha256, uri } => (
-            PartAttachmentSource::FileId {
-                file_id: uri.clone(),
+            if uri.starts_with("data:") {
+                PartAttachmentSource::DataUrl { url: uri.clone() }
+            } else {
+                PartAttachmentSource::FileId {
+                    file_id: uri.clone(),
+                }
             },
             Some(sha256.clone()),
         ),
@@ -792,6 +801,7 @@ fn tool_call_view_from_part(part: &PartResource) -> Option<ToolCallView> {
             .entry("input".to_owned())
             .or_insert_with(|| serde_json::json!({}));
     }
+    let localized_attachments = restore_localized_tool_attachment_sources(&mut projected_content);
     let content = match ToolCallContent::try_from(&projected_content) {
         Ok(content) => content,
         Err(error) => {
@@ -805,14 +815,63 @@ fn tool_call_view_from_part(part: &PartResource) -> Option<ToolCallView> {
     };
     let operation = operation_from_tool_call(&content);
     let mut view = ToolCallView::from_operation(operation, part.presentation.clone());
+    view.localized_attachments = localized_attachments;
     let loaded = |section, field| {
         part.content.get(field).is_some()
             || part.sections.iter().any(|loaded| loaded.section == section)
     };
     view.input_loaded = loaded(agena_api::live::ToolDetailSection::Input, "input");
-    view.output_loaded = loaded(agena_api::live::ToolDetailSection::Output, "output");
+    // Presentation snapshots can retain an attachment-only output skeleton.
+    // Its presence does not mean the lazily fetched raw payload is loaded.
+    view.output_loaded = part
+        .sections
+        .iter()
+        .any(|loaded| loaded.section == agena_api::live::ToolDetailSection::Output)
+        || part.content.get("output").is_some_and(|output| {
+            output.get("payload").is_some_and(|value| !value.is_null())
+                || ["fields", "managed_outputs"].iter().any(|field| {
+                    output
+                        .get(*field)
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|values| !values.is_empty())
+                })
+        });
     view.metadata_loaded = loaded(agena_api::live::ToolDetailSection::Metadata, "metadata");
     Some(view)
+}
+
+fn restore_localized_tool_attachment_sources(
+    content: &mut Value,
+) -> Option<Vec<agena_domain::AttachmentItem>> {
+    let attachments = content
+        .get_mut("output")?
+        .get_mut("attachments")?
+        .as_array_mut()?;
+    if !attachments
+        .iter()
+        .any(|item| item.get(LOCALIZED_ATTACHMENT_SOURCE_FIELD).is_some())
+    {
+        return None;
+    }
+    let previews: Vec<agena_domain::AttachmentItem> =
+        serde_json::from_value(Value::Array(attachments.clone())).ok()?;
+    let mut restored = false;
+    for (item, preview) in attachments.iter_mut().zip(&previews) {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let Some(original) = object.remove(LOCALIZED_ATTACHMENT_SOURCE_FIELD) else {
+            continue;
+        };
+        if matches!(&preview.source, agena_domain::AttachmentSource::DataUrl { url }
+            if url.starts_with("data:image/"))
+            && serde_json::from_value::<agena_domain::AttachmentSource>(original.clone()).is_ok()
+        {
+            object.insert("source".into(), original);
+            restored = true;
+        }
+    }
+    restored.then_some(previews)
 }
 
 /// Project a typed domain request onto the API presentation resource,

@@ -7,7 +7,7 @@ use super::super::{
 };
 use super::request_render::render_file_changes;
 use crate::layout::{BODY_PREFIX, DETAIL_PREFIX, NESTED_PREFIX};
-use crate::part_headline::part_headline;
+use crate::part_headline::{attachment_label, part_headline};
 use crate::ui_text;
 use crate::{PartExecutionStatusResource, ToolCallView, TranscriptEntryPart};
 use agena_domain::ViewBlock;
@@ -172,10 +172,15 @@ pub(crate) fn render_tool_detail_sections_with_sections(
 
     let mut visible_copy_sections = Vec::new();
 
+    let recorded_failure_text = tool
+        .error_message()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let missing_failure_reason = (part.status == PartExecutionStatusResource::Failed
+        && recorded_failure_text.is_none())
+    .then(|| ui_text::t(i18n, "tool-error-unavailable"));
     let failure_text = if part.status == PartExecutionStatusResource::Failed {
-        tool.error_message()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
+        recorded_failure_text.or(missing_failure_reason.as_deref())
     } else {
         None
     };
@@ -213,13 +218,44 @@ pub(crate) fn render_tool_detail_sections_with_sections(
         expanded: true,
     };
     visible_copy_sections.push(presentation_copy_text);
+    // Failure facts are independent of raw output: a rejected tool may have
+    // no output at all. Keep its public diagnostic available immediately in
+    // Technical details without loading any of the optional payload sections.
+    // Never serialize the model-feedback channel into a human view or copy.
+    let failure_json = tool.operation.error.as_ref().map(|error| {
+        technical_json_text(
+            &serde_json::to_value(agena_failure::UserProblem::from(&error.failure))
+                .expect("public tool failure is JSON serializable"),
+        )
+    });
+    let failure_body = match (failure_json, missing_failure_reason.as_ref()) {
+        (Some(json), Some(reason)) => Some(format!("{reason}\n\n{json}")),
+        (json, None) => json,
+        (None, Some(reason)) => Some(reason.clone()),
+    };
+    let failure_copy_text = failure_body
+        .as_ref()
+        .map(|text| format!("{}\n{text}", ui_text::t(i18n, "activity-section-error")))
+        .unwrap_or_default();
     let details = render_detail_section_with_body(
         out,
         &ui_text::t(i18n, "tool-technical-details"),
         details_expanded,
         width,
-        |_| {},
-        String::new(),
+        |body| {
+            if let Some(text) = &failure_body {
+                push_section_heading(
+                    body,
+                    &format!("    › {}", ui_text::t(i18n, "activity-section-error")),
+                    Style::default()
+                        .fg(agena_tui_components::theme::danger_color())
+                        .add_modifier(Modifier::BOLD),
+                    width,
+                );
+                push_expanded_tool_text(body, NESTED_PREFIX, text, Style::default(), width);
+            }
+        },
+        failure_copy_text.clone(),
     );
     if !details_expanded {
         return ToolExecutionRender {
@@ -232,6 +268,9 @@ pub(crate) fn render_tool_detail_sections_with_sections(
             presentation: Some(presentation),
             visible_copy_text: visible_copy_sections.join("\n\n"),
         };
+    }
+    if !failure_copy_text.is_empty() {
+        visible_copy_sections.push(failure_copy_text);
     }
     let nested_start = out.len();
     let width = width.saturating_sub(2);
@@ -264,8 +303,10 @@ pub(crate) fn render_tool_detail_sections_with_sections(
     }
 
     let output_json = if tool.output_loaded {
-        serde_json::to_string_pretty(&tool.operation.output)
-            .expect("raw tool output is JSON serializable")
+        technical_json_text(
+            &serde_json::to_value(&tool.operation.output)
+                .expect("raw tool output is JSON serializable"),
+        )
     } else {
         ui_text::t(i18n, "content-loading")
     };
@@ -397,8 +438,8 @@ fn render_json_detail_section(
     expanded: bool,
     width: u16,
 ) -> ToolExecutionSectionRender {
-    let text = json_detail_copy_text(title, value);
-    let body_text = serde_json::to_string_pretty(value).expect("JSON is serializable");
+    let body_text = technical_json_text(value);
+    let text = format!("{title}\n{body_text}");
     render_detail_section_with_body(
         out,
         title,
@@ -429,8 +470,46 @@ fn render_markdown_detail_section(
 }
 
 fn json_detail_copy_text(title: &str, value: &Value) -> String {
-    let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    let rendered = technical_json_text(value);
     format!("{title}\n{rendered}")
+}
+
+fn technical_json_text(value: &Value) -> String {
+    fn summarize_inline_data(value: &mut Value) {
+        match value {
+            Value::String(text) if text.starts_with("data:") => {
+                if let Some((header, body)) = text.split_once(',') {
+                    let mime: String = header["data:".len()..]
+                        .split(';')
+                        .next()
+                        .unwrap_or("application/octet-stream")
+                        .chars()
+                        .take(128)
+                        .collect();
+                    *text = format!(
+                        "[embedded {mime} data: {} encoded bytes omitted]",
+                        body.len()
+                    );
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    summarize_inline_data(value);
+                }
+            }
+            Value::Object(object) => {
+                for value in object.values_mut() {
+                    summarize_inline_data(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    // Pixel bytes stay in the bounded preview cache. Technical rows and their
+    // copy projection retain metadata without materializing megabytes of text.
+    let mut value = value.clone();
+    summarize_inline_data(&mut value);
+    serde_json::to_string_pretty(&value).expect("JSON is serializable")
 }
 
 fn render_tool_presentation_body(
@@ -462,6 +541,79 @@ fn render_tool_presentation_body(
             errors: &tool.content_errors,
         },
     );
+    for attachment in tool.attachments() {
+        render_output_attachment(attachment, out, width, i18n);
+    }
+}
+
+fn output_attachment(item: &agena_domain::AttachmentItem) -> agena_api::resource::PartAttachment {
+    use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
+    use agena_domain::AttachmentKind;
+
+    PartAttachment {
+        kind: match item.kind {
+            AttachmentKind::Image => PartAttachmentKind::Image,
+            AttachmentKind::Audio => PartAttachmentKind::Audio,
+            AttachmentKind::Video => PartAttachmentKind::Video,
+            AttachmentKind::Pdf => PartAttachmentKind::Pdf,
+            AttachmentKind::File => PartAttachmentKind::File,
+        },
+        mime: item.mime.clone(),
+        source: PartAttachmentSource::from(&item.source),
+        filename: item.filename.clone(),
+        title: item.title.clone(),
+        size_bytes: item.size_bytes,
+        sha256: item.sha256.clone(),
+        width: item.width,
+        height: item.height,
+        duration_ms: item.duration_ms,
+        page_count: item.page_count,
+    }
+}
+
+fn render_output_attachment(
+    item: &agena_domain::AttachmentItem,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    let item = output_attachment(item);
+    if !super::super::transcript_ast::render_attachment_image(out, BODY_PREFIX, &item, width, i18n)
+    {
+        push_label_value(
+            out,
+            "  - ",
+            &attachment_label(&item, i18n),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+            width,
+        );
+    }
+}
+
+fn artifact_matches_attachment(
+    artifact: &agena_domain::ArtifactRef,
+    attachment: &agena_domain::AttachmentItem,
+) -> bool {
+    if artifact
+        .sha256
+        .as_ref()
+        .filter(|hash| !hash.is_empty())
+        .is_some_and(|hash| attachment.sha256.as_ref() == Some(hash))
+    {
+        return true;
+    }
+    match &attachment.source {
+        agena_domain::AttachmentSource::Url { url }
+        | agena_domain::AttachmentSource::DataUrl { url } => artifact.uri == *url,
+        agena_domain::AttachmentSource::LocalPath { path } => {
+            artifact
+                .uri
+                .strip_prefix("file://")
+                .unwrap_or(&artifact.uri)
+                == path
+        }
+        _ => false,
+    }
 }
 
 fn tool_diff_paths(tool: &ToolCallView) -> std::collections::BTreeSet<String> {
@@ -480,11 +632,14 @@ fn tool_diff_paths(tool: &ToolCallView) -> std::collections::BTreeSet<String> {
 
 fn human_tool_blocks(tool: &ToolCallView) -> impl Iterator<Item = &ViewBlock> {
     tool.presentation.blocks.iter().filter(|block| {
-        tool.operation.user_input.requests.is_empty()
+        let is_attachment_copy = matches!(block, ViewBlock::Media { artifact, .. }
+            if tool.attachments().iter().any(|attachment| artifact_matches_attachment(artifact, attachment)));
+        !is_attachment_copy
+            && (tool.operation.user_input.requests.is_empty()
             || !matches!(
                 block.block_id(),
                 Some("answers" | "interaction-answers" | "interaction-meta")
-            )
+            ))
     })
 }
 
@@ -508,48 +663,67 @@ fn tool_presentation_copy_text(
                 })
             })
             .map(|block| match block {
-                ViewBlock::Content { resource, .. } => tool
-                    .contents
-                    .get(&resource.resource_id)
-                    .map(|frame| {
-                        let mut text = String::new();
-                        if let Some(document) = &frame.document {
-                            text.push_str(
-                                &document
-                                    .blocks
-                                    .iter()
-                                    .map(|block| operation_block_copy_text(block, i18n))
-                                    .filter(|text| !text.is_empty())
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n"),
-                            );
-                            if !text.is_empty()
-                                && (!frame.lines.is_empty() || !frame.text.is_empty())
-                            {
-                                text.push_str("\n\n");
+                ViewBlock::Content { resource, .. } => {
+                    let frame = tool.contents.get(&resource.resource_id);
+                    let mut text = frame
+                        .map(|frame| {
+                            let mut text = String::new();
+                            if let Some(document) = &frame.document {
+                                text.push_str(
+                                    &document
+                                        .blocks
+                                        .iter()
+                                        .map(|block| operation_block_copy_text(block, i18n))
+                                        .filter(|text| !text.is_empty())
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n"),
+                                );
+                                if !text.is_empty()
+                                    && (!frame.lines.is_empty() || !frame.text.is_empty())
+                                {
+                                    text.push_str("\n\n");
+                                }
                             }
-                        }
-                        if frame.resource.kind == agena_domain::ContentKind::Text {
-                            text.push_str(&frame.text);
-                        }
-                        for (index, line) in frame.lines.iter().enumerate() {
-                            if index > 0 && !frame.wrapped.get(index - 1).copied().unwrap_or(false)
-                            {
-                                text.push('\n');
+                            if frame.resource.kind == agena_domain::ContentKind::Text {
+                                text.push_str(&frame.text);
                             }
-                            for span in &line.spans {
-                                text.push_str(&span.content);
+                            for (index, line) in frame.lines.iter().enumerate() {
+                                if index > 0
+                                    && !frame.wrapped.get(index - 1).copied().unwrap_or(false)
+                                {
+                                    text.push('\n');
+                                }
+                                for span in &line.spans {
+                                    text.push_str(&span.content);
+                                }
                             }
+                            if frame.gap {
+                                text.insert_str(0, &format!("[{}]\n", i18n.text("content-gap")));
+                            }
+                            if frame.windowed {
+                                text.insert_str(0, &format!("[{}]\n", i18n.text("content-window")));
+                            }
+                            text
+                        })
+                        .unwrap_or_default();
+                    let error = tool
+                        .content_errors
+                        .get(&resource.resource_id)
+                        .map(String::as_str)
+                        .or_else(|| {
+                            frame.and_then(|frame| frame.resource.capture_error.as_deref())
+                        });
+                    if let Some(error) = error {
+                        if !text.is_empty() {
+                            text.push('\n');
                         }
-                        if frame.gap {
-                            text.insert_str(0, &format!("[{}]\n", i18n.text("content-gap")));
-                        }
-                        if frame.windowed {
-                            text.insert_str(0, &format!("[{}]\n", i18n.text("content-window")));
-                        }
-                        text
-                    })
-                    .unwrap_or_default(),
+                        text.push_str(&crate::content::content_status_text(error));
+                    }
+                    // Text resources retain their original bytes. Their
+                    // screen rendering already strips terminal controls; the
+                    // copy projection must not reintroduce those controls.
+                    crate::sanitize_terminal_text(&text)
+                }
                 ViewBlock::FileChanges { changes, .. } => operation_block_copy_text(
                     &ViewBlock::FileChanges {
                         id: None,
@@ -564,6 +738,11 @@ fn tool_presentation_copy_text(
                 _ => operation_block_copy_text(block, i18n),
             })
             .filter(|text| !text.trim().is_empty()),
+    );
+    sections.extend(
+        tool.attachments()
+            .iter()
+            .map(|attachment| attachment_label(&output_attachment(attachment), i18n)),
     );
     sections.join("\n\n")
 }
@@ -852,13 +1031,7 @@ pub(crate) fn render_operation_blocks<'a>(
                 }
             }
             ViewBlock::Media { artifact, .. } => {
-                push_label_value(
-                    out,
-                    "  - ",
-                    artifact.name.as_deref().unwrap_or(artifact.uri.as_str()),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
-                );
+                render_output_attachment(&artifact.clone().into(), out, width, i18n);
             }
             ViewBlock::Json { value, .. } => {
                 let text = json_value_to_markdown(value);
@@ -933,45 +1106,25 @@ pub(crate) fn render_operation_blocks<'a>(
                 }
             }
             ViewBlock::Custom { presentation, .. } => {
-                // Object payloads (e.g. a plugin's `presentation` map) read
-                // best as nested bullets; any other shape falls back to
-                // pretty-printed JSON.
-                let value = serde_json::json!(presentation);
-                if value.is_object() {
-                    let text = json_value_to_markdown(&value);
-                    if expanded {
-                        push_expanded_markdown(out, BODY_PREFIX, text.as_str(), width, i18n);
+                let text = operation_block_copy_text(block, i18n);
+                if expanded {
+                    if presentation.is_empty() {
+                        // Unknown custom schemas are data, not executable UI.
+                        // Keep their kind and fields visible when the plugin
+                        // did not supply a textual human presentation.
+                        push_expanded_tool_text(out, BODY_PREFIX, &text, Style::default(), width);
                     } else {
-                        push_collapsible_text(
-                            out,
-                            BODY_PREFIX,
-                            text.as_str(),
-                            Style::default(),
-                            width,
-                            i18n,
-                        );
+                        push_expanded_markdown(out, BODY_PREFIX, text.as_str(), width, i18n);
                     }
                 } else {
-                    let text =
-                        serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
-                    if expanded {
-                        push_expanded_markdown(
-                            out,
-                            BODY_PREFIX,
-                            format!("```json\n{text}\n```").as_str(),
-                            width,
-                            i18n,
-                        );
-                    } else {
-                        push_collapsible_text(
-                            out,
-                            BODY_PREFIX,
-                            text.as_str(),
-                            Style::default().fg(agena_tui_components::theme::muted_color()),
-                            width,
-                            i18n,
-                        );
-                    }
+                    push_collapsible_text(
+                        out,
+                        BODY_PREFIX,
+                        text.as_str(),
+                        Style::default(),
+                        width,
+                        i18n,
+                    );
                 }
             }
         }

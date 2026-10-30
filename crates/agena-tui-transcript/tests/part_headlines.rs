@@ -436,6 +436,39 @@ fn tool_headlines_keep_result_summaries_with_long_literal_titles() {
 }
 
 #[test]
+fn attachment_only_output_does_not_claim_the_lazy_raw_payload_is_loaded() {
+    for payload in [None, Some(json!({"text": "complete raw output"}))] {
+        let content = agena_runtime_contracts::part_content::ToolCallContent {
+            name: "image.generate".into(),
+            input: json!({}),
+            call_id: 557,
+            state: agena_domain::ToolResultState::Completed,
+            output: Some(agena_domain::RawOutput {
+                payload: payload.clone(),
+                attachments: vec![
+                    serde_json::from_value(json!({
+                        "kind": "image", "mime": "image/png", "filename": "generated.png",
+                        "source": {"source": "local_path", "path": "/server/generated.png"}
+                    }))
+                    .unwrap(),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let entry = projected(wire("tool_call", content.as_value()));
+        let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) =
+            &entry.parts[0].content
+        else {
+            panic!("expected an operation");
+        };
+        assert_eq!(tool.output_loaded, payload.is_some());
+        assert_eq!(tool.attachments().len(), 1);
+        assert!(tool.has_attachments());
+    }
+}
+
+#[test]
 fn errors_keep_the_public_reason_when_their_details_are_expanded() {
     use agena_failure::*;
     let problem: UserProblem = Failure::new(

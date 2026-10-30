@@ -99,6 +99,9 @@ pub struct ToolCallView {
     pub input_loaded: bool,
     pub output_loaded: bool,
     pub metadata_loaded: bool,
+    /// Authenticated client-local image previews, separate from the canonical
+    /// sources retained in operation.output for technical details and copying.
+    pub localized_attachments: Option<Vec<agena_domain::AttachmentItem>>,
     /// Bounded client-local frames; never serialized into Part facts.
     pub contents: std::collections::BTreeMap<
         agena_domain::ContentId,
@@ -108,6 +111,15 @@ pub struct ToolCallView {
 }
 
 impl ToolCallView {
+    pub fn has_attachments(&self) -> bool {
+        !self.attachments().is_empty()
+            || self
+                .presentation
+                .blocks
+                .iter()
+                .any(|block| matches!(block, ViewBlock::Media { .. }))
+    }
+
     pub fn has_interaction(&self) -> bool {
         !self.operation.user_input.requests.is_empty()
             || !self.operation.authorization.permissions.is_empty()
@@ -197,6 +209,7 @@ impl ToolCallView {
             input_loaded: true,
             output_loaded: true,
             metadata_loaded: true,
+            localized_attachments: None,
             contents: Default::default(),
             content_errors: Default::default(),
         }
@@ -287,8 +300,9 @@ impl ToolCallView {
     }
 
     pub fn attachments(&self) -> &[agena_domain::AttachmentItem] {
-        self.raw_output()
-            .map(|raw| raw.attachments.as_slice())
+        self.localized_attachments
+            .as_deref()
+            .or_else(|| self.raw_output().map(|raw| raw.attachments.as_slice()))
             .unwrap_or_default()
     }
 

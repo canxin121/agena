@@ -10,6 +10,7 @@ fn fixture() -> (MathGraphicsRenderer, TranscriptMathPlacement) {
     let picker = Picker::from_parts(FontSize::new(2, 2), ProtocolType::Iterm2, false, Vec::new());
     let config = MathGraphicsConfig {
         picker,
+        image_background: [24, 24, 27],
         layout: MathLayoutConfig {
             native_graphics: true,
             cell_width: 2,
@@ -73,6 +74,36 @@ fn decoded_image(buffer: &Buffer, x: u16, y: u16) -> image::RgbaImage {
         .trim_end_matches('\x07');
     let bytes = BASE64_STANDARD.decode(payload).unwrap();
     image::load_from_memory(&bytes).unwrap().to_rgba8()
+}
+
+#[test]
+fn halfblock_previews_keep_two_pixel_colors_and_composite_source_alpha() {
+    let mut pixels = image::RgbaImage::new(1, 2);
+    pixels.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+    pixels.put_pixel(0, 1, Rgba([0, 0, 255, 0]));
+    let artifact = MathArtifact {
+        id: 999,
+        image: DynamicImage::ImageRgba8(pixels),
+        size: Size::new(1, 1),
+        foreground: None,
+        row_layout_weights: Vec::new(),
+    };
+    let context = MathRenderContext {
+        images_enabled: true,
+        image_background: [240, 241, 242],
+        ..Default::default()
+    };
+    let lines = with_math_render_context(&context, || {
+        assert!(image_rendering_enabled());
+        with_text_math_rendering(|| assert!(!image_rendering_enabled()));
+        assert!(image_rendering_enabled());
+        image_halfblock_lines(&artifact, artifact.size)
+    });
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].spans[0].content, "▀");
+    assert_eq!(lines[0].spans[0].style.fg, Some(Color::Rgb(255, 0, 0)));
+    assert_eq!(lines[0].spans[0].style.bg, Some(Color::Rgb(240, 241, 242)));
+    assert!(!image_rendering_enabled());
 }
 
 #[test]

@@ -274,9 +274,17 @@ const MAX_LOCALIZED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 fn image_reference(object: &serde_json::Map<String, serde_json::Value>) -> Option<ImageReference> {
     let text = |key: &str| object.get(key).and_then(serde_json::Value::as_str);
+    let artifact = object
+        .get("artifact")
+        .and_then(serde_json::Value::as_object);
     let mime = text("mime")
         .or_else(|| text("mime_type"))
-        .or_else(|| text("media_type"));
+        .or_else(|| text("media_type"))
+        .or_else(|| {
+            artifact
+                .and_then(|a| a.get("mime"))
+                .and_then(serde_json::Value::as_str)
+        });
     if text("kind") != Some("image") && !mime.is_some_and(|mime| mime.starts_with("image/")) {
         return None;
     }
@@ -288,24 +296,26 @@ fn image_reference(object: &serde_json::Map<String, serde_json::Value>) -> Optio
     {
         return None;
     }
-    let artifact = object
-        .get("artifact")
-        .and_then(serde_json::Value::as_object);
     let reference = object
         .get("reference")
         .and_then(serde_json::Value::as_object);
     let value = source
-        .and_then(|s| s.get("path").or_else(|| s.get("url")))
+        .and_then(|s| {
+            s.get("path")
+                .or_else(|| s.get("url"))
+                .or_else(|| s.get("file_id"))
+        })
         .or_else(|| artifact.and_then(|a| a.get("uri")))
         .or_else(|| reference.and_then(|r| r.get("uri").or_else(|| r.get("path"))))
-        .or_else(|| object.get("uri"))?
+        .or_else(|| object.get("uri").or_else(|| object.get("path")))?
         .as_str()?;
-    let path = value.strip_prefix("file://").unwrap_or(value);
-    if path.is_empty()
-        || path.starts_with("data:")
-        || path.starts_with("http:")
-        || path.starts_with("https:")
-        || path.starts_with("blob:")
+    // A provider's opaque upload id is not a server path. Only Agena's own
+    // immutable references can be resolved by the authenticated media API.
+    if source
+        .and_then(|s| s.get("source"))
+        .and_then(serde_json::Value::as_str)
+        == Some("file_id")
+        && !value.starts_with("agena:media:")
     {
         return None;
     }
@@ -321,6 +331,19 @@ fn image_reference(object: &serde_json::Map<String, serde_json::Value>) -> Optio
                 .and_then(serde_json::Value::as_str)
         })
         .unwrap_or_default();
+    server_image_reference(value, mime, hash)
+}
+
+fn server_image_reference(value: &str, mime: Option<&str>, hash: &str) -> Option<ImageReference> {
+    let path = value.strip_prefix("file://").unwrap_or(value);
+    if path.is_empty()
+        || path.starts_with("data:")
+        || path.starts_with("http:")
+        || path.starts_with("https:")
+        || path.starts_with("blob:")
+    {
+        return None;
+    }
     Some((
         path.to_owned(),
         mime.filter(|m| m.starts_with("image/"))
@@ -330,19 +353,179 @@ fn image_reference(object: &serde_json::Map<String, serde_json::Value>) -> Optio
     ))
 }
 
+/// A Read result describes the original file in two payload objects, while
+/// its actual attachment may already be a frozen, session-owned blob. Those
+/// descriptions are not additional media resources. Require exact byte and
+/// presentation identity before treating them as metadata; unrelated payload
+/// images and legacy results without authoritative attachments still work.
+fn read_output_has_bound_image_metadata(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    use serde_json::Value;
+
+    let Some(payload) = object.get("payload").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(description) = payload.get("attachment").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(info) = payload.get("read_info").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(path) = description.get("path").and_then(Value::as_str) else {
+        return false;
+    };
+    if path.trim().is_empty()
+        || info.get("path").and_then(Value::as_str) != Some(path)
+        || !payload
+            .get("loaded_paths")
+            .and_then(Value::as_array)
+            .is_some_and(|paths| paths.iter().any(|value| value.as_str() == Some(path)))
+        || description.get("kind").and_then(Value::as_str) != Some("image")
+        || !description
+            .get("mime")
+            .and_then(Value::as_str)
+            .is_some_and(|mime| mime.starts_with("image/"))
+        || !description
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .is_some_and(|size| size > 0)
+    {
+        return false;
+    }
+    let Some(hash) = info
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    else {
+        return false;
+    };
+    // The localizer gives source/artifact/reference precedence over path.
+    // Compare that effective identity too, so an overriding resource or an
+    // explicitly different attachment hash is never suppressed as metadata.
+    if description.get("sha256").is_some_and(|value| {
+        value
+            .as_str()
+            .is_none_or(|value| !hash.eq_ignore_ascii_case(value))
+    }) || ![description, info].iter().all(|metadata| {
+        image_reference(metadata).is_some_and(|(reference, mime, revision)| {
+            reference == path
+                && Some(mime.as_str()) == description.get("mime").and_then(Value::as_str)
+                && (revision.is_empty() || hash.eq_ignore_ascii_case(&revision))
+        })
+    }) {
+        return false;
+    }
+    let Some(attachments) = object.get("attachments").and_then(Value::as_array) else {
+        return false;
+    };
+    attachments.iter().filter_map(Value::as_object).any(|item| {
+        if !item
+            .get("sha256")
+            .and_then(Value::as_str)
+            .is_some_and(|value| hash.eq_ignore_ascii_case(value))
+            || !["kind", "mime", "size_bytes"].iter().all(|key| {
+                description.get(*key) == info.get(*key) && description.get(*key) == item.get(*key)
+            })
+            || !["filename", "width", "height", "duration_ms", "page_count"]
+                .iter()
+                .all(|key| {
+                    [description, info].iter().all(|metadata| {
+                        metadata
+                            .get(*key)
+                            .filter(|value| !value.is_null())
+                            .is_none_or(|value| item.get(*key) == Some(value))
+                    })
+                })
+        {
+            return false;
+        }
+        let Some(source) = item.get("source").and_then(Value::as_object) else {
+            return false;
+        };
+        let text = |key: &str| source.get(key).and_then(Value::as_str).unwrap_or_default();
+        match text("source") {
+            "local_path" => !text("path").is_empty(),
+            "url" => ["agena:media:", "file://", "https://", "http://"]
+                .iter()
+                .any(|prefix| text("url").starts_with(prefix)),
+            "data_url" => {
+                text("url").starts_with("data:")
+                    && text("url")
+                        .split_once(',')
+                        .is_some_and(|(_, data)| !data.is_empty())
+            }
+            "base64" => !text("data").is_empty(),
+            "file_id" => text("file_id").starts_with("agena:media:"),
+            _ => false,
+        }
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageReferenceContext {
+    Resource,
+    ReadPayload,
+    ReadMetadata,
+}
+
+impl ImageReferenceContext {
+    fn child(self, key: &str, bound_read_metadata: bool) -> Self {
+        if self == Self::ReadPayload && matches!(key, "read_info" | "attachment") {
+            Self::ReadMetadata
+        } else if bound_read_metadata && key == "payload" {
+            Self::ReadPayload
+        } else {
+            Self::Resource
+        }
+    }
+}
+
 fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<ImageReference>) {
+    collect_workspace_image_references(value, output, ImageReferenceContext::Resource);
+}
+
+fn collect_workspace_image_references(
+    value: &serde_json::Value,
+    output: &mut Vec<ImageReference>,
+    context: ImageReferenceContext,
+) {
     match value {
         serde_json::Value::Array(values) => {
             for value in values {
-                workspace_image_references(value, output);
+                collect_workspace_image_references(value, output, ImageReferenceContext::Resource);
             }
         }
         serde_json::Value::Object(object) => {
-            if let Some(reference) = image_reference(object) {
+            if context != ImageReferenceContext::ReadMetadata
+                && let Some(reference) = image_reference(object)
+            {
                 output.push(reference);
             }
-            for value in object.values() {
-                workspace_image_references(value, output);
+            let bound_read_metadata = read_output_has_bound_image_metadata(object);
+            for (key, value) in object {
+                collect_workspace_image_references(
+                    value,
+                    output,
+                    context.child(key, bound_read_metadata),
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_server_localization_metadata(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                strip_server_localization_metadata(value);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            object.remove(agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD);
+            for value in object.values_mut() {
+                strip_server_localization_metadata(value);
             }
         }
         _ => {}
@@ -351,25 +534,53 @@ fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<ImageR
 
 fn replace_workspace_image_references(
     value: &mut serde_json::Value,
-    images: &HashMap<String, Arc<str>>,
+    images: &HashMap<ImageReference, Arc<str>>,
     remaining: &mut usize,
+) {
+    replace_workspace_image_references_in(
+        value,
+        images,
+        remaining,
+        ImageReferenceContext::Resource,
+    );
+}
+
+fn replace_workspace_image_references_in(
+    value: &mut serde_json::Value,
+    images: &HashMap<ImageReference, Arc<str>>,
+    remaining: &mut usize,
+    context: ImageReferenceContext,
 ) {
     match value {
         serde_json::Value::Array(values) => {
             for value in values {
-                replace_workspace_image_references(value, images, remaining);
+                replace_workspace_image_references_in(
+                    value,
+                    images,
+                    remaining,
+                    ImageReferenceContext::Resource,
+                );
             }
         }
         serde_json::Value::Object(object) => {
-            let replacement = image_reference(object)
-                .and_then(|(path, _, _)| images.get(&path))
+            let bound_read_metadata = read_output_has_bound_image_metadata(object);
+            let replacement = (context != ImageReferenceContext::ReadMetadata)
+                .then(|| image_reference(object))
+                .flatten()
+                .and_then(|reference| images.get(&reference))
                 .cloned();
             if let Some(url) = replacement.filter(|url| url.len() <= *remaining) {
                 *remaining -= url.len();
                 if object.contains_key("source") {
+                    let original = object
+                        .insert(
+                            "source".into(),
+                            serde_json::json!({"source":"data_url","url":url.as_ref()}),
+                        )
+                        .expect("attachment source exists");
                     object.insert(
-                        "source".into(),
-                        serde_json::json!({"source":"data_url","url":url.as_ref()}),
+                        agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD.into(),
+                        original,
                     );
                 } else if let Some(artifact) = object
                     .get_mut("artifact")
@@ -388,12 +599,22 @@ fn replace_workspace_image_references(
                             .unwrap()
                             .clone();
                     }
+                } else if object.contains_key("path") {
+                    object.remove("path");
+                    object.insert("data_url".into(), serde_json::json!(url.as_ref()));
                 } else {
                     object.insert("uri".into(), serde_json::json!(url.as_ref()));
                 }
             }
-            for value in object.values_mut() {
-                replace_workspace_image_references(value, images, remaining);
+            for (key, value) in object.iter_mut() {
+                if key != agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD {
+                    replace_workspace_image_references_in(
+                        value,
+                        images,
+                        remaining,
+                        context.child(key, bound_read_metadata),
+                    );
+                }
             }
         }
         _ => {}
@@ -483,6 +704,19 @@ impl TuiBackend {
             workspace_root: Arc::new(workspace_root),
             media_workspace: Arc::new(tempfile::tempdir().expect("test media root")),
         }
+    }
+
+    /// HTTP transport fixture backed only by the endpoint supplied by its test.
+    #[cfg(test)]
+    pub(crate) fn isolated_test_backend_with_endpoint(
+        workspace_root: PathBuf,
+        endpoint: &str,
+    ) -> Self {
+        let mut backend = Self::isolated_test_backend(workspace_root);
+        Arc::get_mut(&mut backend.inner)
+            .expect("unshared test backend")
+            .client = AgenaClient::new(endpoint).expect("test endpoint");
+        backend
     }
 
     pub async fn connect_remote(
@@ -1178,35 +1412,10 @@ impl TuiBackend {
         session_id: i64,
         path: &str,
     ) -> Result<(String, Vec<u8>)> {
-        if path.starts_with("agena:media:") {
-            return self
-                .inner
-                .client
-                .download_session_media_file(session_id, path)
-                .await
-                .context("failed to download session-owned immutable image");
-        }
-        let requested = Path::new(path);
-        let workspace_relative = if requested.is_absolute() {
-            requested.strip_prefix(self.workspace_root()).ok()
-        } else {
-            Some(requested)
-        };
-        if let Some(relative) = workspace_relative {
-            let relative = relative.to_string_lossy().replace('\\', "/");
-            if let Ok(download) = self.download_workspace_file(relative.as_str()).await {
-                return Ok(download);
-            }
-        }
-        // Managed uploads and tool artifacts live outside the source tree.
-        // The server authorizes the absolute path against this workspace's
-        // attachment roots; the client must not infer those server locations.
-        if requested.is_absolute()
-            && workspace_relative.is_none()
-            && let Ok(download) = self.download_workspace_file(path).await
-        {
-            return Ok(download);
-        }
+        // The session endpoint resolves workspace-relative files, managed
+        // uploads, generated images, and immutable media under the owning
+        // session's authorization. Never resolve history against the active
+        // workspace or fall back to an unrelated same-named file.
         self.inner
             .client
             .download_session_media_file(session_id, path)
@@ -1220,24 +1429,94 @@ impl TuiBackend {
     }
 
     async fn localize_workspace_image_parts(&self, session_id: i64, parts: &mut [PartResource]) {
-        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
-
         let mut references = Vec::new();
-        for part in parts.iter() {
+        for part in parts.iter_mut() {
+            strip_server_localization_metadata(&mut part.content);
             workspace_image_references(&part.content, &mut references);
+            if let Some(presentation) = &part.presentation {
+                for block in &presentation.blocks {
+                    if let agena_domain::ViewBlock::Media { artifact, .. } = block
+                        && artifact.mime.starts_with("image/")
+                        && let Some(reference) = server_image_reference(
+                            &artifact.uri,
+                            Some(&artifact.mime),
+                            artifact.sha256.as_deref().unwrap_or_default(),
+                        )
+                    {
+                        references.push(reference);
+                    }
+                }
+            }
         }
-        references.sort();
-        references.dedup();
-        if references.is_empty() {
+        let localized = self
+            .load_workspace_image_references(session_id, references)
+            .await;
+        let mut presentation_bytes = MAX_LOCALIZED_IMAGE_BYTES;
+        for part in parts.iter_mut() {
+            replace_workspace_image_references(
+                &mut part.content,
+                &localized,
+                &mut presentation_bytes,
+            );
+            if let Some(presentation) = &mut part.presentation {
+                for block in &mut presentation.blocks {
+                    if let agena_domain::ViewBlock::Media { artifact, .. } = block
+                        && artifact.mime.starts_with("image/")
+                        && let Some(reference) = server_image_reference(
+                            &artifact.uri,
+                            Some(&artifact.mime),
+                            artifact.sha256.as_deref().unwrap_or_default(),
+                        )
+                        && let Some(url) = localized.get(&reference)
+                        && url.len() <= presentation_bytes
+                    {
+                        presentation_bytes -= url.len();
+                        artifact.uri = url.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    async fn localize_tool_detail_images(
+        &self,
+        session_id: i64,
+        detail: &mut agena_api::live::ToolDetailResource,
+    ) {
+        // Detail values are fresh server facts, including conditional-cache
+        // hits. A server-supplied client marker is never localization proof.
+        strip_server_localization_metadata(&mut detail.value);
+        if !matches!(
+            detail.section,
+            agena_api::live::ToolDetailSection::Output
+                | agena_api::live::ToolDetailSection::Presentation
+        ) {
             return;
         }
+        let mut references = Vec::new();
+        workspace_image_references(&detail.value, &mut references);
+        let localized = self
+            .load_workspace_image_references(session_id, references)
+            .await;
+        let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
+        replace_workspace_image_references(&mut detail.value, &localized, &mut budget);
+    }
 
-        let mut localized = HashMap::<String, Arc<str>>::new();
+    async fn load_workspace_image_references(
+        &self,
+        session_id: i64,
+        mut references: Vec<ImageReference>,
+    ) -> HashMap<ImageReference, Arc<str>> {
+        use sha2::Digest as _;
+        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+        references.sort();
+        references.dedup();
+        let mut localized = HashMap::<ImageReference, Arc<str>>::new();
         let mut batch_bytes = 0usize;
         for (path, mime, revision) in references {
-            if localized.contains_key(&path) {
-                continue;
-            }
+            // Different revisions of the same path can coexist in history.
+            // Keep their lookup identities intact throughout the whole batch.
+            let reference = (path.clone(), mime.clone(), revision.clone());
             let key = (session_id, path.clone(), revision);
             let cached = self
                 .inner
@@ -1262,6 +1541,17 @@ impl TuiBackend {
                 if bytes.len() as u64 > MAX_IMAGE_BYTES {
                     continue;
                 }
+                if !key.2.is_empty() {
+                    // Some authorized workspace endpoints serve mutable files.
+                    // Never label those new bytes with an older content hash.
+                    let actual: String = sha2::Sha256::digest(&bytes)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    if !actual.eq_ignore_ascii_case(&key.2) {
+                        continue;
+                    }
+                }
                 let value: Arc<str> = format!(
                     "data:{mime};base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -1278,16 +1568,9 @@ impl TuiBackend {
                 break;
             }
             batch_bytes += value.len();
-            localized.insert(path, value);
+            localized.insert(reference, value);
         }
-        let mut presentation_bytes = MAX_LOCALIZED_IMAGE_BYTES;
-        for part in parts.iter_mut() {
-            replace_workspace_image_references(
-                &mut part.content,
-                &localized,
-                &mut presentation_bytes,
-            );
-        }
+        localized
     }
 
     async fn localized_execution(
@@ -2102,6 +2385,9 @@ impl TuiBackend {
             )?;
             for part in execution.parts.iter().chain(&page.parts) {
                 let mut part = part.clone();
+                // Merge logic reads local preview provenance, so discard any
+                // server claim before the first merge, not only before render.
+                strip_server_localization_metadata(&mut part.content);
                 if let Some(previous) = retained_parts.get(&part.part_id) {
                     crate::transcript_state::merge_part_snapshot(previous, &mut part);
                 }
@@ -2202,10 +2488,14 @@ impl TuiBackend {
         limit: u64,
         cursor: Option<&str>,
     ) -> Result<agena_api::live::SessionPartsResource> {
-        Ok(self
+        let mut page = self
             .client()
             .session_parts_page(session_id, limit, cursor)
-            .await?)
+            .await?;
+        for part in &mut page.parts {
+            strip_server_localization_metadata(&mut part.content);
+        }
+        Ok(page)
     }
 
     pub(crate) async fn get_tool_detail(
@@ -2214,10 +2504,17 @@ impl TuiBackend {
         part_id: i64,
         section: agena_api::live::ToolDetailSection,
     ) -> Result<agena_api::live::ToolDetailResource> {
-        Ok(self
+        let mut detail = self
             .client()
             .session_tool_detail(session_id, part_id, section)
-            .await?)
+            .await?;
+        anyhow::ensure!(
+            detail.part_id == part_id && detail.section == section,
+            "the server returned a different tool detail section"
+        );
+        self.localize_tool_detail_images(session_id, &mut detail)
+            .await;
+        Ok(detail)
     }
 
     pub async fn refresh_session(
@@ -2226,10 +2523,13 @@ impl TuiBackend {
         after_seq: Option<i64>,
         force: bool,
     ) -> Result<SessionRefresh> {
-        let execution = self
+        let mut execution = self
             .client()
             .get_session_state_validated(session_id, force)
             .await?;
+        for part in &mut execution.parts {
+            strip_server_localization_metadata(&mut part.content);
+        }
         if !force && after_seq.is_some() && execution.latest_event_seq == after_seq {
             return Ok(SessionRefresh {
                 execution_only: Some(execution),
@@ -2807,9 +3107,26 @@ impl TuiBackend {
                     )) = &item
                         && (!part.is_message_boundary() || *origin != session_id)
                     {
+                        let mut part = *part.clone();
+                        // Even a forwarded event for another session must
+                        // never carry server-asserted client provenance.
+                        strip_server_localization_metadata(&mut part.content);
+                        if *origin == session_id {
+                            // A completed tool arrives as an incremental part,
+                            // without a snapshot reload. Resolve its server
+                            // attachments through the same authenticated API
+                            // used when opening history.
+                            tokio::select! {
+                                _ = tx.closed() => return,
+                                _ = backend.localize_workspace_image_parts(
+                                    session_id,
+                                    std::slice::from_mut(&mut part),
+                                ) => {},
+                            }
+                        }
                         if tx
                             .send(LiveEvent {
-                                part_update: Some((*origin, *part.clone())),
+                                part_update: Some((*origin, part)),
                                 session_deleted: false,
                                 snapshot: None,
                                 force_refresh: false,
@@ -3060,11 +3377,306 @@ fn provider_studio_transport_error(
 #[cfg(test)]
 mod attachment_localization_tests {
     use super::*;
+
+    fn bound_read_output(hash: &str, size: usize) -> serde_json::Value {
+        serde_json::json!({
+            "payload": {
+                "read_info": {
+                    "path":"ai-drawings/image.png", "kind":"image", "mime":"image/png",
+                    "size_bytes":size, "sha256":hash, "width":20, "height":40,
+                    "delivery":"model_input"
+                },
+                "attachment": {
+                    "path":"ai-drawings/image.png", "kind":"image", "mime":"image/png",
+                    "filename":"image.png", "size_bytes":size, "width":20, "height":40
+                },
+                "loaded_paths":["ai-drawings/image.png"],
+                "metadata":{"delivery":"model_input"}
+            },
+            "truncated":false,
+            "attachments":[{
+                "kind":"image", "mime":"image/png", "filename":"image.png",
+                "sha256":hash, "size_bytes":size, "width":20, "height":40,
+                "source":{"source":"url","url":"agena:media:v1:fixture"}
+            }]
+        })
+    }
+
+    #[test]
+    fn bound_read_metadata_is_not_a_second_resource_or_rewritten_technical_fact() {
+        let hash = "a".repeat(64);
+        for wrapped in [false, true] {
+            let raw = bound_read_output(&hash, 100);
+            let payload = raw["payload"].clone();
+            let mut value = if wrapped {
+                serde_json::json!({"raw_output":raw})
+            } else {
+                raw
+            };
+            let mut references = Vec::new();
+            workspace_image_references(&value, &mut references);
+            assert_eq!(
+                references,
+                vec![(
+                    "agena:media:v1:fixture".into(),
+                    "image/png".into(),
+                    hash.clone()
+                )]
+            );
+            // Even a pre-existing path cache must not replace original
+            // read_info/attachment metadata with presentation data URLs.
+            let images = HashMap::from([
+                (
+                    references[0].clone(),
+                    Arc::<str>::from("data:image/png;base64,AAAA"),
+                ),
+                (
+                    (
+                        "ai-drawings/image.png".into(),
+                        "image/png".into(),
+                        hash.clone(),
+                    ),
+                    Arc::<str>::from("data:image/png;base64,BBBB"),
+                ),
+                (
+                    (
+                        "ai-drawings/image.png".into(),
+                        "image/png".into(),
+                        String::new(),
+                    ),
+                    Arc::<str>::from("data:image/png;base64,CCCC"),
+                ),
+            ]);
+            let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
+            replace_workspace_image_references(&mut value, &images, &mut budget);
+            let raw = if wrapped {
+                &value["raw_output"]
+            } else {
+                &value
+            };
+            assert_eq!(raw["payload"], payload);
+            assert_eq!(raw["attachments"][0]["source"]["source"], "data_url");
+            assert_eq!(
+                raw["attachments"][0]["source"]["url"],
+                "data:image/png;base64,AAAA"
+            );
+        }
+    }
+
+    #[test]
+    fn read_metadata_requires_matching_effective_path_mime_and_optional_hash() {
+        let hash = "a".repeat(64);
+        let different_hash = "b".repeat(64);
+        let original = bound_read_output(&hash, 100);
+        let mut matching = original.clone();
+        matching["payload"]["attachment"]["sha256"] = serde_json::json!(hash);
+        assert!(read_output_has_bound_image_metadata(
+            matching.as_object().unwrap()
+        ));
+
+        for (key, value) in [
+            ("sha256", serde_json::json!(different_hash)),
+            (
+                "artifact",
+                serde_json::json!({"uri":"ai-drawings/image.png","sha256":different_hash}),
+            ),
+            (
+                "reference",
+                serde_json::json!({"path":"ai-drawings/image.png","sha256":different_hash}),
+            ),
+        ] {
+            let mut raw = original.clone();
+            raw["payload"]["attachment"][key] = value;
+            assert!(
+                !read_output_has_bound_image_metadata(raw.as_object().unwrap()),
+                "{key}"
+            );
+            let mut references = Vec::new();
+            workspace_image_references(&raw, &mut references);
+            assert!(
+                references
+                    .iter()
+                    .any(|item| item.0 == "ai-drawings/image.png" && item.2 == different_hash),
+                "{key}"
+            );
+        }
+        for metadata in ["attachment", "read_info"] {
+            for (key, value) in [
+                (
+                    "source",
+                    serde_json::json!({"source":"local_path","path":"different.png"}),
+                ),
+                (
+                    "artifact",
+                    serde_json::json!({"uri":"file://different.png","mime":"image/png"}),
+                ),
+                ("reference", serde_json::json!({"path":"different.png"})),
+            ] {
+                let mut raw = original.clone();
+                raw["payload"][metadata][key] = value;
+                assert!(
+                    !read_output_has_bound_image_metadata(raw.as_object().unwrap()),
+                    "{metadata}.{key}"
+                );
+                let mut references = Vec::new();
+                workspace_image_references(&raw, &mut references);
+                assert!(
+                    references.iter().any(|item| item.0 == "different.png"),
+                    "{metadata}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unrelated_read_payload_images_and_legacy_fallbacks_remain_resources() {
+        let original = bound_read_output(&"a".repeat(64), 100);
+        let mut extra = original.clone();
+        extra["payload"]["extra_image"] =
+            serde_json::json!({"mime":"image/png","path":"extra.png"});
+        extra["payload"]["read_info"]["thumbnail"] =
+            serde_json::json!({"mime":"image/png","path":"thumbnail.png"});
+        let mut references = Vec::new();
+        workspace_image_references(&extra, &mut references);
+        assert_eq!(references.len(), 3);
+        assert!(references.iter().any(|item| item.0 == "extra.png"));
+        assert!(references.iter().any(|item| item.0 == "thumbnail.png"));
+        assert!(
+            !references
+                .iter()
+                .any(|item| item.0 == "ai-drawings/image.png")
+        );
+
+        for (pointer, different) in [
+            ("/attachments", serde_json::json!([])),
+            ("/attachments/0/sha256", serde_json::json!("b".repeat(64))),
+            ("/attachments/0/size_bytes", serde_json::json!(101)),
+            ("/attachments/0/width", serde_json::json!(21)),
+            ("/attachments/0/filename", serde_json::json!("other.png")),
+            (
+                "/payload/read_info/path",
+                serde_json::json!("other/image.png"),
+            ),
+            ("/payload/read_info/mime", serde_json::json!("image/jpeg")),
+            ("/payload/read_info/sha256", serde_json::Value::Null),
+            ("/payload/loaded_paths", serde_json::json!([])),
+        ] {
+            let mut value = original.clone();
+            *value.pointer_mut(pointer).unwrap() = different;
+            let mut references = Vec::new();
+            workspace_image_references(&value, &mut references);
+            assert!(
+                references
+                    .iter()
+                    .any(|item| item.0 == "ai-drawings/image.png"),
+                "{pointer}"
+            );
+        }
+        let mut legacy = original;
+        legacy.as_object_mut().unwrap().remove("attachments");
+        let mut references = Vec::new();
+        workspace_image_references(&legacy, &mut references);
+        assert_eq!(references.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_output_localization_only_downloads_the_owned_media_reference() {
+        use agena_api::live::{ToolDetailResource, ToolDetailSection};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        const IMAGE: &str = "iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAYAAAD+MdrbAAAAKUlEQVR4nO3MoQEAAAwCIP9/envCJoFKLrmmCIVCoXA2LH9CoVAo3A0fsaQ6G+7F7JIAAAAASUVORK5CYII=";
+        const HASH: &str = "cfdb6b08410a8a0be495f5b1c59bd4fc2575d1d0ff7c65dcd67d539bc2a1af50";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(IMAGE)
+            .unwrap();
+        let raw = bound_read_output(HASH, bytes.len());
+        let original_payload = raw["payload"].clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = timeout(Duration::from_secs(3), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let mut buffer = [0; 1024];
+                let count = timeout(Duration::from_secs(3), socket.read(&mut buffer))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+                assert!(request.len() < 16 * 1024);
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /api/v1/sessions/49/media?"));
+            let target = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            let url = url::Url::parse(&format!("http://fixture{target}")).unwrap();
+            assert_eq!(
+                url.query_pairs().find(|(key, _)| key == "path").unwrap().1,
+                "agena:media:v1:fixture"
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer attachment-test-token\r\n")
+            );
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&bytes).await.unwrap();
+            drop(socket);
+            assert!(
+                timeout(Duration::from_millis(300), listener.accept())
+                    .await
+                    .is_err(),
+                "Read metadata must not trigger another filesystem media request"
+            );
+        });
+        let mut backend =
+            TuiBackend::isolated_test_backend(PathBuf::from("/server/current-workspace"));
+        Arc::get_mut(&mut backend.inner).unwrap().client = AgenaClient::new(endpoint)
+            .unwrap()
+            .with_bearer_token("attachment-test-token")
+            .unwrap();
+        let mut detail = ToolDetailResource {
+            part_id: 1245,
+            revision: 1,
+            updated_at_ms: 1,
+            section: ToolDetailSection::Output,
+            part_state: Some("completed".into()),
+            value: raw,
+        };
+        timeout(
+            Duration::from_secs(3),
+            backend.localize_tool_detail_images(49, &mut detail),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail.value["payload"], original_payload);
+        assert_eq!(
+            detail.value["attachments"][0]["source"]["source"],
+            "data_url"
+        );
+        server.await.unwrap();
+    }
+
     #[test]
     fn finds_and_replaces_immutable_generated_and_local_images() {
         let mut value = serde_json::json!([
             {"kind":"image","mime":"image/png","source":{"source":"local_path","path":"/upload/a.png"},"sha256":"a"},
-            {"type":"media","mime_type":"image/png","artifact":{"uri":"file:///generated/b.png","mime":"image/png","sha256":"b"}},
+            {"type":"media","artifact":{"uri":"file:///generated/b.png","mime":"image/png","sha256":"b"}},
             {"activity_type":"resource","kind":"image","media_type":"image/png","reference":{"reference_type":"artifact","uri":"agena:media:v1:abcd","sha256":"c"}},
             {"kind":"image","source":{"source":"unavailable","reason":"missing"}}
         ]);
@@ -3075,7 +3687,12 @@ mod attachment_localization_tests {
         assert_eq!(refs.len(), 3);
         let images = refs
             .iter()
-            .map(|(path, _, _)| (path.clone(), Arc::<str>::from("data:image/png;base64,AAAA")))
+            .map(|reference| {
+                (
+                    reference.clone(),
+                    Arc::<str>::from("data:image/png;base64,AAAA"),
+                )
+            })
             .collect();
         let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
         replace_workspace_image_references(&mut value, &images, &mut budget);
@@ -3100,7 +3717,7 @@ mod attachment_localization_tests {
         let mut value = serde_json::json!([item.clone(), item]);
         let url: Arc<str> = Arc::from("data:image/png;base64,AAAA");
         let mut budget = url.len();
-        let images = HashMap::from([("/a.png".into(), url)]);
+        let images = HashMap::from([(("/a.png".into(), "image/png".into(), String::new()), url)]);
         replace_workspace_image_references(&mut value, &images, &mut budget);
         assert_eq!(budget, 0);
         assert_eq!(value[0]["source"]["source"], "data_url");
@@ -3123,5 +3740,640 @@ mod attachment_localization_tests {
             Arc::from("uncacheable"),
         );
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn one_localization_batch_keeps_revisions_and_server_markers_separate() {
+        use agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD;
+        let mut value = serde_json::json!([
+            {"kind":"image","mime":"image/png","sha256":"old",
+                "source":{"source":"local_path","path":"/same.png"},
+                (LOCALIZED_ATTACHMENT_SOURCE_FIELD):{"source":"local_path","path":"/forged.png"}},
+            {"kind":"image","mime":"image/png","sha256":"new",
+                "source":{"source":"local_path","path":"/same.png"}},
+            {"kind":"image","mime":"image/png","sha256":"unavailable",
+                "source":{"source":"local_path","path":"/same.png"},
+                (LOCALIZED_ATTACHMENT_SOURCE_FIELD):{"source":"local_path","path":"/forged.png"}}
+        ]);
+        strip_server_localization_metadata(&mut value);
+        let images = HashMap::from([
+            (
+                ("/same.png".into(), "image/png".into(), "old".into()),
+                Arc::<str>::from("data:image/png;base64,OLD"),
+            ),
+            (
+                ("/same.png".into(), "image/png".into(), "new".into()),
+                Arc::<str>::from("data:image/png;base64,NEW"),
+            ),
+        ]);
+        let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
+        replace_workspace_image_references(&mut value, &images, &mut budget);
+        assert_eq!(value[0]["source"]["url"], "data:image/png;base64,OLD");
+        assert_eq!(value[1]["source"]["url"], "data:image/png;base64,NEW");
+        assert_eq!(
+            value[0][LOCALIZED_ATTACHMENT_SOURCE_FIELD]["path"],
+            "/same.png"
+        );
+        assert_eq!(
+            value[1][LOCALIZED_ATTACHMENT_SOURCE_FIELD]["path"],
+            "/same.png"
+        );
+        assert_eq!(value[2]["source"]["source"], "local_path");
+        assert!(value[2].get(LOCALIZED_ATTACHMENT_SOURCE_FIELD).is_none());
+    }
+
+    #[test]
+    fn file_refs_and_owned_file_ids_localize_without_treating_provider_ids_as_paths() {
+        let mut value = serde_json::json!([
+            {"mime":"image/png","path":"/upload/image.png","name":"image.png"},
+            {"kind":"image","source":{"source":"file_id","file_id":"agena:media:v1:owned"}},
+            {"kind":"image","source":{"source":"file_id","file_id":"provider-upload-id"}},
+            {"kind":"image","source":{"source":"url","url":"https://images.example.test/image.png"}}
+        ]);
+        let mut references = Vec::new();
+        workspace_image_references(&value, &mut references);
+        assert_eq!(references.len(), 2);
+        let images = references
+            .into_iter()
+            .map(|reference| (reference, Arc::<str>::from("data:image/png;base64,AAAA")))
+            .collect();
+        let mut budget = MAX_LOCALIZED_IMAGE_BYTES;
+        replace_workspace_image_references(&mut value, &images, &mut budget);
+        assert_eq!(value[0]["data_url"], "data:image/png;base64,AAAA");
+        assert!(value[0].get("path").is_none());
+        assert_eq!(value[1]["source"]["source"], "data_url");
+        assert_eq!(value[2]["source"]["file_id"], "provider-upload-id");
+        assert_eq!(value[3]["source"]["source"], "url");
+    }
+
+    #[tokio::test]
+    async fn output_details_keep_image_previews_across_folds_cache_revisions_and_failed_reads() {
+        use agena_api::live::{ToolDetailResource, ToolDetailSection};
+        use agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD;
+        use agena_tui_transcript::{
+            TranscriptActivitySection, TranscriptContentId, TranscriptNodeKey,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        const IMAGE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAYAAAD+MdrbAAAAKUlEQVR4nO3MoQEAAAwCIP9/envCJoFKLrmmCIVCoXA2LH9CoVAo3A0fsaQ6G+7F7JIAAAAASUVORK5CYII=";
+        const SECOND_IMAGE: &str = "iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAYAAAD+MdrbAAAAK0lEQVR4nO3OsQ0AAAzCMP5/un2CDQ9ZrSS56wYEAoHAVbC8BwQCgcBd8AGxpDobPseZLgAAAABJRU5ErkJggg==";
+        const FIRST_HASH: &str = "cfdb6b08410a8a0be495f5b1c59bd4fc2575d1d0ff7c65dcd67d539bc2a1af50";
+        const SECOND_HASH: &str =
+            "bf74b363920168d5adc6dee64d568ee704949f4355ff4c74a1ea8470d6e4af3b";
+        const PATH: &str = "/server/managed/generated.png";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(IMAGE.split_once(',').unwrap().1)
+            .unwrap();
+        let second_bytes = base64::engine::general_purpose::STANDARD
+            .decode(SECOND_IMAGE)
+            .unwrap();
+        let output = |hash: &str, size: usize| {
+            serde_json::json!({
+                "payload":{"text":"Finished image"}, "truncated":false,
+                "attachments":[{
+                    "kind":"image", "mime":"image/png", "filename":"generated.png",
+                    "sha256":hash, "size_bytes":size,
+                    "source":{"source":"local_path","path":PATH},
+                    (LOCALIZED_ATTACHMENT_SOURCE_FIELD):{"source":"local_path","path":"/forged.png"}
+                }]
+            })
+        };
+        let first_raw = output(FIRST_HASH, bytes.len());
+        let second_raw = output(SECOND_HASH, second_bytes.len());
+        let resource = |revision: i64, value: serde_json::Value| ToolDetailResource {
+            part_id: 1129,
+            revision,
+            updated_at_ms: revision,
+            section: ToolDetailSection::Output,
+            part_state: Some("completed".into()),
+            value,
+        };
+        let first_body = serde_json::to_vec(&resource(1, first_raw.clone())).unwrap();
+        let second_body = serde_json::to_vec(&resource(2, second_raw.clone())).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server_bytes = bytes.clone();
+        let server = tokio::spawn(async move {
+            // An unexpected duplicate media read fails this ordered protocol.
+            // 304 bodies are cached by AgenaClient; image caches remain scoped
+            // to session + exact path + content revision.
+            let replies = vec![
+                (
+                    "/api/v1/sessions/46/media?",
+                    "200 OK",
+                    "image/png",
+                    "",
+                    server_bytes.clone(),
+                    None,
+                ),
+                (
+                    "/api/v1/sessions/46/parts/1129/tool-sections/output ",
+                    "200 OK",
+                    "application/json",
+                    "ETag: \"output-1\"\r\nX-Resource-Revision: image-fixture:1\r\n",
+                    first_body,
+                    None,
+                ),
+                (
+                    "/api/v1/sessions/46/parts/1129/tool-sections/output ",
+                    "304 Not Modified",
+                    "application/json",
+                    "ETag: \"output-1\"\r\nX-Resource-Revision: image-fixture:1\r\n",
+                    Vec::new(),
+                    Some("output-1"),
+                ),
+                (
+                    "/api/v1/sessions/46/parts/1129/tool-sections/output ",
+                    "200 OK",
+                    "application/json",
+                    "ETag: \"output-2\"\r\nX-Resource-Revision: image-fixture:2\r\n",
+                    second_body.clone(),
+                    Some("output-1"),
+                ),
+                (
+                    "/api/v1/sessions/46/media?",
+                    "200 OK",
+                    "image/png",
+                    "",
+                    second_bytes,
+                    None,
+                ),
+                (
+                    "/api/v1/sessions/47/parts/1129/tool-sections/output ",
+                    "200 OK",
+                    "application/json",
+                    "ETag: \"output-2\"\r\nX-Resource-Revision: image-fixture:2\r\n",
+                    second_body,
+                    None,
+                ),
+                (
+                    "/api/v1/sessions/47/media?",
+                    "403 Forbidden",
+                    "application/json",
+                    "",
+                    b"{}".to_vec(),
+                    None,
+                ),
+                (
+                    "/api/v1/sessions/46/parts/1129/tool-sections/output ",
+                    "409 Conflict",
+                    "application/json",
+                    "",
+                    b"{}".to_vec(),
+                    Some("output-2"),
+                ),
+                (
+                    "/api/v1/sessions/46/parts/1129/tool-sections/output ",
+                    "304 Not Modified",
+                    "application/json",
+                    "ETag: \"output-2\"\r\nX-Resource-Revision: image-fixture:2\r\n",
+                    Vec::new(),
+                    Some("output-2"),
+                ),
+                (
+                    "/api/v1/sessions/46/media?",
+                    "503 Service Unavailable",
+                    "application/json",
+                    "",
+                    b"{}".to_vec(),
+                    None,
+                ),
+            ];
+            for (expected, status, content_type, headers, body, etag) in replies {
+                let (mut socket, _) = timeout(Duration::from_secs(10), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let count = timeout(Duration::from_secs(10), socket.read(&mut buffer))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() < 16 * 1024);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET {expected}")), "{request}");
+                let headers_in = request.to_ascii_lowercase();
+                assert!(headers_in.contains("authorization: bearer attachment-test-token\r\n"));
+                if let Some(etag) = etag {
+                    assert!(headers_in.contains(&format!("if-none-match: \"{etag}\"\r\n")));
+                }
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+            }
+        });
+        let mut backend = TuiBackend::isolated_test_backend(PathBuf::from("/server/workspace"));
+        Arc::get_mut(&mut backend.inner).unwrap().client = AgenaClient::new(endpoint)
+            .unwrap()
+            .with_bearer_token("attachment-test-token")
+            .unwrap();
+        let mut initial_output = first_raw;
+        initial_output["payload"] = serde_json::Value::Null;
+        let mut parts = [PartResource {
+            part_id: 1129,
+            run_id: Some(1129),
+            message_id: Some(1128),
+            message_boundary: true,
+            kind: "tool_call".into(),
+            role: "assistant".into(),
+            state: "completed".into(),
+            run_state: Some("completed".into()),
+            revision: 1,
+            updated_at_ms: 1,
+            content: serde_json::json!({"name":"image_generation","call_id":557,"state":"completed",
+                "lifecycle":agena_domain::TimeRange::default(),"output":initial_output}),
+            ..Default::default()
+        }];
+        backend.localize_workspace_image_parts(46, &mut parts).await;
+        let original = serde_json::json!({"source":"local_path","path":PATH});
+        assert_eq!(
+            parts[0].content["output"]["attachments"][0][LOCALIZED_ATTACHMENT_SOURCE_FIELD],
+            original
+        );
+        let mut state = crate::TranscriptState::default();
+        state.reset(46, "Image session".into());
+        state.set_math_render_context(agena_tui_media::MathRenderContext::new(
+            None,
+            &std::env::temp_dir(),
+        ));
+        state.merge_parts(parts.to_vec());
+        let assert_image = |state: &mut crate::TranscriptState| {
+            let rendered = state.rendered(100);
+            assert!(rendered.lines.iter().any(|line| line.text.contains('▀')));
+            assert_eq!(
+                rendered
+                    .lines
+                    .iter()
+                    .filter(|line| line.text.contains('🖼'))
+                    .count(),
+                1
+            );
+            assert!(
+                !rendered
+                    .lines
+                    .iter()
+                    .any(|line| line.text.contains("iVBORw0KGgo"))
+            );
+        };
+        assert_image(&mut state);
+        assert!(!state.tool_detail_is_current(1129, ToolDetailSection::Output));
+        let activity = state
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::Activity {
+                        content_id: TranscriptContentId::StoredPart(1129),
+                        ..
+                    }
+                )
+            })
+            .unwrap()
+            .key
+            .clone();
+        let section_key = |section| TranscriptNodeKey::ActivitySection {
+            entry_id: activity.entry_id(),
+            content_id: TranscriptContentId::StoredPart(1129),
+            section,
+        };
+        let details = section_key(TranscriptActivitySection::TechnicalDetails);
+        let output_key = section_key(TranscriptActivitySection::Output);
+        state.node_expansions.insert(details.clone(), true);
+        state.node_expansions.insert(output_key.clone(), true);
+        state.invalidate_render();
+        let requested = state
+            .begin_tool_detail_load(1129, ToolDetailSection::Output)
+            .unwrap();
+        let first = backend
+            .get_tool_detail(46, 1129, ToolDetailSection::Output)
+            .await
+            .unwrap();
+        assert!(state.accept_tool_detail_load(1129, ToolDetailSection::Output, requested));
+        assert!(state.finish_tool_detail_load(first.clone()));
+        assert_image(&mut state);
+        assert!(
+            state
+                .rendered(100)
+                .lines
+                .iter()
+                .any(|line| line.text.contains(PATH))
+        );
+        assert!(
+            !state
+                .rendered(100)
+                .lines
+                .iter()
+                .any(|line| line.text.contains(LOCALIZED_ATTACHMENT_SOURCE_FIELD))
+        );
+        for key in [&output_key, &details, &activity] {
+            state.node_expansions.insert(key.clone(), false);
+            state.invalidate_render();
+            if key == &activity {
+                assert!(
+                    !state
+                        .rendered(100)
+                        .lines
+                        .iter()
+                        .any(|line| line.text.contains('▀'))
+                );
+            } else {
+                assert_image(&mut state);
+            }
+            state.node_expansions.insert(key.clone(), true);
+            state.invalidate_render();
+            assert_image(&mut state);
+            assert!(
+                state
+                    .begin_tool_detail_load(1129, ToolDetailSection::Output)
+                    .is_none()
+            );
+        }
+
+        let cached = backend
+            .get_tool_detail(46, 1129, ToolDetailSection::Output)
+            .await
+            .unwrap();
+        assert_eq!(cached.value, first.value);
+        assert!(state.finish_tool_detail_load(cached));
+        assert_image(&mut state);
+        state.parts[0].revision = 2;
+        state.parts[0].updated_at_ms = 2;
+        let revised = backend
+            .get_tool_detail(46, 1129, ToolDetailSection::Output)
+            .await
+            .unwrap();
+        assert_eq!(revised.value["attachments"][0]["sha256"], SECOND_HASH);
+        assert_ne!(revised.value["attachments"][0]["source"]["url"], IMAGE);
+        assert!(state.finish_tool_detail_load(revised));
+        assert!(!state.finish_tool_detail_load(first));
+        assert_eq!(
+            state.parts[0].content["output"]["attachments"][0]["sha256"],
+            SECOND_HASH
+        );
+        assert_image(&mut state);
+
+        let foreign = backend
+            .get_tool_detail(47, 1129, ToolDetailSection::Output)
+            .await
+            .unwrap();
+        assert_eq!(
+            foreign.value["attachments"][0]["source"]["source"],
+            "local_path"
+        );
+        assert!(
+            foreign.value["attachments"][0]
+                .get(LOCALIZED_ATTACHMENT_SOURCE_FIELD)
+                .is_none()
+        );
+        let before = state.parts[0].content.clone();
+        assert!(
+            backend
+                .get_tool_detail(46, 1129, ToolDetailSection::Output)
+                .await
+                .is_err()
+        );
+        assert_eq!(state.parts[0].content, before);
+        assert_image(&mut state);
+
+        backend
+            .inner
+            .workspace_image_data_urls
+            .write()
+            .await
+            .clear();
+        let failed_media = backend
+            .get_tool_detail(46, 1129, ToolDetailSection::Output)
+            .await
+            .unwrap();
+        assert_eq!(
+            failed_media.value["attachments"][0]["source"]["source"],
+            "local_path"
+        );
+        assert!(state.finish_tool_detail_load(failed_media));
+        assert_eq!(state.parts[0].content, before);
+        assert_image(&mut state);
+        timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn mismatched_download_hash_cannot_create_a_preview_or_poison_the_cache() {
+        use agena_api::live::{ToolDetailResource, ToolDetailSection};
+        use agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        let bytes = base64::engine::general_purpose::STANDARD.decode(
+            "iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAYAAAD+MdrbAAAAK0lEQVR4nO3OsQ0AAAzCMP5/un2CDQ9ZrSS56wYEAoHAVbC8BwQCgcBd8AGxpDobPseZLgAAAABJRU5ErkJggg=="
+        ).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = timeout(Duration::from_secs(10), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let count = timeout(Duration::from_secs(10), socket.read(&mut buffer))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() < 16 * 1024);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with("GET /api/v1/sessions/46/media?"));
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer attachment-test-token\r\n")
+                );
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(&bytes).await.unwrap();
+            }
+        });
+        let mut backend = TuiBackend::isolated_test_backend(PathBuf::from("/server/workspace"));
+        Arc::get_mut(&mut backend.inner).unwrap().client = AgenaClient::new(endpoint)
+            .unwrap()
+            .with_bearer_token("attachment-test-token")
+            .unwrap();
+        let mut detail = ToolDetailResource {
+            part_id: 1129,
+            revision: 1,
+            updated_at_ms: 1,
+            section: ToolDetailSection::Output,
+            part_state: Some("completed".into()),
+            value: serde_json::json!({"attachments":[{
+                "kind":"image","mime":"image/png","size_bytes":98,
+                "sha256":"cfdb6b08410a8a0be495f5b1c59bd4fc2575d1d0ff7c65dcd67d539bc2a1af50",
+                "source":{"source":"local_path","path":"/server/changed.png"}
+            }],"truncated":false}),
+        };
+        backend.localize_tool_detail_images(46, &mut detail).await;
+        assert_eq!(
+            detail.value["attachments"][0]["source"]["source"],
+            "local_path"
+        );
+        assert!(
+            detail.value["attachments"][0]
+                .get(LOCALIZED_ATTACHMENT_SOURCE_FIELD)
+                .is_none()
+        );
+        assert!(
+            backend
+                .inner
+                .workspace_image_data_urls
+                .read()
+                .await
+                .is_empty()
+        );
+        // A hashless mutable path can still be displayed, but must be read
+        // again next time and never be admitted to the revision cache.
+        detail.value["attachments"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("sha256");
+        backend.localize_tool_detail_images(46, &mut detail).await;
+        assert_eq!(
+            detail.value["attachments"][0]["source"]["source"],
+            "data_url"
+        );
+        assert!(
+            backend
+                .inner
+                .workspace_image_data_urls
+                .read()
+                .await
+                .is_empty()
+        );
+        timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn generated_images_use_authenticated_media_and_keep_session_authorization() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            // Session 46 owns the image. Session 47 must make its own request
+            // and remain denied; no current-workspace fallback is permitted.
+            for expected in ["/api/v1/sessions/46/media?", "/api/v1/sessions/47/media?"] {
+                let (mut socket, _) = timeout(Duration::from_secs(10), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let count = timeout(Duration::from_secs(10), socket.read(&mut buffer))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(request.len() < 16 * 1024);
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET {expected}")), "{request}");
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer attachment-test-token\r\n")
+                );
+                let allowed = expected.contains("/sessions/46/");
+                let (status, content_type, body) = if allowed {
+                    ("200 OK", "image/png", "image-bytes")
+                } else {
+                    ("403 Forbidden", "application/json", "{}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let mut backend = TuiBackend::isolated_test_backend(PathBuf::from("/server/workspace"));
+        Arc::get_mut(&mut backend.inner).unwrap().client = AgenaClient::new(endpoint)
+            .unwrap()
+            .with_bearer_token("attachment-test-token")
+            .unwrap();
+        let part = || {
+            PartResource {
+            kind: "tool_call".into(),
+            content: serde_json::json!({"output":{"attachments":[{
+                "kind":"image","mime":"image/png","filename":"generated.png","sha256":"2c8648d103e3dd7ad87660da0f126a1443b6d21ac1bd3ec000c5e24e2373a90c",
+                "source":{"source":"local_path","path":"/server/managed/generated.png"}
+            }]}}),
+            presentation: Some(
+                serde_json::from_value(serde_json::json!({
+                    "title":"Generated image","summary":"","blocks":[{
+                        "type":"media","artifact":{
+                            "uri":"file:///server/managed/generated.png","mime":"image/png",
+                            "name":"generated.png","sha256":"2c8648d103e3dd7ad87660da0f126a1443b6d21ac1bd3ec000c5e24e2373a90c"
+                        }
+                    }]
+                }))
+                .unwrap(),
+            ),
+            ..Default::default()
+        }
+        };
+        for session_id in [46, 46, 47] {
+            let mut parts = [part()];
+            timeout(
+                Duration::from_secs(10),
+                backend.localize_workspace_image_parts(session_id, &mut parts),
+            )
+            .await
+            .unwrap();
+            let source = &parts[0].content["output"]["attachments"][0]["source"];
+            let agena_domain::ViewBlock::Media { artifact, .. } =
+                &parts[0].presentation.as_ref().unwrap().blocks[0]
+            else {
+                panic!("expected a media block");
+            };
+            if session_id == 46 {
+                assert_eq!(source["source"], "data_url");
+                assert_eq!(source["url"], artifact.uri);
+                assert!(artifact.uri.starts_with("data:image/png;base64,"));
+            } else {
+                assert_eq!(source["source"], "local_path");
+                assert_eq!(artifact.uri, "file:///server/managed/generated.png");
+            }
+        }
+        timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

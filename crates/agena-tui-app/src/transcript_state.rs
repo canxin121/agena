@@ -118,6 +118,213 @@ fn tool_detail_section_loaded(
         .any(|loaded| loaded.section == section && loaded.revision == part.revision)
 }
 
+fn attachment_original_source(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .get(agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD)
+        .or_else(|| value.get("source"))
+}
+
+fn same_image_attachment_identity(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    let hash = left.get("sha256").and_then(serde_json::Value::as_str);
+    let size = left.get("size_bytes").and_then(serde_json::Value::as_u64);
+    left.get("kind").and_then(serde_json::Value::as_str) == Some("image")
+        && left.get("kind") == right.get("kind")
+        && left.get("mime") == right.get("mime")
+        && hash.is_some_and(|hash| !hash.trim().is_empty())
+        && hash == right.get("sha256").and_then(serde_json::Value::as_str)
+        && size.is_some()
+        && size == right.get("size_bytes").and_then(serde_json::Value::as_u64)
+        && attachment_original_source(left).is_some()
+        && attachment_original_source(left) == attachment_original_source(right)
+}
+
+fn output_images(value: Option<&serde_json::Value>) -> Vec<&serde_json::Value> {
+    value
+        .and_then(|value| value.get("attachments"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("kind").and_then(serde_json::Value::as_str) == Some("image"))
+        .collect()
+}
+
+fn output_image_identities_match(
+    left: Option<&serde_json::Value>,
+    right: &serde_json::Value,
+) -> bool {
+    let left = output_images(left);
+    let right = output_images(Some(right));
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| same_image_attachment_identity(left, right))
+}
+
+fn presentation_media(document: &agena_domain::PartDocument) -> Vec<&agena_domain::ArtifactRef> {
+    document
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            agena_domain::ViewBlock::Media { artifact, .. } => Some(artifact),
+            _ => None,
+        })
+        .collect()
+}
+
+fn media_matches_current_attachment(
+    media: &agena_domain::ArtifactRef,
+    attachment: &serde_json::Value,
+) -> bool {
+    let Some(hash) = media
+        .sha256
+        .as_deref()
+        .filter(|hash| !hash.trim().is_empty())
+    else {
+        return false;
+    };
+    let Some(size) = media.size_bytes else {
+        return false;
+    };
+    if attachment.get("sha256").and_then(serde_json::Value::as_str) != Some(hash)
+        || attachment
+            .get("size_bytes")
+            .and_then(serde_json::Value::as_u64)
+            != Some(size)
+        || attachment.get("mime").and_then(serde_json::Value::as_str) != Some(media.mime.as_str())
+    {
+        return false;
+    }
+    // Compare the currently usable source. A localized data URL only matches
+    // a new reference after that reference itself has been authorized/verified.
+    // Matching its hash alone could revive an older image after a failed read.
+    [
+        attachment.get("source"),
+        attachment.get(agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD),
+    ]
+    .into_iter()
+    .flatten()
+    .any(
+        |source| match source.get("source").and_then(serde_json::Value::as_str) {
+            Some("local_path") => {
+                source.get("path").and_then(serde_json::Value::as_str)
+                    == Some(media.uri.strip_prefix("file://").unwrap_or(&media.uri))
+            }
+            Some("data_url" | "url") => {
+                source.get("url").and_then(serde_json::Value::as_str) == Some(media.uri.as_str())
+            }
+            Some("file_id") => {
+                source.get("file_id").and_then(serde_json::Value::as_str)
+                    == Some(media.uri.as_str())
+            }
+            _ => false,
+        },
+    )
+}
+
+fn older_presentation_matches_current_media(
+    previous: Option<&agena_domain::PartDocument>,
+    current: &agena_api::part::PartResource,
+) -> bool {
+    let media = previous.map(presentation_media).unwrap_or_default();
+    if media.is_empty() {
+        return current
+            .presentation
+            .as_ref()
+            .is_none_or(|document| presentation_media(document).is_empty());
+    }
+    let attachments = current
+        .content
+        .pointer("/output/attachments")
+        .and_then(serde_json::Value::as_array)
+        .filter(|items| !items.is_empty());
+    if let Some(document) = &current.presentation {
+        let current_media = presentation_media(document);
+        if !media.iter().all(|media| {
+            current_media.iter().any(|candidate| {
+                media
+                    .sha256
+                    .as_deref()
+                    .is_some_and(|hash| !hash.trim().is_empty())
+                    && media.sha256 == candidate.sha256
+                    && media.size_bytes.is_some()
+                    && media.size_bytes == candidate.size_bytes
+                    && media.mime == candidate.mime
+                    && (media.uri == candidate.uri
+                        || attachments.is_some_and(|attachments| {
+                            attachments.iter().any(|attachment| {
+                                media_matches_current_attachment(media, attachment)
+                                    && media_matches_current_attachment(candidate, attachment)
+                            })
+                        }))
+            })
+        }) {
+            return false;
+        }
+    }
+    if let Some(attachments) = attachments {
+        // Raw attachment facts take precedence over a stale presentation.
+        return media.iter().all(|media| {
+            attachments
+                .iter()
+                .any(|attachment| media_matches_current_attachment(media, attachment))
+        });
+    }
+    current.presentation.is_some()
+}
+
+/// Keep an already downloaded preview if a detail/media refresh failed. The
+/// caller owns the same part and session; names and array positions confer no
+/// identity. New references or revisions of the image must localize afresh.
+fn preserve_localized_output_attachments(
+    previous: &serde_json::Value,
+    incoming: &mut serde_json::Value,
+) {
+    use agena_tui_transcript::parts::LOCALIZED_ATTACHMENT_SOURCE_FIELD;
+    let Some(previous) = previous
+        .get("attachments")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return;
+    };
+    let Some(incoming) = incoming
+        .get_mut("attachments")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for next in incoming {
+        if next
+            .pointer("/source/source")
+            .and_then(serde_json::Value::as_str)
+            == Some("data_url")
+        {
+            continue;
+        }
+        let Some(old) = previous.iter().find(|old| {
+            old.get(LOCALIZED_ATTACHMENT_SOURCE_FIELD).is_some()
+                && old
+                    .pointer("/source/source")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("data_url")
+                && old
+                    .pointer("/source/url")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|url| url.starts_with("data:image/"))
+                && same_image_attachment_identity(old, next)
+        }) else {
+            continue;
+        };
+        if let Some(object) = next.as_object_mut() {
+            object.insert("source".into(), old["source"].clone());
+            object.insert(
+                LOCALIZED_ATTACHMENT_SOURCE_FIELD.into(),
+                old[LOCALIZED_ATTACHMENT_SOURCE_FIELD].clone(),
+            );
+        }
+    }
+}
+
 fn preserve_loaded_tool_sections(
     previous: &agena_api::part::PartResource,
     incoming: &mut agena_api::part::PartResource,
@@ -138,6 +345,10 @@ fn preserve_loaded_tool_sections(
     ] {
         if (section == agena_api::live::ToolDetailSection::Input
             || previous.state == incoming.state)
+            && (section != agena_api::live::ToolDetailSection::Output
+                || incoming_content.get("output").is_none_or(|output| {
+                    output_image_identities_match(previous_content.get("output"), output)
+                }))
             && let Some(loaded) = previous
                 .sections
                 .iter()
@@ -160,6 +371,8 @@ fn preserve_loaded_tool_sections(
         .sections
         .iter()
         .find(|loaded| loaded.section == agena_api::live::ToolDetailSection::Presentation)
+        && (loaded.revision >= incoming.revision
+            || older_presentation_matches_current_media(previous.presentation.as_ref(), incoming))
         && incoming
             .sections
             .iter()
@@ -178,10 +391,21 @@ pub(crate) fn merge_part_snapshot(
     previous: &agena_api::part::PartResource,
     incoming: &mut agena_api::part::PartResource,
 ) {
+    if previous.part_id != incoming.part_id {
+        return;
+    }
     if (incoming.revision, incoming.updated_at_ms) < (previous.revision, previous.updated_at_ms) {
         let older = std::mem::replace(incoming, previous.clone());
         preserve_loaded_tool_sections(&older, incoming);
     } else {
+        if previous.part_id == incoming.part_id
+            && previous.kind == "tool_call"
+            && incoming.kind == "tool_call"
+            && let Some(previous_output) = previous.content.get("output")
+            && let Some(incoming_output) = incoming.content.get_mut("output")
+        {
+            preserve_localized_output_attachments(previous_output, incoming_output);
+        }
         preserve_loaded_tool_sections(previous, incoming);
     }
 }
@@ -189,10 +413,15 @@ pub(crate) fn merge_part_snapshot(
 fn apply_tool_detail_value(
     part: &mut agena_api::part::PartResource,
     section: agena_api::live::ToolDetailSection,
-    value: serde_json::Value,
+    mut value: serde_json::Value,
 ) -> bool {
     if part.kind != "tool_call" {
         return false;
+    }
+    if section == agena_api::live::ToolDetailSection::Output
+        && let Some(previous) = part.content.get("output")
+    {
+        preserve_localized_output_attachments(previous, &mut value);
     }
     match section {
         agena_api::live::ToolDetailSection::Metadata
@@ -548,7 +777,7 @@ impl TranscriptState {
         if (part.revision, part.updated_at_ms) <= (previous.revision, previous.updated_at_ms) {
             return false;
         }
-        preserve_loaded_tool_sections(previous, &mut part);
+        merge_part_snapshot(previous, &mut part);
         let part_id = part.part_id;
         self.apply_parts_change(move |parts| parts[index] = part);
         // Invalidate only the entry owning the changed durable part.
@@ -639,6 +868,26 @@ impl TranscriptState {
             .any(|loaded| loaded.section == resource.section && loaded.revision > resource.revision)
         {
             return false;
+        }
+        // A cached output may predate a sibling metadata update, but it must
+        // never replace the image identity already present in a newer part.
+        if resource.section == agena_api::live::ToolDetailSection::Output
+            && resource.revision < part.revision
+            && !output_image_identities_match(part.content.get("output"), &resource.value)
+        {
+            return false;
+        }
+        if resource.section == agena_api::live::ToolDetailSection::Presentation
+            && resource.revision < part.revision
+        {
+            let Ok(document) =
+                serde_json::from_value::<agena_domain::PartDocument>(resource.value.clone())
+            else {
+                return false;
+            };
+            if !older_presentation_matches_current_media(Some(&document), part) {
+                return false;
+            }
         }
         if resource.section == agena_api::live::ToolDetailSection::Output
             && agena_tui_transcript::part_state_is_terminal(&part.state)

@@ -106,6 +106,8 @@ thread_local! {
 pub struct MathRenderContext {
     layout: MathLayoutConfig,
     workspace: Option<Arc<PathBuf>>,
+    images_enabled: bool,
+    image_background: [u8; 3],
 }
 
 impl MathRenderContext {
@@ -126,6 +128,15 @@ impl MathRenderContext {
         Self {
             layout: graphics.map_or_else(MathLayoutConfig::default, |graphics| graphics.layout),
             workspace: Some(Arc::new(workspace)),
+            images_enabled: true,
+            image_background: graphics.map_or(
+                [
+                    DEFAULT_DARK_BACKGROUND.red,
+                    DEFAULT_DARK_BACKGROUND.green,
+                    DEFAULT_DARK_BACKGROUND.blue,
+                ],
+                |graphics| graphics.image_background,
+            ),
         }
     }
 }
@@ -151,6 +162,7 @@ pub fn with_math_render_context<T>(context: &MathRenderContext, render: impl FnO
 pub struct MathGraphicsConfig {
     picker: Picker,
     layout: MathLayoutConfig,
+    image_background: [u8; 3],
 }
 
 impl MathGraphicsConfig {
@@ -179,7 +191,11 @@ impl MathGraphicsConfig {
             cell_height: font.height.max(1),
             ..MathLayoutConfig::default()
         };
-        let mut config = Self { picker, layout };
+        let mut config = Self {
+            picker,
+            layout,
+            image_background: [0; 3],
+        };
         config.apply_terminal_appearance(resolved_background);
         config
     }
@@ -202,6 +218,7 @@ impl MathGraphicsConfig {
         // transparent images allow the terminal background to show through.
         self.picker.set_background_color(Some(Rgba([0, 0, 0, 0])));
         self.layout.foreground = foreground_for_background(background);
+        self.image_background = [background.red, background.green, background.blue];
     }
 }
 
@@ -259,6 +276,18 @@ pub fn layout_config() -> MathLayoutConfig {
             .map_or_else(MathLayoutConfig::default, |context| context.layout)
     });
     apply_text_math_rendering_policy(config)
+}
+
+/// A terminal can display raster previews with colored half blocks even when
+/// it has no native graphics protocol. Text exports still keep captions only.
+pub fn image_rendering_enabled() -> bool {
+    TEXT_MATH_RENDER_DEPTH.with(|depth| depth.get() == 0)
+        && RENDER_CONTEXT_STACK.with(|stack| {
+            stack
+                .borrow()
+                .last()
+                .is_some_and(|context| context.images_enabled)
+        })
 }
 
 fn apply_text_math_rendering_policy(mut config: MathLayoutConfig) -> MathLayoutConfig {

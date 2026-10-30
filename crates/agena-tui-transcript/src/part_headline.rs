@@ -232,6 +232,11 @@ fn canonical_headline(payload: &ActivityPayload, i18n: &I18n) -> TranscriptPartH
 }
 
 pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> TranscriptPartHeadline {
+    let image_generation = matches!(
+        &part.content,
+        TranscriptPartContent::Activity(Activity::Operation(tool))
+            if tool.operation.invocation.name == "image_generation"
+    );
     let (title, summary) = match &part.content {
         TranscriptPartContent::UserDocument(document) => (String::new(), document.plain_text()),
         TranscriptPartContent::InlineUi(reply) => (String::new(), reply.copy_text()),
@@ -335,7 +340,11 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
                     request_title.as_str(),
                     tool.error_message().unwrap_or_default(),
                     tool.summary(),
-                    if title.contains(subject) { "" } else { subject },
+                    if image_generation || title.contains(subject) {
+                        ""
+                    } else {
+                        subject
+                    },
                 ]);
                 (title, summary)
             }
@@ -403,7 +412,7 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let title = if supplied_title.is_empty() {
+    let title = if supplied_title.is_empty() || image_generation {
         title
     } else {
         ui_text::localized_activity_title(i18n, &supplied_title)
@@ -412,7 +421,12 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
         part.content,
         TranscriptPartContent::Activity(Activity::Attachment(_) | Activity::CommandReference(_))
     );
-    let summary = if literal_summary {
+    let summary = if image_generation {
+        // The image presentation deliberately uses an empty summary when
+        // its count is already in the title. Keep actual errors/questions,
+        // but do not restore a stored prompt or infer one from the input.
+        summary
+    } else if literal_summary {
         [part.headline.summary.as_str(), summary.as_str()]
             .into_iter()
             .find(|text| !text.trim().is_empty())
@@ -422,6 +436,7 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
         first_content([part.headline.summary.as_str(), summary.as_str()])
     };
     let summary = if summary.is_empty()
+        && !image_generation
         && !matches!(
             part.content,
             TranscriptPartContent::Activity(Activity::AssistantReplyLifecycle(_))
@@ -448,4 +463,78 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
         summary
     };
     TranscriptPartHeadline { title, summary }
+}
+
+#[cfg(test)]
+mod image_headline_tests {
+    use super::*;
+    use crate::{ToolCallView, TranscriptContentId};
+    use agena_domain::{PartDocument, ToolResultState, ViewBlock};
+    use agena_runtime_contracts::part_content::{ToolCallContent, operation_from_tool_call};
+    use serde_json::json;
+
+    fn image_part(summary: &str) -> TranscriptEntryPart<'static> {
+        let content = ToolCallContent {
+            name: "image_generation".into(),
+            input: json!({"description": "A stale copy of the image prompt"}),
+            state: ToolResultState::Completed,
+            ..Default::default()
+        };
+        let tool = ToolCallView::from_operation(
+            operation_from_tool_call(&content),
+            Some(PartDocument {
+                title: "Generate image · 1 image".into(),
+                summary: summary.into(),
+                blocks: vec![ViewBlock::Markdown {
+                    id: Some("text".into()),
+                    text: "A rose in a vase, lit from the left".into(),
+                }],
+            }),
+        );
+        TranscriptEntryPart {
+            id: TranscriptContentId::StoredPart(557),
+            status: PartExecutionStatusResource::Completed,
+            headline: TranscriptPartHeadline {
+                title: "Image generation · an older prompt".into(),
+                summary: "A stale copy of the image prompt".into(),
+            },
+            content: TranscriptPartContent::Activity(Activity::Operation(Box::new(tool))),
+        }
+    }
+
+    #[test]
+    fn image_headline_keeps_the_projected_summary_including_intentional_empty() {
+        for summary in ["", "The provider adjusted the requested dimensions"] {
+            let part = image_part(summary);
+            let headline = part_headline(&part, &I18n::english());
+            assert_eq!(headline.title, "Generate image · 1 image");
+            assert_eq!(headline.summary, summary);
+        }
+    }
+
+    #[test]
+    fn image_headline_still_exposes_a_real_failure() {
+        use agena_failure::*;
+        let mut part = image_part("");
+        part.status = PartExecutionStatusResource::Failed;
+        let TranscriptPartContent::Activity(Activity::Operation(tool)) = &mut part.content else {
+            panic!("expected an image operation");
+        };
+        tool.operation.state = ToolResultState::Failed;
+        tool.operation.error = Some(agena_domain::OperationError {
+            failure: Failure::new(
+                FailureCode::new("test.image_connection"),
+                FailureCategory::DependencyUnavailable,
+                FailureResponsibility::Dependency,
+                RetryDirective::Backoff,
+                RecoveryDirective::Retry,
+                FailureImpact::OperationFailed,
+                UserPresentation::new("test-image-error", "The image provider connection closed"),
+            ),
+        });
+        tool.presentation.title = "Generate image · 1 image · failed".into();
+        let headline = part_headline(&part, &I18n::english());
+        assert_eq!(headline.title, "Generate image · 1 image · failed");
+        assert_eq!(headline.summary, "The image provider connection closed");
+    }
 }

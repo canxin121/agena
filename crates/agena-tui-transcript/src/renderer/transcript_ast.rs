@@ -25,8 +25,9 @@ use super::{
 };
 use crate::{InlineVerticalLayout, push_math_block};
 use agena_tui_media::{
-    MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
-    render_markdown_image, render_markdown_svg, unicode_formula,
+    MathLinePlacement, bounded_image_data_url, image_halfblock_lines, image_rendering_enabled,
+    layout_config, positional_unicode_text, render_markdown_image, render_markdown_svg,
+    unicode_formula,
 };
 
 mod render;

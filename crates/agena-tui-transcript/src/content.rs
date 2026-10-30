@@ -514,10 +514,16 @@ pub fn render_content(
     format: agena_domain::ContentFormat,
 ) {
     let Some(frame) = frame else {
-        out.push(RenderedLine::dim(format!(
-            "{CONTENT_PREFIX}{}",
-            connection_error.unwrap_or(&i18n.text("content-loading"))
-        )));
+        push_content_status(
+            out,
+            connection_error.unwrap_or(&i18n.text("content-loading")),
+            Style::default().fg(if connection_error.is_some() {
+                agena_tui_components::theme::danger_color()
+            } else {
+                agena_tui_components::theme::muted_color()
+            }),
+            width,
+        );
         return;
     };
     let state = match frame.resource.state {
@@ -636,12 +642,39 @@ pub fn render_content(
         }
     }
     if let Some(error) = connection_error.or(frame.resource.capture_error.as_deref()) {
-        out.push(RenderedLine::plain(
-            format!("{CONTENT_PREFIX}{}", agena_tui::sanitize_picker_text(error)),
+        push_content_status(
+            out,
+            error,
             Style::default().fg(agena_tui_components::theme::danger_color()),
-        ));
+            width,
+        );
     }
     out.push(RenderedLine::dim(format!("{BODY_PREFIX}└─")).with_copy_projection("", 0));
+}
+
+pub(crate) fn content_status_text(text: &str) -> String {
+    crate::sanitize_terminal_text(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn push_content_status(out: &mut Vec<RenderedLine>, text: &str, style: Style, width: u16) {
+    let text = content_status_text(text);
+    let available = usize::from(width.saturating_sub(CONTENT_GUTTER).max(1));
+    for row in crate::wrap_rich_line(&[Span::styled(text, style)], available, available) {
+        let copy = row
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let mut spans = vec![Span::styled(CONTENT_PREFIX, style)];
+        spans.extend(row.spans);
+        out.push(
+            RenderedLine::rich(Line::from(spans))
+                .with_copy_projection(copy, usize::from(CONTENT_GUTTER)),
+        );
+    }
 }
 
 fn clip_cells(line: &Line<'static>, width: usize) -> Line<'static> {

@@ -900,8 +900,12 @@ fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> P
     };
     let (source, sha256) = match &resource.reference {
         agena_domain::ResourceReference::Artifact { sha256, uri } => (
-            PartAttachmentSource::FileId {
-                file_id: uri.clone(),
+            if uri.starts_with("data:") {
+                PartAttachmentSource::DataUrl { url: uri.clone() }
+            } else {
+                PartAttachmentSource::FileId {
+                    file_id: uri.clone(),
+                }
             },
             Some(sha256.clone()),
         ),
@@ -1408,6 +1412,7 @@ pub(crate) fn render_part_node(
             };
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
                 tool.has_interaction()
+                    || tool.has_attachments()
                     || operation_default_expanded(
                         defaults,
                         tool.operation.invocation.name.as_str(),
@@ -1724,9 +1729,9 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_RESOURCE))
-            });
+            // Attachments are the visible result of the part. Keep them open
+            // on arrival, while retaining the user's explicit fold choice.
+            let expanded = expansions.get(&key).copied().unwrap_or(true);
             let mut labels = Vec::new();
             for item in &attachment.attachments {
                 let label = attachment_label(item, i18n);
@@ -2731,7 +2736,8 @@ fn render_activity_canonical(
         content_id: part.id,
     };
     let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
-    let default_expanded = defaults.default_expanded(activity_kind_id_for_payload(payload));
+    let default_expanded = matches!(payload, agena_domain::ActivityPayload::Resource(_))
+        || defaults.default_expanded(activity_kind_id_for_payload(payload));
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, _, summary, error) = activity_presentation(payload);
     let retry_headline = match payload {

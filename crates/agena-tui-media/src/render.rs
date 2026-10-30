@@ -4,6 +4,71 @@ pub fn render_markdown_svg(source: &str) -> Result<Arc<MathArtifact>, String> {
     svg_artifact(source.as_bytes())
 }
 
+/// Render the same decoded image as ordinary terminal cells when kitty,
+/// sixel, and iTerm2 graphics are unavailable. Two image pixels share one
+/// cell, preserving the aspect ratio established by the transcript layout.
+pub fn image_halfblock_lines(
+    artifact: &MathArtifact,
+    size: Size,
+) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::{
+        style::{Color, Style},
+        text::{Line, Span},
+    };
+
+    let width = u32::from(size.width);
+    let height = u32::from(size.height).saturating_mul(2);
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || u64::from(width).saturating_mul(u64::from(height)) > MAX_IMAGE_PIXELS
+    {
+        return Vec::new();
+    }
+    let background = RENDER_CONTEXT_STACK.with(|stack| {
+        stack.borrow().last().map_or(
+            [
+                DEFAULT_DARK_BACKGROUND.red,
+                DEFAULT_DARK_BACKGROUND.green,
+                DEFAULT_DARK_BACKGROUND.blue,
+            ],
+            |context| context.image_background,
+        )
+    });
+    let image = artifact
+        .image
+        .resize_exact(width, height, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    let color = |pixel: &Rgba<u8>| {
+        let alpha = u16::from(pixel.0[3]);
+        let channels = std::array::from_fn::<_, 3, _>(|index| {
+            ((u16::from(pixel.0[index]) * alpha
+                + u16::from(background[index]) * (255 - alpha)
+                + 127)
+                / 255) as u8
+        });
+        Color::Rgb(channels[0], channels[1], channels[2])
+    };
+    (0..height)
+        .step_by(2)
+        .map(|y| {
+            Line::from(
+                (0..width)
+                    .map(|x| {
+                        Span::styled(
+                            "▀",
+                            Style::default()
+                                .fg(color(image.get_pixel(x, y)))
+                                .bg(color(image.get_pixel(x, y + 1))),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
 /// Construct a data URL for an attachment only after proving that decoding it
 /// cannot exceed the transcript image byte budget. This prevents an untrusted
 /// plugin payload from being duplicated into a second unbounded allocation

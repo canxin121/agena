@@ -183,8 +183,8 @@ pub fn first_write_redirection_target(command: &str) -> Option<String> {
                     skip_redirect_whitespace(&mut chars);
                 }
                 let target = redirect_target(&mut chars);
-                if !target.is_empty() && target != "/dev/null" {
-                    return Some(target);
+                if !target.raw.is_empty() && target.literal.as_deref() != Some("/dev/null") {
+                    return Some(target.raw);
                 }
             }
             _ => {}
@@ -202,7 +202,7 @@ fn redirect_target_is_dev_null(chars: &mut std::iter::Peekable<std::str::Chars<'
         chars.next();
         skip_redirect_whitespace(chars);
     }
-    redirect_target(chars) == "/dev/null"
+    redirect_target(chars).literal.as_deref() == Some("/dev/null")
 }
 
 fn skip_redirect_whitespace(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
@@ -211,17 +211,60 @@ fn skip_redirect_whitespace(chars: &mut std::iter::Peekable<std::str::Chars<'_>>
     }
 }
 
-/// Collect the redirect destination after an already-consumed `>` (or `>>`).
-fn redirect_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
-    let mut target = String::new();
+struct RedirectTarget {
+    raw: String,
+    literal: Option<String>,
+}
+
+/// Collect one shell word after an already-consumed redirect operator.
+///
+/// Parentheses terminate an unquoted word, including the closing `)` in
+/// `$(command 2>/dev/null)`. Quoted or escaped parentheses remain filename
+/// characters. Only a complete literal word may qualify as the null sink;
+/// expansions and unterminated quotes remain conservative file effects.
+fn redirect_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> RedirectTarget {
+    let mut raw = String::new();
+    let mut literal = String::new();
+    let mut quote = None;
+    let mut complete_literal = true;
     while let Some(&ch) = chars.peek() {
-        if ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '<' | '>') {
+        if quote.is_none()
+            && (ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')'))
+        {
             break;
         }
-        target.push(ch);
         chars.next();
+        raw.push(ch);
+        match (quote, ch) {
+            (None, '\'' | '"') => quote = Some(ch),
+            (Some(active), closing) if active == closing => quote = None,
+            (Some('\''), _) => literal.push(ch),
+            (_, '\\') => {
+                let Some(escaped) = chars.next() else {
+                    complete_literal = false;
+                    break;
+                };
+                raw.push(escaped);
+                if escaped != '\n' {
+                    // In double quotes, backslash only quotes these shell
+                    // characters; other backslashes remain literal.
+                    if quote == Some('"') && !matches!(escaped, '$' | '`' | '"' | '\\') {
+                        literal.push('\\');
+                    }
+                    literal.push(escaped);
+                }
+            }
+            (_, '$' | '`') => {
+                complete_literal = false;
+                literal.push(ch);
+            }
+            _ => literal.push(ch),
+        }
     }
-    target
+    RedirectTarget {
+        raw,
+        literal: (complete_literal && quote.is_none()).then_some(literal),
+    }
 }
 
 /// Detect a shell input-redirection operator outside quotes. Reading from
@@ -470,6 +513,78 @@ fn filesystem_segment_reason(tokens: &[String]) -> Option<String> {
     ))
 }
 
+fn curl_short_option_takes_argument(flag: char) -> bool {
+    matches!(
+        flag,
+        'A' | 'b'
+            | 'c'
+            | 'C'
+            | 'd'
+            | 'D'
+            | 'e'
+            | 'E'
+            | 'F'
+            | 'h'
+            | 'H'
+            | 'K'
+            | 'm'
+            | 'o'
+            | 'P'
+            | 'Q'
+            | 'r'
+            | 't'
+            | 'T'
+            | 'u'
+            | 'U'
+            | 'w'
+            | 'x'
+            | 'X'
+            | 'y'
+            | 'Y'
+            | 'z'
+    )
+}
+
+fn curl_option_takes_next_argument(option: &str) -> bool {
+    (option.len() == 2
+        && option.starts_with('-')
+        && option
+            .chars()
+            .nth(1)
+            .is_some_and(curl_short_option_takes_argument))
+        || matches!(
+            option,
+            "--output"
+                | "--upload-file"
+                | "--config"
+                | "--cookie-jar"
+                | "--cookie"
+                | "--cacert"
+                | "--cert"
+                | "--key"
+                | "--netrc-file"
+                | "--etag-compare"
+                | "--data"
+                | "--data-ascii"
+                | "--data-binary"
+                | "--data-raw"
+                | "--json"
+                | "--form"
+                | "--header"
+                | "--proxy-header"
+                | "--write-out"
+                | "--user"
+                | "--proxy-user"
+                | "--user-agent"
+                | "--request"
+                | "--url"
+                | "--max-time"
+                | "--connect-timeout"
+                | "--proxy"
+                | "--referer"
+        )
+}
+
 fn curl_filesystem_reason(args: &[String]) -> Option<String> {
     if args.iter().any(|arg| arg.starts_with("file://")) {
         return Some("invokes curl with a local file URL".to_string());
@@ -477,8 +592,78 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
     let mut index = 0;
     while index < args.len() {
         let arg = args[index].as_str();
+        if arg == "--" {
+            break;
+        }
+        let mut consumes_next_argument = curl_option_takes_next_argument(arg);
+        // Curl accepts short-option clusters such as `-sSo /dev/null`.
+        // Stop at the first option taking a value: the remainder belongs to
+        // that value, so `-Atrace` cannot become a trace-output option.
+        if arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2 {
+            for (offset, flag) in arg[1..].char_indices() {
+                if matches!(flag, 'O' | 'R' | 'n') {
+                    let option = vec![format!("-{flag}")];
+                    if let Some(reason) = curl_filesystem_reason(&option) {
+                        return Some(reason);
+                    }
+                }
+                if curl_short_option_takes_argument(flag) {
+                    let tail = &arg[offset + 1 + flag.len_utf8()..];
+                    consumes_next_argument = tail.is_empty();
+                    let value = if tail.is_empty() {
+                        args.get(index + 1).map(String::as_str)
+                    } else {
+                        Some(tail)
+                    };
+                    if matches!(
+                        flag,
+                        'b' | 'c' | 'd' | 'D' | 'E' | 'F' | 'H' | 'K' | 'o' | 'T' | 'w'
+                    ) {
+                        let mut option = vec![format!("-{flag}")];
+                        option.extend(value.map(str::to_owned));
+                        if let Some(reason) = curl_filesystem_reason(&option) {
+                            return Some(reason);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        let (option, attached) = arg
+            .split_once('=')
+            .map_or((arg, None), |(name, value)| (name, Some(value)));
+        if matches!(
+            option,
+            "-D" | "--dump-header"
+                | "--trace"
+                | "--trace-ascii"
+                | "--stderr"
+                | "--etag-save"
+                | "--libcurl"
+                | "--hsts"
+                | "--alt-svc"
+        ) {
+            let target = attached.or_else(|| args.get(index + 1).map(String::as_str));
+            let supports_stdout = matches!(
+                option,
+                "-D" | "--dump-header" | "--trace" | "--trace-ascii" | "--stderr" | "--libcurl"
+            );
+            if target != Some("/dev/null") && !(supports_stdout && target == Some("-")) {
+                return Some(format!(
+                    "invokes curl option '{option}' that writes a local file"
+                ));
+            }
+            // Discarding the body or another output is only one no-op effect.
+            // Continue checking every other output, upload and command.
+            index += if attached.is_some() { 1 } else { 2 };
+            continue;
+        }
         match arg {
-            "-o" | "--output" if args.get(index + 1).is_none_or(|value| value != "-") => {
+            "-o" | "--output"
+                if args
+                    .get(index + 1)
+                    .is_none_or(|value| !matches!(value.as_str(), "-" | "/dev/null")) =>
+            {
                 return Some(match args.get(index + 1) {
                     Some(target) if target != "-" => {
                         format!("invokes curl output option that writes a local file '{target}'")
@@ -486,11 +671,22 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                     _ => "invokes curl output option that writes a local file".to_string(),
                 });
             }
-            "-O" | "--remote-name" => {
+            "-O" | "--remote-name" | "--remote-name-all" => {
                 return Some(
                     "invokes curl remote-name output which writes to the current directory"
                         .to_string(),
                 );
+            }
+            "-R" | "--remote-time" | "--remove-on-error" | "--no-clobber" | "--xattr" => {
+                return Some(format!(
+                    "invokes curl option '{arg}' that can change the output file or its metadata"
+                ));
+            }
+            "--output-dir" => {
+                return Some("invokes curl output-directory option for local files".to_string());
+            }
+            "-n" | "--netrc" | "--netrc-optional" => {
+                return Some("invokes curl netrc option that reads a local file".to_string());
             }
             "-T" | "--upload-file" => {
                 return Some(match args.get(index + 1) {
@@ -508,7 +704,9 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                     None => "invokes curl config option that reads a local file".to_string(),
                 });
             }
-            "-c" | "--cookie-jar" => {
+            "-c" | "--cookie-jar"
+                if args.get(index + 1).is_none_or(|value| value != "/dev/null") =>
+            {
                 return Some(match args.get(index + 1) {
                     Some(target) => format!(
                         "invokes curl cookie-jar option that writes a local file '{target}'"
@@ -516,13 +714,29 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                     None => "invokes curl cookie-jar option that writes a local file".to_string(),
                 });
             }
-            "--cacert" | "--cert" | "--key" => {
+            "--cacert" | "-E" | "--cert" | "--key" | "--netrc-file" | "--etag-compare" => {
                 return Some(match args.get(index + 1) {
                     Some(target) => {
                         format!("invokes curl option '{arg}' that reads a local file '{target}'")
                     }
                     None => format!("invokes curl option '{arg}' that reads a local file"),
                 });
+            }
+            "-H" | "--header" | "--proxy-header"
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| value.starts_with('@')) =>
+            {
+                return Some("invokes curl header option that reads a local file".to_string());
+            }
+            "-w" | "--write-out"
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| value.starts_with('@') || value.contains("%output{")) =>
+            {
+                return Some(
+                    "invokes curl write-out format that accesses a local file".to_string(),
+                );
             }
             "-b" | "--cookie"
                 if args
@@ -548,8 +762,16 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 return Some("invokes curl form upload that reads a local file".to_string());
             }
             _ => {
-                if (arg.starts_with("-o") && arg.len() > 2 && &arg[2..] != "-")
-                    || (arg.starts_with("--output=") && arg != "--output=-")
+                if arg.starts_with("--output-dir=") || arg.starts_with("--expand-output") {
+                    return Some(
+                        "invokes curl output option with a dynamic local destination".to_string(),
+                    );
+                }
+                if (arg.starts_with("-o")
+                    && arg.len() > 2
+                    && !matches!(&arg[2..], "-" | "/dev/null"))
+                    || (arg.starts_with("--output=")
+                        && !matches!(arg, "--output=-" | "--output=/dev/null"))
                 {
                     let target = arg
                         .split_once('=')
@@ -577,7 +799,9 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                         "invokes curl config option that reads a local file '{target}'"
                     ));
                 }
-                if (arg.starts_with("-c") && arg.len() > 2) || arg.starts_with("--cookie-jar=") {
+                if (arg.starts_with("-c") && arg.len() > 2 && &arg[2..] != "/dev/null")
+                    || (arg.starts_with("--cookie-jar=") && arg != "--cookie-jar=/dev/null")
+                {
                     let target = arg
                         .split_once('=')
                         .map(|(_, value)| value)
@@ -589,11 +813,27 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 if arg.starts_with("--cacert=")
                     || arg.starts_with("--cert=")
                     || arg.starts_with("--key=")
+                    || arg.starts_with("--netrc-file=")
+                    || arg.starts_with("--etag-compare=")
                 {
                     let target = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
                     return Some(format!(
                         "invokes curl option '{arg}' that reads a local file '{target}'"
                     ));
+                }
+                if ["--header=", "--proxy-header="].iter().any(|prefix| {
+                    arg.strip_prefix(prefix)
+                        .is_some_and(|value| value.starts_with('@'))
+                }) {
+                    return Some("invokes curl header option that reads a local file".to_string());
+                }
+                if arg
+                    .strip_prefix("--write-out=")
+                    .is_some_and(|value| value.starts_with('@') || value.contains("%output{"))
+                {
+                    return Some(
+                        "invokes curl write-out format that accesses a local file".to_string(),
+                    );
                 }
                 if (arg.starts_with("-b")
                     && arg.len() > 2
@@ -628,7 +868,7 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 }
             }
         }
-        index += 1;
+        index += if consumes_next_argument { 2 } else { 1 };
     }
     None
 }
@@ -868,4 +1108,270 @@ fn looks_like_remote_target(arg: &str) -> bool {
             || trimmed.starts_with("git@")
             || trimmed.starts_with("http://")
             || trimmed.starts_with("https://"))
+}
+
+#[cfg(test)]
+mod null_sink_tests {
+    use super::*;
+
+    #[test]
+    fn redirection_recognizes_literal_null_at_shell_boundaries() {
+        for command in [
+            "status=$(printf ok 2>/dev/null)",
+            "(printf ok >/dev/null)",
+            "printf ok >/dev/null; printf done",
+            "printf ok 2>>/dev/null",
+            "printf ok &>/dev/null",
+            "printf ok >'/dev/null'",
+            r#"printf ok >"/dev/null""#,
+            r#"printf ok >/dev/"null""#,
+            r"printf ok >/dev/\null",
+            "printf ok >/dev/\\\nnull",
+        ] {
+            assert!(!contains_write_redirection(command), "{command}");
+            assert_eq!(first_write_redirection_target(command), None, "{command}");
+        }
+        for command in [
+            "cat </dev/null",
+            "(cat <'/dev/null')",
+            r#"cat <"/dev/null""#,
+        ] {
+            assert!(!contains_input_redirection(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn null_like_paths_and_expansions_remain_file_effects() {
+        for target in [
+            "'/dev/null)'",
+            r#""/dev/null)""#,
+            r"/dev/null\)",
+            "/dev/nullx",
+            "/dev/null/file",
+            "/dev/zero",
+            "./dev/null",
+            "${SINK}",
+            r#"/dev/null"$suffix""#,
+            r#""/dev\/null""#,
+            "'/dev/null",
+            "/dev/null\\",
+        ] {
+            let output = format!("printf ok >{target}");
+            assert!(contains_write_redirection(&output), "{output}");
+            assert!(
+                first_write_redirection_target(&output).is_some(),
+                "{output}"
+            );
+            assert!(
+                filesystem_effects_required_reason(&output).is_some(),
+                "{output}"
+            );
+            let input = format!("cat <{target}");
+            assert!(contains_input_redirection(&input), "{input}");
+        }
+    }
+
+    #[test]
+    fn null_redirection_does_not_hide_later_writes() {
+        for command in [
+            "printf ok 2>/dev/null >result.txt",
+            "status=$(printf ok 2>/dev/null); printf done >result.txt",
+            "(printf ok >/dev/null) >result.txt",
+        ] {
+            assert!(contains_write_redirection(command), "{command}");
+            assert_eq!(
+                first_write_redirection_target(command).as_deref(),
+                Some("result.txt"),
+                "{command}"
+            );
+            assert!(
+                filesystem_effects_required_reason(command).is_some(),
+                "{command}"
+            );
+        }
+        for command in [
+            "printf ok >/dev/null; touch result.txt",
+            "curl -o /dev/null https://example.invalid; touch result.txt",
+            "curl -o /dev/null https://example.invalid | tee result.txt",
+            "curl -o /dev/null https://example.invalid && curl -o result.txt https://example.invalid",
+        ] {
+            assert!(
+                filesystem_effects_required_reason(command).is_some(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn null_redirection_does_not_upgrade_uninspected_syntax() {
+        let analysis = analyze_command("status=$(printf ok 2>/dev/null)");
+        assert_eq!(analysis.classification, CommandClassification::Unknown);
+        assert!(!analysis.single_command);
+        assert_eq!(
+            interpret_exit_code(&analysis, 1, false),
+            ExitInterpretation::Error
+        );
+    }
+
+    #[test]
+    fn curl_body_can_discard_to_exact_null_or_stdout() {
+        for options in [
+            "-o /dev/null",
+            "-o/dev/null",
+            "--output /dev/null",
+            "--output=/dev/null",
+            "-o '/dev/null'",
+            r#"-o "/dev/null""#,
+            r#"-o /dev/"null""#,
+            "-sSo /dev/null",
+            "-sSfo/dev/null",
+            "-o -",
+            "-o-",
+            "--output=-",
+            "-o /dev/null -w '%{http_code}'",
+            "-o /dev/null -D /dev/null --trace=/dev/null -c /dev/null",
+        ] {
+            let command = format!("curl {options} https://example.invalid");
+            assert_eq!(
+                filesystem_effects_required_reason(&command),
+                None,
+                "{command}"
+            );
+            assert!(network_command_reason(&command).is_some(), "{command}");
+        }
+    }
+
+    #[test]
+    fn curl_null_like_output_paths_still_require_declarations() {
+        for target in [
+            "/dev/nullx",
+            "/dev/null/file",
+            "/dev/zero",
+            "./dev/null",
+            "'/dev/null)'",
+            r#""/dev\/null""#,
+            "$SINK",
+            r#"/dev/null"$suffix""#,
+            "result.txt",
+        ] {
+            for output in ["-o ", "-o", "--output ", "--output="] {
+                let command = format!("curl {output}{target} https://example.invalid");
+                assert!(
+                    filesystem_effects_required_reason(&command).is_some(),
+                    "{command}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn curl_discard_does_not_hide_other_file_outputs() {
+        for options in [
+            "-o result.txt",
+            "-sSo result.txt",
+            "-D headers.txt",
+            "-sDheaders.txt",
+            "--dump-header=headers.txt",
+            "--trace trace.log",
+            "--trace-ascii=trace.log",
+            "--stderr errors.log",
+            "--etag-save etag.txt",
+            "--etag-save -",
+            "--libcurl generated.c",
+            "--hsts hsts.txt",
+            "--alt-svc=altsvc.txt",
+            "-c cookies.txt",
+            "-scookies.txt",
+            "--cookie-jar=cookies.txt",
+            "-O",
+            "-sO",
+            "--remote-name-all",
+            "--output-dir files",
+            "--output-dir=files",
+            "--expand-output '{{destination}}'",
+            "--no-clobber",
+            "--remove-on-error",
+            "--remote-time",
+            "-sR",
+            "--xattr",
+            "-w '%output{result.txt}%{http_code}'",
+            "--write-out=%output{result.txt}",
+        ] {
+            let command = format!("curl -o /dev/null {options} https://example.invalid");
+            assert!(
+                filesystem_effects_required_reason(&command).is_some(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn curl_discard_does_not_hide_explicit_file_reads() {
+        for options in [
+            "-T input.txt",
+            "--upload-file=input.txt",
+            "-K curl.conf",
+            "--config=curl.conf",
+            "-d @body.txt",
+            "--data-binary=@body.txt",
+            "-F image=@photo.png",
+            "-b cookies.txt",
+            "-H @headers.txt",
+            "-sH@headers.txt",
+            "--header=@headers.txt",
+            "--proxy-header @headers.txt",
+            "-w @format.txt",
+            "--write-out=@format.txt",
+            "--netrc",
+            "--netrc-file=netrc.txt",
+            "--etag-compare etag.txt",
+            "--cert cert.pem",
+            "-sEcert.pem",
+            "file:///tmp/input.txt",
+        ] {
+            let command = format!("curl -o /dev/null {options} https://example.invalid");
+            assert!(
+                filesystem_effects_required_reason(&command).is_some(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn curl_option_values_are_not_reinterpreted_as_options() {
+        for options in [
+            "-A '-oresult.txt'",
+            "--user-agent '-oresult.txt'",
+            "-sA '-oresult.txt'",
+            "-H '--trace'",
+            "--header '--trace'",
+            "-d '--remote-name-all'",
+            "--data-raw '--remote-name-all'",
+            "-w '--output=result.txt'",
+        ] {
+            let command = format!("curl {options} -o /dev/null https://example.invalid");
+            assert_eq!(
+                filesystem_effects_required_reason(&command),
+                None,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_tokens_preserve_posix_double_quote_escapes() {
+        assert_eq!(
+            shell_tokens(r#"curl -o "/dev\/null""#),
+            ["curl", "-o", r"/dev\/null"]
+        );
+        assert_eq!(
+            shell_tokens(r#"printf '%s' "a\q\$b\`c\"d\\e""#),
+            ["printf", "%s", "a\\q$b`c\"d\\e"]
+        );
+        assert_eq!(shell_tokens(r"printf '%s' 'a\b'"), ["printf", "%s", r"a\b"]);
+        assert_eq!(shell_tokens("echo \\\n hi"), ["echo", "hi"]);
+        assert_eq!(shell_tokens("echo hel\\\nlo"), ["echo", "hello"]);
+        assert_eq!(shell_tokens("echo \"\\\n\" hi"), ["echo", "", "hi"]);
+        assert_eq!(shell_tokens("echo '|'"), ["echo", "|"]);
+    }
 }

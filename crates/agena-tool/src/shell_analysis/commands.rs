@@ -9,15 +9,25 @@ pub(super) fn tokens(command: &str) -> Vec<String> {
     let (mut single, mut double, mut escaped, mut started) = (false, false, false, false);
     for ch in command.chars() {
         if escaped {
-            word.push(ch);
             escaped = false;
+            if ch == '\n' {
+                // A shell line continuation is not part of the argv word and
+                // must not introduce an empty argument before whitespace.
+                continue;
+            }
+            if double && !matches!(ch, '$' | '`' | '"' | '\\') {
+                // POSIX double quotes preserve backslashes before other
+                // characters. Dropping one can misidentify a real output
+                // path such as "/dev\\/null" as the null device.
+                word.push('\\');
+            }
+            word.push(ch);
             started = true;
             continue;
         }
         match ch {
             '\\' if !single => {
                 escaped = true;
-                started = true;
             }
             '\'' if !double => {
                 single = !single;

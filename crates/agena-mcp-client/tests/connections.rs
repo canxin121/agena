@@ -412,11 +412,29 @@ async fn streamable_http_supports_both_lifecycles_and_redacts_status_urls() {
     }
 }
 
+type SecretReadPause = (
+    tokio::sync::oneshot::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 #[derive(Default)]
-struct MemorySecrets(Mutex<BTreeMap<String, String>>);
+struct MemorySecrets(
+    Mutex<BTreeMap<String, String>>,
+    Mutex<Option<SecretReadPause>>,
+);
 impl SecretStore for MemorySecrets {
     fn get_secret(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
-        Ok(self.0.lock().unwrap().get(key).cloned())
+        let value = self.0.lock().unwrap().get(key).cloned();
+        let pause = self.1.lock().unwrap().take();
+        if let Some((ready, resume)) = pause {
+            ready
+                .send(())
+                .map_err(|_| SecretStoreError::Other("read observer closed".into()))?;
+            resume.recv_timeout(Duration::from_secs(5)).map_err(|_| {
+                SecretStoreError::Other("paused credential read was not resumed".into())
+            })?;
+        }
+        Ok(value)
     }
     fn set_secret(&self, key: &str, value: &str) -> Result<(), SecretStoreError> {
         self.0.lock().unwrap().insert(key.into(), value.into());
@@ -425,6 +443,18 @@ impl SecretStore for MemorySecrets {
     fn delete_secret(&self, key: &str) -> Result<(), SecretStoreError> {
         self.0.lock().unwrap().remove(key);
         Ok(())
+    }
+    fn delete_secret_if_matches(
+        &self,
+        key: &str,
+        expected: &str,
+    ) -> Result<bool, SecretStoreError> {
+        let mut values = self.0.lock().unwrap();
+        if values.get(key).map(String::as_str) != Some(expected) {
+            return Ok(false);
+        }
+        values.remove(key);
+        Ok(true)
     }
 }
 
@@ -539,6 +569,27 @@ async fn oauth_pkce_completion_checks_binding_and_logout_preserves_bearer() {
         },
     ));
     assert!(changed_registration.load().await.unwrap().is_none());
+
+    // Pause clear after it observes this binding, then save a different binding
+    // through another worker. The stale clear must preserve the replacement.
+    let replacement = bound.load().await.unwrap().unwrap();
+    let (ready, observed) = tokio::sync::oneshot::channel();
+    let (resume, paused) = std::sync::mpsc::channel();
+    *memory.1.lock().unwrap() = Some((ready, paused));
+    let clearing = tokio::spawn({
+        let bound = bound.clone();
+        async move { bound.clear().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), observed)
+        .await
+        .unwrap()
+        .unwrap();
+    changed_scopes.save(replacement).await.unwrap();
+    resume.send(()).unwrap();
+    clearing.await.unwrap().unwrap();
+    assert!(changed_scopes.load().await.unwrap().is_some());
+    assert!(bound.load().await.unwrap().is_none());
+
     assert!(
         sessions
             .complete(&flow.flow_id, &callback, "revision-one")

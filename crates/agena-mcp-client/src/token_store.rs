@@ -407,7 +407,12 @@ impl CredentialStore for FileOAuthCredentialStore {
                 if Self::decode_credentials(&raw, Some(&binding))?.is_none() {
                     return Ok(());
                 }
-                store.delete_secret(&key).map_err(Self::auth_error)
+                // A refresh or another registration can replace the record
+                // after binding validation. Never delete that newer credential.
+                store
+                    .delete_secret_if_matches(&key, &raw)
+                    .map(|_| ())
+                    .map_err(Self::auth_error)
             })
             .await
             .map_err(Self::auth_error)?

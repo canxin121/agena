@@ -50,6 +50,10 @@ pub trait SecretStore: Send + Sync {
     fn get_secret(&self, key: &str) -> Result<Option<String>, SecretStoreError>;
     fn set_secret(&self, key: &str, value: &str) -> Result<(), SecretStoreError>;
     fn delete_secret(&self, key: &str) -> Result<(), SecretStoreError>;
+    /// Delete only the exact value observed by the caller. Comparison and
+    /// removal are one atomic operation; a missing or replaced value is kept.
+    fn delete_secret_if_matches(&self, key: &str, expected: &str)
+    -> Result<bool, SecretStoreError>;
     fn list_secret_keys(&self) -> Result<Vec<String>, SecretStoreError> {
         Err(SecretStoreError::Other(
             "listing is unsupported by this store".to_owned(),
@@ -255,6 +259,21 @@ impl SecretStore for FileSecretStore {
         })
     }
 
+    fn delete_secret_if_matches(
+        &self,
+        key: &str,
+        expected: &str,
+    ) -> Result<bool, SecretStoreError> {
+        self.locked(|store, values| {
+            if values.get(key).map(String::as_str) != Some(expected) {
+                return Ok(false);
+            }
+            values.remove(key);
+            store.write(values)?;
+            Ok(true)
+        })
+    }
+
     fn list_secret_keys(&self) -> Result<Vec<String>, SecretStoreError> {
         self.locked(|_, values| Ok(values.keys().cloned().collect()))
     }
@@ -339,4 +358,67 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conditional_delete_preserves_replaced_and_unrelated_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = FileSecretStore::at(directory.path(), "conditional-delete");
+        let second = FileSecretStore::at(directory.path(), "conditional-delete");
+        first.set_secret("oauth", "first-registration").unwrap();
+        first.set_secret("bearer", "independent-bearer").unwrap();
+        let observed = first.get_secret("oauth").unwrap().unwrap();
+        second
+            .set_secret("oauth", "replacement-registration")
+            .unwrap();
+        let encrypted = std::fs::read(first.path()).unwrap();
+
+        assert!(!first.delete_secret_if_matches("oauth", &observed).unwrap());
+        assert_eq!(std::fs::read(first.path()).unwrap(), encrypted);
+        assert_eq!(
+            second.get_secret("oauth").unwrap().as_deref(),
+            Some("replacement-registration")
+        );
+        assert!(
+            second
+                .delete_secret_if_matches("oauth", "replacement-registration")
+                .unwrap()
+        );
+        assert!(
+            !first
+                .delete_secret_if_matches("oauth", "replacement-registration")
+                .unwrap()
+        );
+        assert_eq!(
+            first.get_secret("bearer").unwrap().as_deref(),
+            Some("independent-bearer")
+        );
+    }
+
+    #[test]
+    fn independent_handles_can_delete_the_observed_value_only_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = FileSecretStore::at(directory.path(), "racing-delete");
+        let second = FileSecretStore::at(directory.path(), "racing-delete");
+        first.set_secret("oauth", "current-registration").unwrap();
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = [first, second].map(|store| {
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                store
+                    .delete_secret_if_matches("oauth", "current-registration")
+                    .unwrap()
+            })
+        });
+        let deleted = handles
+            .into_iter()
+            .map(|handle| usize::from(handle.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(deleted, 1);
+    }
 }

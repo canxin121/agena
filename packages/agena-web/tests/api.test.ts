@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { ApiError, apiBlob, apiResponse, apiText } from '../src/lib/api'
+import { ApiError, apiBlob, apiFetch, apiResponse, apiText } from '../src/lib/api'
 import { OC_AUTH_REQUIRED_EVENT, readAuthRequiredFromStorage, type AuthRequiredDetail } from '../src/lib/authEvents'
 import { readServerAuthTokenVersion, writeServerAuthTokenForBaseUrl } from '../src/lib/serverAuthToken'
 
@@ -186,5 +186,100 @@ describe('shared HTTP error boundary', () => {
       expect(error).toMatchObject({ status: 304, message: 'Request failed (304)', bodyText: '' })
     }
     expect(authEvents).toEqual([])
+  })
+})
+
+describe('shared HTTP request boundary', () => {
+  const requests = [{ name: 'apiFetch', request: apiFetch }, ...readers]
+
+  for (const { name, request } of requests) {
+    test(`${name} preserves all HeadersInit forms and caller request options`, async () => {
+      const entries: [string, string][] = [
+        ['Authorization', 'Bearer caller-token'],
+        ['Accept', 'text/plain'],
+        ['Content-Type', 'text/plain'],
+        ['X-Custom', 'kept'],
+      ]
+      for (const headers of [Object.fromEntries(entries), entries, new Headers(entries)]) {
+        const before = Array.from(new Headers(headers).entries())
+        const controller = new AbortController()
+        globalThis.fetch = (async (url, init) => {
+          expect(String(url)).toBe(`${origin}/api/v1/operation`)
+          const sent = new Headers(init?.headers)
+          expect(sent.get('authorization')).toBe('Bearer caller-token')
+          expect(sent.get('accept')).toBe('text/plain')
+          expect(sent.get('content-type')).toBe('text/plain')
+          expect(sent.get('x-custom')).toBe('kept')
+          expect(init?.method).toBe('POST')
+          expect(init?.body).toBe('command')
+          expect(init?.signal).toBe(controller.signal)
+          expect(init?.credentials).toBe('same-origin')
+          expect(init?.cache).toBe('no-store')
+          expect(init?.redirect).toBe('error')
+          return new Response('ok')
+        }) as typeof fetch
+        await request('/api/v1/operation', {
+          method: 'POST',
+          headers,
+          body: 'command',
+          signal: controller.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+          redirect: 'error',
+        })
+        expect(Array.from(new Headers(headers).entries())).toEqual(before)
+      }
+    })
+  }
+
+  test('reader defaults apply only to absent headers and leave caller Headers unchanged', async () => {
+    for (const { name, request } of requests) {
+      const defaults = name === 'apiFetch' || name === 'apiResponse' ? 'application/json' : null
+      for (const [headers, expectedAuth, expectedAccept] of [
+        [new Headers(), 'Bearer request-token', defaults],
+        [new Headers({ authorization: '', accept: '' }), '', ''],
+      ] as const) {
+        const before = Array.from(headers.entries())
+        globalThis.fetch = (async (_, init) => {
+          const sent = new Headers(init?.headers)
+          expect(sent.get('authorization')).toBe(expectedAuth)
+          expect(sent.get('accept')).toBe(expectedAccept)
+          return new Response('ok')
+        }) as typeof fetch
+        await request('/api/v1/operation', { headers })
+        expect(Array.from(headers.entries())).toEqual(before)
+      }
+    }
+  })
+
+  test('credential defaults retain backend trust, token presence, and explicit overrides', async () => {
+    const cases = [
+      {
+        url: '/api/v1/operation',
+        token: 'request-token',
+        expectedAuth: 'Bearer request-token',
+        expectedCredentials: 'omit',
+      },
+      { url: '/api/v1/operation', token: '', expectedAuth: null, expectedCredentials: 'include' },
+      { url: 'https://outside.test/file', token: 'request-token', expectedAuth: null, expectedCredentials: 'omit' },
+      {
+        url: '/api/v1/operation',
+        token: 'request-token',
+        credentials: 'same-origin',
+        expectedAuth: 'Bearer request-token',
+        expectedCredentials: 'same-origin',
+      },
+    ] as const
+    for (const { request } of requests) {
+      for (const fixture of cases) {
+        writeServerAuthTokenForBaseUrl(origin, fixture.token)
+        globalThis.fetch = (async (_, init) => {
+          expect(new Headers(init?.headers).get('authorization')).toBe(fixture.expectedAuth)
+          expect(init?.credentials).toBe(fixture.expectedCredentials)
+          return new Response('ok')
+        }) as typeof fetch
+        await request(fixture.url, 'credentials' in fixture ? { credentials: fixture.credentials } : undefined)
+      }
+    }
   })
 })

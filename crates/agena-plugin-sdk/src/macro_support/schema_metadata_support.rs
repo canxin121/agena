@@ -8,6 +8,9 @@ use super::schema_support::{
     escape_json_pointer_segment, resolve_schema_ref, resolve_schema_value,
     unescape_json_pointer_segment,
 };
+use super::validation_paths::{
+    JsonPathSegment, json_path_matches_segments, parse_json_path, value_present,
+};
 use crate::identity::normalized_name_distance;
 
 // Keep the independent non-empty rule when later metadata batches replace
@@ -200,6 +203,33 @@ pub fn set_schema_value_list_metadata(
     object.insert(key.to_string(), Value::Array(values.to_vec()));
 }
 
+/// Record a field default that the input parser actually injects. The field
+/// may be omitted; its type and value constraints still apply when supplied.
+pub fn set_schema_input_default_metadata(
+    schema: &mut Value,
+    pointer: &str,
+    field: &str,
+    value: Value,
+) {
+    let Some(parent_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let field_pointer = format!(
+        "{parent_pointer}/properties/{}",
+        escape_json_pointer_segment(field)
+    );
+    let Some(property) = ensure_schema_object_at_pointer(schema, &field_pointer) else {
+        return;
+    };
+    // Keep a field's default beside its $ref, not in the shared definition.
+    property.insert("default".to_owned(), value);
+    if let Some(parent) = schema.pointer_mut(&parent_pointer) {
+        let mut required = schema_required_names(parent);
+        required.retain(|name| name != field);
+        set_schema_required_names(parent, &required);
+    }
+}
+
 pub fn set_schema_value_metadata(schema: &mut Value, pointer: &str, key: &str, value: Value) {
     let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
         return;
@@ -326,6 +356,178 @@ pub fn set_schema_non_empty_metadata(schema: &mut Value, pointer: &str) {
         return;
     };
     set_schema_non_empty_metadata_on_object(target);
+}
+
+// Rust's str::trim uses Unicode White_Space. Keep an explicit BMP class
+// instead of ECMA-262 \s, whose character set differs (notably U+0085/U+FEFF).
+const EMPTY_STRING_PATTERN: &str =
+    r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
+
+/// Require at least one match of a strict input path and non-empty values for
+/// every match. A wildcard is existential for presence: an empty sibling array
+/// must not invalidate another sibling that has a match.
+///
+/// The complement of `items: { not: child }` expresses this without `contains`,
+/// preserving the structural schema consumed by the closed settings compiler.
+/// Typed command validation continues to enforce this relational constraint.
+pub fn set_schema_strict_non_empty_path_metadata(schema: &mut Value, pointer: &str, path: &str) {
+    let segments = parse_json_path(path);
+    if segments.is_empty() {
+        return;
+    }
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    // A missing property can be supplied by serde/arg defaults. Evaluate the
+    // serialized default with the runtime path grammar and value predicate;
+    // a mixed default such as ["a", ""] is not a valid substitute.
+    let mut context = schema.pointer(&resolved_pointer);
+    let mut defaults = Vec::with_capacity(segments.len());
+    for (index, segment) in segments.iter().enumerate() {
+        context = match context.map(|current| path_schema_child(schema, current, segment)) {
+            Some(Ok(child)) => child,
+            None => None,
+            // Multiple composed shapes can have different serde defaults or
+            // custom branch selection. Do not invent a stricter raw-input
+            // contract where that runtime choice is not represented.
+            Some(Err(())) => return,
+        };
+        let matches = context
+            .and_then(|child| {
+                child
+                    .get("default")
+                    .or_else(|| resolve_schema_value(schema, child).get("default"))
+            })
+            .map(|value| json_path_matches_segments(value, &segments[index + 1..]))
+            .unwrap_or_default();
+        let invalid = matches.iter().any(|value| !value_present(value));
+        defaults.push((!matches.is_empty() && !invalid, invalid));
+    }
+    let mut present = serde_json::json!({});
+    let mut invalid = serde_json::json!({"anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": EMPTY_STRING_PATTERN},
+        {"type": "array", "maxItems": 0},
+        {"type": "object", "maxProperties": 0},
+    ]});
+    for (index, segment) in segments.iter().enumerate().rev() {
+        match segment {
+            JsonPathSegment::Key(key) => {
+                for (condition, absent_matches) in [
+                    (&mut present, defaults[index].0),
+                    (&mut invalid, defaults[index].1),
+                ] {
+                    let mut properties = serde_json::Map::new();
+                    properties.insert(key.clone(), std::mem::take(condition));
+                    *condition = serde_json::json!({
+                        "type": "object",
+                        "properties": properties,
+                    });
+                    if !absent_matches {
+                        condition["required"] = serde_json::json!([key]);
+                    }
+                }
+            }
+            JsonPathSegment::AllItems => {
+                for condition in [&mut present, &mut invalid] {
+                    *condition = serde_json::json!({
+                        "type": "array",
+                        "not": {"items": {"not": std::mem::take(condition)}},
+                    });
+                }
+            }
+        }
+    }
+    let Some(object) = ensure_schema_object_at_pointer(schema, &resolved_pointer) else {
+        return;
+    };
+    append_schema_not(
+        object,
+        serde_json::json!({"anyOf": [
+            {"not": present}, invalid,
+        ]}),
+    );
+}
+
+fn path_schema_child<'a>(
+    root: &'a Value,
+    current: &'a Value,
+    segment: &JsonPathSegment,
+) -> std::result::Result<Option<&'a Value>, ()> {
+    let current = resolve_schema_value(root, current);
+    let expected = match segment {
+        JsonPathSegment::Key(_) => "object",
+        JsonPathSegment::AllItems => "array",
+    };
+    // A custom deserializer can turn a wire string into a Rust Vec, for
+    // example. Its serialized validation path must not force the input to
+    // become an array. Nullable containers retain their ordinary traversal.
+    let incompatible = match current.get("type") {
+        Some(Value::String(kind)) => kind != expected && kind != "null",
+        Some(Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|kind| kind != expected && kind != "null"),
+        _ => false,
+    };
+    if incompatible {
+        return Err(());
+    }
+    let child = match segment {
+        JsonPathSegment::Key(key) => current
+            .get("properties")
+            .and_then(|properties| properties.get(key)),
+        JsonPathSegment::AllItems => current.get("items"),
+    };
+    if child.is_some() {
+        return Ok(child);
+    }
+    for group in ["oneOf", "anyOf", "allOf"] {
+        if let Some(branches) = current.get(group).and_then(Value::as_array) {
+            let mut shapes = branches.iter().filter(|branch| {
+                resolve_schema_value(root, branch)
+                    .get("type")
+                    .and_then(Value::as_str)
+                    != Some("null")
+            });
+            if let Some(shape) = shapes.next() {
+                if shapes.next().is_some() {
+                    return Err(());
+                }
+                return path_schema_child(root, shape, segment);
+            }
+        }
+    }
+    // A validation path may describe a parsed enum payload or another
+    // parse-only field. A wrapped public object does not expose that key at
+    // this location; do not invent a raw-input requirement for it.
+    if matches!(segment, JsonPathSegment::Key(_)) && current.get("properties").is_some() {
+        return Err(());
+    }
+    Ok(None)
+}
+
+fn append_schema_not(object: &mut serde_json::Map<String, Value>, forbidden: Value) {
+    if let Some(existing) = object.get_mut("not") {
+        if existing == &forbidden {
+            return;
+        }
+        if let Some(alternatives) = existing
+            .as_object_mut()
+            .filter(|object| object.len() == 1)
+            .and_then(|object| object.get_mut("anyOf"))
+            .and_then(Value::as_array_mut)
+        {
+            if !alternatives.contains(&forbidden) {
+                alternatives.push(forbidden);
+            }
+            return;
+        }
+        let previous = std::mem::take(existing);
+        *existing = serde_json::json!({"anyOf": [previous, forbidden]});
+    } else {
+        object.insert("not".to_owned(), forbidden);
+    }
 }
 
 pub fn prefix_schema_order_metadata(schema: &mut Value, prefix: &str) {
@@ -690,6 +892,14 @@ fn set_schema_non_empty_metadata_on_object(object: &mut serde_json::Map<String, 
     if let Some(key) = non_empty_minimum_key(object) {
         object.insert(NON_EMPTY_METADATA.to_string(), Value::Bool(true));
         set_schema_minimum_u64_metadata_on_object(object, key, 1);
+    }
+    if schema_kind_matches(object, "string") {
+        append_schema_not(
+            object,
+            serde_json::json!({
+                "type": "string", "pattern": EMPTY_STRING_PATTERN,
+            }),
+        );
     }
 }
 

@@ -737,3 +737,183 @@ async fn patch_settings_returns_the_shared_edit_response() {
     );
     assert!(server.requests.lock().unwrap()[0].starts_with("PATCH /api/v1/settings "));
 }
+
+#[tokio::test]
+async fn typed_auth_provider_responses_keep_defaults_and_credential_request_boundaries() {
+    const PROVIDER: &str = r#"{"provider_id":"fixture","configured":true,"credential_present":false,"api_key_write_supported":true,"refresh_supported":false}"#;
+    const PROVIDERS: &str = r#"[{"provider_id":"fixture","configured":true,"credential_present":false,"api_key_write_supported":true,"refresh_supported":false}]"#;
+    let list_server = Fixture::new("127.0.0.1:0", "unused", Some(PROVIDERS)).await;
+    let providers = AgenaClient::new(&list_server.url)
+        .unwrap()
+        .auth_providers()
+        .await
+        .unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].provider_id, "fixture");
+    assert!(!providers[0].expired);
+
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(PROVIDER)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let provider = client.auth_provider("fixture").await.unwrap();
+    assert!(!provider.expired && provider.credential_type.is_none());
+    let stored = client
+        .set_auth_api_key("fixture", "fixture-private-key".to_owned())
+        .await
+        .unwrap();
+    assert_eq!(stored.provider_id, "fixture");
+    let removed = client.delete_auth_provider("fixture").await.unwrap();
+    assert!(!removed.credential_present);
+    let requests = server.requests.lock().unwrap();
+    assert!(requests[0].starts_with("GET /api/v1/auth/providers/fixture "));
+    assert!(requests[1].starts_with("PUT /api/v1/auth/providers/fixture/api-key "));
+    assert!(requests[2].starts_with("DELETE /api/v1/auth/providers/fixture "));
+    let bodies = server.request_bodies.lock().unwrap();
+    assert!(bodies[0].is_empty() && bodies[2].is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap(),
+        serde_json::json!({"api_key": "fixture-private-key"})
+    );
+}
+
+#[tokio::test]
+async fn typed_auth_flows_keep_handshakes_and_pending_poll_states() {
+    const BROWSER: &str = r#"{"provider_id":"fixture","authorize_url":"https://example.test/authorize","state":"fixture-state","pkce_verifier":"fixture-verifier"}"#;
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(BROWSER)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let openai = client
+        .start_openai_browser_auth("fixture", "http://localhost:9876/auth/callback")
+        .await
+        .unwrap();
+    let gitlab = client
+        .start_gitlab_browser_auth("fixture", "http://localhost:9876/auth/callback")
+        .await
+        .unwrap();
+    assert_eq!(openai.state, "fixture-state");
+    assert_eq!(gitlab.pkce_verifier, "fixture-verifier");
+    assert!(openai.instance_url.is_none() && gitlab.instance_url.is_none());
+    for body in server.request_bodies.lock().unwrap().iter() {
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({
+                "provider_id":"fixture", "redirect_uri":"http://localhost:9876/auth/callback"
+            })
+        );
+    }
+
+    const DEVICE: &str = r#"{"provider_id":"fixture","verification_url":"https://example.test/device","user_code":"USER-CODE","device_code":"fixture-device","interval_seconds":3}"#;
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(DEVICE)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let openai = client.start_openai_device_auth("fixture").await.unwrap();
+    let copilot = client
+        .start_copilot_device_auth("fixture", Some("github.example.test"))
+        .await
+        .unwrap();
+    assert_eq!(openai.user_code, "USER-CODE");
+    assert_eq!(copilot.device_code, "fixture-device");
+    assert_eq!(copilot.interval_seconds, 3);
+    {
+        let bodies = server.request_bodies.lock().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap(),
+            serde_json::json!({"provider_id":"fixture"})
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap(),
+            serde_json::json!({
+                "provider_id":"fixture", "enterprise_domain":"github.example.test"
+            })
+        );
+    }
+
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"completed":false}"#)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let openai = client
+        .poll_openai_device_auth("fixture", "fixture-device".into(), "USER-CODE".into())
+        .await
+        .unwrap();
+    let copilot = client
+        .poll_copilot_device_auth("fixture", "fixture-device".into(), None)
+        .await
+        .unwrap();
+    assert!(!openai.completed && openai.provider.is_none());
+    assert!(!copilot.completed && copilot.provider.is_none());
+    {
+        let bodies = server.request_bodies.lock().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap(),
+            serde_json::json!({
+                "provider_id":"fixture", "device_code":"fixture-device", "user_code":"USER-CODE"
+            })
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap(),
+            serde_json::json!({
+                "provider_id":"fixture", "device_code":"fixture-device", "enterprise_domain":null
+            })
+        );
+    }
+
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"completed":true}"#)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let openai = client
+        .finish_openai_browser_auth(
+            "fixture",
+            "fixture-code".into(),
+            "fixture-verifier".into(),
+            "http://localhost:9876/auth/callback".into(),
+        )
+        .await
+        .unwrap();
+    let gitlab = client
+        .finish_gitlab_browser_auth(
+            "fixture",
+            "fixture-code".into(),
+            "fixture-verifier".into(),
+            "http://localhost:9876/auth/callback".into(),
+        )
+        .await
+        .unwrap();
+    assert!(openai.completed && gitlab.completed);
+    let bodies = server.request_bodies.lock().unwrap();
+    for body in bodies.iter() {
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({
+                "provider_id":"fixture", "code":"fixture-code", "pkce_verifier":"fixture-verifier",
+                "redirect_uri":"http://localhost:9876/auth/callback"
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_auth_responses_keep_protocol_and_decode_error_classes() {
+    let malformed = Fixture::new("127.0.0.1:0", "unused", Some("{")).await;
+    let client = AgenaClient::new(&malformed.url).unwrap();
+    assert!(matches!(
+        client.auth_provider("fixture").await,
+        Err(ClientError::Protocol(_))
+    ));
+    let invalid = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"provider_id":17}"#)).await;
+    let client = AgenaClient::new(&invalid.url).unwrap();
+    assert!(matches!(
+        client.auth_provider("fixture").await,
+        Err(ClientError::Decode(_))
+    ));
+}
+
+#[tokio::test]
+async fn typed_auth_lists_reject_invalid_dates_and_unknown_credential_variants() {
+    for wire in [
+        r#"[{"provider_id":"fixture","configured":true,"credential_present":true,"api_key_write_supported":false,"refresh_supported":true,"expires_at":"not-rfc3339"}]"#,
+        r#"[{"provider_id":"fixture","configured":true,"credential_present":true,"api_key_write_supported":false,"refresh_supported":true,"credential_type":"unknown-credential-type"}]"#,
+        r#"[{"provider_id":"fixture","configured":true,"credential_present":true,"api_key_write_supported":false,"refresh_supported":true,"credential_issuer":"unknown-credential-issuer"}]"#,
+    ] {
+        let server = Fixture::new("127.0.0.1:0", "unused", Some(wire)).await;
+        let client = AgenaClient::new(&server.url).unwrap();
+        assert!(
+            matches!(client.auth_providers().await, Err(ClientError::Decode(_))),
+            "wire: {wire}"
+        );
+    }
+}

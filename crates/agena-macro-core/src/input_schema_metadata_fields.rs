@@ -4,6 +4,8 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Fields, LitStr, Result};
 
+use super::input_arg_output_support::apply_arg_default_to_spec;
+use super::input_postprocess_support::input_default_schema_metadata_calls;
 use super::{
     doc_text, flatten_shape_type, nested_input_shape_spec, parse_input_field_arg_attrs,
     prepare_input_field_names,
@@ -81,6 +83,19 @@ pub fn tool_input_struct_field_schema_metadata_calls(
                 );
             });
         }
+        // Make runtime-injected defaults visible before global and variant
+        // constraints decide whether a missing path can be satisfied.
+        let mut defaults = Vec::new();
+        apply_arg_default_to_spec(
+            &mut defaults,
+            &names.schema_path,
+            &names.parse_path,
+            &names.schema_aliases,
+            &field.ty,
+            arg_config.default,
+            arg_config.default_expr.clone(),
+        );
+        calls.extend(input_default_schema_metadata_calls(prefix, &defaults));
         let description = doc_text(&field.attrs).and_then(|text| {
             let trimmed = text.trim().to_string();
             (!trimmed.is_empty()).then_some(trimmed)

@@ -134,7 +134,7 @@ impl AgenaClient {
             .request_builder(
                 reqwest::Method::POST,
                 self.endpoint("/api/v1/sessions/import"),
-                None,
+                None::<&serde_json::Value>,
                 Some("application/json"),
             )
             .header(reqwest::header::CONTENT_TYPE, MEDIA_TYPE)

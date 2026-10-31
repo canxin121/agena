@@ -9,8 +9,7 @@ use crate::{
     constraint_relation_metadata_calls, constraint_schema_metadata_calls,
     expand_flatten_shape_post_parse_tokens, expand_flatten_shape_schema_normalize_expr,
     expand_input_alias_normalize_tokens, expand_input_default_insert_tokens,
-    expand_input_default_schema_metadata_tokens, expand_input_dispatch_fn,
-    expand_input_example_expr, expand_input_root_default_insert_tokens,
+    expand_input_dispatch_fn, expand_input_example_expr, expand_input_root_default_insert_tokens,
     expand_input_root_default_schema_metadata_tokens,
     expand_input_root_example_schema_metadata_tokens, expand_input_shape_enum_normalize_fn,
     expand_input_shape_enum_parse_error_remap_expr,
@@ -18,13 +17,13 @@ use crate::{
     expand_input_shape_enum_validate_error_remap_expr, expand_input_shape_variant_validation_arm,
     expand_input_tags_expr, expand_nested_shape_schema_normalize_expr,
     expand_result_path_remap_expr, expand_schema_metadata_fn, input_constraint_field_lookup,
-    input_default_schema_metadata_calls, input_error_path_mappings,
-    normalize_array_value_constraints, normalize_array_value_nested_path_constraints,
-    normalized_input_variant_config, parse_input_config, resolve_constraint_expr_paths,
-    resolve_constraint_group_paths, resolve_constraint_lit_paths, resolve_constraint_pair_paths,
-    resolve_constraint_string_paths, resolve_constraint_strings_paths,
-    resolve_constraint_usize_paths, resolve_constraint_values_paths, serde_rename_all_fields_rule,
-    serde_rename_all_rule, struct_flatten_shape_types, struct_nested_shape_fields,
+    input_error_path_mappings, normalize_array_value_constraints,
+    normalize_array_value_nested_path_constraints, normalized_input_variant_config,
+    parse_input_config, resolve_constraint_expr_paths, resolve_constraint_group_paths,
+    resolve_constraint_lit_paths, resolve_constraint_pair_paths, resolve_constraint_string_paths,
+    resolve_constraint_strings_paths, resolve_constraint_usize_paths,
+    resolve_constraint_values_paths, serde_rename_all_fields_rule, serde_rename_all_rule,
+    struct_flatten_shape_types, struct_nested_shape_fields,
 };
 
 pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
@@ -104,10 +103,6 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             let config = normalized_input_variant_config(variant, enum_field_rule)?;
             let mut calls = constraint_schema_metadata_calls(prefix, &config)?;
             calls.extend(constraint_relation_metadata_calls(prefix, &config)?);
-            calls.extend(input_default_schema_metadata_calls(
-                prefix,
-                &config.input_defaults,
-            ));
             Ok(calls)
         })?;
     let flatten_shape_post_parse_expr =
@@ -120,7 +115,11 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         variant_validate_error_remap_expr,
     ) = match &input.data {
         Data::Enum(data_enum) => (
-            expand_input_shape_enum_normalize_fn(&data_enum.variants, enum_field_rule)?,
+            expand_input_shape_enum_normalize_fn(
+                &input.attrs,
+                &data_enum.variants,
+                enum_field_rule,
+            )?,
             expand_input_shape_enum_parse_error_remap_expr(&data_enum.variants, enum_field_rule)?,
             expand_input_shape_enum_post_parse_normalize_expr(
                 &data_enum.variants,
@@ -228,8 +227,6 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         config.default,
         config.default_expr.as_ref(),
     );
-    let input_default_schema_metadata_expr =
-        expand_input_default_schema_metadata_tokens(&config.input_defaults);
     let input_root_example_schema_metadata_expr =
         expand_input_root_example_schema_metadata_tokens(config.example.as_ref());
     let input_error_path_mappings = input_error_path_mappings(&input.attrs, &input.data)?;
@@ -258,7 +255,6 @@ pub fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                         let schema = &mut schema;
                         #input_root_default_schema_metadata_expr
                         #input_root_example_schema_metadata_expr
-                        #input_default_schema_metadata_expr
                     }
                     schema
                 }).clone()

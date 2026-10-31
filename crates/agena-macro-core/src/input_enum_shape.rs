@@ -1,8 +1,11 @@
 //! Enum-shape handling for tool input schemas.
 
+use super::serde_rename_support::{
+    serde_attribute_aliases, serde_internal_tag, serde_variant_input, serde_variant_rename_all_rule,
+};
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
-use syn::{Fields, LitStr, Result, Token, Type, Variant};
+use syn::{Attribute, Fields, LitStr, Result, Token, Type, Variant};
 
 use super::{
     NestedInputShapeField, PathStringConstraint, SerdeRenameRule, built_in_normalization_tokens,
@@ -16,6 +19,7 @@ use super::{
 };
 
 pub fn expand_input_shape_enum_normalize_fn(
+    attrs: &[Attribute],
     variants: &Punctuated<Variant, Token![,]>,
     enum_field_rule: Option<SerdeRenameRule>,
 ) -> Result<proc_macro2::TokenStream> {
@@ -32,9 +36,20 @@ pub fn expand_input_shape_enum_normalize_fn(
         flatten_shapes: Vec<Type>,
     }
 
+    let internal_tag = serde_internal_tag(attrs)?;
+    let tag = internal_tag
+        .clone()
+        .unwrap_or_else(|| LitStr::new("action", proc_macro2::Span::call_site()));
+    let variant_rename_rule = serde_variant_rename_all_rule(attrs)?;
     let mut normalize_variants = Vec::new();
     let mut action_candidates = Vec::new();
+    let mut action_match_arms = Vec::new();
+    let mut has_variant_fallback = false;
     for variant in variants {
+        let serde_input = serde_variant_input(variant, variant_rename_rule)?;
+        if serde_input.name.is_none() && !serde_input.fallback {
+            continue;
+        }
         let config = normalized_input_variant_config(variant, enum_field_rule)?;
         let variant_field_rule = serde_rename_all_rule(&variant.attrs)?.or(enum_field_rule);
         let nested_shapes = variant
@@ -47,7 +62,41 @@ pub fn expand_input_shape_enum_normalize_fn(
             .iter()
             .filter_map(|field| flatten_shape_type(field).transpose())
             .collect::<Result<Vec<_>>>()?;
-        let action = input_variant_action_name(variant, &config);
+        if internal_tag.is_none() && !config.input_defaults.is_empty() {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "variant #[arg(default)] requires an internally tagged enum; use #[serde(default)] for adjacent, external, or untagged payloads",
+            ));
+        }
+        let action = if internal_tag.is_some() {
+            let input = serde_input;
+            has_variant_fallback |= input.fallback;
+            let Some(name) = input.name else {
+                if input.fallback && !config.input_defaults.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        variant,
+                        "variant #[arg(default)] requires an internally tagged enum; use #[serde(default)] for adjacent, external, or untagged payloads",
+                    ));
+                }
+                continue;
+            };
+            name
+        } else {
+            input_variant_action_name(variant, &config)
+        };
+        let mut aliases = serde_attribute_aliases(&variant.attrs)?;
+        if let Some(alias) = config.action.as_ref() {
+            aliases.push(alias.value());
+        }
+        aliases.sort();
+        aliases.dedup();
+        let aliases = aliases
+            .into_iter()
+            .filter(|alias| alias != &action.value())
+            .map(|alias| LitStr::new(&alias, variant.ident.span()))
+            .collect::<Vec<_>>();
+        // Keep serde's variant declaration order when aliases overlap.
+        action_match_arms.push(quote! { #action #( | #aliases)* => #action.to_string(), });
         action_candidates.push(action.clone());
         if config.default_when_empty
             || !config.infer_when_present.is_empty()
@@ -60,7 +109,7 @@ pub fn expand_input_shape_enum_normalize_fn(
             || !flatten_shapes.is_empty()
         {
             normalize_variants.push(EnumNormalizeVariant {
-                action: input_variant_action_name(variant, &config),
+                action,
                 default_when_empty: config.default_when_empty,
                 infer_when_present: config.infer_when_present,
                 drop_keys: config.drop_keys,
@@ -73,6 +122,24 @@ pub fn expand_input_shape_enum_normalize_fn(
             });
         }
     }
+
+    let unknown_action_arm = if has_variant_fallback {
+        // Let serde select an `other` or untagged fallback without changing
+        // the payload or injecting a different variant's defaults.
+        quote! { _ => return Ok(serde_json::Value::Object(object)), }
+    } else {
+        quote! {
+            other => {
+                let suggestions = ::agena_plugin_sdk::macro_support::suggest_name_candidates(
+                    other, [#(#action_candidates),*], 1,
+                );
+                let message = ::agena_plugin_sdk::macro_support::unknown_name_message(
+                    #tag, other, &suggestions,
+                );
+                return Err(::agena_plugin_sdk::PluginError::invalid_params(message));
+            }
+        }
+    };
 
     if action_candidates.is_empty() {
         return Ok(quote! {
@@ -107,7 +174,7 @@ pub fn expand_input_shape_enum_normalize_fn(
             quote! {
                 if object.is_empty() {
                     object.insert(
-                        "action".to_string(),
+                        #tag.to_string(),
                         serde_json::Value::String(#action.to_string()),
                     );
                 }
@@ -258,26 +325,13 @@ pub fn expand_input_shape_enum_normalize_fn(
                 serde_json::Value::Object(object) => object,
                 other => return Ok(other),
             };
-            let action_candidates = [#(#action_candidates),*];
 
             #default_empty_expr
 
-            let action = match object.get("action").and_then(serde_json::Value::as_str) {
+            let action = match object.get(#tag).and_then(serde_json::Value::as_str) {
                 Some(action) => match action {
-                    other if action_candidates.iter().any(|candidate| *candidate == other) => other.to_string(),
-                    other => {
-                        let suggestions = ::agena_plugin_sdk::macro_support::suggest_name_candidates(
-                            other,
-                            action_candidates,
-                            1,
-                        );
-                        let message = ::agena_plugin_sdk::macro_support::unknown_name_message(
-                            "action",
-                            other,
-                            &suggestions,
-                        );
-                        return Err(::agena_plugin_sdk::PluginError::invalid_params(message));
-                    }
+                    #(#action_match_arms)*
+                    #unknown_action_arm
                 },
                 None => {
                     let mut inferred_action: Option<&str> = None;
@@ -287,13 +341,15 @@ pub fn expand_input_shape_enum_normalize_fn(
                     };
                     let action = action.to_string();
                     object.insert(
-                        "action".to_string(),
+                        #tag.to_string(),
                         serde_json::Value::String(action.clone()),
                     );
                     action
                 }
             };
 
+            // Canonicalize declared aliases before serde selects the variant.
+            object.insert(#tag.to_string(), serde_json::Value::String(action.clone()));
             match action.as_str() {
                 #(#drop_match_arms)*
                 _ => {}
@@ -551,4 +607,49 @@ pub fn expand_input_shape_variant_validation_arm(
     };
 
     Ok(Some(arm))
+}
+
+#[cfg(test)]
+mod default_representation_tests {
+    #[test]
+    fn unsupported_variant_default_payloads_are_rejected() {
+        let inputs: [syn::DeriveInput; 4] = [
+            syn::parse_quote! {
+                enum External { Values { #[arg(default)] entries: Vec<String> } }
+            },
+            syn::parse_quote! {
+                #[serde(tag = "kind", content = "payload")]
+                enum Adjacent { Values { #[arg(default)] entries: Vec<String> } }
+            },
+            syn::parse_quote! {
+                #[serde(untagged)]
+                enum Untagged { Values { #[arg(default)] entries: Vec<String> } }
+            },
+            syn::parse_quote! {
+                #[serde(tag = "kind")]
+                enum VariantUntagged {
+                    Known,
+                    #[serde(untagged)]
+                    Raw { #[arg(default)] entries: Vec<String> },
+                }
+            },
+        ];
+        for input in inputs {
+            let error = crate::input_expand_support::expand_input(input).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("variant #[arg(default)] requires an internally tagged enum")
+            );
+        }
+        let skipped: syn::DeriveInput = syn::parse_quote! {
+            #[serde(tag = "kind", content = "payload")]
+            enum Adjacent {
+                Good,
+                #[serde(skip_deserializing)]
+                Old { #[arg(default)] entries: Vec<String> },
+            }
+        };
+        crate::input_expand_support::expand_input(skipped).unwrap();
+    }
 }

@@ -25,24 +25,9 @@ use crate::drivers::dispatch::{PluginDispatcher, StreamHandle};
 use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeStreamHandle, ToolStreamError};
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostClient, HostCommandMutationResponse,
-    HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
-    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
-    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostHookListResponse,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRegisteredCommandListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, PluginNotifyRequest, ToolDescriptor,
+    EventSubscription, HostClient, HostCommandMutationResponse, HostCommandRegisterRequest,
+    HostCommandRemoveRequest, HostCommandUpdateRequest, HostRegisteredCommandListResponse,
+    LogLevel,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -758,7 +743,7 @@ fn params_with_optional_context(mut params: serde_json::Value) -> serde_json::Va
     params
 }
 
-crate::drivers::impl_callback_host_client!(StdioHostClient, params_with_optional_context, {
+crate::drivers::impl_callback_host_client!(@stdio StdioHostClient, params_with_optional_context, {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
         if let Err(error) = self
             .notify(
@@ -819,100 +804,13 @@ crate::drivers::impl_callback_host_client!(StdioHostClient, params_with_optional
         crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_NETWORK, serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() }))).await
     }
 
-    async fn ask_user(&self, req: AskUserRequest) -> crate::error::Result<AskUserResponse> {
-        self.call(
-            method::HOST_ASK_USER,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn list_tools(&self) -> crate::error::Result<Vec<ToolDescriptor>> {
-        self.call(
-            method::HOST_TOOL_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn get_context_status(
-        &self,
-        req: HostContextStatusRequest,
-    ) -> crate::error::Result<HostContextStatusResponse> {
-        self.call(
-            method::HOST_CONTEXT_STATUS,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn set_session_model(
-        &self,
-        req: HostSetSessionModelRequest,
-    ) -> crate::error::Result<HostSetSessionModelResponse> {
-        self.call(
-            method::HOST_SESSION_SET_MODEL,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn monitor_start(&self, req: MonitorStartRequest) -> crate::error::Result<MonitorHandle> {
-        self.call(
-            method::HOST_MONITOR_START,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn monitor_list(&self) -> crate::error::Result<Vec<MonitorHandle>> {
-        self.call(
-            method::HOST_MONITOR_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn monitor_read(
-        &self,
-        req: MonitorReadRequest,
-    ) -> crate::error::Result<MonitorReadResponse> {
-        self.call(
-            method::HOST_MONITOR_READ,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::error::Result<MonitorHandle> {
-        self.call(
-            method::HOST_MONITOR_STOP,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
     async fn register_command(
         &self,
@@ -968,374 +866,34 @@ crate::drivers::impl_callback_host_client!(StdioHostClient, params_with_optional
         .await
     }
 
-    async fn register_tool(
-        &self,
-        req: HostToolRegisterRequest,
-    ) -> crate::error::Result<HostToolMutationResponse> {
-        self.call(
-            method::HOST_TOOL_REGISTRY_REGISTER,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn update_tool(
-        &self,
-        req: HostToolUpdateRequest,
-    ) -> crate::error::Result<HostToolMutationResponse> {
-        self.call(
-            method::HOST_TOOL_REGISTRY_UPDATE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn remove_tool(
-        &self,
-        req: HostToolRemoveRequest,
-    ) -> crate::error::Result<HostToolMutationResponse> {
-        self.call(
-            method::HOST_TOOL_REGISTRY_REMOVE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn list_registered_tools(&self) -> crate::error::Result<HostRegisteredToolListResponse> {
-        self.call(
-            method::HOST_TOOL_REGISTRY_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn storage_get(
-        &self,
-        req: HostStorageGetRequest,
-    ) -> crate::error::Result<HostStorageGetResponse> {
-        self.call(
-            method::HOST_STORAGE_GET,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn storage_set(&self, req: HostStorageSetRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_STORAGE_SET,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_STORAGE_DELETE,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn storage_list(
-        &self,
-        req: HostStorageListRequest,
-    ) -> crate::error::Result<HostStorageListResponse> {
-        self.call(
-            method::HOST_STORAGE_LIST,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn secret_get(
-        &self,
-        req: HostSecretGetRequest,
-    ) -> crate::error::Result<HostSecretGetResponse> {
-        self.call(
-            method::HOST_SECRET_GET,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn secret_set(&self, req: HostSecretSetRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_SECRET_SET,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn secret_delete(&self, req: HostSecretDeleteRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_SECRET_DELETE,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn secret_list(&self) -> crate::error::Result<HostSecretListResponse> {
-        self.call(
-            method::HOST_SECRET_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn plugin_status_list(&self) -> crate::error::Result<HostPluginStatusListResponse> {
-        self.call(
-            method::HOST_PLUGIN_STATUS_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn plugin_status_get(
-        &self,
-        req: HostPluginStatusGetRequest,
-    ) -> crate::error::Result<HostPluginStatusGetResponse> {
-        self.call(
-            method::HOST_PLUGIN_STATUS_GET,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn lsp_list_servers(&self) -> crate::error::Result<HostLspListServersResponse> {
-        self.call(
-            method::HOST_LSP_LIST_SERVERS,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn lsp_list_diagnostics(
-        &self,
-        req: HostLspListDiagnosticsRequest,
-    ) -> crate::error::Result<HostLspListDiagnosticsResponse> {
-        self.call(
-            method::HOST_LSP_LIST_DIAGNOSTICS,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn scheduler_list(&self) -> crate::error::Result<HostSchedulerListResponse> {
-        self.call(
-            method::HOST_SCHEDULER_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn scheduler_create(
-        &self,
-        req: HostSchedulerCreateRequest,
-    ) -> crate::error::Result<HostSchedulerCreateResponse> {
-        self.call(
-            method::HOST_SCHEDULER_CREATE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn scheduler_delete(
-        &self,
-        req: HostSchedulerDeleteRequest,
-    ) -> crate::error::Result<HostSchedulerDeleteResponse> {
-        self.call(
-            method::HOST_SCHEDULER_DELETE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn hook_list(&self) -> crate::error::Result<HostHookListResponse> {
-        self.call(
-            method::HOST_HOOK_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn mcp_list_servers(&self) -> crate::error::Result<HostMcpListServersResponse> {
-        self.call(
-            method::HOST_MCP_LIST_SERVERS,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_MCP_ADD_SERVER,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn mcp_remove_server(
-        &self,
-        req: HostMcpRemoveServerRequest,
-    ) -> crate::error::Result<HostMcpRemoveServerResponse> {
-        self.call(
-            method::HOST_MCP_REMOVE_SERVER,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn display_contribute(
-        &self,
-        req: HostDisplayContributeRequest,
-    ) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_UI_DISPLAY_CONTRIBUTE,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn display_remove(
-        &self,
-        req: HostDisplayRemoveRequest,
-    ) -> crate::error::Result<HostDisplayRemoveResponse> {
-        self.call(
-            method::HOST_UI_DISPLAY_REMOVE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn notify(&self, req: PluginNotifyRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_NOTIFY,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::error::Result<()> {
-        let _: serde_json::Value = self
-            .call(
-                method::HOST_UI_THEME_REGISTER,
-                serde_json::json!({
-                    "request": req,
-                    "context": crate::host_api::current_host_callback_context(),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
 
-    async fn ui_theme_list(&self) -> crate::error::Result<HostThemeListResponse> {
-        self.call(
-            method::HOST_UI_THEME_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 
-    async fn ui_theme_remove(
-        &self,
-        req: HostThemeRemoveRequest,
-    ) -> crate::error::Result<HostThemeRemoveResponse> {
-        self.call(
-            method::HOST_UI_THEME_REMOVE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
 });
 
 fn error_object_from(e: PluginError) -> ErrorObject {
@@ -1846,8 +1404,8 @@ mod cancellation_tests {
 mod permission_tests {
     use super::*;
     use crate::host_api::{
-        HostCallbackContext, PathPermissionQuery, PermissionQuery,
-        run_in_isolated_host_callback_context,
+        HostCallbackContext, HostStorageGetRequest, HostStorageSetRequest, PathPermissionQuery,
+        PermissionQuery, run_in_isolated_host_callback_context,
     };
 
     #[tokio::test]
@@ -1949,6 +1507,125 @@ mod permission_tests {
                 method::HOST_PERMISSION_REQUIRE_NETWORK
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn extended_callbacks_keep_ack_payloads_typed_results_and_authority() {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(4);
+        let pending = Arc::new(StdMutex::new(
+            HashMap::<RequestId, oneshot::Sender<Response>>::new(),
+        ));
+        let client = StdioHostClient {
+            tx,
+            pending: pending.clone(),
+            next_id: Arc::new(AtomicI64::new(1)),
+        };
+        let context = HostCallbackContext {
+            session_id: Some(31),
+            call_id: Some(47),
+            authority_token: Some("opaque-test-authority".into()),
+            ..Default::default()
+        };
+        let expected_context = serde_json::to_value(&context).unwrap();
+        let responder = tokio::spawn(async move {
+            let responses = [
+                (method::HOST_STORAGE_SET, serde_json::Value::Null),
+                (
+                    method::HOST_STORAGE_SET,
+                    serde_json::json!({"stored": true}),
+                ),
+                (
+                    method::HOST_STORAGE_GET,
+                    serde_json::json!({"value": "fixture-value"}),
+                ),
+                (method::HOST_STORAGE_GET, serde_json::json!({"value": 17})),
+                (method::HOST_STORAGE_SET, serde_json::Value::Null),
+                (
+                    method::HOST_SECRET_LIST,
+                    serde_json::json!({"names": ["fixture"]}),
+                ),
+            ];
+            for (index, (method, result)) in responses.into_iter().enumerate() {
+                let body = rx.recv().await.unwrap();
+                let request: Request = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request.method, method);
+                let params = request.params.as_ref().unwrap();
+                if index < 5 {
+                    assert_eq!(params["context"], expected_context);
+                    assert_eq!(params["request"]["namespace"], "fixture");
+                    assert_eq!(params["request"]["key"], "key");
+                    if method == method::HOST_STORAGE_SET {
+                        assert_eq!(params["request"]["value"], "fixture-value");
+                    }
+                } else {
+                    assert_eq!(params, &serde_json::json!({"context": null}));
+                }
+                let payload = if index == 4 {
+                    ResponsePayload::Err {
+                        error: error_object_from(
+                            PluginError::from_kind(
+                                PluginErrorKind::PolicyDenied,
+                                "fixture policy denial",
+                            )
+                            .with_hook("fixture.remote_hook"),
+                        ),
+                    }
+                } else {
+                    ResponsePayload::Ok { result }
+                };
+                pending
+                    .lock()
+                    .unwrap()
+                    .remove(&request.id)
+                    .unwrap()
+                    .send(Response {
+                        jsonrpc: JsonRpcVersion,
+                        id: request.id,
+                        payload,
+                    })
+                    .unwrap();
+            }
+        });
+        run_in_isolated_host_callback_context(context, async {
+            let set = HostStorageSetRequest {
+                scope: Default::default(),
+                visibility: Default::default(),
+                namespace: "fixture".into(),
+                key: "key".into(),
+                value: "fixture-value".into(),
+            };
+            let get = HostStorageGetRequest {
+                scope: Default::default(),
+                visibility: Default::default(),
+                namespace: "fixture".into(),
+                key: "key".into(),
+            };
+            client.storage_set(set.clone()).await.unwrap();
+            client.storage_set(set.clone()).await.unwrap();
+            assert_eq!(
+                client
+                    .storage_get(get.clone())
+                    .await
+                    .unwrap()
+                    .value
+                    .as_deref(),
+                Some("fixture-value")
+            );
+            assert_eq!(
+                client.storage_get(get).await.unwrap_err().kind,
+                PluginErrorKind::InvalidParams
+            );
+            let error = client.storage_set(set).await.unwrap_err();
+            assert_eq!(error.kind, PluginErrorKind::PolicyDenied);
+            assert_eq!(
+                error.diagnostic.hook.as_deref(),
+                Some("fixture.remote_hook")
+            );
+        })
+        .await;
+        assert_eq!(client.secret_list().await.unwrap().names, ["fixture"]);
+        responder.await.unwrap();
+        assert!(client.pending.lock().unwrap().is_empty());
     }
 }
 

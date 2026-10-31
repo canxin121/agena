@@ -6,13 +6,15 @@ use agena_provider::ProviderCatalog;
 
 use crate::ApplicationError;
 use crate::dto::{
-    AuthBrowserStartResource, AuthCredentialIssuerResource, AuthCredentialType,
-    AuthDeviceStartResource, AuthLoginKindResource, AuthLoginResultResource, AuthProviderResource,
     CatalogModelMatchResource, CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse,
     ModelCatalogRefreshResponse, ModelCatalogResponse, ModelCatalogSourceKind,
     RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
 };
 use crate::service::ApplicationService;
+use agena_api::resource::{
+    AuthBrowserStartResource, AuthCredentialIssuerResource, AuthCredentialType,
+    AuthDeviceStartResource, AuthLoginKindResource, AuthLoginResultResource, AuthProviderResource,
+};
 
 static APPLICATION_FILE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 

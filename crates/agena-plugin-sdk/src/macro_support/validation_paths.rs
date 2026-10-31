@@ -723,7 +723,7 @@ pub fn json_path_present(root: &Value, path: &str) -> bool {
     path_present_segments(root, &segments)
 }
 
-fn value_present(value: &Value) -> bool {
+pub(super) fn value_present(value: &Value) -> bool {
     match value {
         Value::Null => false,
         Value::Bool(_) | Value::Number(_) => true,
@@ -778,7 +778,10 @@ fn json_path_matches<'a>(root: &'a Value, path: &str) -> Vec<&'a Value> {
     json_path_matches_segments(root, &segments)
 }
 
-fn json_path_matches_segments<'a>(root: &'a Value, segments: &[JsonPathSegment]) -> Vec<&'a Value> {
+pub(super) fn json_path_matches_segments<'a>(
+    root: &'a Value,
+    segments: &[JsonPathSegment],
+) -> Vec<&'a Value> {
     let mut matches = Vec::new();
     collect_json_path_matches(root, segments, &mut matches);
     matches
@@ -1188,23 +1191,27 @@ fn validate_distinct_trimmed_matches(
     Ok(())
 }
 
-fn parse_json_path(path: &str) -> Vec<JsonPathSegment> {
+pub(super) fn parse_json_path(path: &str) -> Vec<JsonPathSegment> {
     let mut segments = Vec::new();
     for segment in path.split('.') {
-        if let Some(key) = segment.strip_suffix("[]") {
-            if !key.is_empty() {
-                segments.push(JsonPathSegment::Key(key.to_string()));
-            }
+        let mut key = segment;
+        let mut array_depth = 0;
+        while let Some(inner) = key.strip_suffix("[]") {
+            key = inner;
+            array_depth += 1;
+        }
+        if !key.is_empty() {
+            segments.push(JsonPathSegment::Key(key.to_string()));
+        }
+        for _ in 0..array_depth {
             segments.push(JsonPathSegment::AllItems);
-        } else if !segment.is_empty() {
-            segments.push(JsonPathSegment::Key(segment.to_string()));
         }
     }
     segments
 }
 
 #[derive(Clone, PartialEq, Eq)]
-enum JsonPathSegment {
+pub(super) enum JsonPathSegment {
     Key(String),
     AllItems,
 }

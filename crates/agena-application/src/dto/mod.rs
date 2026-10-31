@@ -6,7 +6,6 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use agena_storage::MemoryType;
 
 mod access;
-mod auth;
 mod marketplace;
 mod memory;
 mod model_catalog;
@@ -30,7 +29,6 @@ pub use agena_api::resource::{
     PluginSettingsResponse, PluginSettingsUpdateRequest, PluginSettingsUpdateResponse,
     PluginSummaryTranslation, PluginSurfaceCatalogResponse, PluginToolInvokeRequest,
 };
-pub use auth::*;
 pub use marketplace::*;
 pub use memory::*;
 pub(crate) use model_catalog::catalog_model_resource_from_record;

@@ -3,6 +3,8 @@
 use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Result};
 
+use crate::input_arg_output_support::apply_arg_default_to_spec;
+use crate::input_postprocess_support::input_default_schema_metadata_calls;
 use crate::plugin_impl_config::sanitize_generated_ident_label;
 
 use super::{
@@ -345,43 +347,23 @@ pub fn expand_plugin_tool_input_schema(
             }
         })
         .collect::<Vec<_>>();
-    let default_calls = model
+    let mut defaults = Vec::new();
+    for field in model
         .input_fields
         .iter()
         .filter(|field| !field.flatten_shape)
-        .filter_map(|field| {
-            let pointer = LitStr::new(
-                format!("/properties/{}", field.wire_name.value()).as_str(),
-                field.wire_name.span(),
-            );
-            let ty = &field.ty;
-            if let Some(expr) = field.default_expr.as_ref() {
-                Some(quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_value_metadata(
-                        schema,
-                        #pointer,
-                        "default",
-                        ::agena_plugin_sdk::serde_json::json!(#expr),
-                    );
-                })
-            } else if field.default {
-                Some(quote! {
-                    if let Ok(__default) = ::agena_plugin_sdk::serde_json::to_value(
-                        <#ty as ::core::default::Default>::default(),
-                    ) {
-                        ::agena_plugin_sdk::macro_support::set_schema_value_metadata(
-                            schema,
-                            #pointer,
-                            "default",
-                            __default,
-                        );
-                    }
-                })
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    {
+        apply_arg_default_to_spec(
+            &mut defaults,
+            &field.wire_name,
+            &field.wire_name,
+            &field.aliases,
+            &field.ty,
+            field.default,
+            field.default_expr.clone(),
+        );
+    }
+    let default_calls = input_default_schema_metadata_calls("", &defaults);
     let schema_source = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
         quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_schema() }
     } else {

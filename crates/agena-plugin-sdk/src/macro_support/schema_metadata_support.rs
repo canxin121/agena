@@ -10,6 +10,10 @@ use super::schema_support::{
 };
 use crate::identity::normalized_name_distance;
 
+// Keep the independent non-empty rule when later metadata batches replace
+// ordinary count bounds (for example, a ToolSpec applied to a typed input).
+const NON_EMPTY_METADATA: &str = "x-agena-non-empty";
+
 pub fn set_schema_metadata(
     schema: &mut Value,
     pointer: &str,
@@ -594,6 +598,13 @@ fn set_schema_u64_metadata_on_object(
             return;
         }
     }
+    let value = if object.get(NON_EMPTY_METADATA).and_then(Value::as_bool) == Some(true)
+        && non_empty_minimum_key(object) == Some(key)
+    {
+        value.max(1)
+    } else {
+        value
+    };
     object.insert(
         key.to_string(),
         Value::Number(serde_json::Number::from(value)),
@@ -676,12 +687,21 @@ fn set_schema_non_empty_metadata_on_object(object: &mut serde_json::Map<String, 
             return;
         }
     }
+    if let Some(key) = non_empty_minimum_key(object) {
+        object.insert(NON_EMPTY_METADATA.to_string(), Value::Bool(true));
+        set_schema_minimum_u64_metadata_on_object(object, key, 1);
+    }
+}
+
+fn non_empty_minimum_key(object: &serde_json::Map<String, Value>) -> Option<&'static str> {
     if schema_kind_matches(object, "string") {
-        set_schema_minimum_u64_metadata_on_object(object, "minLength", 1);
+        Some("minLength")
     } else if schema_kind_matches(object, "array") {
-        set_schema_minimum_u64_metadata_on_object(object, "minItems", 1);
+        Some("minItems")
     } else if schema_kind_matches(object, "object") || object.contains_key("properties") {
-        set_schema_minimum_u64_metadata_on_object(object, "minProperties", 1);
+        Some("minProperties")
+    } else {
+        None
     }
 }
 

@@ -769,7 +769,7 @@ pub fn preview_value(value: &JsonValue) -> String {
             }
         }
         JsonValue::Number(number) => number.to_string(),
-        JsonValue::String(text) => truncate_text(text, 40),
+        JsonValue::String(text) => truncate_display_text(text, 40),
         JsonValue::Array(items) => format!("{} item(s)", items.len()),
         JsonValue::Object(object) => format!("{} field(s)", object.len()),
     }
@@ -898,5 +898,5 @@ use super::{
     schema_description_text, schema_first_string_keyword, schema_for_path,
     schema_max_u64_constraint, schema_min_u64_constraint, schema_prefix_item_count,
     schema_prohibits_additional_properties, schema_property_name_schemas, schema_required_fields,
-    set_value_at_path, truncate_text, validate_schema_at,
+    set_value_at_path, truncate_display_text, validate_schema_at,
 };

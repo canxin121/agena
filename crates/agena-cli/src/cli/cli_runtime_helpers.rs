@@ -75,3 +75,13 @@ pub(super) fn title_from_prompt(prompt: &str) -> String {
         truncated
     }
 }
+
+pub(super) fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
+    let server = server.trim();
+    if server.is_empty() {
+        return Err(AppError::Config(
+            "MCP server name must not be empty".to_owned(),
+        ));
+    }
+    Ok(server.to_owned())
+}

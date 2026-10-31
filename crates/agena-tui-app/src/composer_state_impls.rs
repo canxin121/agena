@@ -36,7 +36,7 @@ impl ComposerDraft {
 pub(crate) fn composer_item_label(item: &ComposerItem, i18n: &I18n) -> String {
     match &item.activity.payload {
         ActivityPayload::Resource(resource) => {
-            let mut label = crate::app_session_helpers::attachment_chip_label(
+            let mut label = crate::ui_text::attachment_chip_label(
                 i18n,
                 resource_display_path(resource).as_path(),
                 attachment_kind_for_resource(resource.kind),

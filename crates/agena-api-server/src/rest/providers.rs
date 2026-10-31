@@ -29,9 +29,9 @@ pub async fn list_aws_profile_names(
         .run_blocking(|_| agena_application::provider_queries::list_aws_profile_names())
         .await
         .map_err(ServerError::from)?;
-    Ok(Json(serde_json::json!({
-        "profiles": profiles,
-    })))
+    Ok(Json(agena_api::resource::AwsProfileNamesResponse {
+        profiles,
+    }))
 }
 
 pub async fn list_provider_models(
@@ -63,18 +63,12 @@ pub async fn list_configured_provider_models(
 
 pub async fn list_provider_adapter_models(
     State(state): State<AppState>,
-    Json(request): Json<ProviderAdapterModelsRequest>,
+    Json(request): Json<ListProviderAdapterModelsParams>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(
         agena_application::provider_queries::list_provider_adapter_models_response(
             state.application(),
-            ListProviderAdapterModelsParams {
-                provider_id: request.provider_id,
-                base_url: request.base_url,
-                protocol_paths: request.protocol_paths,
-                api_key: request.api_key,
-                adapter_ids: request.adapter_ids,
-            },
+            request,
         )
         .await
         .map_err(server_error_from_application)?,
@@ -453,6 +447,6 @@ fn provider_studio_auth_error(
 }
 use super::{
     AppState, AxumQuery, IntoResponse, Json, ListProviderAdapterModelsParams,
-    ListSavedProviderAdapterModelsParams, Path, ProviderAdapterModelsRequest,
-    SavedProviderAdapterModelsRequest, ServerError, State, server_error_from_application,
+    ListSavedProviderAdapterModelsParams, Path, SavedProviderAdapterModelsRequest, ServerError,
+    State, server_error_from_application,
 };

@@ -1447,15 +1447,13 @@ impl TuiBackend {
     }
 
     pub(crate) async fn refresh_aws_profiles(&self) -> Result<()> {
-        let value = self.inner.client.aws_profile_names().await?;
-        let profiles = value
-            .get("profiles")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .context("the server returned undecodable AWS profile names")?
-            .unwrap_or_default();
-        *self.inner.aws_profiles.write().await = profiles;
+        let response = self
+            .inner
+            .client
+            .aws_profile_names()
+            .await
+            .context("failed to load AWS profile names from the server")?;
+        *self.inner.aws_profiles.write().await = response.profiles;
         Ok(())
     }
 

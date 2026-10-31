@@ -1811,6 +1811,12 @@ fn validate_value_at(
                     "object contains an undeclared field",
                 ));
             }
+            validate_object_entry_count(
+                &node.constraints,
+                object.len(),
+                path,
+                "object contains too many entries",
+            )?;
         }
         SettingsNodeKind::List { item } => {
             let values = value
@@ -1825,14 +1831,12 @@ fn validate_value_at(
             let object = value
                 .as_object()
                 .ok_or_else(|| SettingsValueError::at(path, "expected object"))?;
-            if let Some(max) = node.constraints.max_entries
-                && object.len() > max as usize
-            {
-                return Err(SettingsValueError::at(
-                    path,
-                    "record contains too many entries",
-                ));
-            }
+            validate_object_entry_count(
+                &node.constraints,
+                object.len(),
+                path,
+                "record contains too many entries",
+            )?;
             for (key, value) in object {
                 validate_value_at(item, value, &join_path(path, key))?;
             }
@@ -1972,6 +1976,21 @@ fn validate_number_constraints(
             path,
             "number is not a declared multiple",
         ));
+    }
+    Ok(())
+}
+
+fn validate_object_entry_count(
+    constraints: &SettingsConstraints,
+    length: usize,
+    path: &str,
+    overflow_message: &'static str,
+) -> Result<(), SettingsValueError> {
+    if constraints
+        .max_entries
+        .is_some_and(|max| length > max as usize)
+    {
+        return Err(SettingsValueError::at(path, overflow_message));
     }
     Ok(())
 }
@@ -2140,3 +2159,127 @@ impl fmt::Display for CommandResultError {
 }
 
 impl std::error::Error for CommandResultError {}
+
+#[cfg(test)]
+mod entry_limit_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn object_kind() -> Value {
+        json!({
+            "kind": "object",
+            "fields": [
+                {"id": "first", "path": "/options/first", "title": "First", "kind": "text"},
+                {"id": "second", "path": "/options/second", "title": "Second", "kind": "text"}
+            ]
+        })
+    }
+
+    fn record_kind() -> Value {
+        json!({
+            "kind": "record",
+            "value": {
+                "id": "entry", "path": "/options/*", "title": "Entry",
+                "required": true, "kind": "text"
+            }
+        })
+    }
+
+    fn map_contract(mut kind: Value, max_entries: Option<u32>) -> SettingsContract {
+        kind["id"] = json!("options");
+        kind["path"] = json!("/options");
+        kind["title"] = json!("Options");
+        kind["required"] = json!(true);
+        if let Some(max_entries) = max_entries {
+            kind["constraints"] = json!({"max_entries": max_entries});
+        }
+        serde_json::from_value(json!({
+            "version": 1,
+            "root": {
+                "id": "root", "path": "", "title": "Settings", "required": true,
+                "kind": "object", "fields": [kind]
+            }
+        }))
+        .expect("existing v1 settings contract")
+    }
+
+    #[test]
+    fn object_max_entries_counts_present_fields_and_preserves_closed_shape() {
+        let contract = map_contract(object_kind(), Some(1));
+        contract.validate().expect("Object permits max_entries");
+        contract.validate_value(&json!({"options": {}})).unwrap();
+        contract
+            .validate_value(&json!({"options": {"first": "one"}}))
+            .unwrap();
+        let error = contract
+            .validate_value(&json!({"options": {"first": "one", "second": "two"}}))
+            .unwrap_err();
+        assert_eq!(error.path.as_deref(), Some("/options"));
+        assert_eq!(error.message, "object contains too many entries");
+
+        let unknown = contract
+            .validate_value(&json!({"options": {"first": "one", "unknown": "two"}}))
+            .unwrap_err();
+        assert_eq!(unknown.path.as_deref(), Some("/options"));
+        assert_eq!(unknown.message, "object contains an undeclared field");
+
+        let child = contract
+            .validate_value(&json!({"options": {"first": false}}))
+            .unwrap_err();
+        assert_eq!(child.path.as_deref(), Some("/options/first"));
+        assert_eq!(child.message, "expected string");
+    }
+
+    #[test]
+    fn record_max_entries_preserves_overflow_and_member_errors() {
+        let contract = map_contract(record_kind(), Some(1));
+        contract.validate().expect("Record permits max_entries");
+        contract.validate_value(&json!({"options": {}})).unwrap();
+        contract
+            .validate_value(&json!({"options": {"arbitrary": "one"}}))
+            .unwrap();
+        let error = contract
+            .validate_value(&json!({"options": {"first": "one", "second": false}}))
+            .unwrap_err();
+        assert_eq!(error.path.as_deref(), Some("/options"));
+        assert_eq!(error.message, "record contains too many entries");
+        assert_eq!(
+            error.to_string(),
+            "/options: record contains too many entries"
+        );
+
+        let child = contract
+            .validate_value(&json!({"options": {"a/b~c": false}}))
+            .unwrap_err();
+        assert_eq!(child.path.as_deref(), Some("/options/a~1b~0c"));
+        assert_eq!(child.message, "expected string");
+    }
+
+    #[test]
+    fn zero_entry_limits_and_missing_v1_limits_keep_their_wire_semantics() {
+        for kind in [object_kind(), record_kind()] {
+            let zero = map_contract(kind.clone(), Some(0));
+            zero.validate_value(&json!({"options": {}})).unwrap();
+            assert!(
+                zero.validate_value(&json!({"options": {"first": "one"}}))
+                    .is_err()
+            );
+
+            // This input omits constraints entirely, as existing v1 manifests may do.
+            let unbounded = map_contract(kind, None);
+            unbounded
+                .validate_value(&json!({"options": {"first": "one", "second": "two"}}))
+                .unwrap();
+            let wire = serde_json::to_value(&unbounded).unwrap();
+            assert_eq!(wire["version"], 1);
+            assert_eq!(wire["root"]["fields"][0]["constraints"], json!({}));
+            assert_eq!(
+                serde_json::from_value::<SettingsContract>(wire).unwrap(),
+                unbounded
+            );
+        }
+        let empty: SettingsConstraints = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(empty, SettingsConstraints::default());
+        assert_eq!(serde_json::to_value(empty).unwrap(), json!({}));
+    }
+}

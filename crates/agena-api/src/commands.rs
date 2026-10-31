@@ -311,3 +311,40 @@ pub struct StopActivityParams {
 pub struct DismissActivityParams {
     pub activity_id: String,
 }
+
+#[cfg(test)]
+mod permission_write_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn permission_write_preserves_missing_null_and_present_fields() {
+        for wire in [
+            json!({"mode":"ask"}),
+            json!({"mode":"ask", "scope":null, "session_id":null}),
+        ] {
+            let request: UpsertPermissionRuleParams = serde_json::from_value(wire).unwrap();
+            assert_eq!(
+                serde_json::to_value(request).unwrap(),
+                json!({"mode":"ask"})
+            );
+        }
+        let wire = json!({
+            "action_key":"network:https://example.test:443", "subject_kind":"network",
+            "tool_name":"fetch", "qualifier":"", "path_access_kind":"read",
+            "workspace_root":"/work", "target_path":"/work/file.txt",
+            "network_target":"https://example.test:443", "network_host":"example.test",
+            "network_port":443, "scope":"session", "session_id":7, "mode":"allow"
+        });
+        let request: UpsertPermissionRuleParams = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        for invalid in [
+            json!({}),
+            json!({"mode":null}),
+            json!({"mode":"unknown"}),
+            json!({"mode":"ask", "network_port":65536}),
+        ] {
+            assert!(serde_json::from_value::<UpsertPermissionRuleParams>(invalid).is_err());
+        }
+    }
+}

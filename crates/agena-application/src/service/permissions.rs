@@ -4,10 +4,9 @@ use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
     PermissionAction, PermissionRuleBatchOperation, PermissionRuleBatchRequest,
     PermissionRuleBatchResponse, PermissionRuleBatchScope, PermissionRuleCursor,
-    PermissionRuleResource, PermissionRuleWriteCommand, PermissionRuleWriteRequest,
-    PermissionScope, PersistedPermissionRule, SearchPaginationQuery, api_error_from_app,
-    build_page, decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc,
-    trim_page,
+    PermissionRuleResource, PermissionRuleWriteCommand, PermissionScope, PersistedPermissionRule,
+    SearchPaginationQuery, UpsertPermissionRuleParams, api_error_from_app, build_page,
+    decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc, trim_page,
 };
 use std::collections::HashSet;
 
@@ -144,7 +143,7 @@ impl ApplicationService {
 
     pub async fn create_permission_rule(
         &self,
-        request: PermissionRuleWriteRequest,
+        request: UpsertPermissionRuleParams,
     ) -> ApplicationResult<PermissionRuleResource> {
         self.create_permission_rule_command(permission_rule_write_command_from_request(
             request,
@@ -172,7 +171,7 @@ impl ApplicationService {
     pub async fn replace_permission_rule(
         &self,
         rule_id: i64,
-        request: PermissionRuleWriteRequest,
+        request: UpsertPermissionRuleParams,
     ) -> ApplicationResult<PermissionRuleResource> {
         self.replace_permission_rule_command(
             rule_id,
@@ -397,7 +396,7 @@ fn permission_scope_from_request(value: Option<&str>) -> ApplicationResult<Permi
 }
 
 fn permission_action_from_write_request(
-    request: &PermissionRuleWriteRequest,
+    request: &UpsertPermissionRuleParams,
     workspace_root: &str,
 ) -> ApplicationResult<PermissionAction> {
     if let Some(action_key) = request.action_key.as_deref()
@@ -502,7 +501,7 @@ fn permission_action_from_write_request(
 }
 
 fn permission_rule_write_command_from_request(
-    request: PermissionRuleWriteRequest,
+    request: UpsertPermissionRuleParams,
     source: &str,
     operator: Option<String>,
     workspace_root: &str,

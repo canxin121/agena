@@ -34,8 +34,7 @@ use agena_api::{
     resource::{
         PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderModelResource,
-        ProviderSummaryResource, RunOptions, SessionExecutionContextResource,
-        SessionExecutionResource, SessionResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
     },
 };
 mod preferences;
@@ -72,7 +71,6 @@ use ratatui::{
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::{process::Command, time::interval};
-use unicode_width::UnicodeWidthChar;
 
 pub use crate::app_backend::{BackendMode, TuiBackend};
 use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
@@ -205,8 +203,15 @@ pub(crate) use self::surface_selection::{
     SurfaceDisplayLine, SurfaceLayout, SurfaceSelection, SurfaceSelectionKind,
     apply_cell_range_highlight, surface_selection_ranges, surface_selection_text,
 };
+use agena_tui_session::session_helpers::{
+    contains_case_insensitive, execution_model_name_status_label, execution_model_status_label,
+    find_search_ranges, model_name_status_label, user_input_answer_values,
+    user_input_question_label,
+};
+use agena_tui_transcript::markdown::truncate_display_width;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
+use agena_tui_transcript::text::attachment_placeholder_base;
 use agena_tui_transcript::{
     initial_search_match_index, normalize_transcript_text_selection,
     transcript_node_highlight_range, transcript_node_kind_label,

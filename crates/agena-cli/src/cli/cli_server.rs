@@ -22,12 +22,12 @@ use super::{
     PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand, ProviderListArgs,
     ProviderListOutput, ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs,
     ReviewArgs, SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput,
-    SessionListView, SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand,
-    ToolDescriptor, UsageArgs, async_trait, browser_login_redirect_uri,
-    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
-    format_plugin_logs_output, memory_type_label, normalize_login_provider,
-    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
-    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
+    SessionListView, SessionOutput, SessionsCommand, SessionsSubcommand, ToolDescriptor, UsageArgs,
+    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
+    format_debug_session_output, format_plugin_logs_output, memory_type_label,
+    normalize_login_provider, normalized_mcp_server_name, paginate_session_summaries,
+    permission_rule_output, prompt_browser_login, prompt_device_login, render_serialized,
+    review_prompt, session_summary_from_resource, title_from_prompt, usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -1476,7 +1476,7 @@ impl AgenaCli {
                 let summaries = resources
                     .into_iter()
                     .map(session_summary_from_resource)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Vec<_>>();
                 let summaries =
                     filter_session_summaries_by_view(summaries, args.view, args.anchor_session_id)?;
                 let sessions = paginate_session_summaries(summaries, args.offset, args.limit);
@@ -1568,7 +1568,7 @@ impl AgenaCli {
                 let mut sessions = resources
                     .into_iter()
                     .map(session_summary_from_resource)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Vec<_>>();
                 if let Some(max_depth) = args.max_depth {
                     let root_depth = sessions.first().map(|first| first.depth).unwrap_or(0);
                     sessions.retain(|session| session.depth - root_depth <= max_depth);
@@ -2099,16 +2099,6 @@ const fn mcp_config_layer_name(layer: McpConfigLayerArg) -> &'static str {
     }
 }
 
-fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
-    let server = server.trim();
-    if server.is_empty() {
-        return Err(AppError::Config(
-            "MCP server name must not be empty".to_owned(),
-        ));
-    }
-    Ok(server.to_owned())
-}
-
 fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppError> {
     let value = match (args.url.as_deref(), args.command.as_deref()) {
         (Some(url), None) => {
@@ -2434,10 +2424,6 @@ fn resolve_model_target(
     Err(AppError::Config(format!(
         "model is required for provider `{target}`; pass --model explicitly"
     )))
-}
-
-fn session_summary_from_resource(resource: SessionResource) -> Result<SessionSummary, AppError> {
-    serde_json::from_value(serde_json::to_value(resource)?).map_err(AppError::from)
 }
 
 fn session_detail(execution: &SessionExecutionResource) -> SessionDetail {

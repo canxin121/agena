@@ -692,13 +692,8 @@ impl App {
     }
 
     pub(crate) fn replace_composer_draft(&mut self, draft: ComposerDraft) {
-        cleanup_temporary_composer_items(self.composer_items.as_slice());
         self.clear_composer_state();
         self.restore_composer_draft(draft);
-    }
-
-    pub(crate) fn cleanup_temporary_draft_store_items(&self) {
-        // Resource activities persist references, never temporary payloads.
     }
 
     pub(crate) fn take_composer_draft(&mut self) -> ComposerDraft {
@@ -767,8 +762,6 @@ impl App {
             {
                 occupied.push(range.clone());
                 retained.push((range, item));
-            } else {
-                cleanup_temporary_composer_item(&item);
             }
         }
 
@@ -1219,10 +1212,6 @@ pub(crate) fn sync_composer_items_with_editor_texts(
         }
     }
 
-    for (_, item) in by_placeholder {
-        cleanup_temporary_composer_item(&item);
-    }
-
     synced
 }
 
@@ -1351,9 +1340,8 @@ use crate::{
     App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, I18n, Instant, Overlay, Path, PathBuf,
     PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
-    attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
-    edit_text, find_placeholder_occurrence, normalize_pasted_path, open_path, set_clipboard_text,
-    ui_text,
+    attachment_placeholder_base, edit_text, find_placeholder_occurrence, normalize_pasted_path,
+    open_path, set_clipboard_text, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;

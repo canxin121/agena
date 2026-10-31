@@ -508,7 +508,7 @@ fn enum_options(schema: &Value) -> Result<Option<Vec<SettingsOption>>, String> {
 }
 
 fn constraints(schema: &Value) -> Result<SettingsConstraints, String> {
-    let mut constraints = SettingsConstraints {
+    let constraints = SettingsConstraints {
         minimum: number(schema.get("minimum"))?,
         maximum: number(schema.get("maximum"))?,
         exclusive_minimum: number(schema.get("exclusiveMinimum"))?,
@@ -544,10 +544,6 @@ fn constraints(schema: &Value) -> Result<SettingsConstraints, String> {
             "",
             "boolean exclusiveMaximum is not supported by the settings compiler",
         ));
-    }
-    if constraints.max_entries.is_none() {
-        constraints.max_entries =
-            bounded_u32(schema.get("maxProperties"), u32::MAX, "maxProperties")?;
     }
     Ok(constraints)
 }
@@ -901,6 +897,38 @@ impl NodeMetadata {
             sensitive: self.sensitive,
             secret: self.secret,
             kind,
+        }
+    }
+}
+
+#[cfg(test)]
+mod entry_limit_compilation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn compiled_max_properties_is_enforced_for_objects_and_records() {
+        for schema in [
+            json!({
+                "type": "object",
+                "properties": {"first": {"type": "string"}, "second": {"type": "string"}},
+                "additionalProperties": false,
+                "maxProperties": 1
+            }),
+            json!({
+                "type": "object", "additionalProperties": {"type": "string"},
+                "maxProperties": 1
+            }),
+        ] {
+            let contract = settings_contract_from_schema(&schema).unwrap();
+            assert_eq!(contract.root.constraints.max_entries, Some(1));
+            contract.validate_value(&json!({})).unwrap();
+            contract.validate_value(&json!({"first": "one"})).unwrap();
+            assert!(
+                contract
+                    .validate_value(&json!({"first": "one", "second": "two"}))
+                    .is_err()
+            );
         }
     }
 }

@@ -13,7 +13,6 @@ use agena_api::{
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
         RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
         UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
     },
     queries::{
         ActivityLogsParams, GetActivityParams, GetPermissionRuleParams, GetSessionParams,
@@ -25,8 +24,8 @@ use agena_api::{
 use agena_application::{
     Application, ApplicationError,
     dto::{
-        CursorPaginationQuery, PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery,
-        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
+        CursorPaginationQuery, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest,
     },
     pagination::PaginatedResponse as ApplicationPaginatedResponse,
 };

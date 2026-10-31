@@ -199,64 +199,16 @@ pub async fn dispatch_command(
             state.service().delete_session(session_id).await?;
             Ok(CommandResult::SessionDeleted { id: session_id })
         }
-        Command::UpsertPermissionRule(UpsertPermissionRuleParams {
-            action_key,
-            subject_kind,
-            tool_name,
-            qualifier,
-            path_access_kind,
-            workspace_root,
-            target_path,
-            network_target,
-            network_host,
-            network_port,
-            scope,
-            session_id,
-            mode,
-        }) => {
-            let rule = state
-                .service()
-                .create_permission_rule(PermissionRuleWriteRequest {
-                    action_key,
-                    subject_kind,
-                    tool_name,
-                    qualifier,
-                    path_access_kind,
-                    workspace_root,
-                    target_path,
-                    network_target,
-                    network_host,
-                    network_port,
-                    scope,
-                    session_id,
-                    mode,
-                })
-                .await?;
-            Ok(CommandResult::PermissionRule(rule))
-        }
+        Command::UpsertPermissionRule(request) => Ok(CommandResult::PermissionRule(
+            state.service().create_permission_rule(request).await?,
+        )),
         Command::ReplacePermissionRule(ReplacePermissionRuleParams { rule_id, rule }) => {
-            let rule = state
-                .service()
-                .replace_permission_rule(
-                    rule_id,
-                    PermissionRuleWriteRequest {
-                        action_key: rule.action_key,
-                        subject_kind: rule.subject_kind,
-                        tool_name: rule.tool_name,
-                        qualifier: rule.qualifier,
-                        path_access_kind: rule.path_access_kind,
-                        workspace_root: rule.workspace_root,
-                        target_path: rule.target_path,
-                        network_target: rule.network_target,
-                        network_host: rule.network_host,
-                        network_port: rule.network_port,
-                        scope: rule.scope,
-                        session_id: rule.session_id,
-                        mode: rule.mode,
-                    },
-                )
-                .await?;
-            Ok(CommandResult::PermissionRule(rule))
+            Ok(CommandResult::PermissionRule(
+                state
+                    .service()
+                    .replace_permission_rule(rule_id, rule)
+                    .await?,
+            ))
         }
         Command::RevokePermissionRule(RevokePermissionRuleParams { rule_id, reason }) => {
             let rule = state
@@ -301,11 +253,11 @@ use super::{
     Application, ApplicationError, CancelRunParams, Command, CommandResult, CompactSessionParams,
     ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
     DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams,
-    ListSessionTreeParams, MarkInteractiveRequestPresentedParams, PermissionRuleWriteRequest,
-    ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
-    SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
-    UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
+    ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
+    ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
+    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams, WorkspacePathRequest,
+    WorkspaceResolveRequest,
 };
 
 fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

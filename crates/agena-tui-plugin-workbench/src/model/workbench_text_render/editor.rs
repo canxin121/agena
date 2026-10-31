@@ -5,7 +5,7 @@ use super::super::{
     object_field_state, object_property_schema, ordered_object_keys, preview_value,
     schema_const_value, schema_enum_values, schema_examples, schema_first_string_keyword,
     schema_is_map_like, schema_kind_label, schema_matches, schema_prefix_item_count,
-    schema_string_is_multiline, schema_type_choices, title_from_key, truncate_text,
+    schema_string_is_multiline, schema_type_choices, title_from_key, truncate_display_text,
 };
 use agena_tui::i18n::I18n;
 
@@ -522,7 +522,7 @@ pub(crate) fn append_string_editor_lines(
     } else {
         lines.push(Line::from(format!(
             "{indent}{title}        [ {} ]{}",
-            clean(truncate_text(text, 48)),
+            clean(truncate_display_text(text, 48)),
             format_suffix
         )));
     }

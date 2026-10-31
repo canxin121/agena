@@ -24,7 +24,7 @@ pub async fn get_permission_rule(
 
 pub async fn create_permission_rule(
     State(state): State<AppState>,
-    Json(request): Json<PermissionRuleWriteRequest>,
+    Json(request): Json<UpsertPermissionRuleParams>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(state.service().create_permission_rule(request)).await
 }
@@ -32,7 +32,7 @@ pub async fn create_permission_rule(
 pub async fn replace_permission_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<i64>,
-    Json(request): Json<PermissionRuleWriteRequest>,
+    Json(request): Json<UpsertPermissionRuleParams>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(state.service().replace_permission_rule(rule_id, request)).await
 }
@@ -58,6 +58,6 @@ pub async fn delete_permission_rule(
 }
 use super::{
     AppState, AxumQuery, IntoResponse, Json, Path, PermissionRuleBatchRequest,
-    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, SearchPaginationQuery, ServerError,
-    State, json_http, json_http_found,
+    PermissionRuleRevokeRequest, SearchPaginationQuery, ServerError, State,
+    UpsertPermissionRuleParams, json_http, json_http_found,
 };

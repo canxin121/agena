@@ -2,7 +2,9 @@
 """Validate native session API transports, generated state, and restart contracts.
 
 Run after implementation work; commands execute serially in one Cargo target.
-The full workspace suite can provide the default-transport and restart results.
+The process suite builds Agena unless --binary or AGENA_TEST_BINARY supplies a
+fresh executable. Session crash recovery is cross-platform; only the isolated
+service-manager cases require Linux. Process tests never silently skip.
 """
 
 import argparse
@@ -13,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 
@@ -25,10 +28,16 @@ def main():
         default=(Path(__file__).resolve().parents[2] / "target" / "session-kernel-api-validation" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")),
     )
     parser.add_argument("--jobs", default="3")
+    parser.add_argument("--binary", type=Path, default=os.environ.get("AGENA_TEST_BINARY"),
+                        help="Fresh Agena executable; otherwise build it with Cargo")
     parser.add_argument("--skip-default-suite", action="store_true")
     parser.add_argument("--skip-process-suite", action="store_true")
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()
+    if not args.skip_process_suite and args.binary is not None:
+        args.binary = args.binary.resolve()
+        if not args.binary.is_file() or not os.access(args.binary, os.X_OK):
+            parser.error("--binary/AGENA_TEST_BINARY must name an executable file")
     args.output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["CARGO_BUILD_JOBS"] = args.jobs
@@ -141,10 +150,39 @@ def main():
             ["cargo", "test", "--locked", "-p", "agena-api-server", "--all-features", "--lib"],
         )
     if not args.skip_process_suite:
-        run(
-            "server-restart-process-tests",
-            ["cargo", "test", "--locked", "-p", "agena", "--test", "server_restart", "--", "--nocapture"],
-        )
+        binary = args.binary
+        if binary is None:
+            artifacts = args.output / "server-process-build.jsonl"
+            if run(
+                "server-process-build",
+                ["cargo", "build", "--locked", "-p", "agena", "--bin", "agena", "--message-format=json"],
+                artifacts,
+            ):
+                for line in artifacts.read_text().splitlines():
+                    message = json.loads(line)
+                    target = message.get("target", {})
+                    if (message.get("reason") == "compiler-artifact"
+                            and target.get("name") == "agena" and "bin" in target.get("kind", [])
+                            and message.get("executable")):
+                        binary = Path(message["executable"]).resolve()
+        if binary is None or not binary.is_file() or not os.access(binary, os.X_OK):
+            results.append({"name": "server-process-binary", "exit_code": 1,
+                            "error": "A built Agena executable is required; process tests cannot be skipped."})
+            save()
+        else:
+            results.append({"name": "server-process-binary", "exit_code": 0, "path": str(binary)})
+            save()
+            env["AGENA_TEST_BINARY"] = str(binary)
+            run(
+                "server-restart-process-tests",
+                [sys.executable, "-m", "unittest", "discover", "-s", "scripts/agena/tests",
+                 "-p", "test_server_lifecycle.py", "-v"],
+            )
+            run(
+                "server-oauth-restart-process-test",
+                [sys.executable, "scripts/agena/tests/test_mcp_oauth.py",
+                 "McpOAuthTests.test_authorization_rotation_revocation_and_single_address_control", "-v"],
+            )
     if lock_before != hashlib.sha256((args.repo / "Cargo.lock").read_bytes()).hexdigest():
         results.append({"name": "cargo-lock-unchanged", "exit_code": 1})
         save()

@@ -167,12 +167,16 @@ checks connection release on exit; it does not assert allocator/RSS release
 or release when merely hiding a pane. Existing app/transport tests cover
 those separate state transitions.
 
-The pre-existing `server_restart.rs` PTY helper only attaches a TUI, answers
-terminal queries and asserts liveness/single Runtime ownership. It does not
-send keyboard input. App tests cover isolated keyboard dispatch and permission
-state; the new actual PTY flow supplies the missing process→keyboard→HTTP→tool
-and rendering boundary. Validation is pending until these new scripts are
-actually run against the final release binary.
+`http_experience.py --tui` runs `tui_experience.py` for the process, keyboard,
+rendering and HTTP/tool boundary described above. Preserve the actual run
+artifacts from the final binary when reporting validation.
+
+Session crash recovery is covered by `SessionRestartTests` in
+`scripts/agena/tests/test_server_lifecycle.py`: an interrupted attempt is
+reconciled before the first session read, and persisted messages resume in FIFO
+order without the sender. `scripts/ci/verify-session-kernel-api.py` runs this
+suite and the existing MCP OAuth restart/revocation test. Permission, fork,
+cancellation and SSE coverage remains in the existing probes and fixtures.
 
 ## Real CLI settlement and complete output regression
 

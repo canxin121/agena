@@ -1,4 +1,4 @@
-"""Real CLI/HTTP lifecycle tests with an isolated Linux service-manager fixture.
+"""Real HTTP crash recovery and isolated Linux service-manager lifecycle tests.
 
 Run with AGENA_TEST_BINARY pointing to a freshly built Agena executable. The
 fixture replaces systemctl in PATH and writes definitions only beneath a
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,11 @@ import time
 import unittest
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
+
+
+# Share the established loopback Provider and HTTP fixtures with the probes.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'probes'))
+import http_experience as http_fixture
 
 
 SERVICE_MANAGER = r'''
@@ -238,6 +244,156 @@ class ServerLifecycleTests(unittest.TestCase):
         self.assertIn('already running', output)
         self.assertEqual(self.record(), record)
         self.assertFalse((self.root / 'manager-calls.jsonl').exists())
+
+
+@unittest.skipUnless(os.environ.get('AGENA_TEST_BINARY'),
+                     'AGENA_TEST_BINARY is required for session restart tests')
+class SessionRestartTests(unittest.TestCase):
+    """Exercise crash recovery over HTTP on every platform, without a service manager."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='agena-session-restart-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.binary = Path(os.environ['AGENA_TEST_BINARY']).resolve(strict=True)
+        self.trace_path = self.root / 'http.jsonl'
+        self.trace = http_fixture.JsonLines(self.trace_path)
+        self.addCleanup(self.trace.close)
+        self.provider = http_fixture.Provider(20, self.trace)
+        self.addCleanup(self.provider.close)
+        self.workspace = http_fixture.prepare_configuration(self.root, self.provider.base_url)
+        self.environment = http_fixture.clean_environment(self.root)
+        self.environment['AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES'] = '1'
+        self.log = (self.root / 'server.log').open('wb')
+        self.addCleanup(self.log.close)
+        self.process = None
+        self.api = None
+        self.addCleanup(self.stop)
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            self.port = listener.getsockname()[1]
+        self.identity = self.start()
+        self.workspace_id = self.api.call('POST', '/api/v1/workspaces/resolve', {
+            'path': str(self.workspace), 'create_if_missing': True,
+        })[0]['id']
+
+    def start(self):
+        self.api = http_fixture.Api(f'http://127.0.0.1:{self.port}', 20, self.trace)
+        self.process = subprocess.Popen(
+            [str(self.binary), '--data-dir', str(self.root / 'data'), 'server',
+             '--host', '127.0.0.1', '--port', str(self.port), '--workspace', str(self.workspace)],
+            cwd=self.root / 'process-cwd', env=self.environment,
+            stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,
+        )
+        record_path = self.root / 'data/run/server.json'
+
+        def published():
+            self.assertIsNone(self.process.poll(), 'server exited before publishing its identity')
+            try:
+                return json.loads(record_path.read_text())['pid'] == self.process.pid
+            except (OSError, ValueError):
+                return False
+
+        http_fixture.poll(published, self.api.timeout, 'server did not replace its discovery record')
+        return http_fixture.wait_server(self.process, self.api, record_path)['health']['server']
+
+    def disconnect_client(self):
+        if self.api is not None:
+            connection = getattr(self.api.local, 'connection', None)
+            if connection is not None:
+                connection.close()
+                self.api.local.connection = None
+
+    def stop(self):
+        self.disconnect_client()
+        if self.process is not None:
+            # kill(), rather than a graceful shutdown, must leave recovery work
+            # for the next process. The child is always this fixture's Popen.
+            self.process.kill()
+            self.process.wait(timeout=10)
+            self.process = None
+
+    def attempts(self, session_id):
+        database = (self.root / 'data/agena.db').as_uri() + '?mode=ro'
+        with sqlite3.connect(database, uri=True) as connection:
+            return connection.execute(
+                'SELECT a.generation,a.phase FROM agena_executions e '
+                'JOIN agena_attempts a ON a.execution_id=e.id '
+                'WHERE e.session_id=? ORDER BY e.message_id,a.generation',
+                (session_id,),
+            ).fetchall()
+
+    def test_crash_reconciles_abandoned_attempt_before_first_session_read(self):
+        session = http_fixture.create_session(self.api, self.workspace_id, 'crash recovery')
+        held = self.provider.plan('abandoned', 'held')
+        http_fixture.submit(self.api, session, 'hold until the server crashes')
+        self.assertTrue(held.requested.wait(20), 'provider did not receive the active request')
+        self.assertEqual(http_fixture.state_kind(self.api.state(session)), 'running')
+        self.stop()
+        self.provider.assert_step(held)
+        self.assertEqual(self.attempts(session), [(1, 'running')])
+
+        restarted = self.start()
+        self.assertNotEqual(restarted['id'], self.identity['id'])
+        self.assertEqual(restarted['instance_id'], self.identity['instance_id'])
+        # No retry/poll may hide a stale first projection of the abandoned run.
+        recovered = self.api.state(session)
+        self.assertEqual(http_fixture.state_kind(recovered), 'failed')
+        self.assertEqual(self.attempts(session), [(1, 'interrupted')])
+        user = next(part for part in self.api.parts(session)
+                    if part['role'] == 'user' and part['message_boundary'])
+        self.assertEqual(user['state'], 'completed')
+        self.assertEqual(user['content']['execution_phase'], 'interrupted')
+        self.assertEqual(user['content']['abort_reason'], 'process_restart')
+        self.assertEqual(user['content']['document'], [
+            {'type': 'text', 'text': 'hold until the server crashes'},
+        ])
+
+        answer = self.provider.plan('recovered', 'text', payloads=['recovered after server restart'])
+        self.api.call('POST', f'/api/v1/sessions/{session}/continue', {})
+        http_fixture.wait_idle(self.api, session)
+        self.provider.assert_step(answer)
+        self.assertIn('recovered after server restart', http_fixture.read_assistant_text(self.api, session))
+        self.assertEqual(self.attempts(session), [(1, 'interrupted'), (2, 'succeeded')])
+        assistant_boundaries = [part for part in self.api.parts(session)
+                                if part['role'] == 'assistant' and part['message_boundary']]
+        self.assertEqual(len(assistant_boundaries), 1, 'the abandoned attempt must not fabricate a reply')
+        self.assertEqual(self.provider.errors, [])
+
+    def test_crash_restores_queued_messages_in_order_without_the_sender(self):
+        session = http_fixture.create_session(self.api, self.workspace_id, 'durable queue')
+        held = self.provider.plan('active_before_crash', 'held')
+        http_fixture.submit(self.api, session, 'active before crash')
+        self.assertTrue(held.requested.wait(20))
+        http_fixture.submit(self.api, session, 'first queued prompt')
+        http_fixture.submit(self.api, session, 'second queued prompt')
+        self.assertEqual(len(self.api.state(session)['queued_messages']), 2)
+        self.stop()
+        self.provider.assert_step(held)
+        first = self.provider.plan('queue_first', 'text', payloads=['first queued answer'])
+        second = self.provider.plan('queue_second', 'text', payloads=['second queued answer'])
+
+        self.start()
+        # These requests must be scheduled by startup recovery without a
+        # reconnecting sender, a session read, or an explicit continue command.
+        self.assertTrue(first.requested.wait(20), 'first queued input did not resume on startup')
+        self.assertTrue(second.requested.wait(20), 'second queued input did not resume on startup')
+        self.provider.assert_step(first)
+        self.provider.assert_step(second)
+        completed = http_fixture.wait_idle(self.api, session)
+        self.assertEqual(completed['queued_messages'], [])
+        self.assertIn('second queued answer', http_fixture.read_assistant_text(self.api, session))
+        self.assertEqual(self.attempts(session), [
+            (1, 'interrupted'), (1, 'succeeded'), (1, 'succeeded'),
+        ])
+        requests = {record['step']: json.dumps(record['request'])
+                    for line in self.trace_path.read_text().splitlines()
+                    if (record := json.loads(line))['kind'] == 'provider_request'}
+        self.assertIn('first queued prompt', requests['queue_first'])
+        self.assertNotIn('second queued prompt', requests['queue_first'])
+        self.assertLess(requests['queue_second'].index('first queued answer'),
+                        requests['queue_second'].index('second queued prompt'))
+        self.assertEqual(self.provider.errors, [])
 
 
 if __name__ == '__main__':

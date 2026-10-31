@@ -1,6 +1,6 @@
 //! Permission studio presentation state for a session.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Permission studio state of a session.
 #[derive(Debug, Clone)]
@@ -17,36 +17,11 @@ pub(crate) async fn get_session_permission_studio_state(
     application: &super::TuiBackend,
     session_id: i64,
 ) -> Result<SessionPermissionStudioState> {
-    let execution =
-        crate::app_backend::operations::get_session_state(application, session_id).await?;
-    let (permission, effective_permission) = permission_configs_from_resources(
-        &execution.execution.selected_permission,
-        &execution.execution.effective_permission,
-    )?;
+    let execution = application.get_session_state(session_id).await?;
     Ok(SessionPermissionStudioState {
         session_id,
         session_title: execution.session.title.clone(),
-        permission,
-        effective_permission,
+        permission: execution.execution.selected_permission.into(),
+        effective_permission: execution.execution.effective_permission.into(),
     })
-}
-
-fn permission_configs_from_resources(
-    selected: &agena_api::resource::PermissionConfigResource,
-    effective: &agena_api::resource::PermissionConfigResource,
-) -> Result<(
-    agena_domain::PermissionConfig,
-    agena_domain::PermissionConfig,
-)> {
-    let selected = serde_json::from_value(
-        serde_json::to_value(selected)
-            .context("failed to serialize selected permission resource")?,
-    )
-    .context("failed to decode selected permission resource")?;
-    let effective = serde_json::from_value(
-        serde_json::to_value(effective)
-            .context("failed to serialize effective permission resource")?,
-    )
-    .context("failed to decode effective permission resource")?;
-    Ok((selected, effective))
 }

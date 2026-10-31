@@ -14,6 +14,7 @@ mod conversation;
 mod file_changes;
 mod interaction;
 mod notification;
+mod permission;
 pub use activity::*;
 pub use auth::*;
 pub use conversation::*;
@@ -442,6 +443,39 @@ pub struct ModelCatalogListResponse {
     pub items: Vec<CatalogModelResource>,
 }
 
+impl ModelCatalogListResponse {
+    /// Client-local empty state before the first catalog page is loaded.
+    pub fn empty() -> Self {
+        Self {
+            summary: ModelCatalogResponse {
+                refreshing: false,
+                last_refresh_at: None,
+                last_successful_source: None,
+                last_failure: None,
+                model_count: 0,
+            },
+            total: 0,
+            offset: 0,
+            limit: 0,
+            available_origins: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+}
+
+/// A verified, display-only catalog suggestion for a provider model ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogModelMatchResource {
+    pub model_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<CatalogModelResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelCatalogMatchResponse {
+    pub items: Vec<CatalogModelMatchResource>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Request to look up catalog models by id.
 pub struct ModelCatalogLookupRequest {
@@ -528,259 +562,30 @@ pub struct CatalogModelResource {
         skip_serializing_if = "ConfiguredModelModeMapResource::is_empty"
     )]
     pub speed_modes: ConfiguredModelModeMapResource<ConfiguredModelSpeedModeResource>,
-    #[serde(
-        default,
-        skip_serializing_if = "ModelCapabilityPatchResource::is_empty"
-    )]
+    // REST has always exposed `input` and `features` at the model level.
+    #[serde(flatten)]
     pub capabilities: ModelCapabilityPatchResource,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
-/// Provider-scoped answer-verbosity information in the public API.
-pub struct CatalogProviderVerbosityProfileResource {
-    pub supported: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub levels: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_default: Option<String>,
-}
+// Shared provider configuration values have the same wire contract as catalog
+// metadata. Their optional/default/flatten rules must be maintained once.
+pub use agena_domain::ModelInputModality as ModelInputModalityResource;
+pub use agena_provider::{
+    CapabilitySelectionPatch as CapabilitySelectionPatchResource,
+    CapabilitySelectionPatchBody as CapabilitySelectionPatchBodyResource,
+    CatalogProviderVerbosityProfile as CatalogProviderVerbosityProfileResource,
+    ConfiguredModeDefault as ConfiguredModeDefaultResource,
+    ConfiguredModelModeMap as ConfiguredModelModeMapResource,
+    ConfiguredModelSpeedMode as ConfiguredModelSpeedModeResource,
+    ConfiguredModelThinkingMode as ConfiguredModelThinkingModeResource,
+    ConfiguredThinkingStrategy as ConfiguredThinkingStrategyResource,
+    ModelCapabilityFeature as ModelCapabilityFeatureResource,
+    ModelCapabilityPatch as ModelCapabilityPatchResource,
+};
+pub mod model_catalog;
 
-/// Configured model modes retain the distinction between inheriting a default,
-/// explicitly clearing it, and choosing a named mode. Runtime merging logic is
-/// intentionally not part of the protocol.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ConfiguredModelModeMapResource<T> {
-    #[serde(default)]
-    pub default: ConfiguredModeDefaultResource,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub modes: BTreeMap<String, T>,
-}
-
-impl<T> ConfiguredModelModeMapResource<T> {
-    pub fn is_empty(&self) -> bool {
-        matches!(self.default, ConfiguredModeDefaultResource::Inherit) && self.modes.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(tag = "kind", content = "mode", rename_all = "snake_case")]
-/// How a default mode is configured (inherit, clear, or explicit).
-pub enum ConfiguredModeDefaultResource {
-    #[default]
-    Inherit,
-    Clear,
-    Mode(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Configured thinking mode of a model.
-pub struct ConfiguredModelThinkingModeResource {
-    /// `None` means the catalog did not explicitly set a default marker.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "default")]
-    pub is_default: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingRequestResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strategy: Option<ConfiguredThinkingStrategyResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<ReasoningEffortResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display: Option<ThinkingDisplayResource>,
-    #[serde(
-        default,
-        skip_serializing_if = "ProviderModelRequestOverrideResource::is_empty"
-    )]
-    pub request_override: ProviderModelRequestOverrideResource,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Configured thinking strategy of a model.
-pub enum ConfiguredThinkingStrategyResource {
-    Disabled,
-    Effort,
-    Budget,
-    Adaptive,
-    RequestOnly,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Configured speed mode of a model.
-pub struct ConfiguredModelSpeedModeResource {
-    /// `None` means the catalog did not explicitly set a default marker.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "default")]
-    pub is_default: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "ProviderModelRequestOverrideResource::is_empty"
-    )]
-    pub request_override: ProviderModelRequestOverrideResource,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-/// Patch selecting supported or unsupported capabilities.
-pub enum CapabilitySelectionPatchResource<T> {
-    Supported(Vec<T>),
-    Patch(CapabilitySelectionPatchBodyResource<T>),
-}
-
-impl<T> CapabilitySelectionPatchResource<T> {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Supported(values) => values.is_empty(),
-            Self::Patch(values) => values.is_empty(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
-/// Body of a capability selection patch.
-pub struct CapabilitySelectionPatchBodyResource<T> {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub supported: Vec<T>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unsupported: Vec<T>,
-}
-
-impl<T> CapabilitySelectionPatchBodyResource<T> {
-    pub fn is_empty(&self) -> bool {
-        self.supported.is_empty() && self.unsupported.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Patch of model capabilities (input modalities and features).
-pub struct ModelCapabilityPatchResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<CapabilitySelectionPatchResource<ModelInputModalityResource>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub features: Option<CapabilitySelectionPatchResource<ModelCapabilityFeatureResource>>,
-}
-
-impl ModelCapabilityPatchResource {
-    pub fn is_empty(&self) -> bool {
-        self.input
-            .as_ref()
-            .is_none_or(CapabilitySelectionPatchResource::is_empty)
-            && self
-                .features
-                .as_ref()
-                .is_none_or(CapabilitySelectionPatchResource::is_empty)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Input modality of a model.
-pub enum ModelInputModalityResource {
-    Text,
-    Image,
-    Document,
-    Audio,
-    Video,
-    File,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Feature capability of a model.
-pub enum ModelCapabilityFeatureResource {
-    ToolCalling,
-    Streaming,
-    Reasoning,
-    StructuredOutput,
-    #[serde(rename = "temperature")]
-    Temperature,
-}
-
-/// Lifecycle label for a catalog model in the public wire contract.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelLifecycle {
-    Active,
-    Preview,
-    Beta,
-    Alpha,
-    Experimental,
-    Deprecated,
-}
-
-/// Public, decimal-string pricing values for a catalog model. String values
-/// preserve provider precision and avoid a floating-point wire contract.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ModelPricing {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tiers: Vec<ModelPricingTier>,
-}
-
-impl ModelPricing {
-    pub fn is_empty(&self) -> bool {
-        self.input_usd_per_million_tokens.is_none()
-            && self.output_usd_per_million_tokens.is_none()
-            && self.cache_read_usd_per_million_tokens.is_none()
-            && self.cache_write_usd_per_million_tokens.is_none()
-            && self.tiers.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Pricing tier of a model.
-pub struct ModelPricingTier {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tier_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_usd_per_million_tokens: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_write_usd_per_million_tokens: Option<String>,
-}
-
-impl ModelPricingTier {
-    pub fn is_empty(&self) -> bool {
-        self.tier_type.is_none()
-            && self.size_tokens.is_none()
-            && self.input_usd_per_million_tokens.is_none()
-            && self.output_usd_per_million_tokens.is_none()
-            && self.cache_read_usd_per_million_tokens.is_none()
-            && self.cache_write_usd_per_million_tokens.is_none()
-    }
-}
+// Stable model value types have identical public and domain semantics.
+pub use agena_domain::{ModelLifecycle, ModelPricing, ModelPricingTier};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response to a runtime configuration reload.
@@ -789,6 +594,39 @@ pub struct RuntimeReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a settings edit.
+pub struct ConfigSettingsEditResponse {
+    #[serde(default)]
+    pub before_revision: String,
+    #[serde(default)]
+    pub after_revision: String,
+    pub config_path: std::path::PathBuf,
+    pub config_found: bool,
+    pub operation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub dry_run: bool,
+    pub changed: bool,
+    pub created: bool,
+    pub deleted: bool,
+    pub validated: bool,
+    pub reload_requested: bool,
+    pub reload_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload: Option<ConfigSettingsReloadResponse>,
+    pub previous: serde_json::Value,
+    pub current: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a settings reload.
+pub struct ConfigSettingsReloadResponse {
+    pub previous_generation: u64,
+    pub generation: u64,
+    pub loaded_at: String,
 }
 
 // ─── Workspaces ──────────────────────────────────────────────────────────
@@ -1832,3 +1670,191 @@ pub struct ProviderAdapterModelsResponse {
     pub provider_id: String,
     pub adapters: Vec<ProviderAdapterModelsResource>,
 }
+
+#[cfg(test)]
+mod model_catalog_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_reads_the_existing_flat_wire_contract_and_omits_absent_fields() {
+        let value = json!({
+            "model_id": "fixture-model",
+            "source": "cache",
+            "input": ["text", "image"],
+            "features": { "supported": ["reasoning"], "unsupported": ["temperature"] },
+            "thinking_modes": {
+                "default": "high",
+                "high": { "strategy": "effort", "effort": "high" }
+            },
+            "speed_modes": { "default": null, "fast": { "disabled": true } }
+        });
+        let model: CatalogModelResource = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(model.thinking_modes.default.mode(), Some("high"));
+        assert_eq!(
+            model.speed_modes.default,
+            ConfiguredModeDefaultResource::Clear
+        );
+        assert_eq!(
+            model
+                .capabilities
+                .input_support(ModelInputModalityResource::Image),
+            Some(agena_domain::CapabilitySupport::Supported)
+        );
+        assert_eq!(serde_json::to_value(model).unwrap(), value);
+    }
+
+    #[test]
+    fn mode_default_distinguishes_missing_null_and_name() {
+        for (value, expected) in [
+            (json!({}), ConfiguredModeDefaultResource::Inherit),
+            (
+                json!({"default": null}),
+                ConfiguredModeDefaultResource::Clear,
+            ),
+            (
+                json!({"default": "fast"}),
+                ConfiguredModeDefaultResource::Mode("fast".into()),
+            ),
+        ] {
+            let modes: ConfiguredModelModeMapResource<ConfiguredModelSpeedModeResource> =
+                serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(modes.default, expected);
+            assert_eq!(serde_json::to_value(modes).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn catalog_page_defaults_only_optional_fields() {
+        let page: ModelCatalogListResponse = serde_json::from_value(json!({
+            "summary": {"model_count": 0}, "items": [], "total": 0, "offset": 0, "limit": 50
+        }))
+        .unwrap();
+        assert!(!page.summary.refreshing);
+        assert!(page.available_origins.is_empty());
+        assert!(page.summary.last_successful_source.is_none());
+        assert!(
+            serde_json::from_value::<ModelCatalogListResponse>(json!({
+                "summary": {"model_count": 0}, "items": [], "total": 0, "offset": 0
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<CatalogModelResource>(json!({"model_id": "missing-source"}))
+                .is_err()
+        );
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A file staged in the selected instance for one workspace. `path` is the
+/// absolute managed path clients should reference as a workspace attachment.
+pub struct WorkspaceFileUploadResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub workspace_id: i64,
+    pub path: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Kind of a workspace file entry.
+pub enum WorkspaceFileKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A node in a workspace file tree.
+pub struct WorkspaceFileNode {
+    pub name: String,
+    pub path: String,
+    pub kind: WorkspaceFileKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<WorkspaceFileNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A workspace file tree.
+pub struct WorkspaceFileTreeResource {
+    pub workspace_id: i64,
+    pub root: String,
+    pub path: String,
+    pub entries: Vec<WorkspaceFileNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Git status of a workspace.
+pub struct GitStatusResource {
+    pub workspace_root: String,
+    pub git_available: bool,
+    pub repo: bool,
+    pub gh_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind: Option<u64>,
+    pub staged_files: u64,
+    pub unstaged_files: u64,
+    pub untracked_files: u64,
+    pub changed_files: u64,
+    pub clean: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Result of a git commit.
+pub struct GitCommitResource {
+    pub commit: String,
+    pub summary: String,
+    pub status: GitStatusResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A created pull request.
+pub struct GitPullRequestResource {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Presentation-neutral registered tool metadata used by permission UIs.
+pub struct PermissionToolCatalogResource {
+    pub name: String,
+    pub summary: String,
+    /// UI-only summaries keyed by BCP-47 locale; permission editors pick
+    /// the client language and fall back to `summary`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub summary_translations: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// Complete JSON configuration-source projection for presentation and
+/// application-level configuration use cases. Runtime retains configuration
+/// resolution and file settings implementation; consumers never assemble this
+/// view from Runtime snapshots themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigJsonSources {
+    pub config_path: std::path::PathBuf,
+    pub config_found: bool,
+    pub project_config_path: std::path::PathBuf,
+    pub project_config_found: bool,
+    pub applied_layers: Vec<String>,
+    pub file: serde_json::Value,
+    pub project_file: serde_json::Value,
+    pub effective: serde_json::Value,
+}
+
+mod plugins;
+pub use plugins::*;

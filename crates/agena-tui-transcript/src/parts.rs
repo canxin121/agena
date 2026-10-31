@@ -375,7 +375,7 @@ fn attachment_kind_from_value(content: &serde_json::Value) -> Option<PartAttachm
     }
 }
 
-fn composer_resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
+pub(crate) fn resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
     let kind = match resource.kind {
         agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
         agena_domain::ResourceKind::Audio => PartAttachmentKind::Audio,
@@ -445,7 +445,7 @@ fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
         let content = match activity.payload {
             agena_domain::ActivityPayload::Resource(resource) => {
                 TranscriptActivityContent::Attachment(AttachmentPartResource {
-                    attachments: vec![composer_resource_attachment(&resource)],
+                    attachments: vec![resource_attachment(&resource)],
                 })
             }
             agena_domain::ActivityPayload::CommandReference(command) => {

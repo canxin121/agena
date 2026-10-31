@@ -27,48 +27,9 @@ pub type PluginEffectFuture = Pin<Box<dyn Future<Output = Result<(), String>> + 
 type SyncDisposer = Box<dyn FnOnce() -> Result<(), String> + Send + 'static>;
 type AsyncDisposer = Box<dyn FnOnce() -> PluginEffectFuture + Send + 'static>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginEffectScopeState {
-    Active,
-    Disposing,
-    Disposed,
-    Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginEffectState {
-    Active,
-    Disposing,
-    Disposed,
-    Failed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginEffectDescriptor {
-    pub id: u64,
-    pub kind: String,
-    pub label: String,
-    pub registered_at_ms: u64,
-    pub state: PluginEffectState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginEffectScopeInspect {
-    pub plugin_id: PluginKey,
-    pub generation: u64,
-    pub lifecycle: PluginEffectScopeState,
-    pub accepting: bool,
-    pub active_leases: usize,
-    pub cancelled: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub effects: Vec<PluginEffectDescriptor>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
-}
+pub use agena_plugin_sdk::inspection::{
+    PluginEffectDescriptor, PluginEffectScopeInspect, PluginEffectScopeState, PluginEffectState,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginEffectDisposeReport {

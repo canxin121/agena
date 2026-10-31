@@ -4,6 +4,7 @@ use crate::RenderedLine;
 use crate::math::{
     display_math_source, inline_math_unicode_text, push_inline_math, push_math_block,
 };
+pub use agena_tui_components::text::{sanitize_terminal_text, strip_terminal_ansi_sequences};
 use agena_tui_components::{line_plain_text, trim_empty_line_edges};
 use ratatui::{
     style::{Modifier, Style},
@@ -11,7 +12,7 @@ use ratatui::{
 };
 use tui_markdown::from_str as markdown_to_text;
 use unicode_linebreak::linebreaks;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 pub fn push_multiline(
     out: &mut Vec<RenderedLine>,
@@ -884,104 +885,7 @@ pub fn styled_tokens_to_line(tokens: Vec<StyledGrapheme>) -> Line<'static> {
     Line::from(spans)
 }
 
-pub fn strip_terminal_ansi_sequences(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != 0x1b {
-            let ch = text[index..].chars().next().unwrap_or_default();
-            out.push(ch);
-            index += ch.len_utf8();
-            continue;
-        }
-
-        index += 1;
-        if index >= bytes.len() {
-            break;
-        }
-
-        match bytes[index] {
-            b'[' => {
-                index += 1;
-                while index < bytes.len() {
-                    let byte = bytes[index];
-                    // Escape sequences may only contain ASCII parameter bytes.
-                    // A non-ASCII byte means the sequence was truncated and the
-                    // rest is real text: stop so it is emitted below and we
-                    // never land mid-way through a multi-byte char.
-                    if !byte.is_ascii() {
-                        break;
-                    }
-                    index += 1;
-                    if (0x40..=0x7e).contains(&byte) {
-                        break;
-                    }
-                }
-            }
-            b']' => {
-                index += 1;
-                while index < bytes.len() {
-                    match bytes[index] {
-                        0x07 => {
-                            index += 1;
-                            break;
-                        }
-                        0x1b if bytes.get(index + 1) == Some(&b'\\') => {
-                            index += 2;
-                            break;
-                        }
-                        byte if !byte.is_ascii() => break,
-                        _ => index += 1,
-                    }
-                }
-            }
-            _ => {
-                // Single-char escape (e.g. ESC M). Skip it only when it is a
-                // plain ASCII byte; a non-ASCII leading byte is the start of a
-                // multi-byte char and must be emitted as text.
-                if bytes[index].is_ascii() {
-                    index += 1;
-                }
-            }
-        }
-    }
-
-    out
-}
-
-pub fn sanitize_terminal_text(text: &str) -> String {
-    let stripped = strip_terminal_ansi_sequences(text).replace('\r', "");
-    stripped
-        .chars()
-        .filter_map(|ch| match ch {
-            '\n' | '\t' => Some(ch),
-            '\u{200e}' | '\u{200f}' => None,
-            '\u{202a}'..='\u{202e}' => None,
-            '\u{2066}'..='\u{2069}' => None,
-            ch if ch.is_control() => Some(' '),
-            _ => Some(ch),
-        })
-        .collect()
-}
-
 pub fn truncate_display_width(text: &str, max_width: usize) -> String {
-    let text = sanitize_terminal_text(text);
-    let mut width = 0_usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width.saturating_add(ch_width) > max_width {
-            break;
-        }
-        out.push(ch);
-        width = width.saturating_add(ch_width);
-    }
-    if out.is_empty() {
-        text.chars().take(max_width).collect()
-    } else {
-        out
-    }
+    agena_tui_components::text::clip_display_width(&sanitize_terminal_text(text), max_width)
 }
 use unicode_segmentation::UnicodeSegmentation;

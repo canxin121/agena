@@ -5,16 +5,6 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::ApplicationError;
 
-/// Default page limit used when no limit is requested.
-pub const DEFAULT_PAGE_LIMIT: u64 = 50;
-/// Maximum allowed page limit.
-pub const MAX_PAGE_LIMIT: u64 = 200;
-
-/// Normalizes a caller-provided page limit to the product-wide safe range.
-pub fn normalize_limit(limit: Option<u64>) -> u64 {
-    limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT)
-}
-
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 /// Ordering of a page of results.

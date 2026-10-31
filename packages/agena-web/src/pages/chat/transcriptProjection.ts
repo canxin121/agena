@@ -158,38 +158,10 @@ export function transcriptPartText(part: MessagePartLike): string {
   return rawText(part.text)
 }
 
-function toolCallView(part: MessagePartLike): JsonRecord {
-  const content = durablePartContent(part)
-  const presentation = record(part.agenaPresentation)
-  const title = firstText(presentation, ['title'])
-  const summary = firstText(presentation, ['summary'])
-  const invocation = {
-    name: firstText(content, ['name']) || 'unknown',
-    plugin_name: content.plugin,
-    input: toolInputRecord(content.input),
-    tool_api_call: record(content.tool_api_call),
-  }
-  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
-  return {
-    call_id: content.call_id ?? 0,
-    invocation,
-    title,
-    summary,
-    blocks,
-    user_input: record(content.user_input),
-    authorization: record(content.authorization),
-    metadata: record(content.metadata),
-    error: content.error ?? null,
-    lifecycle: record(content.lifecycle),
-    output: content.output ?? null,
-  }
-}
-
 function operationTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
   const content = durablePartContent(part)
-  const operation = toolCallView(part)
   return (
-    firstText(operation, ['title']) ||
+    firstText(record(part.agenaPresentation), ['title']) ||
     firstText(content, ['name']) ||
     text(part.tool) ||
     text(labels?.operation) ||
@@ -202,8 +174,7 @@ function operationSummary(part: MessagePartLike): string {
   // A projected empty summary is intentional when the title/body already
   // contains that text. Do not revive the older stored summary in its place.
   if (typeof presentation.summary === 'string') return text(presentation.summary)
-  const operation = toolCallView(part)
-  return firstText(operation, ['summary']) || text(part.agenaSummary) || firstText(record(part.state), ['title'])
+  return text(part.agenaSummary) || firstText(record(part.state), ['title'])
 }
 
 function operationCopyText(part: MessagePartLike): string {
@@ -287,12 +258,11 @@ export function partPendingInteractionRequestIds(part: MessagePartLike): string[
 
 export function partHasInteraction(part: MessagePartLike): boolean {
   if (durablePartKind(part) !== 'tool_call') return false
-  const operation = toolCallView(part)
-  const requests = record(operation.user_input).requests
-  const permissions = record(operation.authorization).permissions
+  const content = durablePartContent(part)
+  const requests = record(content.user_input).requests
+  const permissions = record(content.authorization).permissions
   if (Array.isArray(requests) && requests.length) return true
   if (Array.isArray(permissions) && permissions.length) return true
-  const content = durablePartContent(part)
   const resources = Array.isArray(content.resources) ? content.resources : []
   if (resources.some((resource) => record(resource).kind === 'terminal')) return true
   const blocks = record(part.agenaPresentation).blocks

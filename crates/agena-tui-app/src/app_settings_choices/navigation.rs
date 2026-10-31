@@ -97,7 +97,9 @@ impl App {
 
     /// The commands a server-owned target resolves, i.e. everything that is not
     /// this client's own to run.
-    pub(crate) fn plugin_slash_commands(&self) -> Vec<agena_plugin_host::CommandCatalogItem> {
+    pub(crate) fn plugin_slash_commands(
+        &self,
+    ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
         crate::app_backend::plugin_effects::plugin_slash_commands(&self.application)
     }
 

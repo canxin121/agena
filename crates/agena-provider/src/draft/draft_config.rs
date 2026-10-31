@@ -1,18 +1,17 @@
-//! Draft provider configuration edited in the studio. Previously located in
-//! `agena-tui-backend/src/backend_drafts/provider_draft_config.rs`.
+//! Editable provider values and explicit configuration projections; no persistence.
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use super::catalog::{credential_issuer_label, optional_non_empty, parse_oauth_expires_at_ms};
 use super::draft_auth_data::{
     DEFAULT_GITLAB_INSTANCE_URL, ProviderCredentialDraftBundle, ProviderDraftAuthDetails,
     ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
     ProviderOAuthTokensDraft, ProviderStudioSaveError, ProviderStudioSaveField,
     ProviderStudioSaveValidationError, provider_credential_drafts,
 };
-use super::save::{parse_credential_issuer, trimmed_owned};
-use agena_provider::{
+use super::{credential_issuer_label, optional_non_empty, parse_oauth_expires_at_ms};
+use super::{parse_credential_issuer, trimmed_owned};
+use crate::{
     AuthData, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay,
     ProviderOverlay, ProviderSecretSourceOverlay,
 };
@@ -37,10 +36,8 @@ impl ProviderConfigDraft {
             auth_kind: ProviderDraftAuthKind::Unset,
             auth: ProviderDraftAuthDetails::default(),
             credential_drafts: ProviderCredentialDraftBundle::default(),
-            request_timeout_secs: agena_provider::ProviderNetworkConfig::default()
-                .request_timeout_secs,
-            connect_timeout_secs: agena_provider::ProviderNetworkConfig::default()
-                .connect_timeout_secs,
+            request_timeout_secs: crate::ProviderNetworkConfig::default().request_timeout_secs,
+            connect_timeout_secs: crate::ProviderNetworkConfig::default().connect_timeout_secs,
         }
     }
 
@@ -169,12 +166,12 @@ impl ProviderConfigDraft {
         self.credential_drafts = credential_drafts;
     }
 
-    pub fn from_configured_editor(provider: agena_provider::ProviderConfiguredEditor) -> Self {
-        let split_api_key = |api_key: Option<agena_provider::ProviderApiKeySource>| match api_key {
-            Some(agena_provider::ProviderApiKeySource::Inline(value)) => {
+    pub fn from_configured_editor(provider: crate::ProviderConfiguredEditor) -> Self {
+        let split_api_key = |api_key: Option<crate::ProviderApiKeySource>| match api_key {
+            Some(crate::ProviderApiKeySource::Inline(value)) => {
                 (ProviderDraftSecretSourceKind::Inline, value)
             }
-            Some(agena_provider::ProviderApiKeySource::Environment(value)) => {
+            Some(crate::ProviderApiKeySource::Environment(value)) => {
                 (ProviderDraftSecretSourceKind::Env, value)
             }
             None => (ProviderDraftSecretSourceKind::Unset, String::new()),
@@ -194,7 +191,7 @@ impl ProviderConfigDraft {
             service_key_env,
             credential_drafts,
         ) = match provider.auth {
-            agena_provider::ProviderConfiguredEditorAuth::None => (
+            crate::ProviderConfiguredEditorAuth::None => (
                 ProviderDraftAuthKind::None,
                 String::new(),
                 String::new(),
@@ -209,7 +206,7 @@ impl ProviderConfigDraft {
                 String::new(),
                 ProviderCredentialDraftBundle::default(),
             ),
-            agena_provider::ProviderConfiguredEditorAuth::Api { base_url, api_key } => {
+            crate::ProviderConfiguredEditorAuth::Api { base_url, api_key } => {
                 let (kind, value) = split_api_key(api_key);
                 (
                     ProviderDraftAuthKind::Api,
@@ -227,7 +224,7 @@ impl ProviderConfigDraft {
                     ProviderCredentialDraftBundle::default(),
                 )
             }
-            agena_provider::ProviderConfiguredEditorAuth::ClineApi { api_key } => {
+            crate::ProviderConfiguredEditorAuth::ClineApi { api_key } => {
                 let (kind, value) = split_api_key(api_key);
                 (
                     ProviderDraftAuthKind::ClineApi,
@@ -245,7 +242,7 @@ impl ProviderConfigDraft {
                     ProviderCredentialDraftBundle::default(),
                 )
             }
-            agena_provider::ProviderConfiguredEditorAuth::Gitlab {
+            crate::ProviderConfiguredEditorAuth::Gitlab {
                 api_key,
                 instance_url,
             } => {
@@ -266,7 +263,7 @@ impl ProviderConfigDraft {
                     ProviderCredentialDraftBundle::default(),
                 )
             }
-            agena_provider::ProviderConfiguredEditorAuth::Credential {
+            crate::ProviderConfiguredEditorAuth::Credential {
                 issuer,
                 credential,
                 base_url,
@@ -287,7 +284,7 @@ impl ProviderConfigDraft {
                 service_key_env.unwrap_or_default(),
                 provider_credential_drafts(issuer, credential.as_ref()),
             ),
-            agena_provider::ProviderConfiguredEditorAuth::BedrockSigv4 {
+            crate::ProviderConfiguredEditorAuth::BedrockSigv4 {
                 base_url,
                 region,
                 profile,
@@ -338,7 +335,7 @@ impl ProviderConfigDraft {
         }
     }
 
-    pub(crate) fn to_provider_overlay_for_save(
+    pub fn to_provider_overlay_for_save(
         &self,
         adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
     ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
@@ -346,14 +343,14 @@ impl ProviderConfigDraft {
             enabled: Some(true),
             auth: Some(self.to_auth_overlay_for_save()?),
             adapters,
-            network: Some(agena_provider::ProviderNetworkOverlay {
+            network: Some(crate::ProviderNetworkOverlay {
                 request_timeout_secs: Some(self.request_timeout_secs),
                 connect_timeout_secs: Some(self.connect_timeout_secs),
             }),
         })
     }
 
-    pub(crate) fn to_auth_overlay_for_save(
+    pub fn to_auth_overlay_for_save(
         &self,
     ) -> std::result::Result<ProviderAuthOverlay, ProviderStudioSaveError> {
         let credential = self
@@ -427,9 +424,8 @@ impl ProviderConfigDraft {
                 Some(ProviderApiSubtype::Gitlab),
                 None,
                 None,
-                self.secret_source_overlay().map(|source| {
-                    agena_provider::ProviderGitlabApiAccessOverlay::ApiKey { source }
-                }),
+                self.secret_source_overlay()
+                    .map(|source| crate::ProviderGitlabApiAccessOverlay::ApiKey { source }),
                 trimmed_owned(self.auth.instance_url.as_str()),
                 None,
                 None,
@@ -513,7 +509,7 @@ impl ProviderConfigDraft {
         })
     }
 
-    pub(crate) fn to_provider_auth_mode_for_save(
+    pub fn to_provider_auth_mode_for_save(
         &self,
     ) -> std::result::Result<ProviderAuthMode, ProviderStudioSaveError> {
         match self.auth_kind {
@@ -530,7 +526,7 @@ impl ProviderConfigDraft {
         }
     }
 
-    pub(crate) fn secret_source_overlay(&self) -> Option<ProviderSecretSourceOverlay> {
+    pub fn secret_source_overlay(&self) -> Option<ProviderSecretSourceOverlay> {
         let value = optional_non_empty(self.auth.secret_source_value.as_str())?.to_owned();
         match self.auth.secret_source_kind {
             ProviderDraftSecretSourceKind::Unset => None,
@@ -541,7 +537,7 @@ impl ProviderConfigDraft {
         }
     }
 
-    pub(crate) fn secret_source_inline_value(&self) -> Option<&str> {
+    pub fn secret_source_inline_value(&self) -> Option<&str> {
         matches!(
             self.auth.secret_source_kind,
             ProviderDraftSecretSourceKind::Inline
@@ -549,7 +545,7 @@ impl ProviderConfigDraft {
         .then_some(self.auth.secret_source_value.as_str())
     }
 
-    pub(crate) fn secret_source_env_value(&self) -> Option<&str> {
+    pub fn secret_source_env_value(&self) -> Option<&str> {
         matches!(
             self.auth.secret_source_kind,
             ProviderDraftSecretSourceKind::Env
@@ -557,7 +553,7 @@ impl ProviderConfigDraft {
         .then_some(self.auth.secret_source_value.as_str())
     }
 
-    pub(crate) fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
+    pub fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
         match self.auth_kind {
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
                 let tokens = &self.credential_drafts.openai_chatgpt.tokens;
@@ -639,7 +635,7 @@ impl ProviderConfigDraft {
         }
     }
 
-    pub(crate) fn credential_auth_data_for_listing(
+    pub fn credential_auth_data_for_listing(
         &self,
         issuer: CredentialIssuer,
     ) -> Result<Option<AuthData>> {
@@ -765,4 +761,4 @@ impl ProviderConfigDraft {
     }
 }
 
-use agena_provider::CredentialIssuer;
+use crate::CredentialIssuer;

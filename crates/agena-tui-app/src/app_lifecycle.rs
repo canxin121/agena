@@ -535,7 +535,7 @@ fn apply_math_graphics_appearance(launch: &mut LaunchOptions) {
 
 fn tui_palette_with_plugin(
     base: agena_tui_components::ThemePalette,
-    plugin_theme: Option<&agena_plugin_host::HostThemePalette>,
+    plugin_theme: Option<&agena_plugin_sdk::host_api::HostThemePalette>,
 ) -> agena_tui_components::ThemePalette {
     let Some(theme) = plugin_theme else {
         return base;

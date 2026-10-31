@@ -155,7 +155,7 @@ pub async fn replace_session_permission(
     Json(request): Json<SessionPermissionUpdateRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-    let permission = agena_application::permission_config_domain_from_resource(request.permission)?;
+    let permission = request.permission.into();
     Ok(Json(
         state.set_session_permission(session_id, permission).await?,
     ))

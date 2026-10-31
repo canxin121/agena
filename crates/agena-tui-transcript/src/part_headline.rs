@@ -306,14 +306,11 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
                 } else {
                     title
                 };
-                let input_label =
-                    crate::renderer::tool_invocation_label(&tool.operation.invocation);
-                let subject = input_label
-                    .strip_prefix(tool.operation.invocation.name.as_str())
-                    .unwrap_or_default()
-                    .trim()
-                    .trim_start_matches('·')
-                    .trim();
+                let invocation = &tool.operation.invocation;
+                let subject = agena_tool::invocation_title_subject(
+                    invocation.name.as_str(),
+                    &serde_json::Value::from(invocation.input.clone()),
+                );
                 let records = &tool.operation.user_input.requests;
                 let pending_id = crate::interaction_view::interaction_request_id_for_part(part);
                 let primary = pending_id
@@ -340,10 +337,10 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
                     request_title.as_str(),
                     tool.error_message().unwrap_or_default(),
                     tool.summary(),
-                    if image_generation || title.contains(subject) {
+                    if image_generation || title.contains(subject.as_str()) {
                         ""
                     } else {
-                        subject
+                        subject.as_str()
                     },
                 ]);
                 (title, summary)

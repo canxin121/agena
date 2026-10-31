@@ -748,9 +748,9 @@ impl App {
             );
             let text = match (kind, content) {
                 (
-                    agena_plugin_host::ContributionKind::StatusLineText
-                    | agena_plugin_host::ContributionKind::FooterBlock,
-                    agena_plugin_host::PluginDisplayContent::Text { text },
+                    agena_plugin_sdk::ContributionKind::StatusLineText
+                    | agena_plugin_sdk::ContributionKind::FooterBlock,
+                    agena_plugin_sdk::PluginDisplayContent::Text { text },
                 ) => text,
                 _ => continue,
             };

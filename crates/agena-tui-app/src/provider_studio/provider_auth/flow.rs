@@ -13,7 +13,7 @@ use super::{
     provider_studio_missing_start_auth_field, provider_studio_required_field_summary,
 };
 use crate::ui_text;
-use agena_application::provider_studio::{ProviderDraftAuthActionResult, ProviderDraftAuthError};
+use agena_provider::draft::{ProviderDraftAuthActionResult, ProviderDraftAuthError};
 
 pub(crate) fn provider_studio_start_auth_summary(
     i18n: &I18n,

@@ -201,6 +201,7 @@ dependencies = [
  "agena-failure",
  "agena-notification",
  "agena-plugin-sdk",
+ "agena-provider",
  "agena-skills",
  "chrono",
  "schemars",
@@ -666,7 +667,6 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "futures-util",
  "hex",
- "jsonschema",
  "portable-atomic",
  "reqwest 0.13.4",
  "serde",
@@ -723,6 +723,7 @@ dependencies = [
  "bitflags 2.13.1",
  "bytes",
  "futures-util",
+ "jsonschema",
  "portable-atomic",
  "regex",
  "reqwest 0.13.4",
@@ -757,6 +758,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "anyhow",
  "async-trait",
  "blake3",
  "chrono",
@@ -874,7 +876,6 @@ dependencies = [
  "http 1.5.0",
  "infer",
  "log",
- "oauth2",
  "parking_lot",
  "regex",
  "reqwest 0.13.4",
@@ -895,6 +896,7 @@ dependencies = [
 name = "agena-runtime-config"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
  "agena-domain",
  "agena-failure",
  "agena-plugin-host",
@@ -923,7 +925,6 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-macros",
- "agena-plugin-host",
  "agena-plugin-sdk",
  "agena-provider",
  "agena-storage-layout",
@@ -1336,16 +1337,13 @@ name = "agena-tui-app"
 version = "0.1.0"
 dependencies = [
  "agena-api",
- "agena-application",
  "agena-client",
  "agena-domain",
  "agena-failure",
  "agena-notification",
- "agena-plugin-host",
  "agena-plugin-sdk",
  "agena-process",
  "agena-provider",
- "agena-runtime",
  "agena-storage-layout",
  "agena-tui",
  "agena-tui-components",
@@ -1460,10 +1458,10 @@ dependencies = [
 name = "agena-tui-plugin-workbench"
 version = "0.1.0"
 dependencies = [
- "agena-application",
+ "agena-api",
  "agena-domain",
  "agena-failure",
- "agena-plugin-host",
+ "agena-plugin-sdk",
  "agena-tui",
  "agena-tui-components",
  "crossterm",

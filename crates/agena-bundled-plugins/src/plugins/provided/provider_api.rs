@@ -193,159 +193,6 @@ fn request_error(family: Family, method: &reqwest::Method, error: PluginError) -
     }
 }
 
-#[cfg(test)]
-mod request_error_tests {
-    use super::*;
-    use agena_failure::{FailureImpact, RetryDirective};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn resolved_read_routes_keep_failure_identity_while_mutations_remain_uncertain() {
-        let error = official_service::provider_http_error(
-            "provider",
-            "resource API",
-            reqwest::StatusCode::NOT_FOUND,
-            Some("req_fixture-49"),
-            &json!({"error":{"message":"This endpoint is unavailable"}}),
-            &BTreeMap::new(),
-        );
-        for (provider, family, input) in [
-            ("chatgpt", Family::Tokens, json!({"action":"create"})),
-            ("claude", Family::Tokens, json!({"action":"create"})),
-            ("gemini", Family::Tokens, json!({"action":"create"})),
-            ("chatgpt", Family::Files, json!({"action":"list"})),
-            (
-                "chatgpt",
-                Family::Files,
-                json!({"action":"get","id":"file_fixture"}),
-            ),
-        ] {
-            let route =
-                routes::resolve(provider, family, &serde_json::from_value(input).unwrap()).unwrap();
-            let actual = request_error(family, &route.method, error.clone());
-            let received: PluginError =
-                serde_json::from_value(serde_json::to_value(&actual).unwrap()).unwrap();
-            assert_eq!(received, error);
-            assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
-        }
-        for (family, input) in [
-            (Family::Images, json!({"action":"create"})),
-            (Family::Files, json!({"action":"upload"})),
-            (
-                Family::Files,
-                json!({"action":"delete","id":"file_fixture"}),
-            ),
-        ] {
-            let route = routes::resolve("chatgpt", family, &serde_json::from_value(input).unwrap())
-                .unwrap();
-            let actual = request_error(family, &route.method, error.clone());
-            assert_eq!(actual.failure.retry, RetryDirective::Never);
-            assert_eq!(actual.failure.impact, FailureImpact::PartialSuccess);
-            assert!(actual.failure.user.fallback.contains("HTTP 404"));
-            assert!(actual.failure.user.fallback.contains("req_fixture-49"));
-        }
-    }
-
-    #[tokio::test]
-    async fn get_connection_failure_keeps_read_failure_policy() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        let input = serde_json::from_value(json!({"action":"get","id":"file_fixture"})).unwrap();
-        let route = routes::resolve("chatgpt", Family::Files, &input).unwrap();
-        let error = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
-            .unwrap()
-            .request(
-                route.method.clone(),
-                format!("http://{address}/{}", route.path),
-            )
-            .send()
-            .await
-            .unwrap_err();
-        let error =
-            official_service::provider_transport_error("chatgpt", "resource API", &error, None);
-        let original = error.clone();
-        let error = request_error(Family::Files, &route.method, error);
-        let wire = serde_json::to_string(&error).unwrap();
-        let received: PluginError = serde_json::from_str(&wire).unwrap();
-        assert_eq!(received, original);
-        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
-        assert!(
-            received
-                .failure
-                .user
-                .fallback
-                .contains("connection refused")
-        );
-        assert!(!wire.contains("remote_effect_unknown"));
-    }
-
-    #[tokio::test]
-    async fn count_tokens_non_json_404_is_not_partial_success() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            let length = stream.read(&mut request).await.unwrap();
-            assert!(
-                String::from_utf8_lossy(&request[..length])
-                    .starts_with("POST /responses/input_tokens HTTP/1.1")
-            );
-            let body = "<html>private-body-canary</html>";
-            let response = format!(
-                "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: {}\r\nX-Request-ID: req_count-fixture\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-        });
-        let input = serde_json::from_value(json!({"action":"create"})).unwrap();
-        let route = routes::resolve("chatgpt", Family::Tokens, &input).unwrap();
-        let response = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
-            .unwrap()
-            .request(
-                route.method.clone(),
-                format!("http://{address}/{}", route.path),
-            )
-            .json(&json!({"model":"fixture","input":"fixture"}))
-            .send()
-            .await
-            .unwrap();
-        let error = official_service::read_json_response_bounded(
-            response,
-            "chatgpt",
-            "resource API",
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap_err();
-        server.await.unwrap();
-        let original = error.clone();
-        let error = request_error(Family::Tokens, &route.method, error);
-        let wire = serde_json::to_string(&error).unwrap();
-        let received: PluginError = serde_json::from_str(&wire).unwrap();
-        assert_eq!(received, original);
-        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
-        assert!(received.failure.user.fallback.contains("HTTP 404"));
-        assert!(received.failure.user.fallback.contains("req_count-fixture"));
-        assert!(
-            received
-                .failure
-                .user
-                .fallback
-                .contains("Response is not valid JSON")
-        );
-        assert!(!wire.contains("private-body-canary"));
-        assert!(!wire.contains("remote_effect_unknown"));
-    }
-}
-
 /// Reject path traversal, URL syntax and nested names in individual segments.
 fn segment(value: &str, prefix: &str) -> Result<String> {
     let value = value.strip_prefix(prefix).unwrap_or(value);
@@ -1370,5 +1217,158 @@ fn collect_binary(value: &mut Value, output: &mut Vec<(String, String)>, depth: 
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod request_error_tests {
+    use super::*;
+    use agena_failure::{FailureImpact, RetryDirective};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn resolved_read_routes_keep_failure_identity_while_mutations_remain_uncertain() {
+        let error = official_service::provider_http_error(
+            "provider",
+            "resource API",
+            reqwest::StatusCode::NOT_FOUND,
+            Some("req_fixture-49"),
+            &json!({"error":{"message":"This endpoint is unavailable"}}),
+            &BTreeMap::new(),
+        );
+        for (provider, family, input) in [
+            ("chatgpt", Family::Tokens, json!({"action":"create"})),
+            ("claude", Family::Tokens, json!({"action":"create"})),
+            ("gemini", Family::Tokens, json!({"action":"create"})),
+            ("chatgpt", Family::Files, json!({"action":"list"})),
+            (
+                "chatgpt",
+                Family::Files,
+                json!({"action":"get","id":"file_fixture"}),
+            ),
+        ] {
+            let route =
+                routes::resolve(provider, family, &serde_json::from_value(input).unwrap()).unwrap();
+            let actual = request_error(family, &route.method, error.clone());
+            let received: PluginError =
+                serde_json::from_value(serde_json::to_value(&actual).unwrap()).unwrap();
+            assert_eq!(received, error);
+            assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        }
+        for (family, input) in [
+            (Family::Images, json!({"action":"create"})),
+            (Family::Files, json!({"action":"upload"})),
+            (
+                Family::Files,
+                json!({"action":"delete","id":"file_fixture"}),
+            ),
+        ] {
+            let route = routes::resolve("chatgpt", family, &serde_json::from_value(input).unwrap())
+                .unwrap();
+            let actual = request_error(family, &route.method, error.clone());
+            assert_eq!(actual.failure.retry, RetryDirective::Never);
+            assert_eq!(actual.failure.impact, FailureImpact::PartialSuccess);
+            assert!(actual.failure.user.fallback.contains("HTTP 404"));
+            assert!(actual.failure.user.fallback.contains("req_fixture-49"));
+        }
+    }
+
+    #[tokio::test]
+    async fn get_connection_failure_keeps_read_failure_policy() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let input = serde_json::from_value(json!({"action":"get","id":"file_fixture"})).unwrap();
+        let route = routes::resolve("chatgpt", Family::Files, &input).unwrap();
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .request(
+                route.method.clone(),
+                format!("http://{address}/{}", route.path),
+            )
+            .send()
+            .await
+            .unwrap_err();
+        let error =
+            official_service::provider_transport_error("chatgpt", "resource API", &error, None);
+        let original = error.clone();
+        let error = request_error(Family::Files, &route.method, error);
+        let wire = serde_json::to_string(&error).unwrap();
+        let received: PluginError = serde_json::from_str(&wire).unwrap();
+        assert_eq!(received, original);
+        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        assert!(
+            received
+                .failure
+                .user
+                .fallback
+                .contains("connection refused")
+        );
+        assert!(!wire.contains("remote_effect_unknown"));
+    }
+
+    #[tokio::test]
+    async fn count_tokens_non_json_404_is_not_partial_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..length])
+                    .starts_with("POST /responses/input_tokens HTTP/1.1")
+            );
+            let body = "<html>private-body-canary</html>";
+            let response = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nContent-Length: {}\r\nX-Request-ID: req_count-fixture\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let input = serde_json::from_value(json!({"action":"create"})).unwrap();
+        let route = routes::resolve("chatgpt", Family::Tokens, &input).unwrap();
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .request(
+                route.method.clone(),
+                format!("http://{address}/{}", route.path),
+            )
+            .json(&json!({"model":"fixture","input":"fixture"}))
+            .send()
+            .await
+            .unwrap();
+        let error = official_service::read_json_response_bounded(
+            response,
+            "chatgpt",
+            "resource API",
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap_err();
+        server.await.unwrap();
+        let original = error.clone();
+        let error = request_error(Family::Tokens, &route.method, error);
+        let wire = serde_json::to_string(&error).unwrap();
+        let received: PluginError = serde_json::from_str(&wire).unwrap();
+        assert_eq!(received, original);
+        assert_ne!(received.failure.impact, FailureImpact::PartialSuccess);
+        assert!(received.failure.user.fallback.contains("HTTP 404"));
+        assert!(received.failure.user.fallback.contains("req_count-fixture"));
+        assert!(
+            received
+                .failure
+                .user
+                .fallback
+                .contains("Response is not valid JSON")
+        );
+        assert!(!wire.contains("private-body-canary"));
+        assert!(!wire.contains("remote_effect_unknown"));
     }
 }

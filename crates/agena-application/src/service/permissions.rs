@@ -6,7 +6,8 @@ use super::{
     PermissionRuleBatchResponse, PermissionRuleBatchScope, PermissionRuleCursor,
     PermissionRuleResource, PermissionRuleWriteCommand, PermissionRuleWriteRequest,
     PermissionScope, PersistedPermissionRule, SearchPaginationQuery, api_error_from_app,
-    build_page, decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    build_page, decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc,
+    trim_page,
 };
 use std::collections::HashSet;
 
@@ -99,7 +100,7 @@ impl ApplicationService {
         &self,
         query: SearchPaginationQuery,
     ) -> ApplicationResult<PaginatedResponse<PermissionRuleResource>> {
-        let limit = normalize_limit(query.limit());
+        let limit = normalize_resource_limit(query.limit());
         let cursor = query
             .cursor()
             .map(decode_cursor::<PermissionRuleCursor>)

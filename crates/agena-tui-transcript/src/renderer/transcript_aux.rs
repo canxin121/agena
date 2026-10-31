@@ -177,36 +177,6 @@ fn diff_background(
     }
 }
 
-pub(crate) fn tool_invocation_label(invocation: &agena_domain::ToolInvocation) -> String {
-    let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(function_name) = tool_api_display_name(invocation.name.as_str())
-        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !tool_name.trim().is_empty()
-    {
-        return format!("{function_name} · {}", tool_name.trim());
-    }
-    for key in [
-        "command",
-        "file_path",
-        "path",
-        "pattern",
-        "query",
-        "url",
-        "description",
-        "action",
-        "id",
-        "expression",
-        "notebook_path",
-    ] {
-        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
-            && !value.trim().is_empty()
-        {
-            return format!("{} {}", invocation.name, value.trim());
-        }
-    }
-    invocation.name.clone()
-}
-
 pub(crate) fn tool_api_display_name(name: &str) -> Option<&'static str> {
     match name {
         "tools_list" => Some("tools.list"),

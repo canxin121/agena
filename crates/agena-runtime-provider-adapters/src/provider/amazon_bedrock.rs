@@ -2,7 +2,12 @@ pub(super) use agena_domain::ModelMetadata;
 use agena_domain::Role;
 use agena_domain::*;
 use agena_provider::{
-    CompletionFinishReason, CompletionToolCall, CompletionUsage, StreamResumePolicy,
+    AnthropicBinarySource, AnthropicMessage, AnthropicTextBlock, AnthropicThinkingBlockState,
+    AnthropicUsage, CompletionFinishReason, CompletionToolCall, CompletionUsage,
+    StreamResumePolicy, anthropic_budget_effort, anthropic_budget_for_effort,
+    anthropic_thinking_budget, anthropic_thinking_metadata, anthropic_wire_tool_name,
+    json_value_to_string, map_anthropic_usage, merge_anthropic_cache_creation_usage,
+    merge_provider_metadata,
 };
 use agena_provider_bedrock_auth::AwsCredentials as Credentials;
 use async_trait::async_trait;
@@ -298,116 +303,25 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
 
 fn bedrock_anthropic_metadata(
     response_id: Option<String>,
-    blocks: &[BedrockAnthropicTextBlock],
+    blocks: &[AnthropicTextBlock],
 ) -> Option<serde_json::Value> {
-    let thinking_blocks = blocks
-        .iter()
-        .filter_map(|block| match block.kind.as_str() {
-            "thinking"
-                if block
-                    .signature
-                    .as_deref()
-                    .is_some_and(|signature| !signature.trim().is_empty()) =>
-            {
-                Some(serde_json::json!({
-                    "type": "thinking",
-                    "thinking": block.thinking.as_deref().unwrap_or_default(),
-                    "signature": block.signature.as_deref().unwrap_or_default(),
-                }))
-            }
-            "redacted_thinking"
-                if block
-                    .data
-                    .as_deref()
-                    .is_some_and(|data| !data.trim().is_empty()) =>
-            {
-                Some(serde_json::json!({
-                    "type": "redacted_thinking",
-                    "data": block.data.as_deref().unwrap_or_default(),
-                }))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut metadata = serde_json::Map::new();
-    if let Some(response_id) = utils::normalize_optional_text(response_id) {
-        metadata.insert("response_id".to_owned(), Value::String(response_id));
-    }
-    if !thinking_blocks.is_empty() {
-        metadata.insert(
-            "anthropic_thinking_blocks".to_owned(),
-            Value::Array(thinking_blocks),
-        );
-    }
-    (!metadata.is_empty()).then_some(Value::Object(metadata))
+    merge_provider_metadata(
+        response_id_metadata(response_id),
+        anthropic_thinking_metadata(blocks),
+    )
 }
 
-fn parse_json_or_object(raw: String) -> Value {
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(value @ Value::Object(_)) => value,
-        _ => Value::Object(Default::default()),
-    }
-}
-
-fn json_value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn bedrock_wire_tool_name(name: &str) -> String {
-    name.to_owned()
-}
-
-fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage {
-    let cache_write_tokens = usage.cache_creation_input_tokens.unwrap_or_else(|| {
-        usage
-            .cache_creation
-            .as_ref()
-            .map(BedrockAnthropicCacheCreationUsage::total_input_tokens)
-            .unwrap_or_default()
-    });
-
-    let reasoning_tokens = usage
-        .output_tokens_details
-        .as_ref()
-        .and_then(|details| details.thinking_tokens)
-        .unwrap_or_default();
-    let output_tokens = usage.output_tokens.unwrap_or_default();
-
-    let cache_write_5m_tokens = usage
-        .cache_creation
-        .as_ref()
-        .and_then(|value| value.ephemeral_5m_input_tokens)
-        .unwrap_or_default();
-    let cache_write_1h_tokens = usage
-        .cache_creation
-        .as_ref()
-        .and_then(|value| value.ephemeral_1h_input_tokens)
-        .unwrap_or_default();
-    CompletionUsage {
-        requests: 1,
-        input_tokens: usage.input_tokens.unwrap_or_default(),
-        output_tokens: output_tokens.saturating_sub(reasoning_tokens),
-        reasoning_tokens,
-        cache_write_tokens,
-        cache_write_5m_tokens,
-        cache_write_1h_tokens,
-        cache_read_tokens: usage.cache_read_input_tokens.unwrap_or_default(),
-        ..CompletionUsage::default()
-    }
-}
-
+// Bedrock treats an explicitly supplied output_tokens_details object as a
+// snapshot (including an empty object); Anthropic SSE merges its inner fields.
 fn merge_bedrock_anthropic_usage(
-    current: Option<BedrockAnthropicUsage>,
-    update: BedrockAnthropicUsage,
-) -> BedrockAnthropicUsage {
+    current: Option<AnthropicUsage>,
+    update: AnthropicUsage,
+) -> AnthropicUsage {
     let Some(current) = current else {
         return update;
     };
 
-    BedrockAnthropicUsage {
+    AnthropicUsage {
         input_tokens: update.input_tokens.or(current.input_tokens),
         output_tokens: update.output_tokens.or(current.output_tokens),
         output_tokens_details: update
@@ -419,39 +333,10 @@ fn merge_bedrock_anthropic_usage(
         cache_read_input_tokens: update
             .cache_read_input_tokens
             .or(current.cache_read_input_tokens),
-        cache_creation: merge_bedrock_anthropic_cache_creation_usage(
+        cache_creation: merge_anthropic_cache_creation_usage(
             current.cache_creation,
             update.cache_creation,
         ),
-    }
-}
-
-fn merge_bedrock_anthropic_cache_creation_usage(
-    current: Option<BedrockAnthropicCacheCreationUsage>,
-    update: Option<BedrockAnthropicCacheCreationUsage>,
-) -> Option<BedrockAnthropicCacheCreationUsage> {
-    match (current, update) {
-        (Some(current), Some(update)) => Some(BedrockAnthropicCacheCreationUsage {
-            ephemeral_1h_input_tokens: update
-                .ephemeral_1h_input_tokens
-                .or(current.ephemeral_1h_input_tokens),
-            ephemeral_5m_input_tokens: update
-                .ephemeral_5m_input_tokens
-                .or(current.ephemeral_5m_input_tokens),
-        }),
-        (None, Some(update)) => Some(update),
-        (Some(current), None) => Some(current),
-        (None, None) => None,
-    }
-}
-
-fn bedrock_anthropic_budget_for_effort(effort: agena_domain::ReasoningEffort) -> u32 {
-    match effort {
-        agena_domain::ReasoningEffort::Minimal => 1_024,
-        agena_domain::ReasoningEffort::Low => 4_000,
-        agena_domain::ReasoningEffort::Medium => 10_000,
-        agena_domain::ReasoningEffort::High => 16_000,
-        agena_domain::ReasoningEffort::Xhigh | agena_domain::ReasoningEffort::Max => 31_999,
     }
 }
 
@@ -459,21 +344,8 @@ fn bedrock_anthropic_effort_for_budget(
     model: &str,
     budget_tokens: u32,
 ) -> Option<agena_domain::ReasoningEffort> {
-    if !bedrock_anthropic_model_requires_adaptive_thinking(model) {
-        return None;
-    }
-
-    Some(if budget_tokens <= 4_000 {
-        agena_domain::ReasoningEffort::Low
-    } else if budget_tokens <= 10_000 {
-        agena_domain::ReasoningEffort::Medium
-    } else if budget_tokens <= 16_000 {
-        agena_domain::ReasoningEffort::High
-    } else if budget_tokens < 31_999 {
-        agena_domain::ReasoningEffort::Xhigh
-    } else {
-        agena_domain::ReasoningEffort::Max
-    })
+    bedrock_anthropic_model_requires_adaptive_thinking(model)
+        .then(|| anthropic_budget_effort(budget_tokens))
 }
 
 fn bedrock_anthropic_display(
@@ -532,15 +404,8 @@ fn bedrock_anthropic_enabled_thinking(
     budget_tokens: u32,
     max_output_tokens: u32,
 ) -> Option<BedrockAnthropicThinkingConfig> {
-    const MIN_THINKING_BUDGET: u32 = 1_024;
-    if max_output_tokens <= MIN_THINKING_BUDGET {
-        return None;
-    }
-    Some(BedrockAnthropicThinkingConfig::Enabled {
-        budget_tokens: budget_tokens
-            .max(MIN_THINKING_BUDGET)
-            .min(max_output_tokens - 1),
-    })
+    anthropic_thinking_budget(budget_tokens, max_output_tokens)
+        .map(|budget_tokens| BedrockAnthropicThinkingConfig::Enabled { budget_tokens })
 }
 
 #[derive(Debug, Default)]
@@ -619,7 +484,7 @@ fn bedrock_anthropic_thinking_parts(
         ThinkingRequest::Adaptive { effort, .. } => {
             let mut parts = BedrockAnthropicThinkingParts {
                 thinking: bedrock_anthropic_enabled_thinking(
-                    bedrock_anthropic_budget_for_effort(
+                    anthropic_budget_for_effort(
                         effort.unwrap_or(agena_domain::ReasoningEffort::High),
                     ),
                     max_output_tokens,
@@ -644,7 +509,7 @@ fn bedrock_anthropic_thinking_parts(
         ThinkingRequest::Effort { effort } => {
             let mut parts = BedrockAnthropicThinkingParts {
                 thinking: bedrock_anthropic_enabled_thinking(
-                    bedrock_anthropic_budget_for_effort(*effort),
+                    anthropic_budget_for_effort(*effort),
                     max_output_tokens,
                 ),
                 ..BedrockAnthropicThinkingParts::default()
@@ -681,8 +546,8 @@ struct BedrockAnthropicMessagesRequest {
     anthropic_beta: Option<Vec<&'static str>>,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<Vec<BedrockAnthropicTextBlock>>,
-    messages: Vec<BedrockAnthropicMessage>,
+    system: Option<Vec<AnthropicTextBlock>>,
+    messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<BedrockAnthropicToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -728,149 +593,6 @@ struct BedrockAnthropicToolDefinition {
     eager_input_streaming: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
-struct BedrockAnthropicMessage {
-    role: String,
-    content: Vec<BedrockAnthropicTextBlock>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BedrockAnthropicTextBlock {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thinking: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    data: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source: Option<BedrockAnthropicBinarySource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    input: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cache_control: Option<prompt_cache::PromptCacheControl>,
-}
-
-impl BedrockAnthropicTextBlock {
-    fn text(text: impl Into<String>) -> Self {
-        Self {
-            kind: "text".to_owned(),
-            text: Some(text.into()),
-            thinking: None,
-            signature: None,
-            data: None,
-            source: None,
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: None,
-            content: None,
-            cache_control: None,
-        }
-    }
-
-    fn image(source: BedrockAnthropicBinarySource) -> Self {
-        Self {
-            kind: "image".to_owned(),
-            text: None,
-            thinking: None,
-            signature: None,
-            data: None,
-            source: Some(source),
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: None,
-            content: None,
-            cache_control: None,
-        }
-    }
-
-    fn document(source: BedrockAnthropicBinarySource) -> Self {
-        Self {
-            kind: "document".to_owned(),
-            text: None,
-            thinking: None,
-            signature: None,
-            data: None,
-            source: Some(source),
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: None,
-            content: None,
-            cache_control: None,
-        }
-    }
-
-    fn tool_use(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        input_json: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: "tool_use".to_owned(),
-            text: None,
-            thinking: None,
-            signature: None,
-            data: None,
-            source: None,
-            id: Some(id.into()),
-            name: Some(name.into()),
-            input: Some(parse_json_or_object(input_json.into())),
-            tool_use_id: None,
-            content: None,
-            cache_control: None,
-        }
-    }
-
-    fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            kind: "tool_result".to_owned(),
-            text: None,
-            thinking: None,
-            signature: None,
-            data: None,
-            source: None,
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: Some(tool_use_id.into()),
-            content: Some(Value::String(content.into())),
-            cache_control: None,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BedrockAnthropicBinarySource {
-    #[serde(rename = "type")]
-    kind: String,
-    media_type: String,
-    data: String,
-}
-
-impl BedrockAnthropicBinarySource {
-    fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
-        Self {
-            kind: "base64".to_owned(),
-            media_type: media_type.into(),
-            data: data.into(),
-        }
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct BedrockAnthropicMessagesResponse {
     #[serde(default)]
@@ -879,47 +601,42 @@ struct BedrockAnthropicMessagesResponse {
     model: Option<String>,
     #[serde(default)]
     stop_reason: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_bedrock_content")]
+    content: Vec<AnthropicTextBlock>,
     #[serde(default)]
-    content: Vec<BedrockAnthropicTextBlock>,
-    #[serde(default)]
-    usage: Option<BedrockAnthropicUsage>,
+    usage: Option<AnthropicUsage>,
 }
 
-#[derive(Debug, Deserialize)]
-struct BedrockAnthropicUsage {
-    #[serde(default)]
-    input_tokens: Option<u64>,
-    #[serde(default)]
-    output_tokens: Option<u64>,
-    #[serde(default)]
-    output_tokens_details: Option<BedrockAnthropicOutputTokensDetails>,
-    #[serde(default)]
-    cache_creation_input_tokens: Option<u64>,
-    #[serde(default)]
-    cache_read_input_tokens: Option<u64>,
-    #[serde(default)]
-    cache_creation: Option<BedrockAnthropicCacheCreationUsage>,
+// A complete Bedrock response requires a block type. AnthropicTextBlock also
+// represents partial SSE starts, where that field may be absent. Keep this
+// validation at Bedrock's response/persisted-input boundary while sharing every
+// content field, constructor, and serialized representation.
+#[derive(Deserialize)]
+struct BedrockResponseContentBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(flatten)]
+    block: AnthropicTextBlock,
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct BedrockAnthropicOutputTokensDetails {
-    #[serde(default)]
-    thinking_tokens: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct BedrockAnthropicCacheCreationUsage {
-    #[serde(default)]
-    ephemeral_1h_input_tokens: Option<u64>,
-    #[serde(default)]
-    ephemeral_5m_input_tokens: Option<u64>,
-}
-
-impl BedrockAnthropicCacheCreationUsage {
-    fn total_input_tokens(&self) -> u64 {
-        self.ephemeral_1h_input_tokens.unwrap_or_default()
-            + self.ephemeral_5m_input_tokens.unwrap_or_default()
+impl BedrockResponseContentBlock {
+    fn into_block(self) -> AnthropicTextBlock {
+        AnthropicTextBlock {
+            kind: self.kind,
+            ..self.block
+        }
     }
+}
+
+fn deserialize_bedrock_content<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<AnthropicTextBlock>, D::Error> {
+    Vec::<BedrockResponseContentBlock>::deserialize(deserializer).map(|blocks| {
+        blocks
+            .into_iter()
+            .map(BedrockResponseContentBlock::into_block)
+            .collect()
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -949,13 +666,13 @@ enum BedrockAnthropicStreamEvent {
         #[serde(default)]
         delta: BedrockAnthropicStreamMessageDelta,
         #[serde(default)]
-        usage: Option<BedrockAnthropicUsage>,
+        usage: Option<AnthropicUsage>,
         #[serde(default)]
         message: Option<BedrockAnthropicStreamMessage>,
     },
     MessageStop {
         #[serde(default)]
-        usage: Option<BedrockAnthropicUsage>,
+        usage: Option<AnthropicUsage>,
         #[serde(default)]
         message: Option<BedrockAnthropicStreamMessage>,
     },
@@ -1010,7 +727,7 @@ struct BedrockAnthropicStreamMessage {
     #[serde(default)]
     stop_reason: Option<String>,
     #[serde(default)]
-    usage: Option<BedrockAnthropicUsage>,
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Debug, Default)]
@@ -1019,69 +736,144 @@ struct BedrockAnthropicToolCallState {
     name: String,
 }
 
-#[derive(Debug, Default)]
-struct BedrockAnthropicThinkingBlockState {
-    kind: String,
-    thinking: String,
-    signature: Option<String>,
-    data: Option<String>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-impl BedrockAnthropicThinkingBlockState {
-    fn merge_start(&mut self, update: Self) {
-        if !self.kind.trim().is_empty()
-            && !update.kind.trim().is_empty()
-            && self.kind != update.kind
-        {
-            *self = update;
-            return;
-        }
-        if self.kind.trim().is_empty() && !update.kind.trim().is_empty() {
-            self.kind = update.kind;
-        }
-        if !update.thinking.trim().is_empty()
-            && !self.thinking.starts_with(update.thinking.as_str())
-        {
-            self.thinking = update.thinking;
-        }
-        if update
-            .signature
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            self.signature = update.signature;
-        }
-        if update
-            .data
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            self.data = update.data;
-        }
+    #[test]
+    fn bedrock_request_keeps_wrapper_and_shared_content_wire_shapes() {
+        let request = BedrockAnthropicMessagesRequest {
+            anthropic_version: BEDROCK_ANTHROPIC_VERSION.into(),
+            anthropic_beta: None,
+            max_tokens: 2048,
+            system: None,
+            tools: None,
+            thinking: None,
+            output_config: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: vec![],
+            messages: vec![AnthropicMessage {
+                role: "user".into(),
+                content: vec![
+                    AnthropicTextBlock::text("hello"),
+                    AnthropicTextBlock::image(AnthropicBinarySource::base64("image/png", "image")),
+                    AnthropicTextBlock::document(AnthropicBinarySource::base64(
+                        "application/pdf",
+                        "pdf",
+                    )),
+                    AnthropicTextBlock::tool_use("call", "tool", "[]"),
+                    AnthropicTextBlock::tool_result("call", r#"{"ok":true}"#),
+                ],
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "anthropic_version": "bedrock-2023-05-31", "max_tokens": 2048,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "image"}},
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "pdf"}},
+                    {"type": "tool_use", "id": "call", "name": "tool", "input": {}},
+                    {"type": "tool_result", "tool_use_id": "call", "content": r#"{"ok":true}"#}
+                ]}]
+            })
+        );
     }
 
-    fn into_value(self) -> Option<Value> {
-        match self.kind.as_str() {
-            "thinking" => self
-                .signature
-                .filter(|signature| !signature.trim().is_empty())
-                .map(|signature| {
-                    serde_json::json!({
-                        "type": "thinking",
-                        "thinking": self.thinking,
-                        "signature": signature,
-                    })
-                }),
-            "redacted_thinking" => self
-                .data
-                .filter(|data| !data.trim().is_empty())
-                .map(|data| {
-                    serde_json::json!({
-                        "type": "redacted_thinking",
-                        "data": data,
-                    })
-                }),
-            _ => None,
+    #[test]
+    fn bedrock_content_requires_type_but_preserves_empty_type_and_optional_fields() {
+        for value in [
+            json!({"content": [{"text": "missing type"}]}),
+            json!({"content": [{"type": null}]}),
+        ] {
+            assert!(serde_json::from_value::<BedrockAnthropicMessagesResponse>(value).is_err());
         }
+        let response: BedrockAnthropicMessagesResponse = serde_json::from_value(json!({
+            "content": [{"type": "", "text": null}, {"type": "thinking", "signature": "signed"}]
+        }))
+        .unwrap();
+        assert_eq!(response.content[0].kind, "");
+        assert_eq!(
+            serde_json::to_value(&response.content[0]).unwrap(),
+            json!({"type": ""})
+        );
+        assert_eq!(
+            bedrock_anthropic_metadata(Some(" response ".into()), &response.content),
+            Some(json!({
+                "response_id": "response", "anthropic_thinking_blocks": [
+                    {"type": "thinking", "thinking": "", "signature": "signed"}
+                ]
+            }))
+        );
+    }
+
+    #[test]
+    fn bedrock_keeps_platform_specific_thinking_eligibility_and_effort_limits() {
+        let disabled = bedrock_anthropic_thinking_parts(
+            "claude-opus-4-7",
+            Some(&ThinkingRequest::Disabled),
+            32000,
+        );
+        assert!(disabled.thinking.is_none());
+        assert!(
+            agena_provider::anthropic_thinking_parts(
+                "claude-opus-4-7",
+                Some(&ThinkingRequest::Disabled),
+                32000
+            )
+            .thinking
+            .is_some()
+        );
+        let effort = bedrock_anthropic_thinking_parts(
+            "claude-opus-4-7",
+            Some(&ThinkingRequest::Effort {
+                effort: ReasoningEffort::Max,
+            }),
+            32000,
+        );
+        assert_eq!(
+            serde_json::to_value(effort.output_config).unwrap(),
+            json!({"effort": "high"})
+        );
+        let opus45 = bedrock_anthropic_thinking_parts(
+            "claude-opus-4-5",
+            Some(&ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            }),
+            8192,
+        );
+        assert_eq!(
+            serde_json::to_value(opus45.thinking).unwrap(),
+            json!({"type": "enabled", "budget_tokens": 8191})
+        );
+        assert_eq!(opus45.anthropic_beta, Some(vec!["effort-2025-11-24"]));
+        assert!(bedrock_anthropic_enabled_thinking(4000, 1024).is_none());
+        assert_eq!(
+            serde_json::to_value(bedrock_anthropic_enabled_thinking(0, 1025)).unwrap(),
+            json!({"type": "enabled", "budget_tokens": 1024})
+        );
+    }
+
+    #[test]
+    fn bedrock_usage_preserves_atomic_details_and_merges_cache_counters() {
+        let current: AnthropicUsage = serde_json::from_value(json!({
+            "output_tokens": 20, "output_tokens_details": {"thinking_tokens": 5},
+            "cache_creation": {"ephemeral_1h_input_tokens": 9}
+        }))
+        .unwrap();
+        let update: AnthropicUsage = serde_json::from_value(json!({
+            "output_tokens_details": {}, "cache_creation": {"ephemeral_5m_input_tokens": 3}
+        }))
+        .unwrap();
+        let usage = map_anthropic_usage(merge_bedrock_anthropic_usage(Some(current), update));
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 0);
+        assert_eq!(usage.cache_write_tokens, 12);
+        assert_eq!(usage.cache_write_1h_tokens, 9);
+        assert_eq!(usage.cache_write_5m_tokens, 3);
     }
 }

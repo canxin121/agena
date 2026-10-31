@@ -5,6 +5,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use agena_async::AbortOnDrop;
 use async_trait::async_trait;
 use futures_util::FutureExt;
 
@@ -21,16 +22,6 @@ pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
     manifest_transform: Option<ManifestTransform>,
     next_id: AtomicI64,
-}
-
-/// Keep cancellation tied to the caller when a plugin is dispatched on a
-/// fresh Tokio task. Dropping a Tool API call must not leave its body running.
-struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
-
-impl<T> Drop for AbortOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 impl<P: Plugin> InProcessTransport<P> {
@@ -104,7 +95,7 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         // Dispatch it on a fresh worker stack while preserving the callback
         // context and aborting the task if the caller cancels. This also keeps
         // a large plugin callback from overflowing the initiating worker.
-        let mut task = AbortOnDrop(tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             AssertUnwindSafe(async move {
                 let fut = Box::pin(request.run(dispatcher.dispatch(&method, params)));
                 if let Some(context) = context {
@@ -115,8 +106,9 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
             })
             .catch_unwind()
             .await
-        }));
-        let dispatch = (&mut task.0).await.map_err(|error| {
+        });
+        let _abort = AbortOnDrop::new(&task);
+        let dispatch = task.await.map_err(|error| {
             TransportError::disconnected_error("in-process plugin task stopped", &error)
         })?;
         match dispatch {

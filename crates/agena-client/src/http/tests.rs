@@ -396,3 +396,199 @@ async fn inline_ui_human_export_expands_body_references_but_raw_sdk_reads_preser
         .unwrap();
     assert_eq!(String::from_utf8(part_copy).unwrap(), human);
 }
+
+#[tokio::test]
+async fn model_catalog_client_returns_the_public_contract() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "catalog",
+        Some(
+            r#"{
+        "summary": {"model_count": 1},
+        "items": [{"model_id":"fixture-model","source":"generated","input":["text"],
+            "thinking_modes":{"default":"high","high":{"strategy":"effort","effort":"high"}}}],
+        "total":1,"offset":0,"limit":50
+    }"#,
+        ),
+    )
+    .await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let page: agena_api::resource::ModelCatalogListResponse = client
+        .model_catalog("fixture model", Some("fixture"), 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].model_id, "fixture-model");
+    assert_eq!(page.items[0].thinking_modes.default.mode(), Some("high"));
+    assert!(page.available_origins.is_empty());
+    let requests = server.requests.lock().unwrap();
+    assert!(requests[0].contains("q=fixture+model"));
+    assert!(requests[0].contains("origin=fixture"));
+    assert!(requests[0].contains("limit=50"));
+}
+
+#[tokio::test]
+async fn malformed_catalog_remains_a_client_decode_error() {
+    let server = Fixture::new("127.0.0.1:0", "catalog", Some(r#"{"items":[]}"#)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    assert!(client.model_catalog("", None, 0, 50).await.is_err());
+}
+
+/// One-response fixture for the JSON decoding boundary, including error HTTP
+/// statuses and oversized declared lengths without allocating an oversized body.
+async fn json_decoder_response(
+    status: reqwest::StatusCode,
+    body: &str,
+    declared_length: Option<usize>,
+) -> reqwest::Response {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let response = format!(
+        "HTTP/1.1 {} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        status.as_u16(),
+        declared_length.unwrap_or(body.len()),
+    );
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+            assert!(request.len() < 16384);
+        }
+        // The oversized-length fixture may close as soon as it reads headers.
+        let _ = socket.write_all(response.as_bytes()).await;
+    });
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn typed_json_decoder_preserves_duplicate_field_compatibility() {
+    let client = AgenaClient::new("http://127.0.0.1:1").unwrap();
+    let response = json_decoder_response(
+        reqwest::StatusCode::OK,
+        r#"{
+        "summary":{"model_count":1}, "total":1, "offset":0, "limit":50,
+        "items":[{"model_id":"earlier","model_id":"last","source":"cache"}]
+    }"#,
+        None,
+    )
+    .await;
+    let page: agena_api::resource::ModelCatalogListResponse =
+        client.parse_json(response).await.unwrap();
+    assert_eq!(page.items[0].model_id, "last");
+    assert!(page.available_origins.is_empty());
+}
+
+#[tokio::test]
+async fn typed_json_decoder_preserves_syntax_and_schema_error_categories() {
+    let client = AgenaClient::new("http://127.0.0.1:1").unwrap();
+    for (body, expected) in [
+        (" \r\n", "empty response"),
+        ("<html>private-fixture</html>", "invalid JSON"),
+        // A typed decoder can fail on summary before discovering the invalid
+        // remainder; the established error category must still be Protocol.
+        (r#"{"summary":true,"items":]}"#, "invalid JSON"),
+    ] {
+        let response = json_decoder_response(reqwest::StatusCode::OK, body, None).await;
+        let error = client
+            .parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+            .await
+            .unwrap_err();
+        match error {
+            ClientError::Protocol(message) => {
+                assert!(message.contains("server API"));
+                assert!(message.contains("HTTP 200"));
+                assert!(message.contains(expected));
+                assert!(!message.contains("private-fixture"));
+            }
+            other => panic!("wrong JSON protocol error: {other:?}"),
+        }
+    }
+    let response = json_decoder_response(reqwest::StatusCode::OK, r#"{"items":[]}"#, None).await;
+    assert!(matches!(
+        client
+            .parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+            .await
+            .unwrap_err(),
+        ClientError::Decode(_)
+    ));
+}
+
+#[tokio::test]
+async fn typed_json_decoder_preserves_api_error_envelope_and_response_limit() {
+    let client = AgenaClient::new("http://127.0.0.1:1").unwrap();
+    let expected = agena_api::error::ApiError::bad_request("The request is invalid.");
+    let body = serde_json::to_string(&expected).unwrap();
+    let response = json_decoder_response(reqwest::StatusCode::BAD_REQUEST, &body, None).await;
+    match client
+        .parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+        .await
+        .unwrap_err()
+    {
+        ClientError::Api(actual) => assert_eq!(actual, expected),
+        other => panic!("wrong structured API error: {other:?}"),
+    }
+
+    let response = json_decoder_response(
+        reqwest::StatusCode::FORBIDDEN,
+        r#"{"access_token":"private-fixture"}"#,
+        None,
+    )
+    .await;
+    match client
+        .parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+        .await
+        .unwrap_err()
+    {
+        ClientError::Protocol(message) => {
+            assert!(message.contains("HTTP 403"));
+            assert!(message.contains("shared API envelope"));
+            assert!(!message.contains("private-fixture"));
+        }
+        other => panic!("wrong opaque error response: {other:?}"),
+    }
+
+    let response = json_decoder_response(
+        reqwest::StatusCode::OK,
+        "{}",
+        Some(MAX_JSON_RESPONSE_BYTES + 1),
+    )
+    .await;
+    assert!(
+        matches!(client.parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+        .await.unwrap_err(), ClientError::Protocol(message) if message.contains("64 MiB limit"))
+    );
+}
+
+#[tokio::test]
+async fn typed_json_decoder_rejects_overflow_numbers_in_unknown_fields() {
+    let body = r#"{
+        "summary":{"model_count":0}, "items":[], "total":0, "offset":0,
+        "limit":50, "future_field":1e9999
+    }"#;
+    // A directly derived DTO skips unknown values through IgnoredAny. It
+    // therefore accepts this document, whereas our established complete-JSON
+    // boundary rejects an out-of-range number anywhere in the response.
+    let direct: agena_api::resource::ModelCatalogListResponse = serde_json::from_str(body).unwrap();
+    assert_eq!(direct.total, 0);
+
+    let client = AgenaClient::new("http://127.0.0.1:1").unwrap();
+    let response = json_decoder_response(reqwest::StatusCode::OK, body, None).await;
+    match client
+        .parse_json::<agena_api::resource::ModelCatalogListResponse>(response)
+        .await
+        .unwrap_err()
+    {
+        ClientError::Protocol(message) => {
+            assert!(message.contains("server API returned invalid JSON"));
+            assert!(message.contains("number out of range"));
+        }
+        other => panic!("unknown numeric field bypassed JSON validation: {other:?}"),
+    }
+}

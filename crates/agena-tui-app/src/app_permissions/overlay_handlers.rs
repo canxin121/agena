@@ -124,7 +124,7 @@ impl App {
             agena_tui_settings::SettingsStudioEffect::Refresh => {
                 self.dispatch_backend_operation(
                     |application| async move {
-                        crate::app_backend::operations::refresh_provider_client_versions(
+                        crate::app_backend::provider_mappings::refresh_provider_client_versions(
                             &application,
                         )
                         .await

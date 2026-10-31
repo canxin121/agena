@@ -347,11 +347,9 @@ impl App {
         };
         self.dispatch_backend_operation(
             move |application| async move {
-                crate::app_backend::operations::get_session_state_with_transcript_page(
-                    &application,
-                    session_id,
-                )
-                .await
+                application
+                    .get_session_state_with_transcript_page(session_id)
+                    .await
             },
             |app, result| match result {
                 Ok(snapshot) => {

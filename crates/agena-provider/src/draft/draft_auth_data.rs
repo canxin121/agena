@@ -1,17 +1,12 @@
-//! Data types for provider draft authentication and provider-studio save
-//! results. Previously located in `agena-tui-backend/src/backend_drafts/provider_draft_auth.rs`.
-//!
-//! The interactive auth flow entry points (`start_provider_draft_auth` /
-//! `continue_provider_draft_auth`) live on [`crate::Application`], while the
-//! transport-safe draft and result types they operate on live here.
+//! Transport-safe provider authentication drafts, validation failures, and save outcomes.
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use super::catalog::credential_issuer_label;
+use super::credential_issuer_label;
 use super::draft_config::ProviderConfigDraft;
-use super::save::parse_credential_issuer;
-use agena_provider::CredentialIssuer;
+use super::parse_credential_issuer;
+use crate::CredentialIssuer;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Kind of a draft provider authentication flow.
@@ -174,8 +169,7 @@ pub(crate) const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
 
 pub(crate) const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 pub(crate) const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
-pub(crate) const CLINE_API_MODELS_URL: &str =
-    "https://api.cline.bot/api/v1/ai/cline/recommended-models";
+pub const CLINE_API_MODELS_URL: &str = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
 
 impl ProviderDraftAuthKind {
     pub fn label(&self) -> String {
@@ -604,7 +598,7 @@ pub(crate) fn provider_credential_drafts(
     }
 }
 
-use agena_provider::AuthData;
+use crate::AuthData;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Message sent to the draft auth flow.
@@ -733,42 +727,12 @@ pub enum ProviderStudioSaveError {
 }
 
 impl ProviderStudioSaveError {
-    pub(crate) fn other(error: impl std::fmt::Display) -> Self {
+    pub fn other(error: impl std::fmt::Display) -> Self {
         Self::Other(provider_backend_problem(
             "provider.settings_save_failed",
             "The provider settings could not be saved.",
             error,
         ))
-    }
-
-    /// Preserve every `anyhow` context/source layer before projecting the
-    /// diagnostic into the user-safe Provider Studio failure channel.
-    pub(crate) fn other_anyhow(error: anyhow::Error) -> Self {
-        let diagnostic = agena_failure::diagnostic::format_error_chain(error.as_ref());
-        if matches!(
-            error.downcast_ref::<agena_runtime::RuntimeControlServiceError>(),
-            Some(agena_runtime::RuntimeControlServiceError::Shutdown)
-        ) {
-            return Self::Other(
-                crate::ApplicationError::service_unavailable(diagnostic)
-                    .failure
-                    .as_ref()
-                    .into(),
-            );
-        }
-        Self::other(diagnostic)
-    }
-}
-
-impl From<agena_runtime::RuntimeConfigSettingsError> for ProviderStudioSaveError {
-    fn from(error: agena_runtime::RuntimeConfigSettingsError) -> Self {
-        // Preserve the structured failure: config validation errors already
-        // project a safe user-visible message (and never a Reference), while
-        // unexpected failures keep their reference id. Wrapping the error in a
-        // generic internal problem would hide the actionable validation message
-        // behind "The provider settings could not be saved."
-        let problem = error.failure().into();
-        Self::Other(problem)
     }
 }
 

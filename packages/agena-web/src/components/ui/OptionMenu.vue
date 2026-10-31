@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
 import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiArrowDownSLine, RiCheckLine, RiCloseLine, RiMore2Line, RiRefreshLine } from '@remixicon/vue'
@@ -180,12 +181,8 @@ const mobileSheetStyle = ref<CSSProperties>({
   maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
 })
 
-let mobileViewportEventsBound = false
 let releaseActionLock: (() => void) | null = null
 let returnFocusEl: HTMLElement | null = null
-const onMobileViewportChange = () => {
-  void syncMobileSheetPosition()
-}
 
 function unwrapAnchorCandidate(value: unknown): unknown {
   let current = value
@@ -273,42 +270,6 @@ function cssVarPx(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function resolveViewportWidth(): number {
-  if (typeof window === 'undefined') return 0
-  const vvWidth = window.visualViewport?.width
-  if (typeof vvWidth === 'number' && Number.isFinite(vvWidth) && vvWidth > 0) {
-    return vvWidth
-  }
-  return window.innerWidth
-}
-
-function resolveViewportLeft(): number {
-  if (typeof window === 'undefined') return 0
-  const vvLeft = window.visualViewport?.offsetLeft
-  if (typeof vvLeft === 'number' && Number.isFinite(vvLeft) && vvLeft > 0) {
-    return vvLeft
-  }
-  return 0
-}
-
-function resolveViewportHeight(): number {
-  if (typeof window === 'undefined') return 0
-  const vvHeight = window.visualViewport?.height
-  if (typeof vvHeight === 'number' && Number.isFinite(vvHeight) && vvHeight > 0) {
-    return vvHeight
-  }
-  return window.innerHeight
-}
-
-function resolveViewportTop(): number {
-  if (typeof window === 'undefined') return 0
-  const vvTop = window.visualViewport?.offsetTop
-  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) {
-    return vvTop
-  }
-  return 0
-}
-
 async function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -318,11 +279,8 @@ async function syncMobileSheetPosition() {
   const panel = panelEl.value
   if (!panel) return
 
-  const viewportHeight = resolveViewportHeight()
+  const { height: viewportHeight, top: viewportTop, width: viewportWidth, left: viewportLeft } = readViewportRect()
   if (!viewportHeight) return
-  const viewportTop = resolveViewportTop()
-  const viewportWidth = resolveViewportWidth()
-  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
@@ -335,7 +293,18 @@ async function syncMobileSheetPosition() {
   const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
   const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
   const panelCenter = viewportLeft + safeLeft + usableWidth / 2
-  const panelHeight = Math.min(maxHeight, Math.max(0, panel.scrollHeight))
+  const dimensions = {
+    left: `${Math.round(panelCenter)}px`,
+    width: `${Math.round(panelWidth)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+  }
+  // A closed sheet retains its previous constraints. Apply the new viewport
+  // dimensions before measuring: a scrolling child can otherwise make the
+  // old, shorter height look like the content's natural height on reopening.
+  mobileSheetStyle.value = { ...mobileSheetStyle.value, ...dimensions }
+  await nextTick()
+  if (!props.open || !isMobileSheet.value || panelEl.value !== panel) return
+  const panelHeight = Math.min(maxHeight, Math.max(0, panel.getBoundingClientRect().height))
 
   const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
   const centeredTop = topInset + centeredOffset
@@ -344,28 +313,8 @@ async function syncMobileSheetPosition() {
 
   mobileSheetStyle.value = {
     top: `${Math.round(top)}px`,
-    left: `${Math.round(panelCenter)}px`,
-    width: `${Math.round(panelWidth)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
+    ...dimensions,
   }
-}
-
-function bindMobileViewportEvents() {
-  if (mobileViewportEventsBound || typeof window === 'undefined') return
-  window.addEventListener('resize', onMobileViewportChange)
-  window.addEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.addEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.addEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = true
-}
-
-function unbindMobileViewportEvents() {
-  if (!mobileViewportEventsBound || typeof window === 'undefined') return
-  window.removeEventListener('resize', onMobileViewportChange)
-  window.removeEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = false
 }
 
 function itemHaystack(item: OptionMenuItem): string {
@@ -724,7 +673,6 @@ watch(
     if (open) {
       captureReturnFocus()
       if (isMobileSheet.value) {
-        bindMobileViewportEvents()
         void syncMobileSheetPosition()
         void focusMobilePanel()
       }
@@ -734,8 +682,6 @@ watch(
       }
       return
     }
-
-    unbindMobileViewportEvents()
   },
   { immediate: true },
 )
@@ -747,11 +693,8 @@ watch(
 
     if (!props.open) return
     if (mobile) {
-      bindMobileViewportEvents()
       void syncMobileSheetPosition()
       void focusMobilePanel()
-    } else {
-      unbindMobileViewportEvents()
     }
   },
 )
@@ -776,10 +719,11 @@ watch(
 onBeforeUnmount(() => {
   unmounting = true
   clearActionLock()
-  unbindMobileViewportEvents()
 })
 
 defineExpose({ containsTarget, focusSearch })
+
+useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosition)
 </script>
 
 <template>

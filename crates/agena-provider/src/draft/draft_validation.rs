@@ -1,17 +1,14 @@
-//! Draft provider validation / listing-request building. Previously located in
-//! `agena-tui-backend/src/backend_drafts/provider_draft_validation.rs`.
+//! Draft validation and protocol request construction without persistence.
 
 use anyhow::{Result, anyhow};
 
-use super::catalog::{
-    credential_issuer_label, optional_non_empty, supported_provider_draft_adapter_list,
-};
-use super::draft_auth_data::{
+use super::ProviderConfigDraft;
+use super::{
     CLINE_API_MODELS_URL, ProviderDraftAuthKind, ProviderStudioSaveField,
     ProviderStudioSaveValidationError,
 };
-use super::draft_config::ProviderConfigDraft;
-use agena_provider::{
+use super::{credential_issuer_label, optional_non_empty, supported_provider_draft_adapter_list};
+use crate::{
     DraftHttpProviderAdapterModelsRequest, DraftProviderAdapterModelsRequest, ProviderApiKeySource,
     ProviderProtocolPaths,
 };
@@ -100,7 +97,7 @@ impl ProviderConfigDraft {
         Ok(())
     }
 
-    pub(crate) fn validate_for_adapters_for_save(
+    pub fn validate_for_adapters_for_save(
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
@@ -183,7 +180,7 @@ impl ProviderConfigDraft {
         Ok(())
     }
 
-    pub(crate) fn validate_listing_request(&self, adapter_ids: &[String]) -> Result<()> {
+    pub fn validate_listing_request(&self, adapter_ids: &[String]) -> Result<()> {
         let selected = adapter_ids
             .iter()
             .map(|value| value.trim())
@@ -218,7 +215,7 @@ impl ProviderConfigDraft {
         )
     }
 
-    pub(crate) fn build_listing_request(
+    pub fn build_listing_request(
         &self,
         adapter_ids: &[String],
     ) -> Result<DraftProviderAdapterModelsRequest> {

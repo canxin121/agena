@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::{
-    ConfiguredModeDefault, ConfiguredModelModeMap, ConfiguredModelThinkingMode,
-    ConfiguredThinkingStrategy,
-};
-use agena_domain::{ModelThinkingMode, ThinkingRequest};
+use crate::{ConfiguredModeDefault, ConfiguredModelModeMap, ConfiguredModelThinkingMode};
+use agena_domain::ModelThinkingMode;
 
 pub fn apply_configured_modes<'a, Mode, ConfiguredMode: 'a, F>(
     mut modes: BTreeMap<String, Mode>,
@@ -43,7 +40,7 @@ pub fn apply_configured_thinking_modes(
     for (selector, configured) in configured_modes.iter() {
         match configured.apply_to_mode(modes.get(selector.as_str())) {
             Some(mut mode) => {
-                apply_configured_thinking_payload(selector, configured, &mut mode);
+                apply_configured_thinking_payload(configured, &mut mode);
                 mode.preset = Some(selector.clone());
                 modes.insert(selector.clone(), mode);
             }
@@ -118,31 +115,22 @@ pub fn configured_thinking_mode_to_model(
         request_override: mode.request_override.clone(),
         adapter_overrides: mode.adapter_overrides.clone(),
     };
-    apply_configured_thinking_payload(name, mode, &mut model);
+    apply_configured_thinking_payload(mode, &mut model);
     model
 }
 
 fn apply_configured_thinking_payload(
-    _name: &str,
     configured: &ConfiguredModelThinkingMode,
     mode: &mut ModelThinkingMode,
 ) {
     if configured.thinking.is_some() {
         return;
     }
-    mode.thinking = match configured.strategy {
-        None => None,
-        Some(ConfiguredThinkingStrategy::Disabled) => Some(ThinkingRequest::Disabled),
-        Some(ConfiguredThinkingStrategy::Effort) => configured
-            .effort
-            .map(|effort| ThinkingRequest::Effort { effort }),
-        Some(ConfiguredThinkingStrategy::Budget) => configured
-            .budget_tokens
-            .map(|budget_tokens| ThinkingRequest::Budget { budget_tokens }),
-        Some(ConfiguredThinkingStrategy::Adaptive) => Some(ThinkingRequest::Adaptive {
-            effort: configured.effort,
-            display: configured.display,
-        }),
-        Some(ConfiguredThinkingStrategy::RequestOnly) => None,
-    };
+    mode.thinking = configured.strategy.and_then(|strategy| {
+        strategy.request(
+            configured.effort,
+            configured.budget_tokens,
+            configured.display,
+        )
+    });
 }

@@ -1,4 +1,5 @@
 use agena_domain::ToolInvocation;
+use agena_plugin_sdk::identity::normalized_name_distance;
 use agena_tool::ToolPermissionCheck;
 
 /// A registered plugin execution tool. Runtime protocol functions have an
@@ -96,7 +97,7 @@ where
         if name.is_empty() {
             continue;
         }
-        let score = normalized_tool_name_distance(requested, name);
+        let score = normalized_name_distance(requested, name);
         if score == 0 {
             continue;
         }
@@ -146,29 +147,6 @@ pub(crate) fn unknown_tool_hint(requested: &str, suggestions: Vec<String>) -> To
         source: "tool_registry".to_string(),
         retryable: false,
     }))
-}
-
-pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
-    let left = left.trim().to_ascii_lowercase();
-    let right = right.trim().to_ascii_lowercase();
-    if left == right {
-        return 0;
-    }
-    let left_chars = left.chars().collect::<Vec<_>>();
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut prev = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut curr = vec![0; right_chars.len() + 1];
-    for (i, left_ch) in left_chars.iter().enumerate() {
-        curr[0] = i + 1;
-        for (j, right_ch) in right_chars.iter().enumerate() {
-            let replace = prev[j] + usize::from(left_ch != right_ch);
-            let insert = curr[j] + 1;
-            let delete = prev[j + 1] + 1;
-            curr[j + 1] = replace.min(insert.min(delete));
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[right_chars.len()]
 }
 
 pub fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {

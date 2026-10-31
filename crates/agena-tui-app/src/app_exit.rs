@@ -344,11 +344,7 @@ impl App {
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
-                crate::app_backend::operations::cancel_run(
-                    &application,
-                    target.session_id,
-                    Some(target.execution_id),
-                ),
+                application.cancel_run(target.session_id, Some(target.execution_id)),
             )
             .await
             .unwrap_or_else(|_| {

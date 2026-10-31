@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
+import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
+import { computed, ref, watch, type CSSProperties } from 'vue'
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot } from 'radix-vue'
 
 import DialogHeader from '@/components/ui/DialogHeader.vue'
@@ -67,7 +68,6 @@ const contentBodyClass = computed(() =>
   ),
 )
 
-let mobileViewportEventsBound = false
 
 function close() {
   emit('close')
@@ -86,51 +86,12 @@ function cssVarPx(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function resolveViewportHeight(): number {
-  if (typeof window === 'undefined') return 0
-  const vvHeight = window.visualViewport?.height
-  if (typeof vvHeight === 'number' && Number.isFinite(vvHeight) && vvHeight > 0) {
-    return vvHeight
-  }
-  return window.innerHeight
-}
-
-function resolveViewportWidth(): number {
-  if (typeof window === 'undefined') return 0
-  const vvWidth = window.visualViewport?.width
-  if (typeof vvWidth === 'number' && Number.isFinite(vvWidth) && vvWidth > 0) {
-    return vvWidth
-  }
-  return window.innerWidth
-}
-
-function resolveViewportLeft(): number {
-  if (typeof window === 'undefined') return 0
-  const vvLeft = window.visualViewport?.offsetLeft
-  if (typeof vvLeft === 'number' && Number.isFinite(vvLeft) && vvLeft > 0) {
-    return vvLeft
-  }
-  return 0
-}
-
-function resolveViewportTop(): number {
-  if (typeof window === 'undefined') return 0
-  const vvTop = window.visualViewport?.offsetTop
-  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) {
-    return vvTop
-  }
-  return 0
-}
-
 function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
 
-  const viewportHeight = resolveViewportHeight()
+  const { height: viewportHeight, top: viewportTop, width: viewportWidth, left: viewportLeft } = readViewportRect()
   if (!viewportHeight) return
-  const viewportTop = resolveViewportTop()
-  const viewportWidth = resolveViewportWidth()
-  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
@@ -159,59 +120,15 @@ function syncMobileSheetPosition() {
   mobileSheetStyle.value = nextStyle
 }
 
-function onMobileViewportChange() {
-  syncMobileSheetPosition()
-}
-
-function bindMobileViewportEvents() {
-  if (mobileViewportEventsBound || typeof window === 'undefined') return
-  window.addEventListener('resize', onMobileViewportChange)
-  window.addEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.addEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.addEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = true
-}
-
-function unbindMobileViewportEvents() {
-  if (!mobileViewportEventsBound || typeof window === 'undefined') return
-  window.removeEventListener('resize', onMobileViewportChange)
-  window.removeEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = false
-}
-
 watch(
-  () => props.open,
-  (open) => {
-    if (open && isMobileSheet.value) {
-      bindMobileViewportEvents()
-      syncMobileSheetPosition()
-      return
-    }
-
-    unbindMobileViewportEvents()
+  () => props.open && isMobileSheet.value,
+  (active) => {
+    if (active) syncMobileSheetPosition()
   },
   { immediate: true },
 )
 
-watch(
-  () => isMobileSheet.value,
-  (mobile) => {
-    if (!props.open) return
-    if (mobile) {
-      bindMobileViewportEvents()
-      syncMobileSheetPosition()
-      return
-    }
-
-    unbindMobileViewportEvents()
-  },
-)
-
-onBeforeUnmount(() => {
-  unbindMobileViewportEvents()
-})
+useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosition)
 </script>
 
 <template>

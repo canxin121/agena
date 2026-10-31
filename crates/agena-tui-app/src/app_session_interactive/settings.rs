@@ -99,7 +99,7 @@ impl App {
                     None => None,
                 };
                 let runtime_summary =
-                    crate::app_backend::operations::runtime_snapshot_summary(&application).await?;
+                    crate::app_backend::inspector::runtime_snapshot_summary(&application).await?;
                 Ok::<_, anyhow::Error>((session_id, permission, runtime_summary))
             },
             |app, result| match result {
@@ -121,8 +121,7 @@ impl App {
     ) -> UiResult<SettingsStudioOverlay> {
         let sources = crate::app_backend::config::config_json_sources(&self.application)
             .map_err(crate::UiFailure::internal)?;
-        let configured_providers =
-            crate::app_backend::operations::list_configured_providers(&self.application);
+        let configured_providers = self.application.provider_summaries();
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
         )?;

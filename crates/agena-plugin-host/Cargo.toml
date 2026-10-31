@@ -8,14 +8,13 @@ rust-version.workspace = true
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 agena-failure = { workspace = true }
-agena-plugin-sdk = { workspace = true, features = ["cdylib", "stdio", "http"] }
+agena-plugin-sdk = { workspace = true, features = ["cdylib", "stdio", "http", "schema-validation"] }
 agena-process = { workspace = true }
 agena-stdio-codec = { workspace = true }
 abi_stable = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true, features = ["sink"] }
-jsonschema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

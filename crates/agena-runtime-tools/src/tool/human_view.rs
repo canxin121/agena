@@ -13,8 +13,8 @@ use agena_domain::{
     ArtifactRef, AttachmentSource, RawOutput, ToolOutput, ViewBlock, WebSearchResult,
 };
 use agena_tool::{
-    CronJobSummary, CronRunSummary, RenderContext, RenderError, ToolHumanRenderer,
-    normalize_tool_summary, result_title_fragment_for_tool,
+    CronJobSummary, CronRunSummary, FileSearchResultFacts, RenderContext, RenderError,
+    ToolHumanRenderer, normalize_tool_summary, result_title_fragment_for_tool,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -1454,22 +1454,6 @@ impl BuiltinHumanRenderer {
         ));
     }
 
-    fn normalized_tool_name(tool_name: &str) -> String {
-        // Exact cloud identities retain underscores in the action portion of a
-        // wire name; replacing every underscore would erase the cloud marker.
-        if let Some(tool) = agena_tool::provider_tools::cloud_tool(tool_name) {
-            return tool.name.to_owned();
-        }
-
-        let mut key = tool_name.trim().replace("__", ".").replace('/', ".");
-        if let Some(stripped) = key.strip_prefix("agena.") {
-            key = stripped.to_owned();
-        } else if let Some(stripped) = key.strip_prefix("agena_") {
-            key = stripped.replace('_', ".");
-        }
-        key.to_ascii_lowercase()
-    }
-
     fn object_text(object: &serde_json::Map<String, Value>, key: &str) -> String {
         object
             .get(key)
@@ -1923,7 +1907,7 @@ impl BuiltinHumanRenderer {
     }
 
     fn empty_state_block(tool_name: &str) -> ViewBlock {
-        let key = Self::normalized_tool_name(tool_name);
+        let key = agena_tool::normalized_tool_identity(tool_name);
         if key.starts_with("chatgpt.") || key.starts_with("claude.") || key.starts_with("gemini.") {
             let operation = key
                 .rsplit('.')
@@ -3221,7 +3205,7 @@ impl BuiltinHumanRenderer {
         if text.is_empty() {
             return Vec::new();
         }
-        let key = Self::normalized_tool_name(tool_name);
+        let key = agena_tool::normalized_tool_identity(tool_name);
         let is_tools_api = key.starts_with("tools.")
             || key.starts_with("tools_")
             || key.starts_with("plugins.")
@@ -5124,7 +5108,7 @@ impl BuiltinHumanRenderer {
     }
 
     fn specific_tool_blocks(tool_name: &str, raw: &RawOutput) -> Vec<ViewBlock> {
-        let key = Self::normalized_tool_name(tool_name);
+        let key = agena_tool::normalized_tool_identity(tool_name);
         let Some(object) = Self::specific_result_object(raw) else {
             if key == "memory.delete" {
                 return vec![Self::markdown_block(
@@ -5338,17 +5322,17 @@ impl BuiltinHumanRenderer {
                         ));
                     }
                 }
-                ToolPayloadOutput::Glob {
-                    paths,
-                    count,
-                    truncated,
-                } => {
+                ToolPayloadOutput::Glob { paths, .. } => {
+                    let facts = raw
+                        .payload
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .map(FileSearchResultFacts::glob)
+                        .unwrap_or_default();
                     let visible_paths = paths.iter().take(Self::GENERIC_MAX_ROWS);
                     let mut lines = vec![format!(
                         "### {}",
-                        count
-                            .map(|count| format!("{count} matches"))
-                            .unwrap_or_else(|| "Matches".into())
+                        facts.count_text().unwrap_or_else(|| "Matches".into())
                     )];
                     lines.extend(visible_paths.map(|path| format!("- `{path}`")));
                     if paths.len() > Self::GENERIC_MAX_ROWS {
@@ -5358,20 +5342,23 @@ impl BuiltinHumanRenderer {
                             paths.len()
                         ));
                     }
-                    if truncated {
+                    if facts.truncated {
                         lines.push("_Results truncated._".into());
                     }
                     blocks.push(Self::markdown_block("matches", lines.join("\n")));
                 }
                 ToolPayloadOutput::Grep {
                     results,
-                    matches,
-                    truncated,
                     records,
                     note,
-                    scan_complete,
                     ..
                 } => {
+                    let facts = raw
+                        .payload
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .map(FileSearchResultFacts::grep)
+                        .unwrap_or_default();
                     let structured = !records.is_empty();
                     let rows = if structured {
                         records
@@ -5439,10 +5426,8 @@ impl BuiltinHumanRenderer {
                             "matches",
                             format!(
                                 "### {}\n{}",
-                                matches
-                                    .map(|matches| format!("{matches} matches"))
-                                    .unwrap_or_else(|| "Matches".into()),
-                                if scan_complete == Some(false) {
+                                facts.count_text().unwrap_or_else(|| "Matches".into()),
+                                if facts.scan_complete == Some(false) {
                                     "No matches in the searched portion; search is incomplete."
                                 } else {
                                     "No lines matched."
@@ -5452,15 +5437,17 @@ impl BuiltinHumanRenderer {
                     }
                     let mut status_lines = Vec::new();
                     if !structured
-                        && matches.is_some_and(|matches| matches as usize > results.len())
+                        && facts
+                            .count
+                            .is_some_and(|matches| matches > results.len() as u64)
                     {
                         status_lines.push(format!(
                             "_Showing {} of {} matches._",
                             results.len(),
-                            matches.unwrap_or_default()
+                            facts.count.unwrap_or_default()
                         ));
                     }
-                    if truncated {
+                    if facts.truncated {
                         status_lines.push("_Results truncated._".to_owned());
                     }
                     if let Some(note) = note {
@@ -6468,5 +6455,132 @@ mod inline_ui_tests {
             .unwrap();
         assert!(matches!(blocks.as_slice(), [ViewBlock::Text { .. }]));
         assert!(BuiltinHumanRenderer::inline_reply_model("inline_ui.present", &raw).is_none());
+    }
+}
+
+#[cfg(test)]
+mod file_search_projection_tests {
+    use super::*;
+
+    fn render(tool_name: &str, payload: Value) -> (RawOutput, Vec<ViewBlock>) {
+        let raw = RawOutput {
+            payload: Some(payload),
+            ..Default::default()
+        };
+        let blocks = BuiltinHumanRenderer::new(tool_name)
+            .render_human(&RenderContext::default(), &raw)
+            .unwrap();
+        (raw, blocks)
+    }
+
+    #[test]
+    fn grep_files_and_partial_counts_keep_records_and_shared_summary() {
+        for (mode, records, expected) in [
+            (
+                "files",
+                json!([{"kind":"file", "path":"C:/one:two.rs"}]),
+                "1 matching file · truncated",
+            ),
+            (
+                "count",
+                json!([{"kind":"count", "path":"C:/one:two.rs", "count":90, "complete":false}]),
+                "1 matching file · truncated",
+            ),
+        ] {
+            let payload = json!({"mode":mode, "records":records, "scan_complete":false,
+                "truncated":true, "note":"Search budget reached"});
+            let original = payload.clone();
+            let (raw, blocks) = render("fs.grep", payload);
+            assert_eq!(
+                BuiltinHumanRenderer::human_summary_for_tool("fs.grep", &raw),
+                expected
+            );
+            let rows = blocks
+                .iter()
+                .find_map(|block| match block {
+                    ViewBlock::Table { rows, .. } => Some(rows),
+                    _ => None,
+                })
+                .expect("structured records remain a table");
+            assert_eq!(rows[0][0], json!("C:/one:two.rs"));
+            if mode == "count" {
+                assert!(rows[0].iter().any(|cell| cell == &json!("90+ (partial)")));
+            }
+            let status = blocks
+                .iter()
+                .find(|block| block.block_id() == Some("matches-status"))
+                .and_then(ViewBlock::text_value)
+                .unwrap();
+            assert!(status.contains("Results truncated"));
+            assert!(status.contains("Search budget reached"));
+            assert_eq!(raw.payload, Some(original));
+        }
+    }
+
+    #[test]
+    fn incomplete_empty_search_and_context_lines_keep_distinct_meanings() {
+        let (raw, blocks) = render("fs.grep", json!({"mode":"files", "scan_complete":false}));
+        assert_eq!(
+            BuiltinHumanRenderer::human_summary_for_tool("fs.grep", &raw),
+            "0 matching files · incomplete"
+        );
+        assert!(
+            blocks
+                .iter()
+                .filter_map(ViewBlock::text_value)
+                .any(|text| text.contains("0 matching files")
+                    && text.contains("search is incomplete"))
+        );
+
+        let (raw, blocks) = render(
+            "fs.grep",
+            json!({"records":[
+                {"kind":"line", "path":"a.rs", "line":1, "text":"context", "matched":false},
+                {"kind":"line", "path":"a.rs", "line":2, "text":"match", "matched":true}
+            ]}),
+        );
+        assert_eq!(
+            BuiltinHumanRenderer::human_summary_for_tool("fs.grep", &raw),
+            "1 match"
+        );
+        let rows = blocks
+            .iter()
+            .find_map(|block| match block {
+                ViewBlock::Table { rows, .. } => Some(rows),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][2], json!("context"));
+        assert_eq!(rows[1][2], json!("match"));
+    }
+
+    #[test]
+    fn legacy_search_pagination_and_glob_limits_remain_visible() {
+        let (_, blocks) = render(
+            "fs.grep",
+            json!({"matches":12,
+            "results":["a.rs:1: result"], "truncated":true}),
+        );
+        assert!(
+            blocks
+                .iter()
+                .filter_map(ViewBlock::text_value)
+                .any(|text| text.contains("Showing 1 of 12 matches")
+                    && text.contains("Results truncated"))
+        );
+        let (raw, blocks) = render(
+            "fs.glob",
+            json!({"count":12, "paths":["a.rs"], "truncated":true}),
+        );
+        assert_eq!(
+            BuiltinHumanRenderer::human_summary_for_tool("fs.glob", &raw),
+            "12 matches · truncated"
+        );
+        assert!(blocks.iter().filter_map(ViewBlock::text_value).any(|text| {
+            text.contains("12 matches")
+                && text.contains("a.rs")
+                && text.contains("Results truncated")
+        }));
     }
 }

@@ -53,48 +53,7 @@ pub struct WorkspaceFileUploadRequest {
     pub mime: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A file staged in the selected instance for one workspace. `path` is the
-/// absolute managed path clients should reference as a workspace attachment.
-pub struct WorkspaceFileUploadResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
-    pub workspace_id: i64,
-    pub path: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mime: Option<String>,
-    pub size_bytes: u64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a workspace file entry.
-pub enum WorkspaceFileKind {
-    Directory,
-    File,
-    Symlink,
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A node in a workspace file tree.
-pub struct WorkspaceFileNode {
-    pub name: String,
-    pub path: String,
-    pub kind: WorkspaceFileKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<WorkspaceFileNode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A workspace file tree.
-pub struct WorkspaceFileTreeResource {
-    pub workspace_id: i64,
-    pub root: String,
-    pub path: String,
-    pub entries: Vec<WorkspaceFileNode>,
-}
-use super::{Deserialize, SearchPaginationQuery, Serialize};
+use super::{Deserialize, SearchPaginationQuery};
+pub use agena_api::resource::{
+    WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeResource, WorkspaceFileUploadResource,
+};

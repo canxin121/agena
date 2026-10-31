@@ -44,28 +44,30 @@ impl AnthropicThinkingBlockState {
     }
 
     pub fn into_value(self) -> Option<Value> {
-        match self.kind.as_str() {
-            "thinking" => self
-                .signature
-                .filter(|signature| !signature.trim().is_empty())
-                .map(|signature| {
-                    serde_json::json!({
-                        "type": "thinking",
-                        "thinking": self.thinking,
-                        "signature": signature,
-                    })
-                }),
-            "redacted_thinking" => self
-                .data
-                .filter(|data| !data.trim().is_empty())
-                .map(|data| {
-                    serde_json::json!({
-                        "type": "redacted_thinking",
-                        "data": data,
-                    })
-                }),
-            _ => None,
-        }
+        thinking_block_value(
+            &self.kind,
+            &self.thinking,
+            self.signature.as_deref(),
+            self.data.as_deref(),
+        )
+    }
+}
+
+/// Only signed thinking and nonempty redacted payloads may be replayed.
+fn thinking_block_value(
+    kind: &str,
+    thinking: &str,
+    signature: Option<&str>,
+    data: Option<&str>,
+) -> Option<Value> {
+    match kind {
+        "thinking" => signature.filter(|value| !value.trim().is_empty()).map(|signature| {
+            serde_json::json!({"type": "thinking", "thinking": thinking, "signature": signature})
+        }),
+        "redacted_thinking" => data.filter(|value| !value.trim().is_empty()).map(|data| {
+            serde_json::json!({"type": "redacted_thinking", "data": data})
+        }),
+        _ => None,
     }
 }
 
@@ -79,31 +81,13 @@ fn merge_thinking_snapshot(current: &mut String, update: String) {
 pub fn anthropic_thinking_metadata(blocks: &[AnthropicTextBlock]) -> Option<Value> {
     let thinking_blocks = blocks
         .iter()
-        .filter_map(|block| match block.kind.as_str() {
-            "thinking"
-                if block
-                    .signature
-                    .as_deref()
-                    .is_some_and(|signature| !signature.trim().is_empty()) =>
-            {
-                Some(serde_json::json!({
-                    "type": "thinking",
-                    "thinking": block.thinking.as_deref().unwrap_or_default(),
-                    "signature": block.signature.as_deref().unwrap_or_default(),
-                }))
-            }
-            "redacted_thinking"
-                if block
-                    .data
-                    .as_deref()
-                    .is_some_and(|data| !data.trim().is_empty()) =>
-            {
-                Some(serde_json::json!({
-                    "type": "redacted_thinking",
-                    "data": block.data.as_deref().unwrap_or_default(),
-                }))
-            }
-            _ => None,
+        .filter_map(|block| {
+            thinking_block_value(
+                &block.kind,
+                block.thinking.as_deref().unwrap_or_default(),
+                block.signature.as_deref(),
+                block.data.as_deref(),
+            )
         })
         .collect::<Vec<_>>();
     (!thinking_blocks.is_empty())
@@ -254,11 +238,9 @@ pub fn anthropic_budget_for_effort(effort: agena_domain::ReasoningEffort) -> u32
     }
 }
 
-pub fn anthropic_effort_for_budget(
-    model: &str,
-    budget_tokens: u32,
-) -> Option<agena_domain::ReasoningEffort> {
-    anthropic_model_requires_adaptive_thinking(model).then_some(if budget_tokens <= 4_000 {
+/// Map a token budget to effort without applying platform/model eligibility.
+pub fn anthropic_budget_effort(budget_tokens: u32) -> agena_domain::ReasoningEffort {
+    if budget_tokens <= 4_000 {
         agena_domain::ReasoningEffort::Low
     } else if budget_tokens <= 10_000 {
         agena_domain::ReasoningEffort::Medium
@@ -268,6 +250,24 @@ pub fn anthropic_effort_for_budget(
         agena_domain::ReasoningEffort::Xhigh
     } else {
         agena_domain::ReasoningEffort::Max
+    }
+}
+
+pub fn anthropic_effort_for_budget(
+    model: &str,
+    budget_tokens: u32,
+) -> Option<agena_domain::ReasoningEffort> {
+    anthropic_model_requires_adaptive_thinking(model)
+        .then(|| anthropic_budget_effort(budget_tokens))
+}
+
+/// Reserve an output token while enforcing Anthropic's minimum thinking budget.
+pub fn anthropic_thinking_budget(budget_tokens: u32, max_output_tokens: u32) -> Option<u32> {
+    const MIN_THINKING_BUDGET: u32 = 1_024;
+    (max_output_tokens > MIN_THINKING_BUDGET).then(|| {
+        budget_tokens
+            .max(MIN_THINKING_BUDGET)
+            .min(max_output_tokens - 1)
     })
 }
 
@@ -333,13 +333,9 @@ pub fn anthropic_enabled_parts(
     budget_tokens: u32,
     max_output_tokens: u32,
 ) -> AnthropicThinkingParts {
-    const MIN_THINKING_BUDGET: u32 = 1_024;
-    if max_output_tokens <= MIN_THINKING_BUDGET {
+    let Some(budget_tokens) = anthropic_thinking_budget(budget_tokens, max_output_tokens) else {
         return AnthropicThinkingParts::default();
-    }
-    let budget_tokens = budget_tokens
-        .max(MIN_THINKING_BUDGET)
-        .min(max_output_tokens - 1);
+    };
     AnthropicThinkingParts {
         thinking: Some(serde_json::json!({
             "type": "enabled",
@@ -457,4 +453,91 @@ pub fn json_value_to_string(value: &Value) -> String {
 
 pub fn anthropic_wire_tool_name(name: &str) -> String {
     name.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::ReasoningEffort;
+    use serde_json::json;
+
+    #[test]
+    fn thinking_metadata_preserves_signed_block_order_and_omits_invalid_blocks() {
+        let values = json!([
+            {"type": "text", "text": "answer"},
+            {"type": "thinking", "thinking": "unsigned"},
+            {"type": "thinking", "signature": " ", "thinking": "invalid"},
+            {"type": "thinking", "signature": "signed", "thinking": ""},
+            {"type": "redacted_thinking", "data": "opaque"},
+            {"type": "redacted_thinking", "data": ""}
+        ]);
+        let blocks: Vec<AnthropicTextBlock> = serde_json::from_value(values).unwrap();
+        assert_eq!(
+            anthropic_thinking_metadata(&blocks),
+            Some(json!({
+                "anthropic_thinking_blocks": [
+                    {"type": "thinking", "thinking": "", "signature": "signed"},
+                    {"type": "redacted_thinking", "data": "opaque"}
+                ]
+            }))
+        );
+        let state = AnthropicThinkingBlockState {
+            kind: "thinking".into(),
+            signature: Some("signed".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.into_value(),
+            Some(json!({
+                "type": "thinking", "thinking": "", "signature": "signed"
+            }))
+        );
+    }
+
+    #[test]
+    fn thinking_state_keeps_longer_snapshot_and_resets_when_block_kind_changes() {
+        let mut state = AnthropicThinkingBlockState {
+            kind: "thinking".into(),
+            thinking: "full thought".into(),
+            signature: Some("signed".into()),
+            ..Default::default()
+        };
+        state.merge_start(AnthropicThinkingBlockState {
+            kind: "thinking".into(),
+            thinking: "full".into(),
+            ..Default::default()
+        });
+        assert_eq!(state.thinking, "full thought");
+        state.merge_start(AnthropicThinkingBlockState {
+            kind: "redacted_thinking".into(),
+            data: Some("opaque".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            state.into_value(),
+            Some(json!({"type": "redacted_thinking", "data": "opaque"}))
+        );
+    }
+
+    #[test]
+    fn budget_thresholds_and_output_reservation_are_shared_protocol_rules() {
+        for (budget, effort) in [
+            (0, ReasoningEffort::Low),
+            (4000, ReasoningEffort::Low),
+            (4001, ReasoningEffort::Medium),
+            (10000, ReasoningEffort::Medium),
+            (10001, ReasoningEffort::High),
+            (16000, ReasoningEffort::High),
+            (16001, ReasoningEffort::Xhigh),
+            (31998, ReasoningEffort::Xhigh),
+            (31999, ReasoningEffort::Max),
+            (u32::MAX, ReasoningEffort::Max),
+        ] {
+            assert_eq!(anthropic_budget_effort(budget), effort);
+        }
+        assert_eq!(anthropic_thinking_budget(16000, 0), None);
+        assert_eq!(anthropic_thinking_budget(16000, 1024), None);
+        assert_eq!(anthropic_thinking_budget(0, 1025), Some(1024));
+        assert_eq!(anthropic_thinking_budget(16000, 2048), Some(2047));
+    }
 }

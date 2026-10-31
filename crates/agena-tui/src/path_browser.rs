@@ -4,6 +4,7 @@
 //! remain application effects. This module owns only the picker state,
 //! display rows, custom-input rendering, and semantic selection intents.
 
+use agena_tui_components::text::sanitize_terminal_text as sanitize_display_text;
 use std::borrow::Cow;
 
 use crossterm::event::KeyEvent;
@@ -208,27 +209,4 @@ pub fn render_overlay(
     )
     .with_text(i18n);
     render_search_picker_dialog(frame, area, dialog, &spec, sanitize_display_text);
-}
-
-fn sanitize_display_text(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                let _ = chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        match ch {
-            '\r' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {}
-            _ => out.push(ch),
-        }
-    }
-    out
 }

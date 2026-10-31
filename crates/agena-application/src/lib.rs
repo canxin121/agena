@@ -47,7 +47,6 @@ pub use application_content::{ContentDelivery, ContentWatch};
 pub use application_parts::OwnedToolPartsPage;
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
-pub use service::{permission_config_domain_from_resource, permission_config_resource_from_domain};
 
 /// Validate public numeric identities before they cross the capability boundary.
 pub(crate) fn kernel_session_id(

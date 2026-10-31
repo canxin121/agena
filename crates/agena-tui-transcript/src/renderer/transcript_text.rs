@@ -6,7 +6,7 @@ use super::{
     I18n, Line, MarkdownBlock, Modifier, RenderedLine, Span, Style, TranscriptEntry,
     UnicodeWidthStr, file_change_list_item_text, is_markdown_table_header,
     markdown_fence_delimiter, push_expanded_markdown, push_expanded_tool_text, push_single_line,
-    sanitize_terminal_text, tool_invocation_label, trim_empty_line_edges, truncate_display_width,
+    sanitize_terminal_text, trim_empty_line_edges, truncate_display_width,
 };
 use crate::ui_text;
 use crate::{ToolCallView, TranscriptEntryPart, TranscriptPartContent};
@@ -143,12 +143,7 @@ pub(crate) fn tool_display_label(tool: &ToolCallView) -> String {
     if !title.is_empty() {
         title.to_owned()
     } else {
-        let tool_name = tool.operation.invocation.name.trim();
-        if !tool_name.is_empty() {
-            tool_name.to_owned()
-        } else {
-            tool_invocation_label(&tool.operation.invocation)
-        }
+        agena_tool::initial_tool_title(&tool.operation.invocation)
     }
 }
 

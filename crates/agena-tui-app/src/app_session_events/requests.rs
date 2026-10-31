@@ -101,16 +101,16 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::list_workspace_sessions_page(
-                &application,
-                mode == SessionViewMode::Roots,
-                mode == SessionViewMode::All,
-                (!query.trim().is_empty()).then_some(query.as_str()),
-                cursor,
-                50,
-            )
-            .await
-            .map_err(crate::UiFailure::internal);
+            let result = application
+                .list_workspace_sessions_page(
+                    mode == SessionViewMode::Roots,
+                    mode == SessionViewMode::All,
+                    (!query.trim().is_empty()).then_some(query.as_str()),
+                    cursor,
+                    50,
+                )
+                .await
+                .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionSearchPageLoaded {
                     request_id,
@@ -261,12 +261,10 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::get_session_state_with_transcript_page(
-                &application,
-                session_id,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .get_session_state_with_transcript_page(session_id)
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionStateLoaded {
                     session_id,
@@ -426,12 +424,7 @@ impl App {
         let task = tokio::spawn(async move {
             let result = tokio::time::timeout(
                 Duration::from_secs(30),
-                crate::app_backend::operations::get_tool_detail(
-                    &application,
-                    session_id,
-                    part_id,
-                    section,
-                ),
+                application.get_tool_detail(session_id, part_id, section),
             )
             .await
             .map_err(|_| crate::UiFailure::internal("Tool detail request timed out"))
@@ -604,14 +597,10 @@ impl App {
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::submit_document_with_options(
-                &application,
-                session_id,
-                document,
-                options,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .submit_document(session_id, document, options)
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionMessageSubmitted {
                     session_id,
@@ -673,13 +662,10 @@ impl App {
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::continue_session_with_options(
-                &application,
-                session_id,
-                options,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .continue_session(session_id, options)
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionContinued { session_id, result })
                 .await;
@@ -695,13 +681,10 @@ impl App {
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::compact_session_with_options(
-                &application,
-                session_id,
-                options,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .compact_session(session_id, options)
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionCompacted { session_id, result })
                 .await;
@@ -726,16 +709,19 @@ impl App {
         let replied_request_id = request_id.clone();
         let replied_kind = kind;
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::reply_permission_with_options(
-                &application,
-                session_id,
-                request_id,
-                kind,
-                scope,
-                options,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .reply_permission(
+                    session_id,
+                    options,
+                    agena_api::resource::PermissionReply {
+                        request_id,
+                        kind: kind.into(),
+                        scope: scope.map(Into::into),
+                        reason: None,
+                    },
+                )
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::PermissionReplied {
                     session_id,
@@ -758,14 +744,10 @@ impl App {
         let options = self.run_options.to_request();
         let request_id = reply.request_id.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::reply_user_input_with_options(
-                &application,
-                session_id,
-                reply,
-                options,
-            )
-            .await
-            .map_err(crate::UiFailure::from_backend);
+            let result = application
+                .reply_user_input(session_id, options, reply.into())
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::UserInputReplied {
                     session_id,

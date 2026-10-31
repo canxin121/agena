@@ -214,7 +214,10 @@ pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
 pub use stream_error::StreamErrorEvent;
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
-pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
+pub use thinking::{
+    ConfiguredModeDefault, ConfiguredThinkingStrategy, ReasoningEffort, ThinkingDisplay,
+    ThinkingRequest,
+};
 pub use time_range::TimeRange;
 pub use tool_api::{
     APPROVE_ACTION_FUNCTION, BLOCK_ACTION_FUNCTION, CONTROL_FUNCTION_NAMES, ToolApiCall,

@@ -5,24 +5,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 use std::sync::atomic::Ordering;
 
-use serde::{Deserialize, Serialize};
-
 use crate::sdk::PluginKey;
 use crate::status::now_ms;
 
 const DEFAULT_MAX_ENTRIES_PER_PLUGIN: usize = 256;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-/// A log record produced by a plugin.
-pub struct PluginLogRecord {
-    pub seq: u64,
-    pub timestamp_ms: i64,
-    pub plugin_id: PluginKey,
-    pub level: String,
-    pub source: String,
-    pub message: String,
-    pub fields: serde_json::Value,
-}
+pub use agena_plugin_sdk::inspection::PluginLogRecord;
 
 #[derive(Debug)]
 /// In-memory store of plugin log records.

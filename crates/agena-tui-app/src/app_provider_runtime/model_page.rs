@@ -148,7 +148,7 @@ impl App {
     pub(crate) fn apply_provider_studio_catalog_selection(
         &mut self,
         dialog: &mut ProviderStudioOverlay,
-        catalog: agena_application::dto::CatalogModelResource,
+        catalog: agena_api::resource::CatalogModelResource,
     ) -> UiResult<()> {
         let Some(page) = dialog.model_page.as_ref() else {
             return Err(crate::UiFailure::message(ui_text::t(
@@ -161,7 +161,7 @@ impl App {
         let original_model_id = page.original_model_id.clone();
         let (_, current_value) = provider_model_config_draft_to_model_value(&page.draft)
             .map_err(crate::UiFailure::message)?;
-        let value = agena_application::provider_studio::apply_catalog_template_to_model_value(
+        let value = agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
             current_value,
             &catalog,
         )

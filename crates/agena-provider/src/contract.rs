@@ -733,59 +733,13 @@ impl<T> CapabilitySelectionPatch<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-/// How a default mode is configured (inherit, clear, or explicit).
-pub enum ConfiguredModeDefault {
-    #[default]
-    Inherit,
-    Clear,
-    Mode(String),
-}
-
-impl ConfiguredModeDefault {
-    fn is_inherit(&self) -> bool {
-        matches!(self, Self::Inherit)
-    }
-
-    pub fn mode(&self) -> Option<&str> {
-        match self {
-            Self::Mode(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-fn deserialize_mode_default<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<ConfiguredModeDefault, D::Error> {
-    Ok(match Option::<String>::deserialize(deserializer)? {
-        Some(value) => ConfiguredModeDefault::Mode(value),
-        None => ConfiguredModeDefault::Clear,
-    })
-}
-
-fn serialize_mode_default<S: serde::Serializer>(
-    value: &ConfiguredModeDefault,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        ConfiguredModeDefault::Inherit | ConfiguredModeDefault::Clear => {
-            serializer.serialize_none()
-        }
-        ConfiguredModeDefault::Mode(value) => serializer.serialize_str(value),
-    }
-}
+pub use agena_domain::{ConfiguredModeDefault, ConfiguredThinkingStrategy};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 /// Map of per-mode configuration values.
 pub struct ConfiguredModelModeMap<T> {
-    #[serde(
-        default,
-        deserialize_with = "deserialize_mode_default",
-        serialize_with = "serialize_mode_default",
-        skip_serializing_if = "ConfiguredModeDefault::is_inherit"
-    )]
+    #[serde(default, skip_serializing_if = "ConfiguredModeDefault::is_inherit")]
     pub default: ConfiguredModeDefault,
     #[serde(flatten)]
     pub modes: BTreeMap<String, T>,
@@ -1177,17 +1131,6 @@ impl ConfiguredModelSpeedMode {
         }
         Some(mode)
     }
-}
-
-/// Provider-facing strategy used to interpret a configured thinking mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfiguredThinkingStrategy {
-    Disabled,
-    Effort,
-    Budget,
-    Adaptive,
-    RequestOnly,
 }
 
 impl CompletionFinishReason {

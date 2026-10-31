@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Provider ports and provider-facing contracts for Agena"
 
 [dependencies]
+anyhow.workspace = true
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 async-trait.workspace = true

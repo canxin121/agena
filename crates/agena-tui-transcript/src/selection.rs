@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use unicode_segmentation::UnicodeSegmentation;
+use agena_tui_components::text::display_cell_slice;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
@@ -204,17 +204,4 @@ fn join_selection_fragments(
         previous_line = Some(line);
     }
     output
-}
-
-fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
-    let mut column = 0_usize;
-    text.graphemes(true)
-        .filter(|grapheme| {
-            let width = UnicodeWidthStr::width(*grapheme);
-            let start = column;
-            let end = column.saturating_add(width);
-            column = end;
-            start < range.end && end > range.start
-        })
-        .collect()
 }

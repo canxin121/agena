@@ -8,7 +8,7 @@ use crate::{
     ConfiguredModelThinkingMode, ModelCapabilityPatch, ModelCatalogDocument,
 };
 
-trait CatalogConfiguredMode {
+pub(super) trait CatalogConfiguredMode {
     fn is_default(&self) -> Option<bool>;
     fn is_default_mut(&mut self) -> &mut Option<bool>;
     fn display_name(&self) -> &Option<String>;
@@ -109,7 +109,7 @@ fn merge_catalog_mode_maps<Mode>(
     }
 }
 
-fn merge_catalog_mode_groups<Mode: Clone + CatalogConfiguredMode>(
+pub(super) fn merge_catalog_mode_groups<Mode: Clone + CatalogConfiguredMode>(
     current: &mut ConfiguredModelModeMap<Mode>,
     next: &ConfiguredModelModeMap<Mode>,
     merge_mode: impl Fn(&mut Mode, &Mode),
@@ -188,7 +188,7 @@ fn merge_catalog_configured_mode_override<Mode: CatalogConfiguredMode>(
     *current.disabled_mut() |= next.disabled();
 }
 
-fn merge_catalog_thinking_mode(
+pub(super) fn merge_catalog_thinking_mode(
     current: &mut ConfiguredModelThinkingMode,
     next: &ConfiguredModelThinkingMode,
 ) {
@@ -202,6 +202,13 @@ fn merge_catalog_thinking_mode(
     });
 }
 
+pub(super) fn merge_catalog_speed_mode_fill_missing(
+    current: &mut ConfiguredModelSpeedMode,
+    next: &ConfiguredModelSpeedMode,
+) {
+    merge_catalog_configured_mode_fill_missing(current, next, |_, _| {});
+}
+
 fn merge_catalog_speed_mode(
     current: &mut ConfiguredModelSpeedMode,
     next: &ConfiguredModelSpeedMode,
@@ -209,8 +216,11 @@ fn merge_catalog_speed_mode(
     merge_catalog_configured_mode_override(current, next, |_, _| {});
 }
 
-/// Merges a lower-priority definition into a primary definition without
-/// replacing populated primary fields.
+/// Fill missing fields from a live or lower-priority definition.
+///
+/// Descriptive fields and thinking-mode patches retain the primary value.
+/// Speed-mode request patches deliberately apply the incoming override, unlike
+/// the fill-missing policy used when merging public sources.
 pub fn merge_catalog_definition(
     current: &mut CatalogModelDefinition,
     next: &CatalogModelDefinition,
@@ -277,7 +287,7 @@ pub fn merge_catalog_definition(
     merge_source_priority(&mut current.source_priority, &next.source_priority);
 }
 
-fn merge_provider_sources(current: &mut Vec<String>, next: &[String]) {
+pub(super) fn merge_provider_sources(current: &mut Vec<String>, next: &[String]) {
     let mut sources: std::collections::BTreeSet<String> = current.iter().cloned().collect();
     sources.extend(next.iter().cloned());
     *current = sources.into_iter().collect();
@@ -309,7 +319,7 @@ pub fn merge_live_provider_catalog_document(
     }
 }
 
-fn merge_source_priority(
+pub(super) fn merge_source_priority(
     current: &mut CatalogDefinitionSourcePriority,
     next: &CatalogDefinitionSourcePriority,
 ) {
@@ -450,5 +460,159 @@ pub fn merge_model_pricing(current: &mut Option<ModelPricing>, next: Option<&Mod
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge_public_source_catalog_definition;
+    use serde_json::json;
+
+    fn definition(value: serde_json::Value) -> CatalogModelDefinition {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn public_modes_fill_missing_while_live_speed_patches_override() {
+        let primary = definition(json!({
+            "thinking_modes": {"default": null, "high": {
+                "strategy": "effort", "effort": "high",
+                "request_override": {"body_patch": {"nested": {"kept": 1}}}
+            }},
+            "speed_modes": {"default": "fast", "fast": {
+                "display_name": "Primary", "request_override": {
+                    "headers": {"x-policy": "primary"},
+                    "body_patch": {"nested": {"kept": 1}}
+                },
+                "adapter_overrides": {"adapter": {
+                    "headers": {"x-policy": "primary"}
+                }}
+            }}
+        }));
+        let next = definition(json!({
+            "thinking_modes": {"default": "high", "high": {
+                "strategy": "budget", "effort": "low", "budget_tokens": 4000,
+                "request_override": {"body_patch": {"nested": {"kept": 2, "added": 3}}}
+            }},
+            "speed_modes": {"default": "slow", "fast": {
+                "display_name": "Secondary", "description": "Missing description",
+                "disabled": true, "request_override": {
+                    "headers": {"x-policy": "secondary", "x-added": "yes"},
+                    "body_patch": {"nested": {"kept": 2, "added": 3}}
+                },
+                "adapter_overrides": {"adapter": {
+                    "headers": {"x-policy": "secondary", "x-added": "yes"}
+                }}
+            }}
+        }));
+
+        let mut public = primary.clone();
+        merge_public_source_catalog_definition(&mut public, &next);
+        let mut live = primary;
+        merge_catalog_definition(&mut live, &next);
+        assert_eq!(public.thinking_modes, live.thinking_modes);
+        assert_eq!(public.thinking_modes.default, ConfiguredModeDefault::Clear);
+        let thinking = &public.thinking_modes["high"];
+        assert_eq!(
+            thinking.strategy,
+            Some(crate::ConfiguredThinkingStrategy::Effort)
+        );
+        assert_eq!(thinking.budget_tokens, Some(4000));
+        assert_eq!(
+            thinking.request_override.body_patch["nested"],
+            json!({"kept": 1, "added": 3})
+        );
+        for merged in [&public, &live] {
+            let speed = &merged.speed_modes["fast"];
+            assert_eq!(merged.speed_modes.default.mode(), Some("fast"));
+            assert_eq!(speed.display_name.as_deref(), Some("Primary"));
+            assert_eq!(speed.description.as_deref(), Some("Missing description"));
+            assert!(speed.disabled);
+            assert_eq!(speed.request_override.headers["x-added"], "yes");
+            assert_eq!(speed.adapter_overrides["adapter"].headers["x-added"], "yes");
+        }
+        assert_eq!(
+            public.speed_modes["fast"].request_override.headers["x-policy"],
+            "primary"
+        );
+        assert_eq!(
+            live.speed_modes["fast"].request_override.headers["x-policy"],
+            "secondary"
+        );
+        assert_eq!(
+            public.speed_modes["fast"].adapter_overrides["adapter"].headers["x-policy"],
+            "primary"
+        );
+        assert_eq!(
+            live.speed_modes["fast"].adapter_overrides["adapter"].headers["x-policy"],
+            "secondary"
+        );
+        assert_eq!(
+            public.speed_modes["fast"].request_override.body_patch["nested"],
+            json!({"kept": 1, "added": 3})
+        );
+        assert_eq!(
+            live.speed_modes["fast"].request_override.body_patch["nested"],
+            json!({"kept": 2, "added": 3})
+        );
+    }
+
+    #[test]
+    fn public_limit_priority_is_order_independent_and_missing_fields_are_filled() {
+        let mut low = definition(json!({
+            "provider_sources": ["low"], "context_window_tokens": 8000,
+            "max_input_tokens": 7000
+        }));
+        low.source_priority.limits_priority = 1;
+        low.source_priority.descriptive_priority = 4;
+        let mut high = definition(json!({
+            "provider_sources": ["high"], "context_window_tokens": 16000,
+            "max_output_tokens": 4000
+        }));
+        high.source_priority.limits_priority = 2;
+        high.source_priority.mode_priority = 3;
+        let mut low_first = low.clone();
+        merge_public_source_catalog_definition(&mut low_first, &high);
+        let mut high_first = high;
+        merge_public_source_catalog_definition(&mut high_first, &low);
+        assert_eq!(low_first, high_first);
+        assert_eq!(low_first.context_window_tokens, Some(16000));
+        assert_eq!(low_first.max_input_tokens, Some(7000));
+        assert_eq!(low_first.max_output_tokens, Some(4000));
+        assert_eq!(low_first.provider_sources, ["high", "low"]);
+        assert_eq!(low_first.source_priority.limits_priority, 2);
+        assert_eq!(low_first.source_priority.descriptive_priority, 4);
+        assert_eq!(low_first.source_priority.mode_priority, 3);
+
+        let mut equal = low.clone();
+        equal.context_window_tokens = Some(9000);
+        merge_public_source_catalog_definition(&mut low, &equal);
+        assert_eq!(low.context_window_tokens, Some(8000));
+    }
+
+    #[test]
+    fn merging_modes_preserves_one_existing_default_and_fills_new_modes() {
+        let mut current = CatalogModelDefinition::default();
+        current.speed_modes.insert(
+            "fast".into(),
+            ConfiguredModelSpeedMode {
+                is_default: Some(true),
+                ..Default::default()
+            },
+        );
+        let mut next = CatalogModelDefinition::default();
+        next.speed_modes.insert(
+            "slow".into(),
+            ConfiguredModelSpeedMode {
+                is_default: Some(true),
+                ..Default::default()
+            },
+        );
+        next.speed_modes.default = ConfiguredModeDefault::Mode("slow".into());
+        merge_public_source_catalog_definition(&mut current, &next);
+        assert_eq!(current.speed_modes["fast"].is_default, Some(true));
+        assert_eq!(current.speed_modes["slow"].is_default, None);
+        assert_eq!(current.speed_modes.default.mode(), Some("slow"));
     }
 }

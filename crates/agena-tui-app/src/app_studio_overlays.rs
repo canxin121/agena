@@ -233,19 +233,14 @@ impl App {
                     },
                     PermissionStudioSource::WorkspaceConfig => match permission_value {
                         Some(value) => {
-                            crate::app_backend::operations::set_workspace_config_setting(
-                                &application,
-                                "permission",
-                                value,
-                            )
-                            .await?;
+                            application
+                                .set_workspace_config_setting("permission", value)
+                                .await?;
                         }
                         None => {
-                            crate::app_backend::operations::delete_workspace_config_setting(
-                                &application,
-                                "permission",
-                            )
-                            .await?;
+                            application
+                                .delete_workspace_config_setting("permission")
+                                .await?;
                         }
                     },
                     PermissionStudioSource::Session { session_id } => {

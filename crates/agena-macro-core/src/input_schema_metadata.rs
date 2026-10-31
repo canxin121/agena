@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use quote::quote;
 use syn::{Attribute, Data, LitStr, Result, Variant};
 
+use super::input_builtin_support::{numeric_constraint_schema_calls, numeric_field_schema_calls};
 use super::input_schema_metadata_fields::tool_input_struct_field_schema_metadata_calls;
 use super::input_schema_path_support::{
     schema_pointer_from_logical_path, schema_relation_display_path,
@@ -196,70 +197,6 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
         .filter(|metadata| metadata.non_empty)
         .map(|metadata| metadata.parse_path.value())
         .collect::<BTreeSet<_>>();
-    let minimum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter(|metadata| metadata.minimum.is_some())
-        .map(|metadata| metadata.parse_path.value())
-        .collect::<BTreeSet<_>>();
-    let maximum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter(|metadata| metadata.maximum.is_some())
-        .map(|metadata| metadata.parse_path.value())
-        .collect::<BTreeSet<_>>();
-    let exclusive_minimum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter(|metadata| metadata.exclusive_minimum.is_some())
-        .map(|metadata| metadata.parse_path.value())
-        .collect::<BTreeSet<_>>();
-    let exclusive_maximum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter(|metadata| metadata.exclusive_maximum.is_some())
-        .map(|metadata| metadata.parse_path.value())
-        .collect::<BTreeSet<_>>();
-    let item_minimum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter_map(|metadata| {
-            metadata
-                .item_minimum
-                .as_ref()
-                .map(|_| format!("{}[]", metadata.parse_path.value()))
-        })
-        .collect::<BTreeSet<_>>();
-    let item_maximum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter_map(|metadata| {
-            metadata
-                .item_maximum
-                .as_ref()
-                .map(|_| format!("{}[]", metadata.parse_path.value()))
-        })
-        .collect::<BTreeSet<_>>();
-    let item_exclusive_minimum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter_map(|metadata| {
-            metadata
-                .item_exclusive_minimum
-                .as_ref()
-                .map(|_| format!("{}[]", metadata.parse_path.value()))
-        })
-        .collect::<BTreeSet<_>>();
-    let item_exclusive_maximum_metadata_parse_paths = constraints
-        .input_field_metadata()
-        .iter()
-        .filter_map(|metadata| {
-            metadata
-                .item_exclusive_maximum
-                .as_ref()
-                .map(|_| format!("{}[]", metadata.parse_path.value()))
-        })
-        .collect::<BTreeSet<_>>();
     let min_items_metadata_parse_paths = constraints
         .input_field_metadata()
         .iter()
@@ -424,102 +361,7 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
                         );
                     });
                 }
-                if let Some(minimum) = metadata.minimum.as_ref() {
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #pointer,
-                            "minimum",
-                            ::agena_plugin_sdk::serde_json::json!(#minimum),
-                        );
-                    });
-                }
-                if let Some(maximum) = metadata.maximum.as_ref() {
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #pointer,
-                            "maximum",
-                            ::agena_plugin_sdk::serde_json::json!(#maximum),
-                        );
-                    });
-                }
-                if let Some(minimum) = metadata.exclusive_minimum.as_ref() {
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #pointer,
-                            "exclusiveMinimum",
-                            ::agena_plugin_sdk::serde_json::json!(#minimum),
-                        );
-                    });
-                }
-                if let Some(maximum) = metadata.exclusive_maximum.as_ref() {
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #pointer,
-                            "exclusiveMaximum",
-                            ::agena_plugin_sdk::serde_json::json!(#maximum),
-                        );
-                    });
-                }
-                if let Some(minimum) = metadata.item_minimum.as_ref() {
-                    let item_pointer = LitStr::new(
-                        format!("{}/items", pointer.value()).as_str(),
-                        metadata.path.span(),
-                    );
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #item_pointer,
-                            "minimum",
-                            ::agena_plugin_sdk::serde_json::json!(#minimum),
-                        );
-                    });
-                }
-                if let Some(minimum) = metadata.item_exclusive_minimum.as_ref() {
-                    let item_pointer = LitStr::new(
-                        format!("{}/items", pointer.value()).as_str(),
-                        metadata.path.span(),
-                    );
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #item_pointer,
-                            "exclusiveMinimum",
-                            ::agena_plugin_sdk::serde_json::json!(#minimum),
-                        );
-                    });
-                }
-                if let Some(maximum) = metadata.item_exclusive_maximum.as_ref() {
-                    let item_pointer = LitStr::new(
-                        format!("{}/items", pointer.value()).as_str(),
-                        metadata.path.span(),
-                    );
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #item_pointer,
-                            "exclusiveMaximum",
-                            ::agena_plugin_sdk::serde_json::json!(#maximum),
-                        );
-                    });
-                }
-                if let Some(maximum) = metadata.item_maximum.as_ref() {
-                    let item_pointer = LitStr::new(
-                        format!("{}/items", pointer.value()).as_str(),
-                        metadata.path.span(),
-                    );
-                    calls.push(quote! {
-                        ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                            schema,
-                            #item_pointer,
-                            "maximum",
-                            ::agena_plugin_sdk::serde_json::json!(#maximum),
-                        );
-                    });
-                }
+                calls.extend(numeric_field_schema_calls(&pointer, metadata));
                 if let Some(value) = metadata.min_items {
                     let value = value as u64;
                     calls.push(quote! {
@@ -818,100 +660,7 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
             })
             .collect::<Result<Vec<_>>>()?,
     );
-    calls.extend(
-        constraints
-            .minimums()
-            .iter()
-            .filter(|constraint| {
-                !minimum_metadata_parse_paths.contains(&constraint.path.value())
-                    && !item_minimum_metadata_parse_paths.contains(&constraint.path.value())
-            })
-            .map(|constraint| {
-                let pointer = schema_pointer_from_logical_path(prefix, &constraint.path.value())?;
-                let pointer = LitStr::new(pointer.as_str(), constraint.path.span());
-                let value = &constraint.value;
-                Ok(quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                        schema,
-                        #pointer,
-                        "minimum",
-                        ::agena_plugin_sdk::serde_json::json!(#value),
-                    );
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
-    calls.extend(
-        constraints
-            .maximums()
-            .iter()
-            .filter(|constraint| {
-                !maximum_metadata_parse_paths.contains(&constraint.path.value())
-                    && !item_maximum_metadata_parse_paths.contains(&constraint.path.value())
-            })
-            .map(|constraint| {
-                let pointer = schema_pointer_from_logical_path(prefix, &constraint.path.value())?;
-                let pointer = LitStr::new(pointer.as_str(), constraint.path.span());
-                let value = &constraint.value;
-                Ok(quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                        schema,
-                        #pointer,
-                        "maximum",
-                        ::agena_plugin_sdk::serde_json::json!(#value),
-                    );
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
-    calls.extend(
-        constraints
-            .exclusive_minimums()
-            .iter()
-            .filter(|constraint| {
-                !exclusive_minimum_metadata_parse_paths.contains(&constraint.path.value())
-                    && !item_exclusive_minimum_metadata_parse_paths
-                        .contains(&constraint.path.value())
-            })
-            .map(|constraint| {
-                let pointer = schema_pointer_from_logical_path(prefix, &constraint.path.value())?;
-                let pointer = LitStr::new(pointer.as_str(), constraint.path.span());
-                let value = &constraint.value;
-                Ok(quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                        schema,
-                        #pointer,
-                        "exclusiveMinimum",
-                        ::agena_plugin_sdk::serde_json::json!(#value),
-                    );
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
-    calls.extend(
-        constraints
-            .exclusive_maximums()
-            .iter()
-            .filter(|constraint| {
-                !exclusive_maximum_metadata_parse_paths.contains(&constraint.path.value())
-                    && !item_exclusive_maximum_metadata_parse_paths
-                        .contains(&constraint.path.value())
-            })
-            .map(|constraint| {
-                let pointer = schema_pointer_from_logical_path(prefix, &constraint.path.value())?;
-                let pointer = LitStr::new(pointer.as_str(), constraint.path.span());
-                let value = &constraint.value;
-                Ok(quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_number_metadata(
-                        schema,
-                        #pointer,
-                        "exclusiveMaximum",
-                        ::agena_plugin_sdk::serde_json::json!(#value),
-                    );
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    );
+    calls.extend(numeric_constraint_schema_calls(prefix, constraints)?);
     calls.extend(
         constraints
             .min_items()

@@ -15,7 +15,7 @@ type GitJson = <T = JsonValue>(
 
 type Toasts = { push: (kind: ToastKind, message: string, timeoutMs?: number, action?: ToastAction) => void }
 
-type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+import type { PendingRemoteAction } from '@/types/git'
 type GitError = unknown
 
 type GitAuthBody = {

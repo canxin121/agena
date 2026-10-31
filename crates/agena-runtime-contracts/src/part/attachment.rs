@@ -1,9 +1,6 @@
-//! Re-export of attachment types from the plugin SDK.
+//! Shared attachment facts owned by the domain contract.
 //!
-//! These types are the single source of truth for attachments across core and
-//! plugins; they live in `agena-plugin-sdk::attachment` so plugins can produce
-//! them and the host can pass them through verbatim.
+//! The plugin SDK and runtime contracts re-export these same types so tools,
+//! providers and renderers pass attachments without conversion or Host dependencies.
 
-pub use agena_plugin_host::sdk::attachment::{
-    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource,
-};
+pub use agena_domain::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};

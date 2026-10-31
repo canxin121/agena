@@ -290,7 +290,7 @@ impl App {
             .into_iter()
             .filter_map(|entry| {
                 let path = workspace_root.join(&entry.path);
-                let is_dir = entry.kind == agena_application::dto::WorkspaceFileKind::Directory;
+                let is_dir = entry.kind == agena_api::resource::WorkspaceFileKind::Directory;
                 if matches!(
                     dialog.presentation.meta.mode,
                     PathBrowserMode::DirectoryOnly

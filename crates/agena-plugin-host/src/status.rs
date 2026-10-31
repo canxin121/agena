@@ -10,70 +10,9 @@ use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, fmt};
 
-use serde::{Deserialize, Serialize};
-
 use crate::sdk::PluginKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Run state of a plugin.
-pub enum PluginRunState {
-    Running,
-    Restarting,
-    Failed,
-    Stopped,
-}
-
-impl AsRef<str> for PluginRunState {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Running => "running",
-            Self::Restarting => "restarting",
-            Self::Failed => "failed",
-            Self::Stopped => "stopped",
-        }
-    }
-}
-
-impl fmt::Display for PluginRunState {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_ref())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Status of a plugin.
-pub struct PluginStatus {
-    pub plugin_id: PluginKey,
-    /// Owned so the status round-trips over the public API's JSON responses
-    /// (the server serializes its in-process statuses for remote clients).
-    pub kind: String,
-    pub state: PluginRunState,
-    pub pid: Option<u32>,
-    pub restart_count: u32,
-    pub last_exit_code: Option<i32>,
-    pub last_restart_at_ms: Option<i64>,
-    pub last_failure: Option<agena_failure::UserProblem>,
-}
-
-impl PluginStatus {
-    pub fn initial(plugin_id: &PluginKey, kind: impl Into<String>) -> Self {
-        Self {
-            plugin_id: plugin_id.clone(),
-            kind: kind.into(),
-            state: PluginRunState::Running,
-            pid: None,
-            restart_count: 0,
-            last_exit_code: None,
-            last_restart_at_ms: None,
-            last_failure: None,
-        }
-    }
-
-    pub fn key(&self) -> PluginKey {
-        self.plugin_id.clone()
-    }
-}
+pub use agena_plugin_sdk::inspection::{PluginRunState, PluginStatus};
 
 pub fn now_ms() -> i64 {
     SystemTime::now()

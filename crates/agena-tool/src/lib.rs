@@ -84,7 +84,7 @@ pub fn is_tool_identity_title(title: &str, invocation: &ToolInvocation) -> bool 
 pub fn completed_tool_title(invocation: &ToolInvocation, output: &RawOutput) -> String {
     complete_title(
         initial_tool_title(invocation).as_str(),
-        result_title_fragment_for_invocation(invocation, output),
+        result_title_fragment_for_tool(invocation.name.as_str(), output),
     )
 }
 
@@ -383,10 +383,6 @@ fn finalize_result_fragment(mut fragment: String, output: &RawOutput) -> String 
     fragment
 }
 
-fn result_title_fragment_for_invocation(invocation: &ToolInvocation, output: &RawOutput) -> String {
-    result_title_fragment_for_tool(invocation.name.as_str(), output)
-}
-
 fn tool_result_fragment_from_text(key: &str, text: &str) -> Option<String> {
     let text = text.trim();
     let lower = text.to_ascii_lowercase();
@@ -455,6 +451,105 @@ fn discovery_text_result_fragment(key: &str, text: &str) -> Option<String> {
     Some(fragment)
 }
 
+/// Stable result facts for file discovery and text search. Headline and detail
+/// renderers share counts and completeness; row layout and output limits stay
+/// with each renderer. This reads only documented result fields and never
+/// copies file content into a summary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileSearchResultFacts {
+    pub count: Option<u64>,
+    pub truncated: bool,
+    pub scan_complete: Option<bool>,
+    matching_files: bool,
+}
+
+impl FileSearchResultFacts {
+    pub fn glob(object: &serde_json::Map<String, serde_json::Value>) -> Self {
+        Self {
+            count: object.get("count").and_then(value_as_u64).or_else(|| {
+                object
+                    .get("paths")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|paths| paths.len() as u64)
+            }),
+            truncated: object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true),
+            ..Self::default()
+        }
+    }
+
+    pub fn grep(object: &serde_json::Map<String, serde_json::Value>) -> Self {
+        let mode = match object.get("mode") {
+            None => "content",
+            Some(value) => value.as_str().unwrap_or(""),
+        };
+        let scan_complete = object
+            .get("scan_complete")
+            .and_then(serde_json::Value::as_bool);
+        let records = object.get("records").and_then(serde_json::Value::as_array);
+        let legacy_results = object.get("results").and_then(serde_json::Value::as_array);
+        let count = object.get("matches").and_then(value_as_u64).or_else(|| {
+            if let Some(records) = records.filter(|records| !records.is_empty()) {
+                // Context lines are not matches. Files/count modes report
+                // matching files; a Count record's count is a per-file line
+                // count (possibly partial), not the number of result files.
+                // Unknown future record kinds must not become a false zero.
+                return records.iter().try_fold(0_u64, |count, record| {
+                    let kind = record.get("kind")?.as_str()?;
+                    let matched = match (mode, kind) {
+                        ("content", "line") => record.get("matched")?.as_bool()?,
+                        ("files", "file") | ("count", "count") => true,
+                        _ => return None,
+                    };
+                    Some(count + u64::from(matched))
+                });
+            }
+            // Empty arrays are omitted by the current typed payload. An
+            // explicit scan marker still establishes an empty searched
+            // portion, while an opaque/missing result remains unknown.
+            legacy_results
+                .map(|results| results.len() as u64)
+                .or_else(|| {
+                    (matches!(mode, "content" | "files" | "count")
+                        && object
+                            .get("records")
+                            .is_none_or(serde_json::Value::is_array)
+                        && object
+                            .get("results")
+                            .is_none_or(serde_json::Value::is_array)
+                        && (records.is_some() || scan_complete.is_some()))
+                    .then_some(0)
+                })
+        });
+        Self {
+            count,
+            truncated: object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true),
+            scan_complete,
+            matching_files: matches!(mode, "files" | "count"),
+        }
+    }
+
+    pub fn count_text(&self) -> Option<String> {
+        let count = self.count?;
+        let label = match (self.matching_files, count) {
+            (true, 1) => "matching file",
+            (true, _) => "matching files",
+            (false, 1) => "match",
+            (false, _) => "matches",
+        };
+        Some(format!("{count} {label}"))
+    }
+
+    pub fn result_fragment(&self) -> Option<String> {
+        let mut fragment = self.count_text()?;
+        if self.truncated {
+            fragment.push_str(" · truncated");
+        } else if self.scan_complete == Some(false) {
+            fragment.push_str(" · incomplete");
+        }
+        Some(fragment)
+    }
+}
+
 fn tool_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
@@ -463,21 +558,10 @@ fn tool_result_fragment(
     // code/process facts. Prefer the latter so `shell.exec` ends as `passed`
     // or `failed · exit 1`, while list/logs/stop calls still report what they
     // actually returned.
-    if matches!(
-        key,
-        "shell.exec"
-            | "shell.spawn"
-            | "shell.watch"
-            | "shell.open"
-            | "shell.read"
-            | "shell.list"
-            | "shell.logs"
-            | "shell.stop"
-            | "shell.write"
-            | "shell.resize"
-            | "shell.signal"
-            | "shell"
-    ) && let Some(fragment) = shell_result_fragment(key, object)
+    if (key == "shell"
+        || (key.starts_with("shell.")
+            && agena_domain::ToolPermissionConfig::canonical_shell_tool_name(key).is_some()))
+        && let Some(fragment) = shell_result_fragment(key, object)
     {
         return Some(fragment);
     }
@@ -778,32 +862,12 @@ fn tool_result_fragment(
             }
         }
         "fs.glob" => {
-            let count = object.get("count").and_then(value_as_u64).or_else(|| {
-                object
-                    .get("paths")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|paths| paths.len() as u64)
-            });
-            if let Some(count) = count {
-                let mut fragment = format_count(count as usize, "matches");
-                if object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true) {
-                    fragment.push_str(" · truncated");
-                }
+            if let Some(fragment) = FileSearchResultFacts::glob(object).result_fragment() {
                 return Some(fragment);
             }
         }
         "fs.grep" => {
-            let count = object.get("matches").and_then(value_as_u64).or_else(|| {
-                object
-                    .get("results")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|results| results.len() as u64)
-            });
-            if let Some(count) = count {
-                let mut fragment = format_count(count as usize, "matches");
-                if object.get("truncated").and_then(serde_json::Value::as_bool) == Some(true) {
-                    fragment.push_str(" · truncated");
-                }
+            if let Some(fragment) = FileSearchResultFacts::grep(object).result_fragment() {
                 return Some(fragment);
             }
         }
@@ -2426,7 +2490,11 @@ fn tool_action_label(tool_name: &str) -> String {
     }
 }
 
-fn normalized_tool_identity(tool_name: &str) -> String {
+/// Normalize a tool identity for titles and human presentation.
+///
+/// This accepts historical display spellings and folds case. It must not be
+/// used for registry lookup, execution dispatch, or permission decisions.
+pub fn normalized_tool_identity(tool_name: &str) -> String {
     // Exact cloud identities retain underscores in the action portion of a
     // wire name; replacing every underscore would erase the cloud marker.
     if let Some(tool) = provider_tools::cloud_tool(tool_name) {
@@ -2458,7 +2526,10 @@ fn humanize_tool_leaf(key: &str) -> String {
     title
 }
 
-fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> String {
+/// Select a compact, display-safe invocation subject using the same rules as
+/// [`initial_tool_title`]. The source input is borrowed and remains unchanged;
+/// clients keep the complete original input for details and copying.
+pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> String {
     let key = normalized_tool_identity(tool_name);
     if key == "image_generation" {
         // A hosted image prompt is a document-sized instruction, not a
@@ -3358,5 +3429,195 @@ mod hosted_image_title_tests {
             );
             assert_eq!(output.text_content(), prompt);
         }
+    }
+}
+
+#[cfg(test)]
+mod presentation_identity_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn presentation_aliases_keep_cloud_action_underscores() {
+        for name in [
+            "chatgpt.web_search",
+            "agena.chatgpt.web_search",
+            "agena_chatgpt_web_search",
+        ] {
+            assert_eq!(normalized_tool_identity(name), "chatgpt.web_search");
+        }
+        for name in [
+            "shell.exec",
+            "agena.shell.exec",
+            "agena_shell_exec",
+            " SHELL/EXEC ",
+        ] {
+            assert_eq!(normalized_tool_identity(name), "shell.exec");
+        }
+        assert_eq!(
+            normalized_tool_identity("custom.Operation_name"),
+            "custom.operation_name"
+        );
+    }
+
+    #[test]
+    fn shared_subjects_keep_tool_specific_fields_and_borrow_original_input() {
+        let input = json!({
+            "paths": ["中文.rs", "second.rs"],
+            "description": "not the file target",
+            "api_key": "private credential"
+        });
+        let original = input.clone();
+        assert_eq!(
+            invocation_title_subject("agena.fs.read_many", &input),
+            "中文.rs +1"
+        );
+        assert_eq!(input, original);
+        assert_eq!(
+            invocation_title_subject("shell.read", &json!({"process_id": 42})),
+            "42"
+        );
+        assert!(
+            invocation_title_subject("image_generation", &json!({"prompt": "private prompt"}))
+                .is_empty()
+        );
+        assert!(
+            invocation_title_subject("plan.update", &json!({"prompt": "private prompt"}))
+                .is_empty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod file_search_result_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn summary(tool_name: &str, payload: serde_json::Value) -> String {
+        result_title_fragment_for_tool(
+            tool_name,
+            &RawOutput {
+                payload: Some(payload),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn grep_counts_matched_records_without_context_or_per_file_line_totals() {
+        assert_eq!(
+            summary(
+                "fs.grep",
+                json!({
+                    "mode": "content", "records": [
+                        {"kind": "line", "matched": false},
+                        {"kind": "line", "matched": true},
+                        {"kind": "line", "matched": false}
+                    ]
+                })
+            ),
+            "1 match"
+        );
+        assert_eq!(
+            summary(
+                "agena.fs.grep",
+                json!({
+                    "mode": "files", "records": [{"kind": "file"}, {"kind": "file"}]
+                })
+            ),
+            "2 matching files"
+        );
+        assert_eq!(
+            summary(
+                "agena_fs_grep",
+                json!({
+                    "mode": "count", "records": [
+                        {"kind": "count", "count": 90, "complete": true},
+                        {"kind": "count", "count": 3, "complete": false}
+                    ], "truncated": true, "scan_complete": false
+                })
+            ),
+            "2 matching files · truncated"
+        );
+    }
+
+    #[test]
+    fn search_preserves_reported_counts_legacy_shapes_and_unknown_results() {
+        for (tool_name, payload, expected) in [
+            (
+                "fs.glob",
+                json!({"count": " 12 ", "paths": ["a"], "truncated": true}),
+                "12 matches · truncated",
+            ),
+            ("fs.glob", json!({"paths": ["a"]}), "1 match"),
+            (
+                "fs.grep",
+                json!({"matches": 12, "results": ["a:1: match"]}),
+                "12 matches",
+            ),
+            (
+                "fs.grep",
+                json!({"matches": 4_294_967_297_u64}),
+                "4294967297 matches",
+            ),
+            (
+                "fs.grep",
+                json!({"matches": 12, "records": [{"kind": "future"}]}),
+                "12 matches",
+            ),
+            (
+                "fs.grep",
+                json!({"results": ["a:1: match", "b:2: match"]}),
+                "2 matches",
+            ),
+            (
+                "fs.grep",
+                json!({"mode": "files", "scan_complete": true}),
+                "0 matching files",
+            ),
+            (
+                "fs.grep",
+                json!({"mode": "files", "scan_complete": false}),
+                "0 matching files · incomplete",
+            ),
+        ] {
+            assert_eq!(summary(tool_name, payload), expected);
+        }
+        for payload in [
+            json!({}),
+            json!({"mode":"files"}),
+            json!({"records":[{"kind":"future"}]}),
+            json!({"mode":"future", "scan_complete":true}),
+            json!({"mode":null, "scan_complete":true}),
+            json!({"mode":"files", "records":{"kind":"future"}, "scan_complete":true}),
+            json!({"results":"malformed", "scan_complete":true}),
+        ] {
+            assert_eq!(
+                FileSearchResultFacts::grep(payload.as_object().unwrap()).count,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn search_failure_stays_authoritative_and_summary_never_reads_file_text() {
+        let mut raw = RawOutput {
+            payload: Some(json!({
+                "mode": "content", "matches": 12, "status": "failed",
+                "records": [{"kind":"line", "matched":true, "text":"private source content"}],
+                "provider_raw": {"access_token":"private credential"}
+            })),
+            ..Default::default()
+        };
+        let original = raw.clone();
+        assert_eq!(result_title_fragment_for_tool("fs.grep", &raw), "failed");
+        assert_eq!(raw, original);
+        raw.payload.as_mut().unwrap()["status"] = json!("completed");
+        let original = raw.clone();
+        assert_eq!(
+            result_title_fragment_for_tool("fs.grep", &raw),
+            "12 matches"
+        );
+        assert_eq!(raw, original);
     }
 }

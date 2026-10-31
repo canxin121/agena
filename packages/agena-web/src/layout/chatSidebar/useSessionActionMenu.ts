@@ -3,11 +3,9 @@ import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine, RiStarF
 import { useI18n } from 'vue-i18n'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
+import type { SessionMenuTarget, MenuRefEl } from './sessionMenu.types'
 
-type SessionLike = {
-  id: string
-  favorite?: boolean
-}
+type SessionLike = SessionMenuTarget['session']
 
 export type SessionActionItem = {
   id: string
@@ -86,7 +84,7 @@ export function useSessionActionMenu(opts: {
     Partial<{ containsTarget: (target: Node | null) => boolean; focusSearch: () => void }>
 
   // Session action menu (desktop-only trigger)
-  const sessionActionMenuTarget = ref<{ directory: DirectoryEntry; session: SessionLike } | null>(null)
+  const sessionActionMenuTarget = ref<SessionMenuTarget | null>(null)
   const sessionActionMenuQuery = ref('')
   const sessionActionMenuRef = ref<MenuRefLike | null>(null)
   const sessionActionMenuAnchorRef = ref<HTMLElement | null>(null)
@@ -124,7 +122,7 @@ export function useSessionActionMenu(opts: {
     void nextTick(() => sessionActionMenuRef.value?.focusSearch?.())
   }
 
-  function setSessionActionMenuRef(el: Element | ComponentPublicInstance | null) {
+  function setSessionActionMenuRef(el: MenuRefEl) {
     if (!el) {
       sessionActionMenuRef.value = null
       return

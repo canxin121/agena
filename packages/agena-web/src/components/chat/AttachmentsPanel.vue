@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
 import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
 import { RiAttachmentLine, RiCloseLine, RiFileLine, RiFileUploadLine, RiLoader4Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -408,34 +409,6 @@ function cssVarPx(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function resolveViewportHeight(): number {
-  if (typeof window === 'undefined') return 0
-  const vvHeight = window.visualViewport?.height
-  if (typeof vvHeight === 'number' && Number.isFinite(vvHeight) && vvHeight > 0) return vvHeight
-  return window.innerHeight
-}
-
-function resolveViewportWidth(): number {
-  if (typeof window === 'undefined') return 0
-  const vvWidth = window.visualViewport?.width
-  if (typeof vvWidth === 'number' && Number.isFinite(vvWidth) && vvWidth > 0) return vvWidth
-  return window.innerWidth
-}
-
-function resolveViewportLeft(): number {
-  if (typeof window === 'undefined') return 0
-  const vvLeft = window.visualViewport?.offsetLeft
-  if (typeof vvLeft === 'number' && Number.isFinite(vvLeft) && vvLeft > 0) return vvLeft
-  return 0
-}
-
-function resolveViewportTop(): number {
-  if (typeof window === 'undefined') return 0
-  const vvTop = window.visualViewport?.offsetTop
-  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) return vvTop
-  return 0
-}
-
 async function syncMobileSheetPosition() {
   if (!props.open || !isMobileSheet.value) return
   if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -445,11 +418,8 @@ async function syncMobileSheetPosition() {
   const panel = panelEl.value
   if (!panel) return
 
-  const viewportHeight = resolveViewportHeight()
+  const { height: viewportHeight, top: viewportTop, width: viewportWidth, left: viewportLeft } = readViewportRect()
   if (!viewportHeight) return
-  const viewportTop = resolveViewportTop()
-  const viewportWidth = resolveViewportWidth()
-  const viewportLeft = resolveViewportLeft()
 
   const safeTop = cssVarPx('--oc-safe-area-top', 0)
   const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
@@ -462,40 +432,25 @@ async function syncMobileSheetPosition() {
   const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
   const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
   const panelCenter = viewportLeft + safeLeft + usableWidth / 2
-  const panelHeight = Math.min(maxHeight, Math.max(0, panel.scrollHeight))
+  const dimensions = {
+    left: `${Math.round(panelCenter)}px`,
+    width: `${Math.round(panelWidth)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+  }
+  // Measure after the current viewport constraints reach the scrolling list,
+  // including when the panel reopens after the visible area has grown.
+  mobileSheetStyle.value = { ...mobileSheetStyle.value, ...dimensions }
+  await nextTick()
+  if (!props.open || !isMobileSheet.value || panelEl.value !== panel) return
+  const panelHeight = Math.min(maxHeight, Math.max(0, panel.getBoundingClientRect().height))
 
   const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
   const top = topInset + centeredOffset
 
   mobileSheetStyle.value = {
     top: `${Math.round(top)}px`,
-    left: `${Math.round(panelCenter)}px`,
-    width: `${Math.round(panelWidth)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
+    ...dimensions,
   }
-}
-
-function onMobileViewportChange() {
-  void syncMobileSheetPosition()
-}
-
-let mobileViewportEventsBound = false
-function bindMobileViewportEvents() {
-  if (mobileViewportEventsBound || typeof window === 'undefined') return
-  window.addEventListener('resize', onMobileViewportChange)
-  window.addEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.addEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.addEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = true
-}
-
-function unbindMobileViewportEvents() {
-  if (!mobileViewportEventsBound || typeof window === 'undefined') return
-  window.removeEventListener('resize', onMobileViewportChange)
-  window.removeEventListener('orientationchange', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('resize', onMobileViewportChange)
-  window.visualViewport?.removeEventListener('scroll', onMobileViewportChange)
-  mobileViewportEventsBound = false
 }
 
 watch(
@@ -513,7 +468,6 @@ watch(
       }
 
       if (isMobileSheet.value) {
-        bindMobileViewportEvents()
         void syncMobileSheetPosition()
       } else {
         bindDesktopEvents()
@@ -523,7 +477,6 @@ watch(
     }
 
     unbindDesktopEvents()
-    unbindMobileViewportEvents()
     if (!isMobileSheet.value) void restoreReturnFocus()
   },
   { immediate: true },
@@ -535,12 +488,9 @@ watch(
     if (!props.open) return
     if (mobile) {
       unbindDesktopEvents()
-      bindMobileViewportEvents()
       void syncMobileSheetPosition()
       return
     }
-
-    unbindMobileViewportEvents()
     bindDesktopEvents()
     void syncDesktopPosition()
   },
@@ -567,8 +517,9 @@ watch(
 onBeforeUnmount(() => {
   if (focusOutTimer) clearTimeout(focusOutTimer)
   unbindDesktopEvents()
-  unbindMobileViewportEvents()
 })
+
+useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosition)
 </script>
 
 <template>
@@ -704,7 +655,10 @@ onBeforeUnmount(() => {
                 >
                   {{ f.pastePreview }}
                 </p>
-                <label v-if="f.composerKind !== 'skill_ref'" class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                <label
+                  v-if="f.composerKind !== 'skill_ref'"
+                  class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
+                >
                   <input
                     type="checkbox"
                     :checked="f.delivery === 'model_input'"
@@ -879,7 +833,10 @@ onBeforeUnmount(() => {
                     >
                       {{ f.pastePreview }}
                     </p>
-                    <label v-if="f.composerKind !== 'skill_ref'" class="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                    <label
+                      v-if="f.composerKind !== 'skill_ref'"
+                      class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
+                    >
                       <input
                         type="checkbox"
                         :checked="f.delivery === 'model_input'"

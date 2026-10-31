@@ -10,19 +10,19 @@ use agena_provider_bedrock_streaming::{
 use futures_util::StreamExt;
 
 use super::{
-    ADAPTER_KIND, AmazonBedrockAdapter, Arc, AttachmentItem, AttachmentKind,
-    BEDROCK_ANTHROPIC_VERSION, BTreeMap, BedrockAnthropicBinarySource, BedrockAnthropicMessage,
-    BedrockAnthropicMessagesRequest, BedrockAnthropicMessagesResponse, BedrockAnthropicStreamEvent,
-    BedrockAnthropicTextBlock, BedrockAnthropicThinkingBlockState, BedrockAnthropicToolCallState,
-    BedrockAnthropicToolDefinition, BedrockAnthropicUsage, BedrockAuthMode, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatStreamOptions, ChatToolCallWire, ChatUsage,
-    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage, Credentials, EVENTSTREAM_CONTENT_TYPE, HashMap,
-    JSON_CONTENT_TYPE, ModelId, ModelMetadata, Mutex, OpenAiCompatibleModelList, PROVIDER_ID,
-    ProviderError, ProviderId, Role, Sigv4Request, Stream, Value, bedrock_anthropic_metadata,
-    bedrock_anthropic_thinking_parts, bedrock_wire_tool_name, json_value_to_string,
-    map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage, prefix_bedrock_model, prompt_cache,
-    response_id_metadata, sse, strip_cross_region_prefix, utils, wire_message,
+    ADAPTER_KIND, AmazonBedrockAdapter, AnthropicBinarySource, AnthropicMessage,
+    AnthropicTextBlock, AnthropicThinkingBlockState, AnthropicUsage, Arc, AttachmentItem,
+    AttachmentKind, BEDROCK_ANTHROPIC_VERSION, BTreeMap, BedrockAnthropicMessagesRequest,
+    BedrockAnthropicMessagesResponse, BedrockAnthropicStreamEvent, BedrockAnthropicToolCallState,
+    BedrockAnthropicToolDefinition, BedrockAuthMode, BedrockResponseContentBlock,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatStreamOptions,
+    ChatToolCallWire, ChatUsage, CompletionFinishReason, CompletionRequest, CompletionResponse,
+    CompletionStreamEvent, CompletionToolCall, CompletionUsage, Credentials,
+    EVENTSTREAM_CONTENT_TYPE, HashMap, JSON_CONTENT_TYPE, ModelId, ModelMetadata, Mutex,
+    OpenAiCompatibleModelList, PROVIDER_ID, ProviderError, ProviderId, Role, Sigv4Request, Stream,
+    Value, anthropic_wire_tool_name, bedrock_anthropic_metadata, bedrock_anthropic_thinking_parts,
+    json_value_to_string, map_anthropic_usage, merge_bedrock_anthropic_usage, prefix_bedrock_model,
+    prompt_cache, response_id_metadata, sse, strip_cross_region_prefix, utils, wire_message,
 };
 
 impl AmazonBedrockAdapter {
@@ -458,7 +458,7 @@ impl AmazonBedrockAdapter {
             reasoning_text: (!reasoning_text.is_empty()).then_some(reasoning_text),
             finish_reason,
             tool_calls,
-            usage: payload.usage.map(map_bedrock_anthropic_usage),
+            usage: payload.usage.map(map_anthropic_usage),
             provider_metadata,
         })
     }
@@ -475,7 +475,7 @@ impl AmazonBedrockAdapter {
             .iter()
             .cloned()
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: bedrock_wire_tool_name(tool.name.as_str()),
+                name: anthropic_wire_tool_name(tool.name.as_str()),
                 description: tool.description,
                 input_schema: tool.input_schema,
                 cache_control: None,
@@ -486,19 +486,20 @@ impl AmazonBedrockAdapter {
 
     pub(super) fn anthropic_content_to_blocks(
         run: &agena_provider::CompletionInputRun,
-    ) -> Vec<BedrockAnthropicTextBlock> {
+    ) -> Vec<AnthropicTextBlock> {
         let projected = wire_message::project(run);
         Self::anthropic_blocks_from_projected_parts(run, projected.as_slice())
     }
 
     pub(super) fn anthropic_thinking_blocks_from_message(
         run: &agena_provider::CompletionInputRun,
-    ) -> Vec<BedrockAnthropicTextBlock> {
+    ) -> Vec<AnthropicTextBlock> {
         run.provider_state
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {
-                let block = match serde_json::from_value::<BedrockAnthropicTextBlock>(block.clone())
+                let block = match serde_json::from_value::<BedrockResponseContentBlock>(block.clone())
+                    .map(BedrockResponseContentBlock::into_block)
                 {
                     Ok(block) => block,
                     Err(error) => {
@@ -538,30 +539,30 @@ impl AmazonBedrockAdapter {
     pub(super) fn anthropic_blocks_from_projected_parts(
         run: &agena_provider::CompletionInputRun,
         projected: &[wire_message::WirePart],
-    ) -> Vec<BedrockAnthropicTextBlock> {
+    ) -> Vec<AnthropicTextBlock> {
         if projected.is_empty() {
             let text = run.as_text_lossy();
             if text.is_empty() {
                 return Vec::new();
             }
 
-            return vec![BedrockAnthropicTextBlock::text(text)];
+            return vec![AnthropicTextBlock::text(text)];
         }
 
         let mut blocks = Vec::new();
         for part in projected {
             match part {
                 wire_message::WirePart::Text { text } => {
-                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
                 wire_message::WirePart::Reasoning { text } => {
-                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
                 // A system notice (background-operation notification) rides the
                 // assistant message as a text block: Bedrock's Anthropic
                 // Messages API has no mid-conversation system message.
                 wire_message::WirePart::SystemMessage { text } => {
-                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
                 wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::anthropic_attachment_blocks(item));
@@ -570,9 +571,9 @@ impl AmazonBedrockAdapter {
                     id,
                     function,
                     arguments_json,
-                } => blocks.push(BedrockAnthropicTextBlock::tool_use(
+                } => blocks.push(AnthropicTextBlock::tool_use(
                     id.clone(),
-                    bedrock_wire_tool_name(function.function_name()),
+                    anthropic_wire_tool_name(function.function_name()),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -593,7 +594,7 @@ impl AmazonBedrockAdapter {
 
     pub(super) fn anthropic_assistant_messages_from_parts(
         run: &agena_provider::CompletionInputRun,
-    ) -> Vec<BedrockAnthropicMessage> {
+    ) -> Vec<AnthropicMessage> {
         let projected = wire_message::project(run);
         if !projected
             .iter()
@@ -604,7 +605,7 @@ impl AmazonBedrockAdapter {
                 run,
                 projected.as_slice(),
             ));
-            return vec![BedrockAnthropicMessage {
+            return vec![AnthropicMessage {
                 role: "assistant".to_owned(),
                 content,
             }];
@@ -623,7 +624,7 @@ impl AmazonBedrockAdapter {
                     Self::flush_anthropic_assistant_blocks(run, &mut messages, &mut buffered);
                     Self::push_anthropic_request_message(
                         &mut messages,
-                        BedrockAnthropicMessage {
+                        AnthropicMessage {
                             role: "user".to_owned(),
                             content: vec![Self::anthropic_media_tool_result(
                                 tool_call_id.clone(),
@@ -648,7 +649,7 @@ impl AmazonBedrockAdapter {
 
     pub(super) fn anthropic_tool_messages_from_parts(
         run: &agena_provider::CompletionInputRun,
-    ) -> Vec<BedrockAnthropicMessage> {
+    ) -> Vec<AnthropicMessage> {
         let content =
             wire_message::project(run)
                 .into_iter()
@@ -665,7 +666,7 @@ impl AmazonBedrockAdapter {
                 })
                 .collect::<Vec<_>>();
         (!content.is_empty())
-            .then(|| BedrockAnthropicMessage {
+            .then(|| AnthropicMessage {
                 role: "user".to_owned(),
                 content,
             })
@@ -674,8 +675,8 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn push_anthropic_request_message(
-        messages: &mut Vec<BedrockAnthropicMessage>,
-        mut message: BedrockAnthropicMessage,
+        messages: &mut Vec<AnthropicMessage>,
+        mut message: AnthropicMessage,
     ) {
         if message.content.is_empty() {
             return;
@@ -691,8 +692,8 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn extend_anthropic_request_messages(
-        messages: &mut Vec<BedrockAnthropicMessage>,
-        extension: impl IntoIterator<Item = BedrockAnthropicMessage>,
+        messages: &mut Vec<AnthropicMessage>,
+        extension: impl IntoIterator<Item = AnthropicMessage>,
     ) {
         for message in extension {
             Self::push_anthropic_request_message(messages, message);
@@ -701,7 +702,7 @@ impl AmazonBedrockAdapter {
 
     pub(super) fn flush_anthropic_assistant_blocks(
         run: &agena_provider::CompletionInputRun,
-        messages: &mut Vec<BedrockAnthropicMessage>,
+        messages: &mut Vec<AnthropicMessage>,
         buffered: &mut Vec<wire_message::WirePart>,
     ) {
         if buffered.is_empty() {
@@ -720,46 +721,42 @@ impl AmazonBedrockAdapter {
         }
         Self::push_anthropic_request_message(
             messages,
-            BedrockAnthropicMessage {
+            AnthropicMessage {
                 role: "assistant".to_owned(),
                 content,
             },
         );
     }
 
-    pub(super) fn anthropic_attachment_blocks(
-        item: &AttachmentItem,
-    ) -> Vec<BedrockAnthropicTextBlock> {
+    pub(super) fn anthropic_attachment_blocks(item: &AttachmentItem) -> Vec<AnthropicTextBlock> {
         match item.kind {
             AttachmentKind::Image => Self::anthropic_binary_source(item)
-                .map(BedrockAnthropicTextBlock::image)
+                .map(AnthropicTextBlock::image)
                 .into_iter()
                 .collect(),
             AttachmentKind::Pdf => Self::anthropic_binary_source(item)
-                .map(BedrockAnthropicTextBlock::document)
+                .map(AnthropicTextBlock::document)
                 .into_iter()
                 .collect(),
             AttachmentKind::File => wire_message::attachment_text(item)
-                .map(BedrockAnthropicTextBlock::text)
+                .map(AnthropicTextBlock::text)
                 .into_iter()
                 .collect(),
             AttachmentKind::Audio | AttachmentKind::Video => Vec::new(),
         }
         .into_iter()
         .chain(match item.kind {
-            AttachmentKind::Audio | AttachmentKind::Video => Some(BedrockAnthropicTextBlock::text(
-                wire_message::hint_text(item),
-            )),
+            AttachmentKind::Audio | AttachmentKind::Video => {
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
+            }
             AttachmentKind::Image | AttachmentKind::Pdf
                 if Self::anthropic_binary_source(item).is_none() =>
             {
-                Some(BedrockAnthropicTextBlock::text(wire_message::hint_text(
-                    item,
-                )))
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
             }
-            AttachmentKind::File if wire_message::attachment_text(item).is_none() => Some(
-                BedrockAnthropicTextBlock::text(wire_message::hint_text(item)),
-            ),
+            AttachmentKind::File if wire_message::attachment_text(item).is_none() => {
+                Some(AnthropicTextBlock::text(wire_message::hint_text(item)))
+            }
             _ => None,
         })
         .collect()
@@ -769,11 +766,11 @@ impl AmazonBedrockAdapter {
         call_id: impl Into<String>,
         output: impl Into<String>,
         attachments: &[AttachmentItem],
-    ) -> BedrockAnthropicTextBlock {
+    ) -> AnthropicTextBlock {
         let output = output.into();
-        let mut result = BedrockAnthropicTextBlock::tool_result(call_id, &output);
+        let mut result = AnthropicTextBlock::tool_result(call_id, &output);
         if !attachments.is_empty() {
-            let mut blocks = vec![BedrockAnthropicTextBlock::text(output)];
+            let mut blocks = vec![AnthropicTextBlock::text(output)];
             blocks.extend(
                 attachments
                     .iter()
@@ -785,17 +782,15 @@ impl AmazonBedrockAdapter {
         result
     }
 
-    pub(super) fn anthropic_binary_source(
-        item: &AttachmentItem,
-    ) -> Option<BedrockAnthropicBinarySource> {
+    pub(super) fn anthropic_binary_source(item: &AttachmentItem) -> Option<AnthropicBinarySource> {
         wire_message::base64_with_mime(item)
-            .map(|(media_type, data)| BedrockAnthropicBinarySource::base64(media_type, data))
+            .map(|(media_type, data)| AnthropicBinarySource::base64(media_type, data))
     }
 
     pub(super) fn apply_anthropic_prompt_cache_hints(
-        system: &mut [BedrockAnthropicTextBlock],
+        system: &mut [AnthropicTextBlock],
         tools: &mut [BedrockAnthropicToolDefinition],
-        messages: &mut [BedrockAnthropicMessage],
+        messages: &mut [AnthropicMessage],
     ) {
         if let Some(block) = system.last_mut() {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
@@ -811,8 +806,8 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn latest_anthropic_user_cache_block(
-        messages: &mut [BedrockAnthropicMessage],
-    ) -> Option<&mut BedrockAnthropicTextBlock> {
+        messages: &mut [AnthropicMessage],
+    ) -> Option<&mut AnthropicTextBlock> {
         messages.iter_mut().rev().find_map(|message| {
             if message.role != "user" || message.content.is_empty() {
                 return None;
@@ -832,7 +827,7 @@ impl AmazonBedrockAdapter {
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(BedrockAnthropicTextBlock::text(system.clone()));
+            system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
         let mut tools = (!request.tool_api_functions.is_empty())
             .then(|| Self::anthropic_tools(request.tool_api_functions.as_slice()));
@@ -843,7 +838,7 @@ impl AmazonBedrockAdapter {
                 Role::System => {
                     let text = msg.as_text_lossy();
                     if !text.trim().is_empty() {
-                        system_chunks.push(BedrockAnthropicTextBlock::text(text));
+                        system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
                 Role::Assistant => Self::extend_anthropic_request_messages(
@@ -852,7 +847,7 @@ impl AmazonBedrockAdapter {
                 ),
                 Role::User => Self::push_anthropic_request_message(
                     &mut messages,
-                    BedrockAnthropicMessage {
+                    AnthropicMessage {
                         role: "user".to_owned(),
                         content: Self::anthropic_content_to_blocks(&msg),
                     },
@@ -904,7 +899,7 @@ impl AmazonBedrockAdapter {
             if let Some(tool_calls) = message.tool_calls.as_mut() {
                 for tool_call in tool_calls {
                     tool_call.function.name =
-                        bedrock_wire_tool_name(tool_call.function.name.as_str());
+                        anthropic_wire_tool_name(tool_call.function.name.as_str());
                 }
             }
         }
@@ -1073,9 +1068,9 @@ impl AmazonBedrockAdapter {
         let stream = async_stream::try_stream! {
             let mut receiver = receiver;
             let mut pending_tool_calls: std::collections::HashMap<usize, BedrockAnthropicToolCallState> = std::collections::HashMap::new();
-            let mut thinking_blocks = BTreeMap::<usize, BedrockAnthropicThinkingBlockState>::new();
+            let mut thinking_blocks = BTreeMap::<usize, AnthropicThinkingBlockState>::new();
             let mut stream_finish_reason: Option<String> = None;
-            let mut stream_usage: Option<BedrockAnthropicUsage> = None;
+            let mut stream_usage: Option<AnthropicUsage> = None;
             let mut stream_has_content = false;
             let mut stream_tool_call_seen = false;
             let mut response_id: Option<String> = None;
@@ -1138,7 +1133,7 @@ impl AmazonBedrockAdapter {
                                         .to_owned(),
                                 )
                             })?;
-                            let update = BedrockAnthropicThinkingBlockState {
+                            let update = AnthropicThinkingBlockState {
                                     kind: content_block.kind,
                                     thinking: content_block.thinking.unwrap_or_default(),
                                     signature: content_block
@@ -1339,7 +1334,7 @@ impl AmazonBedrockAdapter {
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
                 let thinking_blocks = thinking_blocks
                     .into_values()
-                    .filter_map(BedrockAnthropicThinkingBlockState::into_value)
+                    .filter_map(AnthropicThinkingBlockState::into_value)
                     .collect::<Vec<_>>();
                 let mut provider_metadata = response_id_metadata(response_id);
                 if !thinking_blocks.is_empty() {
@@ -1354,7 +1349,7 @@ impl AmazonBedrockAdapter {
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
                     ),
-                    usage: stream_usage.map(map_bedrock_anthropic_usage),
+                    usage: stream_usage.map(map_anthropic_usage),
                     provider_metadata,
                     end_turn: None,
                 };
@@ -1392,7 +1387,7 @@ impl AmazonBedrockAdapter {
                         .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                             kind: "function".to_owned(),
                             function: crate::provider::chat_wire::ChatFunctionDefinition {
-                                name: bedrock_wire_tool_name(tool.name.as_str()),
+                                name: anthropic_wire_tool_name(tool.name.as_str()),
                                 description: tool.description,
                                 parameters: tool.input_schema,
                             },
@@ -1487,7 +1482,7 @@ impl AmazonBedrockAdapter {
                         .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                             kind: "function".to_owned(),
                             function: crate::provider::chat_wire::ChatFunctionDefinition {
-                                name: bedrock_wire_tool_name(tool.name.as_str()),
+                                name: anthropic_wire_tool_name(tool.name.as_str()),
                                 description: tool.description,
                                 parameters: tool.input_schema,
                             },

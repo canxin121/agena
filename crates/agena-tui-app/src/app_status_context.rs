@@ -326,7 +326,7 @@ impl App {
                 tracing::warn!(
                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
                         "resolve the selected model for the TUI session status",
-                        &error,
+                        error.as_ref(),
                     ),
                     "TUI session status omitted an unresolved model"
                 );

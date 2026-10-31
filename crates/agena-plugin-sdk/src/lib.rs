@@ -40,10 +40,12 @@ pub extern crate serde_json;
 pub mod activity;
 pub mod attachment;
 pub mod cancellation;
+pub mod configuration;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
 pub mod identity;
+pub mod inspection;
 #[doc(hidden)]
 pub mod macro_support;
 pub mod manifest;
@@ -52,6 +54,8 @@ pub mod permission_wait;
 pub mod plugin;
 pub mod prelude;
 pub mod rpc;
+#[cfg(feature = "schema-validation")]
+pub mod schema_validation;
 pub mod service_client;
 mod settings_contract;
 

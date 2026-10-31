@@ -40,14 +40,21 @@ pub(super) fn normalize_domain(url_or_domain: &str) -> String {
         .to_owned()
 }
 
-pub(super) fn provider_http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(OAUTH_HTTP_TIMEOUT)
-            .build()
-            .expect("provider OAuth HTTP client should build")
-    })
+pub(super) fn provider_http_client() -> Result<&'static reqwest::Client, ProviderError> {
+    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(OAUTH_HTTP_TIMEOUT)
+                .build()
+                .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+        })
+        .as_ref()
+        .map_err(|error| {
+            ProviderError::Provider(format!(
+                "cannot initialize authentication HTTP client: {error}"
+            ))
+        })
 }
 
 pub(super) async fn response_body_bounded(
@@ -203,7 +210,7 @@ pub(super) fn expires_at_ms_from_duration(expires_in: Option<Duration>) -> i64 {
         .map(|duration| duration.as_millis())
         .and_then(|millis| i64::try_from(millis).ok())
         .filter(|millis| *millis > 0)
-        .map(|millis| chrono::Utc::now().timestamp_millis() + millis)
+        .map(|millis| chrono::Utc::now().timestamp_millis().saturating_add(millis))
         .unwrap_or(0)
 }
 
@@ -214,7 +221,11 @@ where
     expires_in
         .and_then(|seconds| seconds.try_into().ok())
         .filter(|seconds| *seconds > 0)
-        .map(|seconds| chrono::Utc::now().timestamp_millis() + seconds.saturating_mul(1_000))
+        .map(|seconds| {
+            chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_add(seconds.saturating_mul(1_000))
+        })
         .unwrap_or(0)
 }
 
@@ -370,15 +381,20 @@ pub(super) async fn ensure_http_success(
     })
 }
 
-pub(super) fn oauth_http_client() -> &'static oauth2::reqwest::Client {
-    static CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        oauth2::reqwest::ClientBuilder::new()
-            .redirect(oauth2::reqwest::redirect::Policy::none())
-            .timeout(OAUTH_HTTP_TIMEOUT)
-            .build()
-            .expect("oauth reqwest client should build")
-    })
+pub(super) fn oauth_http_client() -> Result<&'static oauth2::reqwest::Client, ProviderError> {
+    static CLIENT: OnceLock<Result<oauth2::reqwest::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            oauth2::reqwest::ClientBuilder::new()
+                .redirect(oauth2::reqwest::redirect::Policy::none())
+                .timeout(OAUTH_HTTP_TIMEOUT)
+                .build()
+                .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+        })
+        .as_ref()
+        .map_err(|error| {
+            ProviderError::Provider(format!("cannot initialize OAuth HTTP client: {error}"))
+        })
 }
 
 fn oauth_token_response(
@@ -408,9 +424,7 @@ fn decode_openai_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&decoded).ok()
 }
 
-pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
-    let json = decode_openai_jwt_payload(jwt)?;
-
+fn openai_account_id_from_claims(json: &Value) -> Option<String> {
     json.get("chatgpt_account_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
@@ -430,8 +444,7 @@ pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
         })
 }
 
-pub(super) fn extract_openai_fedramp_account(jwt: &str) -> Option<bool> {
-    let json = decode_openai_jwt_payload(jwt)?;
+fn openai_fedramp_from_claims(json: &Value) -> Option<bool> {
     json.get("chatgpt_account_is_fedramp")
         .and_then(|value| value.as_bool())
         .or_else(|| {
@@ -439,4 +452,139 @@ pub(super) fn extract_openai_fedramp_account(jwt: &str) -> Option<bool> {
                 .and_then(|value| value.get("chatgpt_account_is_fedramp"))
                 .and_then(|value| value.as_bool())
         })
+}
+
+/// Parse each token once; account id and FedRAMP claims independently prefer
+/// the id token and fall back to the access token, as the protocol requires.
+pub(super) fn openai_account_identity(
+    id_token: Option<&str>,
+    access_token: &str,
+) -> (Option<String>, bool) {
+    let id = id_token.and_then(decode_openai_jwt_payload);
+    let access = decode_openai_jwt_payload(access_token);
+    let account_id = id
+        .as_ref()
+        .and_then(openai_account_id_from_claims)
+        .or_else(|| access.as_ref().and_then(openai_account_id_from_claims));
+    let fedramp = id
+        .as_ref()
+        .and_then(openai_fedramp_from_claims)
+        .or_else(|| access.as_ref().and_then(openai_fedramp_from_claims))
+        .unwrap_or(false);
+    (account_id, fedramp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn jwt(claims: Value) -> String {
+        format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+        )
+    }
+
+    #[test]
+    fn interval_and_expiry_keep_missing_zero_and_string_semantics() {
+        for (value, expected) in [
+            (None, 5),
+            (Some(json!(0)), 1),
+            (Some(json!(" 12 ")), 12),
+            (Some(json!(-1)), 5),
+            (Some(json!("invalid")), 5),
+            (Some(Value::Null), 5),
+        ] {
+            assert_eq!(parse_device_auth_interval(value, 5), expected);
+        }
+        assert_eq!(expires_at_ms_from_seconds(None::<u64>), 0);
+        assert_eq!(expires_at_ms_from_seconds(Some(0_u64)), 0);
+        assert_eq!(expires_at_ms_from_seconds(Some(u64::MAX)), 0);
+        assert_eq!(expires_at_ms_from_seconds(Some(i64::MAX)), i64::MAX);
+        let before = chrono::Utc::now().timestamp_millis();
+        let expires = expires_at_ms_from_seconds(Some(60_u64));
+        let after = chrono::Utc::now().timestamp_millis();
+        assert!((before + 60_000..=after + 60_000).contains(&expires));
+    }
+
+    #[test]
+    fn account_claims_keep_independent_id_token_precedence_and_legacy_fallbacks() {
+        let id =
+            jwt(json!({"chatgpt_account_id": "id-account", "chatgpt_account_is_fedramp": false}));
+        let access = jwt(json!({"https://api.openai.com/auth": {
+            "chatgpt_account_id": "access-account", "chatgpt_account_is_fedramp": true
+        }}));
+        assert_eq!(
+            openai_account_identity(Some(&id), &access),
+            (Some("id-account".into()), false)
+        );
+        let id = jwt(json!({"organizations": [{"id": "organization"}]}));
+        assert_eq!(
+            openai_account_identity(Some(&id), &access),
+            (Some("organization".into()), true)
+        );
+        assert_eq!(
+            openai_account_identity(Some("malformed"), &access),
+            (Some("access-account".into()), true)
+        );
+        assert_eq!(openai_account_identity(None, "malformed"), (None, false));
+    }
+
+    async fn http_response(status: u16, body: &str) -> reqwest::Response {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            // The response-budget test intentionally closes before reading
+            // the oversized body; a peer reset is expected in that fixture.
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn protocol_errors_preserve_retry_categories_and_response_budget() {
+        for (status, kind, retryable) in [
+            (401, ProviderErrorKind::Authentication, false),
+            (403, ProviderErrorKind::Authentication, false),
+            (429, ProviderErrorKind::RateLimited, true),
+            (503, ProviderErrorKind::Unavailable, true),
+            (400, ProviderErrorKind::InvalidRequest, false),
+        ] {
+            let response = http_response(status, r#"{"error":"failure"}"#).await;
+            let error = ensure_http_success("provider", Some("exchange"), response)
+                .await
+                .unwrap_err();
+            match error {
+                ProviderError::HttpStatus {
+                    status: actual,
+                    kind: actual_kind,
+                    retryable: actual_retryable,
+                    ..
+                } => {
+                    assert_eq!(actual.as_u16(), status);
+                    assert_eq!(actual_kind, kind);
+                    assert_eq!(actual_retryable, retryable);
+                }
+                other => panic!("unexpected protocol error: {other}"),
+            }
+        }
+        let response = http_response(200, &"x".repeat(MAX_OAUTH_RESPONSE_BYTES + 1)).await;
+        assert!(response_body_bounded(response).await.is_err());
+    }
 }

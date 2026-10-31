@@ -812,7 +812,10 @@ fn payload_name_for_invocation(
     invocation_name: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
-    if let Some(action) = shell_action_for_name(invocation_name) {
+    if let Some(action) =
+        agena_domain::ToolPermissionConfig::canonical_shell_tool_name(invocation_name)
+            .and_then(|name| name.strip_prefix("agena.shell."))
+    {
         input.insert(
             "action".to_owned(),
             serde_json::Value::String(action.to_owned()),
@@ -859,26 +862,13 @@ fn payload_name_for_invocation(
     payload_name_for_output_tool(invocation_name)
 }
 
-/// Registered shell identities in their current protocol spellings.
-fn shell_action_for_name(name: &str) -> Option<&'static str> {
-    [
-        "exec", "spawn", "watch", "open", "list", "logs", "read", "write", "stop", "resize",
-        "signal",
-    ]
-    .into_iter()
-    .find(|action| {
-        name == format!("shell.{action}")
-            || name == format!("agena.shell.{action}")
-            || name == format!("agena_shell_{action}")
-    })
-}
-
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     if tool_name == "web_search" {
         return Some("web_search".to_owned());
     }
     // Shell/process tools share one `shell` payload variant; the subcommand
-    // (`run`/`list`/`logs`/`stop`) lives in `action`, not in the variant tag.
+    // lives in `action`, not in the variant tag. Registered spellings are
+    // owned by the shared shell identity contract.
     // Monitor tools share one `monitor` payload variant; the subcommand
     // (`start`/`stop`) lives in `action`, not in the variant tag.
     if matches!(
@@ -893,7 +883,9 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     ) {
         return Some("monitor".to_string());
     }
-    if tool_name == "shell" || shell_action_for_name(tool_name).is_some() {
+    if tool_name == "shell"
+        || agena_domain::ToolPermissionConfig::canonical_shell_tool_name(tool_name).is_some()
+    {
         return Some("shell".to_string());
     }
     payload_name_for_table(tool_name)
@@ -902,6 +894,48 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[test]
+    fn shell_payload_aliases_keep_exact_protocol_matching_and_action_ownership() {
+        for action in [
+            "exec", "spawn", "watch", "open", "list", "logs", "read", "write", "stop", "resize",
+            "signal",
+        ] {
+            for name in [
+                format!("shell.{action}"),
+                format!("agena.shell.{action}"),
+                format!("agena_shell_{action}"),
+            ] {
+                let mut input =
+                    serde_json::json!({"action": "stale", "command": "printf '%s' \"$PATH\""})
+                        .as_object()
+                        .unwrap()
+                        .clone();
+                assert_eq!(
+                    payload_name_for_invocation(&name, &mut input).as_deref(),
+                    Some("shell")
+                );
+                assert_eq!(input["action"], action);
+                assert_eq!(input["command"], "printf '%s' \"$PATH\"");
+                assert_eq!(
+                    payload_name_for_output_tool(&name).as_deref(),
+                    Some("shell")
+                );
+            }
+        }
+        for name in [
+            "SHELL.EXEC",
+            " shell.exec",
+            "shell.exec ",
+            "custom.shell.exec",
+            "shell.execute",
+        ] {
+            let mut input = serde_json::Map::new();
+            assert!(payload_name_for_invocation(name, &mut input).is_none());
+            assert!(payload_name_for_output_tool(name).is_none());
+            assert!(input.is_empty());
+        }
+    }
 
     #[test]
     fn web_plugin_results_keep_their_engine_and_descriptions_in_typed_projection() {

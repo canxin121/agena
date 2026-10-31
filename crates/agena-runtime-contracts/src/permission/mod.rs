@@ -4,7 +4,7 @@ use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
 };
-use agena_plugin_host::sdk::ToolTag;
+use agena_plugin_sdk::ToolTag;
 use path_clean::PathClean;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};

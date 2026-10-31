@@ -15,7 +15,8 @@ impl App {
         } else {
             let mut rows = vec![provider_list_create_item(&self.i18n)];
             rows.extend(
-                crate::app_backend::operations::list_configured_providers(&self.application)
+                self.application
+                    .provider_summaries()
                     .into_iter()
                     .map(|provider| {
                         let label = provider.provider_id.clone();
@@ -137,8 +138,7 @@ impl App {
     }
 
     pub(crate) fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
-        let providers =
-            crate::app_backend::operations::list_configured_providers(&self.application);
+        let providers = self.application.provider_summaries();
         let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
         let selected_provider = initial_provider
             .and_then(|provider_id| {
@@ -230,7 +230,8 @@ impl App {
                 dialog.catalog_match_error = None;
                 let configured_adapters = provider_id
                     .and_then(|id| {
-                        crate::app_backend::operations::list_configured_providers(&self.application)
+                        self.application
+                            .provider_summaries()
                             .into_iter()
                             .find(|provider| provider.provider_id == id)
                     })

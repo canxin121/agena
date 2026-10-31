@@ -119,13 +119,16 @@ impl Application {
             .into_iter()
             .find(|entry| entry.model_id == catalog_model_id)
             .ok_or_else(|| ApplicationError::not_found("catalog model not found"))?;
-        crate::provider_studio::apply_catalog_template_to_model_value(model_value, &catalog)
-            .map_err(|error| {
-                ApplicationError::bad_request_with_diagnostic(
-                    "The model configuration is invalid.",
-                    error,
-                )
-            })
+        agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
+            model_value,
+            &catalog,
+        )
+        .map_err(|error| {
+            ApplicationError::bad_request_with_diagnostic(
+                "The model configuration is invalid.",
+                error,
+            )
+        })
     }
 
     pub async fn start_provider_draft_auth(

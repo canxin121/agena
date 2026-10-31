@@ -381,32 +381,6 @@ export function mediaAttachmentPresentation(block: JsonRecord): AttachmentPresen
   )
 }
 
-function toolCallView(content: JsonRecord, presentationValue: JsonValue): JsonRecord {
-  const presentation = jsonRecord(presentationValue)
-  const title = firstString(presentation, ['title'])
-  const summary = firstString(presentation, ['summary'])
-  const invocation = {
-    name: firstString(content, ['name']) || 'unknown',
-    plugin_name: content.plugin,
-    input: toolInputRecord(content.input),
-    tool_api_call: jsonRecord(content.tool_api_call),
-  }
-  const blocks = jsonArray(presentation.blocks)
-  return {
-    call_id: content.call_id ?? 0,
-    invocation,
-    title,
-    summary,
-    blocks,
-    user_input: jsonRecord(content.user_input),
-    authorization: jsonRecord(content.authorization),
-    metadata: jsonRecord(content.metadata),
-    error: content.error ?? null,
-    lifecycle: jsonRecord(content.lifecycle),
-    output: content.output ?? null,
-  }
-}
-
 const COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
 
 /**
@@ -452,20 +426,19 @@ export function operationPresentation(
   const presentationValue = hasSection('presentation')
     ? (sectionValues.presentation as JsonValue)
     : (part.source.agenaPresentation ?? null)
-  const presentationSummary = jsonRecord(presentationValue).summary
-  const operation = toolCallView(content, presentationValue)
-  const invocation = jsonRecord(operation.invocation)
+  const presentation = jsonRecord(presentationValue)
+  const presentationSummary = presentation.summary
   const encodedInput = toolInputRecord(content.input)
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
-  const toolName = firstString(content, ['name']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
-  const rawOutput = operation.output ?? null
-  const failure = toolFailurePresentation(operation.error)
+  const toolName = firstString(content, ['name']) || 'unknown'
+  const rawOutput = content.output ?? null
+  const failure = toolFailurePresentation(content.error ?? null)
   const error =
     failure.message ||
     (['failed', 'error'].includes(part.status.trim().toLowerCase())
       ? i18n.global.t('chat.toolDetails.errorUnavailable')
       : '')
-  const blocks = jsonArray(operation.blocks)
+  const blocks = jsonArray(presentation.blocks)
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
 
@@ -486,11 +459,11 @@ export function operationPresentation(
     blocks.push(block)
   }
 
-  const startMs = numericValue(jsonRecord(operation.lifecycle).start_ms) ?? part.source.time?.start ?? null
-  const endMs = numericValue(jsonRecord(operation.lifecycle).end_ms) ?? part.source.time?.end ?? null
+  const startMs = numericValue(jsonRecord(content.lifecycle).start_ms) ?? part.source.time?.start ?? null
+  const endMs = numericValue(jsonRecord(content.lifecycle).end_ms) ?? part.source.time?.end ?? null
   const terminal = partStatusPresentation(part.status).terminal
   const canReply = isRunInFlight(part.status) && partOwnsInteractions(part.source)
-  const userInput = jsonRecord(operation.user_input)
+  const userInput = jsonRecord(content.user_input)
   const userInputs = jsonArray(userInput.requests)
     .map((raw) => {
       const record = jsonRecord(raw)
@@ -500,7 +473,7 @@ export function operationPresentation(
       return { ...presentation, pending: canReply && presentation.pending }
     })
     .filter((item): item is InteractionPresentation => Boolean(item))
-  const authorization = jsonRecord(operation.authorization)
+  const authorization = jsonRecord(content.authorization)
   const permissions = jsonArray(authorization.permissions).map((raw) => {
     const permission = jsonRecord(raw)
     const request = jsonRecord(permission.request)
@@ -556,7 +529,7 @@ export function operationPresentation(
   })
 
   return {
-    title: firstString(operation, ['title']) || part.title,
+    title: firstString(presentation, ['title']) || part.title,
     // Empty is a loaded presentation value, not a reason to restore the
     // snapshot's older summary after a lazy detail read.
     summary: typeof presentationSummary === 'string' ? presentationSummary.trim() : part.summary,

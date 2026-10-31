@@ -1,8 +1,8 @@
 //! Provider/model presentation mappings: routing views, local model lists,
 //! catalog lookups, and the inspector rows for think/speed/verbosity choices.
 
+use agena_api::resource::ModelCatalogListResponse;
 use agena_api::resource::ProviderAdapterModelsResource;
-use agena_application::dto::ModelCatalogListResponse;
 use agena_domain::Model as ProviderModel;
 use agena_domain::ModelRef;
 use anyhow::{Context, Result, anyhow};
@@ -188,14 +188,11 @@ pub(crate) fn model_verbosity_values(
 }
 
 pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Result<()> {
-    let _: agena_api::resource::ModelCatalogRefreshResponse = serde_json::from_value(
-        application
-            .client()
-            .refresh_model_catalog()
-            .await
-            .context("failed to start the model catalog refresh through the server")?,
-    )
-    .context("the server returned an undecodable model catalog refresh task")?;
+    application
+        .client()
+        .refresh_model_catalog()
+        .await
+        .context("failed to start the model catalog refresh through the server")?;
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
@@ -214,7 +211,7 @@ pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Re
 }
 
 fn completed_model_catalog_refresh(
-    summary: &agena_application::dto::ModelCatalogResponse,
+    summary: &agena_api::resource::ModelCatalogResponse,
 ) -> Option<Result<()>> {
     if summary.refreshing {
         return None;
@@ -238,4 +235,31 @@ fn preferred_model_display_name(models: Vec<ProviderModel>, model: &ModelRef) ->
         .and_then(|candidate| candidate.display_name)
         .map(|display_name| display_name.trim().to_owned())
         .filter(|display_name| !display_name.is_empty())
+}
+
+pub(crate) async fn refresh_provider_client_versions(
+    application: &crate::TuiBackend,
+) -> Result<agena_provider::ProviderClientVersions> {
+    let value = application
+        .client()
+        .refresh_provider_client_versions()
+        .await
+        .context("failed to refresh provider client versions")?;
+    let string = |key: &str| -> Result<String> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("server omitted provider client version `{key}`"))
+    };
+    let versions = agena_provider::ProviderClientVersions {
+        codex: string("codex")?,
+        claude: string("claude")?,
+        gemini: string("gemini")?,
+    };
+    application
+        .refresh_config_sources()
+        .await
+        .context("versions were refreshed but settings cache refresh failed")?;
+    Ok(versions)
 }

@@ -7,10 +7,10 @@ rust-version.workspace = true
 description = "Plugin workbench presentation state and interaction protocol"
 
 [dependencies]
-agena-application = { workspace = true }
+agena-api = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
-agena-plugin-host = { workspace = true }
+agena-plugin-sdk = { workspace = true, features = ["schema-validation"] }
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 crossterm = { workspace = true }

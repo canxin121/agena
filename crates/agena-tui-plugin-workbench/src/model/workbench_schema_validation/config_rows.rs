@@ -282,9 +282,9 @@ pub(crate) fn compact_duration_summary(value: u64, suffix: &str, label: &str) ->
 }
 
 pub(crate) fn runtime_diagnostics(
-    status: &agena_plugin_host::status::PluginStatus,
+    status: &agena_plugin_sdk::inspection::PluginStatus,
 ) -> Vec<ConfigDiagnostic> {
-    if status.state == agena_plugin_host::status::PluginRunState::Failed {
+    if status.state == agena_plugin_sdk::inspection::PluginRunState::Failed {
         vec![ConfigDiagnostic {
             severity: DiagnosticSeverity::Error,
             source: "runtime".to_owned(),

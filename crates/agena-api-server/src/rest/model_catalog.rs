@@ -26,7 +26,7 @@ pub async fn get_model_catalog(
 ) -> Result<impl IntoResponse, ServerError> {
     let offset = query.offset.unwrap_or(0);
     let limit =
-        agena_application::pagination::normalize_limit(query.limit.map(|value| value as u64))
+        agena_api::pagination::normalize_resource_limit(query.limit.map(|value| value as u64))
             as usize;
     Ok(Json(state.list_model_catalog_with_origin(
         query.q.as_deref().unwrap_or_default(),

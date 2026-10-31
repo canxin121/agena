@@ -1,5 +1,6 @@
 //! Application services: use cases that orchestrate the runtime.
 
+use agena_api::pagination::normalize_resource_limit;
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -35,9 +36,7 @@ use crate::{
         WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,
         WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
-    pagination::{
-        PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
-    },
+    pagination::{PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor},
 };
 
 type ApplicationResult<T> = Result<T, ApplicationError>;
@@ -49,10 +48,7 @@ mod permissions;
 pub(crate) mod sessions;
 mod workspaces;
 
-pub use execution::{
-    list_scheduled_jobs, permission_config_domain_from_resource,
-    permission_config_resource_from_domain, scheduled_job_resource, sort_jobs_for_display,
-};
+pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
 
 /// Maps wire `ListActivitiesParams` to the domain activity filter. HTTP and
 /// WS/IPC transports both funnel through this so CSV kind/status parsing stays

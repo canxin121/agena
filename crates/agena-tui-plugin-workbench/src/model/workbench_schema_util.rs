@@ -16,9 +16,9 @@ pub(crate) fn schema_property_count(schema: &JsonValue) -> usize {
 
 pub(crate) fn command_argument_count(
     _plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::CommandDefinition,
+    command: &agena_plugin_sdk::CommandDefinition,
 ) -> usize {
-    use agena_plugin_host::sdk::SettingsNodeKind;
+    use agena_plugin_sdk::SettingsNodeKind;
     match &command.input.root.kind {
         SettingsNodeKind::Object { fields } => fields.len(),
         _ => 1,
@@ -27,7 +27,7 @@ pub(crate) fn command_argument_count(
 
 pub(crate) fn command_schema_and_value(
     _plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::CommandDefinition,
+    command: &agena_plugin_sdk::CommandDefinition,
 ) -> Option<(JsonValue, JsonValue)> {
     let schema = settings_contract_editor_schema(&command.input);
     let value = command.input.default_value().ok()?;

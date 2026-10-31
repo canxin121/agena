@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
 import { computed, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -137,34 +138,22 @@ const POPOVER_EDGE_MARGIN_PX = 10
 const POPOVER_MIN_HEIGHT_PX = 140
 const POPOVER_SIDE_OFFSET_PX = 5
 
-function resolveViewportHeight(): number {
-  if (typeof window === 'undefined') return 0
-  const vvHeight = window.visualViewport?.height
-  if (typeof vvHeight === 'number' && Number.isFinite(vvHeight) && vvHeight > 0) {
-    return vvHeight
-  }
-  return window.innerHeight
-}
-
-function resolveViewportTop(): number {
-  if (typeof window === 'undefined') return 0
-  const vvTop = window.visualViewport?.offsetTop
-  if (typeof vvTop === 'number' && Number.isFinite(vvTop) && vvTop > 0) {
-    return vvTop
-  }
-  return 0
-}
+const viewportVersion = ref(0)
+useViewportObserver(
+  () => openModel.value && !useDialog.value && Boolean(anchorRect.value),
+  () => { viewportVersion.value += 1 },
+)
 
 const popoverSide = computed<'top' | 'bottom'>(() => {
-  if (useDialog.value) return 'bottom'
+  if (useDialog.value || !openModel.value) return 'bottom'
   const rect = anchorRect.value
   // A closed/unanchored popover needs no geometry. Reading visualViewport
   // while hundreds of message controls mount forces layout between inserts.
   if (!rect) return 'bottom'
-  const viewportHeight = resolveViewportHeight()
+  void viewportVersion.value
+  const { height: viewportHeight, top: viewportTop } = readViewportRect()
   if (!viewportHeight) return 'bottom'
 
-  const viewportTop = resolveViewportTop()
   const viewportBottom = viewportTop + viewportHeight
   const minTop = viewportTop + POPOVER_EDGE_MARGIN_PX
   const maxBottom = viewportBottom - POPOVER_EDGE_MARGIN_PX

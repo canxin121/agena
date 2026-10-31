@@ -23,7 +23,7 @@ pub fn normalize_tool_tag_name(tag: impl AsRef<str>) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-pub(crate) fn normalize_schema_json(value: Value) -> Value {
+pub fn normalize_schema_json(value: Value) -> Value {
     normalize_schema_json_value(value, true)
 }
 
@@ -31,11 +31,11 @@ pub(crate) fn serde_json_value_is_empty_schema(value: &Value) -> bool {
     matches!(value, Value::Null) || value.as_object().is_some_and(|object| object.is_empty())
 }
 
-fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Value {
+pub(crate) fn normalize_schema_json_value(value: Value, remove_titles: bool) -> Value {
     match value {
         Value::Object(mut object) => {
-            if remove_schema_metadata {
-                object.remove("$schema");
+            object.remove("$schema");
+            if remove_titles {
                 object.remove("title");
             }
             let mut cleaned = serde_json::Map::new();
@@ -45,15 +45,18 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
                         Value::Object(map) => Value::Object(
                             map.into_iter()
                                 .map(|(nested_key, nested_value)| {
-                                    (nested_key, normalize_schema_json_value(nested_value, true))
+                                    (
+                                        nested_key,
+                                        normalize_schema_json_value(nested_value, remove_titles),
+                                    )
                                 })
                                 .collect(),
                         ),
-                        other => normalize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, remove_titles),
                     },
                     "required" => match value {
                         Value::Array(items) => Value::Array(items),
-                        other => normalize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, remove_titles),
                     },
                     "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
                         match value {
@@ -62,15 +65,18 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
                                     .map(|(nested_key, nested_value)| {
                                         (
                                             nested_key,
-                                            normalize_schema_json_value(nested_value, true),
+                                            normalize_schema_json_value(
+                                                nested_value,
+                                                remove_titles,
+                                            ),
                                         )
                                     })
                                     .collect(),
                             ),
-                            other => normalize_schema_json_value(other, true),
+                            other => normalize_schema_json_value(other, remove_titles),
                         }
                     }
-                    _ => normalize_schema_json_value(value, true),
+                    _ => normalize_schema_json_value(value, remove_titles),
                 };
                 cleaned.insert(key, normalized);
             }
@@ -93,7 +99,7 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|item| normalize_schema_json_value(item, true))
+                .map(|item| normalize_schema_json_value(item, remove_titles))
                 .collect(),
         ),
         other => other,

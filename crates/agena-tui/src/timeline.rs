@@ -4,6 +4,7 @@
 //! terminal picker projection; it is a detail view over the same transcript
 //! data, not a second history store.
 
+use agena_tui_components::text::sanitize_terminal_text as sanitize_display_text;
 use std::borrow::Cow;
 
 use agena_tui_components::{
@@ -88,29 +89,4 @@ pub fn render_overlay(frame: &mut Frame<'_>, area: Rect, dialog: &TimelineOverla
             )]
         },
     );
-}
-
-fn sanitize_display_text(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                let _ = chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        match ch {
-            '\r' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {}
-            '\n' | '\t' => out.push(ch),
-            value if value.is_control() => out.push(' '),
-            value => out.push(value),
-        }
-    }
-    out
 }

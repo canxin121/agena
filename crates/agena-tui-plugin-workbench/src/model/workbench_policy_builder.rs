@@ -5,11 +5,11 @@ use super::{
 };
 
 pub fn build_plugin_workbench_plugin(
-    sources: &agena_application::dto::ConfigJsonSources,
+    sources: &agena_api::resource::ConfigJsonSources,
     locale: &str,
-    status: agena_plugin_host::status::PluginStatus,
-    mut inspect: Option<agena_plugin_host::PluginInspect>,
-    logs: Vec<agena_plugin_host::PluginLogRecord>,
+    status: agena_plugin_sdk::inspection::PluginStatus,
+    mut inspect: Option<agena_plugin_sdk::inspection::PluginInspect>,
+    logs: Vec<agena_plugin_sdk::inspection::PluginLogRecord>,
 ) -> PluginWorkbenchPlugin {
     if let Some(manifest) = inspect
         .as_mut()
@@ -113,7 +113,7 @@ pub fn build_plugin_workbench_plugin(
 
 /// Resolve presentation copy in the workbench's owned inspection snapshot.
 /// The manifest sent to model tool selection keeps its stable base docs.
-fn localize_manifest_docs(manifest: &mut agena_plugin_host::sdk::PluginManifest, locale: &str) {
+fn localize_manifest_docs(manifest: &mut agena_plugin_sdk::PluginManifest, locale: &str) {
     manifest.localize_settings(locale);
     let summary = manifest.summary_for_locale(locale).map(str::to_owned);
     let help = manifest.help_for_locale(locale).map(str::to_owned);

@@ -49,8 +49,7 @@ impl HostClientProxy {
     }
 }
 
-#[async_trait::async_trait]
-impl HostClient for HostClientProxy {
+crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
         let _ = self
             .run(async {
@@ -90,22 +89,6 @@ impl HostClient for HostClientProxy {
         self.run(self.current().read_config(path)).await
     }
 
-    async fn check_path_permission(
-        &self,
-        request: crate::host_api::PathPermissionQuery,
-    ) -> Result<crate::host_api::PermissionQuery> {
-        self.run(self.current().check_path_permission(request))
-            .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        target: String,
-    ) -> Result<crate::host_api::PermissionQuery> {
-        self.run(self.current().check_network_permission(target))
-            .await
-    }
-
     async fn require_path_permission(
         &self,
         request: crate::host_api::PathPermissionQuery,
@@ -119,54 +102,8 @@ impl HostClient for HostClientProxy {
             .await
     }
 
-    async fn request_config_reload(&self) -> Result<HostConfigReloadRequestResponse> {
-        self.run(self.current().request_config_reload()).await
-    }
-
-    async fn config_reload_status(
-        &self,
-        request: HostConfigReloadStatusRequest,
-    ) -> Result<HostConfigReloadStatusResponse> {
-        self.run(self.current().config_reload_status(request)).await
-    }
-
-    async fn invoke_tool(
-        &self,
-        tool: String,
-        input: serde_json::Value,
-    ) -> Result<ToolInvokeOutput> {
-        self.run(self.current().invoke_tool(tool, input)).await
-    }
-
-    async fn invoke_service(
-        &self,
-        _req: crate::PluginServiceInvokeInput,
-    ) -> Result<crate::PluginServiceInvokeOutput> {
-        self.run(self.current().invoke_service(_req)).await
-    }
-
     async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
         self.run(self.current().ask_user(_req)).await
-    }
-
-    async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle> {
-        self.run(self.current().spawn_agent(req)).await
-    }
-
-    async fn message_agent(&self, req: AgentMessageRequest) -> Result<AgentMessageReceipt> {
-        self.run(self.current().message_agent(req)).await
-    }
-
-    async fn wait_agent(&self, req: AgentWaitRequest) -> Result<AgentWaitResponse> {
-        self.run(self.current().wait_agent(req)).await
-    }
-
-    async fn followup_agent(&self, req: AgentMessageRequest) -> Result<AgentHandle> {
-        self.run(self.current().followup_agent(req)).await
-    }
-
-    async fn cancel_agent(&self, req: AgentTargetRequest) -> Result<AgentMessageReceipt> {
-        self.run(self.current().cancel_agent(req)).await
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {
@@ -196,13 +133,6 @@ impl HostClient for HostClientProxy {
         _req: HostSetSessionModelRequest,
     ) -> Result<HostSetSessionModelResponse> {
         self.run(self.current().set_session_model(_req)).await
-    }
-
-    async fn image_execute(
-        &self,
-        _req: HostImageExecuteRequest,
-    ) -> Result<HostImageExecuteResponse> {
-        self.run(self.current().image_execute(_req)).await
     }
 
     async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
@@ -363,5 +293,98 @@ impl HostClient for HostClientProxy {
         _req: HostThemeRemoveRequest,
     ) -> Result<HostThemeRemoveResponse> {
         self.run(self.current().ui_theme_remove(_req)).await
+    }
+});
+
+#[cfg(test)]
+mod generated_callback_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct BlockingHost {
+        calls: Arc<AtomicUsize>,
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl HostClient for BlockingHost {
+        async fn log(&self, _: LogLevel, _: String, _: serde_json::Value) {}
+        async fn publish_event(&self, env: EventEnvelope) -> Result<()> {
+            NoopHostClient.publish_event(env).await
+        }
+        async fn subscribe_events(&self, filter: EventFilter) -> Result<EventSubscription> {
+            NoopHostClient.subscribe_events(filter).await
+        }
+        async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value> {
+            NoopHostClient.read_config(path).await
+        }
+        async fn invoke_tool(
+            &self,
+            tool: String,
+            input: serde_json::Value,
+        ) -> Result<ToolInvokeOutput> {
+            NoopHostClient.invoke_tool(tool, input).await
+        }
+        async fn check_network_permission(&self, target: String) -> Result<PermissionQuery> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if target == "pending" {
+                self.started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(PermissionQuery::Allow {})
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_callbacks_follow_replacement_and_owner_cancellation() {
+        let stop = tokio_util::sync::CancellationToken::new();
+        let proxy = Arc::new(HostClientProxy::with_cancellation(
+            Arc::new(NoopHostClient),
+            stop.clone(),
+        ));
+        assert_eq!(
+            proxy
+                .check_network_permission("ready".into())
+                .await
+                .unwrap_err()
+                .kind,
+            PluginErrorKind::HostUnavailable,
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        proxy.replace(Arc::new(BlockingHost {
+            calls: calls.clone(),
+            started: started.clone(),
+        }));
+        assert!(matches!(
+            proxy
+                .check_network_permission("ready".into())
+                .await
+                .unwrap(),
+            PermissionQuery::Allow {}
+        ));
+        let pending = tokio::spawn({
+            let proxy = proxy.clone();
+            async move { proxy.check_network_permission("pending".into()).await }
+        });
+        started.notified().await;
+        stop.cancel();
+        assert_eq!(
+            pending.await.unwrap().unwrap_err().kind,
+            PluginErrorKind::HostUnavailable
+        );
+        assert_eq!(
+            proxy
+                .check_network_permission("ready".into())
+                .await
+                .unwrap_err()
+                .kind,
+            PluginErrorKind::HostUnavailable
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "stopped callbacks must not reach the replacement host"
+        );
     }
 }

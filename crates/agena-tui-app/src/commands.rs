@@ -14,8 +14,8 @@
 //! declaration rather than from a table in this crate.
 
 use agena_api::client_command::ClientCommandAction;
-use agena_plugin_host::sdk::{CommandDocs, CommandTarget};
-use agena_plugin_host::{CommandCatalogItem, PluginSurfaceCatalog};
+use agena_plugin_sdk::inspection::{CommandCatalogItem, PluginSurfaceCatalog};
+use agena_plugin_sdk::{CommandDocs, CommandTarget};
 use agena_tui::i18n::I18n;
 
 /// Split a composer line into the command name and its raw argument text.

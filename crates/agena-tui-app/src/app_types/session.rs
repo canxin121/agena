@@ -46,7 +46,7 @@ pub(crate) enum CommandPaletteCommand {
     /// A built-in this client runs locally. Boxed because the declaration
     /// (docs, input contract) dwarfs the plugin variant.
     BuiltIn(Box<crate::commands::ClientCommand>),
-    Plugin(Box<agena_plugin_host::CommandCatalogItem>),
+    Plugin(Box<agena_plugin_sdk::inspection::CommandCatalogItem>),
 }
 
 /// App-owned concrete effect map for the TUI-owned session-navigation

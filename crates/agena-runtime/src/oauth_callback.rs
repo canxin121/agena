@@ -270,3 +270,97 @@ fn oauth_callback_error_message(
     }
     message
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn available_port() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    #[test]
+    fn callback_requires_state_and_preserves_provider_failure_context() {
+        let callback = parse_oauth_callback_url(
+            "http://localhost/callback?code=code&state=expected&iss=https%3A%2F%2Fissuer.invalid",
+            Some("expected"),
+        )
+        .unwrap();
+        assert_eq!(callback.code, "code");
+        assert_eq!(callback.issuer.as_deref(), Some("https://issuer.invalid"));
+        assert!(
+            parse_oauth_callback_url(
+                "http://localhost/callback?code=code&state=other",
+                Some("expected")
+            )
+            .is_err()
+        );
+        assert!(
+            parse_oauth_callback_url("http://localhost/callback?code=code", Some("expected"))
+                .is_err()
+        );
+        let error = parse_oauth_callback_url(
+            "http://localhost/callback?error=access_denied&error_description=Denied&request_id=request-1",
+            Some("expected")).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("access_denied"));
+        assert!(message.contains("Denied"));
+        assert!(message.contains("request-1"));
+    }
+
+    #[tokio::test]
+    async fn expired_callback_releases_its_listener() {
+        let port = available_port();
+        let error = wait_for_oauth_callback_async(port, "state", Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(
+            tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_callback_aborts_its_server_and_releases_the_port() {
+        let port = available_port();
+        let waiting = tokio::spawn(wait_for_oauth_callback_async(
+            port,
+            "state",
+            Duration::from_secs(60),
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if tokio::net::TcpListener::bind(("127.0.0.1", port))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}

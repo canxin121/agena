@@ -8,7 +8,7 @@ import { useGitCredentialsDialogs } from '@/composables/git/useGitCredentialsDia
 import type { JsonValue } from '@/types/json'
 import { i18n } from '@/i18n'
 
-type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+import type { PendingRemoteAction } from '@/types/git'
 
 type ToastKind = 'info' | 'success' | 'error'
 type QueryValue = string | number | boolean | null | undefined

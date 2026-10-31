@@ -9,6 +9,7 @@
 //! turns a committed gesture into clean clipboard text (via the app's OSC 52
 //! copy path).
 
+use agena_tui_components::text::display_cell_slice;
 use std::ops::Range;
 
 use ratatui::{
@@ -155,19 +156,6 @@ pub(crate) fn surface_selection_text(
         }
     }
     fragments.join("\n")
-}
-
-fn display_cell_slice(text: &str, range: Range<usize>) -> String {
-    let mut column = 0_usize;
-    text.graphemes(true)
-        .filter(|grapheme| {
-            let width = UnicodeWidthStr::width(*grapheme);
-            let start = column;
-            let end = column.saturating_add(width);
-            column = end;
-            start < range.end && end > range.start
-        })
-        .collect()
 }
 
 /// Apply an inverse-video highlight to the cells of a line that fall inside

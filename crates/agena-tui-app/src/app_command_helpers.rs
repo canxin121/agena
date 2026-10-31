@@ -129,7 +129,7 @@ pub(crate) fn parse_pr_command_args(
 }
 
 pub(crate) fn plugin_command_slash_name(
-    entry: &agena_plugin_host::CommandCatalogItem,
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
 ) -> Option<String> {
     let name = entry
         .command
@@ -141,7 +141,7 @@ pub(crate) fn plugin_command_slash_name(
 }
 
 pub(crate) fn plugin_command_matches_name(
-    entry: &agena_plugin_host::CommandCatalogItem,
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
     name: &str,
 ) -> bool {
     let name = name.trim().trim_start_matches('/');
@@ -155,7 +155,7 @@ pub(crate) fn plugin_command_matches_name(
 }
 
 pub(crate) fn plugin_command_matches_slash_query(
-    entry: &agena_plugin_host::CommandCatalogItem,
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
     query: &str,
 ) -> bool {
     let query = query.trim().to_ascii_lowercase();
@@ -171,7 +171,9 @@ pub(crate) fn plugin_command_matches_slash_query(
     })
 }
 
-pub(crate) fn plugin_command_detail(entry: &agena_plugin_host::CommandCatalogItem) -> String {
+pub(crate) fn plugin_command_detail(
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
+) -> String {
     let description = entry
         .command
         .docs
@@ -190,7 +192,7 @@ pub(crate) fn plugin_command_detail(entry: &agena_plugin_host::CommandCatalogIte
 /// a no-argument invocation. Web and TUI therefore use the same rule as the
 /// server-owned operation resolver.
 pub(crate) fn plugin_command_accepts_empty_arguments(
-    entry: &agena_plugin_host::CommandCatalogItem,
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
 ) -> bool {
     entry.accepts_empty_input
 }

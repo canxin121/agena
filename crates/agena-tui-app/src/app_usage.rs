@@ -59,7 +59,7 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::usage_stats(&application, query)
+            let result = crate::app_backend::inspector::usage_stats(&application, query)
                 .await
                 .map_err(crate::UiFailure::internal);
             let _ = tx

@@ -7,7 +7,7 @@ pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
     ToolPermissionConfig, ToolPermissionRules,
 };
-use agena_plugin_host::sdk::ToolTag;
+use agena_plugin_sdk::ToolTag;
 use indexmap::IndexMap;
 
 use crate::command_class::CommandClass;

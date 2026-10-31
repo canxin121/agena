@@ -23,17 +23,12 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::drivers::dispatch::{PluginDispatcher, StreamHandle};
 use crate::error::{PluginError, PluginErrorKind};
-use crate::hooks::{
-    EventEnvelope, EventFilter, ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
-};
+use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeStreamHandle, ToolStreamError};
 use crate::host_api::{
-    AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest,
-    AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse, EventSubscription,
-    HostClient, HostCommandMutationResponse, HostCommandRegisterRequest, HostCommandRemoveRequest,
-    HostCommandUpdateRequest, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
-    HostConfigReloadStatusResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
-    HostHookListResponse, HostImageExecuteRequest, HostImageExecuteResponse,
+    AskUserRequest, AskUserResponse, EventSubscription, HostClient, HostCommandMutationResponse,
+    HostCommandRegisterRequest, HostCommandRemoveRequest, HostCommandUpdateRequest,
+    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
@@ -753,8 +748,17 @@ impl Drop for PendingCallGuard {
     }
 }
 
-#[async_trait::async_trait]
-impl HostClient for StdioHostClient {
+fn params_with_optional_context(mut params: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = params.as_object_mut() {
+        object.insert(
+            "context".to_owned(),
+            serde_json::json!(crate::host_api::current_host_callback_context()),
+        );
+    }
+    params
+}
+
+crate::drivers::impl_callback_host_client!(StdioHostClient, params_with_optional_context, {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
         if let Err(error) = self
             .notify(
@@ -804,28 +808,6 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn check_path_permission(
-        &self,
-        request: crate::host_api::PathPermissionQuery,
-    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_PATH,
-            serde_json::json!({ "request": request, "context": crate::host_api::current_host_callback_context() }),
-        )
-        .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        target: String,
-    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_NETWORK,
-            serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() }),
-        )
-        .await
-    }
-
     async fn require_path_permission(
         &self,
         request: crate::host_api::PathPermissionQuery,
@@ -837,113 +819,12 @@ impl HostClient for StdioHostClient {
         crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_NETWORK, serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() }))).await
     }
 
-    async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
-        self.call(
-            method::HOST_CONFIG_RELOAD_REQUEST,
-            serde_json::json!({"context": crate::host_api::current_host_callback_context()}),
-        )
-        .await
-    }
-
-    async fn config_reload_status(
-        &self,
-        request: HostConfigReloadStatusRequest,
-    ) -> crate::Result<HostConfigReloadStatusResponse> {
-        self.call(method::HOST_CONFIG_RELOAD_STATUS, serde_json::json!({"request": request, "context": crate::host_api::current_host_callback_context()})).await
-    }
-
-    async fn invoke_tool(
-        &self,
-        tool: String,
-        input: serde_json::Value,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_TOOL_INVOKE,
-            serde_json::json!({
-                "tool": tool,
-                "input": input,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn invoke_service(
-        &self,
-        req: crate::PluginServiceInvokeInput,
-    ) -> crate::error::Result<crate::PluginServiceInvokeOutput> {
-        self.call(
-            method::HOST_SERVICE_INVOKE,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
     async fn ask_user(&self, req: AskUserRequest) -> crate::error::Result<AskUserResponse> {
         self.call(
             method::HOST_ASK_USER,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::error::Result<AgentHandle> {
-        self.call(
-            method::HOST_AGENT_SPAWN,
-            serde_json::json!({
-                "request": req, "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn message_agent(
-        &self,
-        req: AgentMessageRequest,
-    ) -> crate::error::Result<AgentMessageReceipt> {
-        self.call(
-            method::HOST_AGENT_MESSAGE,
-            serde_json::json!({
-                "request": req, "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn wait_agent(&self, req: AgentWaitRequest) -> crate::error::Result<AgentWaitResponse> {
-        self.call(
-            method::HOST_AGENT_WAIT,
-            serde_json::json!({
-                "request": req, "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn followup_agent(&self, req: AgentMessageRequest) -> crate::error::Result<AgentHandle> {
-        self.call(
-            method::HOST_AGENT_FOLLOWUP,
-            serde_json::json!({
-                "request": req, "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn cancel_agent(
-        &self,
-        req: AgentTargetRequest,
-    ) -> crate::error::Result<AgentMessageReceipt> {
-        self.call(
-            method::HOST_AGENT_CANCEL,
-            serde_json::json!({
-                "request": req, "context": crate::host_api::current_host_callback_context(),
             }),
         )
         .await
@@ -979,20 +860,6 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostSetSessionModelResponse> {
         self.call(
             method::HOST_SESSION_SET_MODEL,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn image_execute(
-        &self,
-        req: HostImageExecuteRequest,
-    ) -> crate::error::Result<HostImageExecuteResponse> {
-        self.call(
-            method::HOST_IMAGE_EXECUTE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -1469,7 +1336,7 @@ impl HostClient for StdioHostClient {
         )
         .await
     }
-}
+});
 
 fn error_object_from(e: PluginError) -> ErrorObject {
     let code = match e.kind {
@@ -2084,3 +1951,6 @@ mod permission_tests {
         );
     }
 }
+
+#[cfg(test)]
+use crate::hooks::ToolInvokeOutput;

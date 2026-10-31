@@ -409,12 +409,9 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            match crate::app_backend::operations::present_interactive_request(
-                &application,
-                session_id,
-                request_id,
-            )
-            .await
+            match application
+                .mark_interactive_request_presented(session_id, request_id)
+                .await
             {
                 Ok(execution) => {
                     let _ = tx

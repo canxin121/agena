@@ -48,6 +48,7 @@ import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
+import type { SessionToggleSelectionOptions, DirectoryToggleSelectionOptions } from '@/layout/chatSidebar/sessionMenu.types'
 
 const props = withDefaults(
   defineProps<{
@@ -79,16 +80,6 @@ function chatDirectorySelectionId(directoryId: string): string {
 
 function chatSessionSelectionId(sessionId: string): string {
   return `session:${String(sessionId || '').trim()}`
-}
-
-type ChatDirectoryToggleSelectionOptions = {
-  event?: MouseEvent
-  orderedDirectoryIds?: string[]
-}
-
-type ChatSessionToggleSelectionOptions = {
-  event?: MouseEvent
-  orderedSessionIds?: string[]
 }
 
 function clearSessionMultiSelectForDirectory() {
@@ -126,7 +117,7 @@ function toggleDirectorySessionMultiSelect(directoryId: string) {
   chatSessionMultiSelect.clearSelection()
 }
 
-function toggleDirectoryMultiSelected(directoryId: string, opts?: ChatDirectoryToggleSelectionOptions) {
+function toggleDirectoryMultiSelected(directoryId: string, opts?: DirectoryToggleSelectionOptions) {
   if (!chatDirectoryMultiSelect.enabled.value) return
   const target = chatDirectorySelectionId(directoryId)
   const orderedDirectoryIds = Array.isArray(opts?.orderedDirectoryIds) ? opts?.orderedDirectoryIds : []
@@ -134,7 +125,7 @@ function toggleDirectoryMultiSelected(directoryId: string, opts?: ChatDirectoryT
   chatDirectoryMultiSelect.selectByInteraction(target, ordered.length ? ordered : [target], opts?.event)
 }
 
-function toggleSessionMultiSelected(sessionId: string, opts?: ChatSessionToggleSelectionOptions) {
+function toggleSessionMultiSelected(sessionId: string, opts?: SessionToggleSelectionOptions) {
   if (!chatSessionMultiSelect.enabled.value) return
   const activeDirectoryId = activeSessionMultiSelectDirectoryId.value
   if (!activeDirectoryId) return

@@ -327,7 +327,7 @@ impl ModelCatalogSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// API response carrying catalog models.
+/// Internal catalog snapshot projection for runtime/application consumers.
 pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,

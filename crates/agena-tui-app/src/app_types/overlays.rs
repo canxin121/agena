@@ -8,9 +8,9 @@ use agena_api::resource::ProviderAdapterModelsResource;
 use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
-use agena_application::dto::ModelCatalogResponse;
-use agena_application::provider_studio::ProviderConfigDraft;
+use agena_api::resource::ModelCatalogResponse;
 use agena_provider::AgenaToolMode;
+use agena_provider::draft::ProviderConfigDraft;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
@@ -421,8 +421,8 @@ pub(crate) struct ProviderStudioOverlay {
     pub(crate) selection: DashboardSelectionState<ProviderStudioFocus>,
     pub(crate) draft: ProviderConfigDraft,
     pub(crate) adapter_models: Vec<ProviderAdapterModelsResource>,
-    pub(crate) catalog_matches: BTreeMap<String, agena_application::dto::CatalogModelResource>,
-    pub(crate) catalog_selections: BTreeMap<String, agena_application::dto::CatalogModelResource>,
+    pub(crate) catalog_matches: BTreeMap<String, agena_api::resource::CatalogModelResource>,
+    pub(crate) catalog_selections: BTreeMap<String, agena_api::resource::CatalogModelResource>,
     pub(crate) catalog_match_generation: u64,
     pub(crate) catalog_matches_loading: bool,
     pub(crate) catalog_match_error: Option<String>,
@@ -498,7 +498,7 @@ pub(crate) struct ProviderStudioModelPage {
     pub(crate) adapter_id: String,
     pub(crate) original_model_id: String,
     pub(crate) draft: ProviderModelConfigDraft,
-    pub(crate) selected_catalog: Option<agena_application::dto::CatalogModelResource>,
+    pub(crate) selected_catalog: Option<agena_api::resource::CatalogModelResource>,
     pub(crate) catalog_selection_manual: bool,
     pub(crate) selection: SelectionCursor,
 }
@@ -543,5 +543,5 @@ pub(crate) struct ModelCatalogStudioOverlay {
     pub(crate) presentation: ModelCatalogPresentation,
     pub(crate) editor: Option<LineInputOverlay>,
     pub(crate) model_target: Option<(String, String)>,
-    pub(crate) rows: Vec<agena_application::dto::CatalogModelResource>,
+    pub(crate) rows: Vec<agena_api::resource::CatalogModelResource>,
 }

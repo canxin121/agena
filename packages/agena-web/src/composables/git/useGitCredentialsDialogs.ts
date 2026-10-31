@@ -3,7 +3,7 @@
 import { ref } from 'vue'
 import type { JsonValue } from '@/types/json'
 
-export type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+import type { PendingRemoteAction } from '@/types/git'
 
 export function useGitCredentialsDialogs() {
   const credDialogOpen = ref(false)

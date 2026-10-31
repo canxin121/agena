@@ -1280,7 +1280,7 @@ fn slice_display_window_styled(
 
 /// Terminal-safe display text for the editor buffer.
 ///
-/// Mirrors the transcript's `sanitize_terminal_text` so the editor never
+/// Shares the multiline display sanitizer so the editor never
 /// stores bytes that ratatui's buffer renderer drops or that make the
 /// terminal's visible output disagree with the width math used for cursor
 /// placement. The transcript sanitizes external content before display; the
@@ -1294,94 +1294,7 @@ fn slice_display_window_styled(
 /// Unicode bidi isolation marks around interpolated variables) would never
 /// match the editor element text and the attachment would be dropped.
 pub fn sanitize_editor_text(text: &str) -> String {
-    let stripped = strip_ansi_sequences(text);
-    let mut out = String::with_capacity(stripped.len());
-    for ch in stripped.chars() {
-        match ch {
-            '\n' => out.push(ch),
-            '\r' => {}
-            '\t' => {
-                // unicode-width reports tab as width 1 while ratatui drops it
-                // from the buffer (0 cells). Expand tabs to spaces so cursor
-                // math and rendering agree; four columns is the common editor
-                // tab stop.
-                out.push_str("    ");
-            }
-            '\u{200e}' | '\u{200f}' => {}
-            '\u{202a}'..='\u{202e}' => {}
-            '\u{2066}'..='\u{2069}' => {}
-            ch if ch.is_control() => out.push(' '),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Remove ANSI escape sequences (CSI, OSC, and single-char escapes) from text
-/// that is about to enter the editor buffer. Pasted terminal output frequently
-/// contains color/OSC sequences; leaving them in the buffer would make the
-/// visible output and cursor math disagree.
-fn strip_ansi_sequences(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut index = 0_usize;
-    while index < bytes.len() {
-        if bytes[index] != b'\x1b' {
-            let ch = text[index..].chars().next().unwrap_or_default();
-            out.push(ch);
-            index = index.saturating_add(ch.len_utf8());
-            continue;
-        }
-        let Some(&next) = bytes.get(index + 1) else {
-            break;
-        };
-        match next {
-            b'[' => {
-                index = index.saturating_add(2);
-                while index < bytes.len() {
-                    let byte = bytes[index];
-                    // CSI sequences may only contain ASCII parameter bytes; a
-                    // non-ASCII byte means the sequence is truncated and the
-                    // rest is real text (never land mid-char).
-                    if !byte.is_ascii() {
-                        break;
-                    }
-                    index = index.saturating_add(1);
-                    if (0x40..=0x7e).contains(&byte) {
-                        break;
-                    }
-                }
-            }
-            b']' => {
-                index = index.saturating_add(2);
-                while index < bytes.len() {
-                    match bytes[index] {
-                        0x07 => {
-                            index = index.saturating_add(1);
-                            break;
-                        }
-                        0x1b if bytes.get(index + 1) == Some(&b'\\') => {
-                            index = index.saturating_add(2);
-                            break;
-                        }
-                        byte if !byte.is_ascii() => break,
-                        _ => index = index.saturating_add(1),
-                    }
-                }
-            }
-            _ => {
-                // Single-char escape (e.g. ESC M). Skip it only when it is a
-                // plain ASCII byte; a non-ASCII leading byte is the start of a
-                // multi-byte char and must be emitted as text.
-                if bytes[index + 1].is_ascii() {
-                    index = index.saturating_add(2);
-                } else {
-                    index = index.saturating_add(1);
-                }
-            }
-        }
-    }
-    out
+    crate::text::sanitize_terminal_text(text).replace('\t', "    ")
 }
 
 /// Halfwidth Katakana Voiced Sound Mark (dakuten).

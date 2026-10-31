@@ -136,7 +136,6 @@ const STORAGE_FILES_EXPLORER_CACHE_PREFIX = localStorageKeys.files.explorerCache
 const DIRECTORY_PAGE_SIZE = 400
 const FILE_CHUNK_BYTES = 256 * 1024
 const LARGE_FILE_WARNING_BYTES = 1024 * 1024
-const HIDDEN_FILE_RELATIVE_PATHS = new Set(['web/src/data/directorySessionSnapshotDb.ts'])
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -334,7 +333,7 @@ function restoreExplorerState(rootPath: string): boolean {
     const selectedPath =
       typeof uiState.selectedPath === 'string' ? normalizePath(String(uiState.selectedPath || '').trim()) : ''
     restoredSelectedFilePath.value =
-      selectedPath && withinWorkspace(selectedPath, base) && !isPathHiddenInFiles(selectedPath) ? selectedPath : ''
+      selectedPath && withinWorkspace(selectedPath, base) ? selectedPath : ''
   }
 
   const cacheKey = storageKey(STORAGE_FILES_EXPLORER_CACHE_PREFIX, base)
@@ -871,7 +870,6 @@ const dirty = computed(() => canEdit.value && draftContent.value !== displayedCo
 
 const displaySelectedPath = computed(() => {
   if (!selectedFile.value?.path) return ''
-  if (isPathHiddenInFiles(selectedFile.value.path)) return ''
   return relativeToWorkspace(selectedFile.value.path)
 })
 
@@ -951,7 +949,7 @@ const filesImageGalleryItems = computed<ImageViewerItem[]>(() => {
     if (!node || node.type !== 'file') continue
 
     const path = normalizePath(String(node.path || '').trim())
-    if (!path || seen.has(path) || isPathHiddenInFiles(path)) continue
+    if (!path || seen.has(path)) continue
     if (detectPreviewMode(path) !== 'image') continue
 
     seen.add(path)
@@ -968,8 +966,7 @@ const filesImageGalleryItems = computed<ImageViewerItem[]>(() => {
   if (
     selectedPath &&
     !seen.has(selectedPath) &&
-    detectPreviewMode(selectedPath) === 'image' &&
-    !isPathHiddenInFiles(selectedPath)
+    detectPreviewMode(selectedPath) === 'image'
   ) {
     const label = String(selectedFile.value?.name || selectedPath.split('/').filter(Boolean).pop() || selectedPath)
     items.push({
@@ -1403,10 +1400,6 @@ function relativeToWorkspace(absPath: string): string {
   return normalized
 }
 
-function normalizeRelativePathKey(path: string): string {
-  return normalizePath(String(path || '').trim()).replace(/^\/+/, '')
-}
-
 function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries: number) {
   if (cache.has(key)) cache.delete(key)
   cache.set(key, value)
@@ -1415,17 +1408,6 @@ function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntri
     if (oldestKey === undefined) break
     cache.delete(oldestKey)
   }
-}
-
-function isPathHiddenInFiles(absOrRelPath: string): boolean {
-  const normalized = normalizePath(String(absOrRelPath || '').trim())
-  if (!normalized) return false
-
-  const rel = normalizeRelativePathKey(relativeToWorkspace(normalized))
-  if (HIDDEN_FILE_RELATIVE_PATHS.has(rel)) return true
-
-  const direct = normalizeRelativePathKey(normalized)
-  return HIDDEN_FILE_RELATIVE_PATHS.has(direct)
 }
 
 function buildFileNode(path: string): FileNode {
@@ -1603,7 +1585,7 @@ async function applyGitNavigationTarget(
 
   const targetPath = resolveGitNavigationPath(rawPath, workspaceRoot)
 
-  if (!targetPath || isPathHiddenInFiles(targetPath)) {
+  if (!targetPath) {
     return
   }
 
@@ -1649,7 +1631,7 @@ async function restoreSelectedFile(rootPath: string, seq: number) {
   if (isStaleRootRestore(seq, rootPath)) return
 
   const selectedPath = normalizePath(String(restoredSelectedFilePath.value || '').trim())
-  if (!selectedPath || !withinWorkspace(selectedPath, rootPath) || isPathHiddenInFiles(selectedPath)) return
+  if (!selectedPath || !withinWorkspace(selectedPath, rootPath)) return
 
   const currentPath = normalizePath(String(selectedFile.value?.path || '').trim())
   if (currentPath === selectedPath) return
@@ -1955,7 +1937,6 @@ function mapDirectoryEntries(dirPath: string, entries: ListEntry[]): FileNode[] 
     .filter((entry) => entry && typeof entry.name === 'string' && entry.name.length > 0)
     .filter((entry) => includeHidden || !isHiddenName(entry.name))
     .filter((entry) => includeGitignored || !shouldIgnoreEntryName(entry.name))
-    .filter((entry) => !isPathHiddenInFiles(buildPath(entry)))
     .map<FileNode>((entry) => {
       const name = entry.name
       const path = buildPath(entry)
@@ -2508,10 +2489,9 @@ async function runSearch() {
     const files = Array.isArray(resp.files) ? resp.files : []
     const filtered = files.filter((f) => includeHidden || !isHiddenName(f.name))
     const pruned = includeGitignored ? filtered : filtered.filter((f) => !shouldIgnorePath(f.path))
-    const visible = pruned.filter((f) => !isPathHiddenInFiles(f.path))
 
     const normalizedQuery = q.toLowerCase()
-    const ranked = visible
+    const ranked = pruned
       .map((hit) => {
         const label = hit.relative_path || relativeToWorkspace(hit.path)
         const score = fuzzyScore(normalizedQuery, label)
@@ -2597,9 +2577,8 @@ async function runContentSearch() {
         }))
       : []
 
-    const visibleFiles = files.filter((file) => !isPathHiddenInFiles(file.path))
-    contentSearchFiles.value = visibleFiles
-    contentSearchMatchCount.value = visibleFiles.reduce((sum, file) => sum + Number(file.matchCount || 0), 0)
+    contentSearchFiles.value = files
+    contentSearchMatchCount.value = files.reduce((sum, file) => sum + Number(file.matchCount || 0), 0)
     contentSearchTruncated.value = Boolean(resp.truncated)
   } catch (err) {
     if (request !== contentSearchRequest || root.value !== rootPath) return
@@ -2618,7 +2597,6 @@ function clearContentSearch() {
 
 async function openContentSearchResult(path: string) {
   const normalized = normalizePath(path)
-  if (isPathHiddenInFiles(normalized)) return
   const name = normalized.split('/').pop() || normalized
   await requestFileSelect({
     name,
@@ -3005,7 +2983,6 @@ function applyRefreshConflictRemote() {
 
 async function openFile(node: FileNode) {
   if (node.type !== 'file') return
-  if (isPathHiddenInFiles(node.path)) return
   const rootPath = root.value
   if (!rootPath) {
     fileError.value = String(t('files.errors.noProjectSelected'))
@@ -3186,7 +3163,6 @@ function buildFileWindowRouteQuery(path: string): Record<string, string> {
 async function openFileInWorkspaceWindow(path: string) {
   const query = buildFileWindowRouteQuery(path)
   if (!query.filePath) return
-  if (isPathHiddenInFiles(query.filePath)) return
 
   const title = fileNameFromPath(query.filePath) || String(t('nav.files'))
   await workspaceNavigation.openWorkspaceLocation('files', {
@@ -3197,7 +3173,6 @@ async function openFileInWorkspaceWindow(path: string) {
 }
 
 async function requestFileSelect(node: FileNode) {
-  if (node.type === 'file' && isPathHiddenInFiles(node.path)) return
   if (node.type === 'file' && shouldOpenFileInNewWorkspaceWindow()) {
     await openFileInWorkspaceWindow(node.path)
     return

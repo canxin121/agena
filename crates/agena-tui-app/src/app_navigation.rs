@@ -214,12 +214,9 @@ impl App {
         let revision = self.session_selection_revision;
         self.dispatch_backend_operation(
             move |application| async move {
-                crate::app_backend::operations::update_session_selection(
-                    &application,
-                    session_id,
-                    options,
-                )
-                .await
+                application
+                    .update_session_selection(session_id, options)
+                    .await
             },
             move |app, result| match result {
                 Ok(execution) => {

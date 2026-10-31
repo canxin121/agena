@@ -17,7 +17,7 @@ type GitJson = <T = GitValue>(
 type ToastKind = 'info' | 'success' | 'error'
 type Toasts = { push: (kind: ToastKind, message: string, timeoutMs?: number) => void }
 
-type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+import type { PendingRemoteAction } from '@/types/git'
 
 export function useGitRemoteTargetOps(opts: {
   repoRoot: { value: string | null }

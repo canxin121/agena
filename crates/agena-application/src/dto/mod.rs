@@ -11,23 +11,30 @@ mod marketplace;
 mod memory;
 mod model_catalog;
 mod operator;
-mod plugins;
 mod runtime;
 mod sessions;
 mod workspaces;
 
 pub use access::*;
 pub use agena_api::resource::{
-    HealthResponse, PermissionMode, PermissionRuleResource, RuntimeBackgroundTaskCancelResponse,
-    RuntimeBackgroundTaskResource, RuntimeBackgroundTaskStartResponse, ScheduledJobResource,
-    ScheduledJobRunResource, SessionAutomationResource, WorkspaceResource,
+    CatalogModelMatchResource, CatalogModelResource, HealthResponse, ModelCatalogListResponse,
+    ModelCatalogLookupRequest, ModelCatalogRefreshResponse, ModelCatalogResponse,
+    ModelCatalogSourceKind, PermissionMode, PermissionRuleResource,
+    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskResource,
+    RuntimeBackgroundTaskStartResponse, ScheduledJobResource, ScheduledJobRunResource,
+    SessionAutomationResource, WorkspaceResource,
+};
+pub use agena_api::resource::{
+    CommandRequestContext, HostNotification, PermissionToolCatalogResource, PluginInspectResponse,
+    PluginListItem, PluginLogListQuery, PluginLogListResponse, PluginSettingsDiagnostic,
+    PluginSettingsResponse, PluginSettingsUpdateRequest, PluginSettingsUpdateResponse,
+    PluginSummaryTranslation, PluginSurfaceCatalogResponse, PluginToolInvokeRequest,
 };
 pub use auth::*;
 pub use marketplace::*;
 pub use memory::*;
-pub use model_catalog::*;
+pub(crate) use model_catalog::catalog_model_resource_from_record;
 pub use operator::*;
-pub use plugins::*;
 pub use runtime::*;
 pub use sessions::*;
 pub use workspaces::*;

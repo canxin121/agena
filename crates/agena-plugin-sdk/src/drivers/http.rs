@@ -12,13 +12,9 @@ use tokio::sync::{RwLock, Semaphore};
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
-    EventEnvelope, EventFilter, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStreamHandle,
-    ToolStreamError,
+    EventEnvelope, EventFilter, ToolInvokeInput, ToolInvokeStreamHandle, ToolStreamError,
 };
-use crate::host_api::{
-    EventSubscription, HostClient, HostConfigReloadRequestResponse, HostConfigReloadStatusRequest,
-    HostConfigReloadStatusResponse, HostImageExecuteRequest, HostImageExecuteResponse, LogLevel,
-};
+use crate::host_api::{EventSubscription, HostClient, LogLevel};
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
     ErrorObject, JsonRpcVersion, Request, RequestId, Response, ResponsePayload, codes, method,
@@ -278,8 +274,7 @@ impl HttpCallbackHostClient {
     }
 }
 
-#[async_trait::async_trait]
-impl HostClient for HttpCallbackHostClient {
+crate::drivers::impl_callback_host_client!(HttpCallbackHostClient, params_with_current_context, {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
         if let Err(error) = self
             .fire(
@@ -335,28 +330,6 @@ impl HostClient for HttpCallbackHostClient {
         .await
     }
 
-    async fn check_path_permission(
-        &self,
-        request: crate::host_api::PathPermissionQuery,
-    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_PATH,
-            params_with_current_context(serde_json::json!({ "request": request })),
-        )
-        .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        target: String,
-    ) -> crate::error::Result<crate::host_api::PermissionQuery> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_NETWORK,
-            params_with_current_context(serde_json::json!({ "target": target })),
-        )
-        .await
-    }
-
     async fn require_path_permission(
         &self,
         request: crate::host_api::PathPermissionQuery,
@@ -367,118 +340,7 @@ impl HostClient for HttpCallbackHostClient {
     async fn require_network_permission(&self, target: String) -> crate::error::Result<()> {
         crate::permission_wait::waiting(self.call(method::HOST_PERMISSION_REQUIRE_NETWORK, params_with_current_context(serde_json::json!({ "target": target, "context": crate::host_api::current_host_callback_context() })))).await
     }
-
-    async fn request_config_reload(&self) -> crate::Result<HostConfigReloadRequestResponse> {
-        self.call(
-            method::HOST_CONFIG_RELOAD_REQUEST,
-            params_with_current_context(serde_json::json!({})),
-        )
-        .await
-    }
-
-    async fn config_reload_status(
-        &self,
-        request: HostConfigReloadStatusRequest,
-    ) -> crate::Result<HostConfigReloadStatusResponse> {
-        self.call(
-            method::HOST_CONFIG_RELOAD_STATUS,
-            params_with_current_context(serde_json::json!({"request": request})),
-        )
-        .await
-    }
-
-    async fn invoke_tool(
-        &self,
-        tool: String,
-        input: serde_json::Value,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_TOOL_INVOKE,
-            params_with_current_context(serde_json::json!({
-                "tool": tool,
-                "input": input,
-            })),
-        )
-        .await
-    }
-
-    async fn invoke_service(
-        &self,
-        req: crate::PluginServiceInvokeInput,
-    ) -> crate::error::Result<crate::PluginServiceInvokeOutput> {
-        self.call(
-            method::HOST_SERVICE_INVOKE,
-            params_with_current_context(serde_json::json!({ "request": req })),
-        )
-        .await
-    }
-
-    async fn spawn_agent(
-        &self,
-        request: crate::host_api::AgentSpawnRequest,
-    ) -> crate::Result<crate::host_api::AgentHandle> {
-        self.call(
-            method::HOST_AGENT_SPAWN,
-            params_with_current_context(serde_json::json!({"request":request})),
-        )
-        .await
-    }
-
-    async fn message_agent(
-        &self,
-        request: crate::host_api::AgentMessageRequest,
-    ) -> crate::Result<crate::host_api::AgentMessageReceipt> {
-        self.call(
-            method::HOST_AGENT_MESSAGE,
-            params_with_current_context(serde_json::json!({"request":request})),
-        )
-        .await
-    }
-
-    async fn wait_agent(
-        &self,
-        request: crate::host_api::AgentWaitRequest,
-    ) -> crate::Result<crate::host_api::AgentWaitResponse> {
-        self.call(
-            method::HOST_AGENT_WAIT,
-            params_with_current_context(serde_json::json!({"request":request})),
-        )
-        .await
-    }
-
-    async fn followup_agent(
-        &self,
-        request: crate::host_api::AgentMessageRequest,
-    ) -> crate::Result<crate::host_api::AgentHandle> {
-        self.call(
-            method::HOST_AGENT_FOLLOWUP,
-            params_with_current_context(serde_json::json!({"request":request})),
-        )
-        .await
-    }
-
-    async fn cancel_agent(
-        &self,
-        request: crate::host_api::AgentTargetRequest,
-    ) -> crate::Result<crate::host_api::AgentMessageReceipt> {
-        self.call(
-            method::HOST_AGENT_CANCEL,
-            params_with_current_context(serde_json::json!({"request":request})),
-        )
-        .await
-    }
-
-    async fn image_execute(
-        &self,
-        req: HostImageExecuteRequest,
-    ) -> crate::error::Result<HostImageExecuteResponse> {
-        self.call(
-            method::HOST_IMAGE_EXECUTE,
-            params_with_current_context(serde_json::json!({ "request": req })),
-        )
-        .await
-    }
-}
+});
 
 /// Serve independently constructed plugin instances. The factory runs once to
 /// obtain the immutable manifest and first object, then again for each new init.
@@ -1363,3 +1225,6 @@ mod permission_tests {
         server.abort();
     }
 }
+
+#[cfg(test)]
+use crate::hooks::ToolInvokeOutput;

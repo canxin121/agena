@@ -27,6 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use agena_api::resource::ConfigJsonSources;
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
@@ -37,7 +38,6 @@ use agena_api::{
         SessionExecutionResource, SessionResource,
     },
 };
-use agena_application::dto::ConfigJsonSources;
 mod preferences;
 
 use agena_domain::Model as ProviderModel;
@@ -76,16 +76,14 @@ use unicode_width::UnicodeWidthChar;
 
 pub use crate::app_backend::{BackendMode, TuiBackend};
 use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
-use agena_application::provider_studio::{
+use agena_provider::draft::{
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
 };
 
 mod commands;
 
-use agena_application::dto::{
-    CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
-};
+use agena_api::resource::{CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse};
 use agena_tui::i18n::{I18n, SUPPORTED_LOCALES};
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, DetailTextLine, DetailTextSpec, Editor,

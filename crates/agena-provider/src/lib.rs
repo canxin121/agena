@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 
 mod auth_values;
 mod catalog_contract;
+pub mod draft;
 pub use catalog_contract::*;
 mod model_discovery;
 pub use model_discovery::*;
@@ -87,12 +88,13 @@ pub use anthropic_wire::{
 mod anthropic_thinking;
 pub use anthropic_thinking::{
     AnthropicThinkingBlockState, AnthropicThinkingParts, anthropic_adaptive_parts,
-    anthropic_budget_for_effort, anthropic_default_display, anthropic_effort_for_budget,
-    anthropic_enabled_parts, anthropic_model_defaults_to_omitted_thinking,
-    anthropic_model_rejects_disabled_thinking, anthropic_model_rejects_sampling,
-    anthropic_model_requires_adaptive_thinking, anthropic_model_supports_adaptive_thinking,
-    anthropic_model_supports_effort, anthropic_model_supports_max_effort,
-    anthropic_model_supports_xhigh_effort, anthropic_thinking_metadata, anthropic_thinking_parts,
+    anthropic_budget_effort, anthropic_budget_for_effort, anthropic_default_display,
+    anthropic_effort_for_budget, anthropic_enabled_parts,
+    anthropic_model_defaults_to_omitted_thinking, anthropic_model_rejects_disabled_thinking,
+    anthropic_model_rejects_sampling, anthropic_model_requires_adaptive_thinking,
+    anthropic_model_supports_adaptive_thinking, anthropic_model_supports_effort,
+    anthropic_model_supports_max_effort, anthropic_model_supports_xhigh_effort,
+    anthropic_thinking_budget, anthropic_thinking_metadata, anthropic_thinking_parts,
     anthropic_wire_tool_name, json_value_to_string, map_anthropic_usage,
     merge_anthropic_cache_creation_usage, merge_anthropic_usage,
 };

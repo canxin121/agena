@@ -2,8 +2,8 @@ use clap::CommandFactory;
 
 use super::{
     AgenaCli, AppError, ApplyPatchExecution, BTreeMap, CompletionArgs, DateTime,
-    DebugSessionOutput, HashSet, OutputFormat, Path, PathBuf, PluginLogsOutput,
-    PluginValidateOutput, PluginValidationMessage, PluginValidationMessages, Serialize, Utc, fs,
+    DebugSessionOutput, HashSet, OutputFormat, Path, PathBuf, PluginValidateOutput,
+    PluginValidationMessage, PluginValidationMessages, Serialize, Utc, fs,
 };
 
 pub(super) fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
@@ -48,7 +48,9 @@ pub(super) fn format_debug_session_output(output: &DebugSessionOutput) -> String
     rendered
 }
 
-pub(super) fn format_plugin_logs_output(output: &PluginLogsOutput) -> String {
+pub(super) fn format_plugin_logs_output(
+    output: &agena_api::resource::PluginLogListResponse,
+) -> String {
     if output.logs.is_empty() {
         return format!("plugin {} has no retained logs", output.plugin_id);
     }

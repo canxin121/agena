@@ -88,7 +88,7 @@ impl App {
 
     pub(crate) fn execute_plugin_slash_command(
         &mut self,
-        entry: agena_plugin_host::CommandCatalogItem,
+        entry: agena_plugin_sdk::inspection::CommandCatalogItem,
         args: &str,
     ) {
         let session_id = self
@@ -126,17 +126,17 @@ impl App {
             format!("{}: {}", result.title, result.summary)
         };
         match result.status {
-            agena_plugin_host::sdk::CommandStatus::Succeeded => self.flash_success(feedback),
-            agena_plugin_host::sdk::CommandStatus::Failed => self.flash_error(
+            agena_plugin_sdk::CommandStatus::Succeeded => self.flash_success(feedback),
+            agena_plugin_sdk::CommandStatus::Failed => self.flash_error(
                 result
                     .detail
                     .clone()
                     .filter(|detail| !detail.trim().is_empty())
                     .unwrap_or(feedback),
             ),
-            agena_plugin_host::sdk::CommandStatus::Unavailable
-            | agena_plugin_host::sdk::CommandStatus::PermissionRequired
-            | agena_plugin_host::sdk::CommandStatus::Cancelled => self.flash_warning(
+            agena_plugin_sdk::CommandStatus::Unavailable
+            | agena_plugin_sdk::CommandStatus::PermissionRequired
+            | agena_plugin_sdk::CommandStatus::Cancelled => self.flash_warning(
                 result
                     .detail
                     .clone()
@@ -147,7 +147,7 @@ impl App {
 
         for effect in result.effects {
             match effect {
-                agena_plugin_host::sdk::CommandHostEffect::InsertPrompt { prompt } => {
+                agena_plugin_sdk::CommandHostEffect::InsertPrompt { prompt } => {
                     if prompt.trim().is_empty() {
                         self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
                         continue;
@@ -162,15 +162,15 @@ impl App {
                         None => self.create_session(Some(draft)),
                     }
                 }
-                agena_plugin_host::sdk::CommandHostEffect::Navigate { path } => {
+                agena_plugin_sdk::CommandHostEffect::Navigate { path } => {
                     if !self.apply_plugin_navigation(path.as_str()) {
                         self.flash_info(format!("Plugin navigation: {path}"));
                     }
                 }
-                agena_plugin_host::sdk::CommandHostEffect::OpenUrl { url } => {
+                agena_plugin_sdk::CommandHostEffect::OpenUrl { url } => {
                     self.flash_info(format!("Plugin operation URL: {url}"));
                 }
-                agena_plugin_host::sdk::CommandHostEffect::RefreshPluginSurface { .. } => {}
+                agena_plugin_sdk::CommandHostEffect::RefreshPluginSurface { .. } => {}
             }
         }
     }
@@ -241,13 +241,7 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let forked = crate::app_backend::operations::fork_session(
-                &application,
-                parent_id,
-                Some(title),
-                mode,
-            )
-            .await;
+            let forked = application.fork_session(parent_id, Some(title), mode).await;
             let _ = tx
                 .send(AppMessage::ForkCreated {
                     parent_id,

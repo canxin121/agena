@@ -428,7 +428,7 @@ impl Application {
             })
             .collect::<Vec<_>>();
         let total = filtered.len();
-        let limit = crate::pagination::normalize_limit(Some(limit as u64)) as usize;
+        let limit = agena_api::pagination::normalize_resource_limit(Some(limit as u64)) as usize;
         let items = filtered.into_iter().skip(offset).take(limit).collect();
 
         ModelCatalogListResponse {
@@ -1072,7 +1072,9 @@ fn model_catalog_summary(
     ModelCatalogResponse {
         refreshing: runtime.model_catalog_refresh_active(),
         last_refresh_at: catalog.last_refresh_at,
-        last_successful_source: catalog.last_successful_source,
+        last_successful_source: catalog
+            .last_successful_source
+            .map(model_catalog_source_kind_from_domain),
         last_failure: catalog.last_failure.as_ref().map(Into::into),
         model_count: catalog.models.len(),
     }
@@ -1186,7 +1188,9 @@ fn model_catalog_resources(
         .models
         .iter()
         .cloned()
-        .map(|model| CatalogModelResource::from_record(model, catalog.last_successful_source))
+        .map(|model| {
+            crate::dto::catalog_model_resource_from_record(model, catalog.last_successful_source)
+        })
         .collect()
 }
 

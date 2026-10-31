@@ -1,3 +1,5 @@
+export type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+
 export interface GitStatusFile {
   indexOldPath?: string
   workingOldPath?: string

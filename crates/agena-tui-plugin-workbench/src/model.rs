@@ -144,11 +144,11 @@ pub struct PluginWorkbenchPlugin {
     pub visible_tool: String,
     pub version: String,
     pub transport: String,
-    pub tools: Vec<agena_plugin_host::ToolDefinition>,
-    pub commands: Vec<agena_plugin_host::CommandDefinition>,
+    pub tools: Vec<agena_plugin_sdk::ToolDefinition>,
+    pub commands: Vec<agena_plugin_sdk::CommandDefinition>,
     pub config_status: PluginConfigStatus,
-    pub status: agena_plugin_host::status::PluginStatus,
-    pub inspect: Option<agena_plugin_host::PluginInspect>,
+    pub status: agena_plugin_sdk::inspection::PluginStatus,
+    pub inspect: Option<agena_plugin_sdk::inspection::PluginInspect>,
     pub configured_plugin_value: Option<JsonValue>,
     pub saved_override: JsonValue,
     pub draft_override: JsonValue,
@@ -161,7 +161,7 @@ pub struct PluginWorkbenchPlugin {
     pub runtime_diagnostics: Vec<ConfigDiagnostic>,
     pub diff: Vec<ConfigDiffRow>,
     pub sections: Vec<ConfigSectionView>,
-    pub logs: Vec<agena_plugin_host::PluginLogRecord>,
+    pub logs: Vec<agena_plugin_sdk::inspection::PluginLogRecord>,
     pub dirty: bool,
     pub branch_drafts: BTreeMap<String, JsonValue>,
 }
@@ -606,7 +606,7 @@ impl PluginWorkbenchOverlay {
             .find(|plugin| plugin.plugin_id == key)
     }
 
-    pub fn selected_tool(&self) -> Option<&agena_plugin_host::ToolDefinition> {
+    pub fn selected_tool(&self) -> Option<&agena_plugin_sdk::ToolDefinition> {
         self.selected_plugin()
             .and_then(|plugin| plugin.tools.get(self.selected_tool))
     }

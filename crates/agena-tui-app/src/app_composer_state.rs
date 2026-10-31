@@ -13,7 +13,7 @@ struct ClipboardUploadCandidate {
 
 #[derive(Debug)]
 struct UploadedClipboardAttachment {
-    resource: agena_application::dto::WorkspaceFileUploadResource,
+    resource: agena_api::resource::WorkspaceFileUploadResource,
     image_info: Option<PastedImageInfo>,
     placeholder: String,
 }
@@ -398,7 +398,7 @@ impl App {
 
     pub(crate) fn stage_uploaded_attachment(
         &mut self,
-        uploaded: agena_application::dto::WorkspaceFileUploadResource,
+        uploaded: agena_api::resource::WorkspaceFileUploadResource,
         image_info: Option<&agena_tui_platform::clipboard::PastedImageInfo>,
     ) -> UiResult<()> {
         let mime = uploaded.mime.clone().unwrap_or_default();

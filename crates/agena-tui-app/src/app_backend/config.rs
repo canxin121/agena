@@ -9,7 +9,7 @@
 use agena_tui_transcript::TranscriptDetailDefaults;
 
 use crate::{TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource};
-use agena_application::dto::ConfigJsonSources;
+use agena_api::resource::ConfigJsonSources;
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;

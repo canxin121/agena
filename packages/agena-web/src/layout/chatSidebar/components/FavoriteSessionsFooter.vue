@@ -1,26 +1,17 @@
 <script setup lang="ts">
+import type { SidebarSession as SessionLike, SessionMenuTarget, MenuRefEl, SessionToggleSelectionOptions } from '@/layout/chatSidebar/sessionMenu.types'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
-import { computed, type ComponentPublicInstance } from 'vue'
+import { computed } from 'vue'
 import { RiArrowDownSLine, RiArrowRightSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
-import type { JsonValue } from '@/types/json'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import SessionRow from '@/layout/chatSidebar/components/SessionRow.vue'
 
 const { t } = useI18n()
-
-type SessionLike = {
-  id: string
-  title?: string
-  slug?: string
-  directory?: string
-  time?: { updated?: number | null } | null
-  [k: string]: JsonValue
-}
 
 type FavoriteSessionRow = {
   id: string
@@ -32,13 +23,6 @@ type FavoriteSessionRow = {
   isExpanded: boolean
   childPage?: number
   childPageCount?: number
-}
-
-type SessionMenuTarget = { directory: DirectoryEntry; session: SessionLike }
-type MenuRefEl = Element | ComponentPublicInstance | null
-type SessionToggleSelectionOptions = {
-  event?: MouseEvent
-  orderedSessionIds?: string[]
 }
 
 const props = defineProps<{

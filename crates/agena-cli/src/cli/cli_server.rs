@@ -18,17 +18,16 @@ use super::{
     MemoryListOutput, MemorySubcommand, MemorySummaryOutput, OutputFormat, PermissionModeArg,
     PermissionReplyKindArg, PermissionScopeArg, PermissionsArgs, PermissionsListArgs,
     PermissionsOutput, PermissionsSubcommand, PermissionsWriteArgs, PluginArchitectureArgs,
-    PluginInspectArgs, PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs,
-    PluginLogsOutput, PluginStatusArgs, PluginStatusOutput, PrArgs, PrOutput,
-    ProviderCapabilitiesOutput, ProviderCommand, ProviderListArgs, ProviderListOutput,
-    ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs,
-    SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput, SessionListView,
-    SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand, ToolDescriptor, UsageArgs,
-    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
-    format_debug_session_output, format_plugin_logs_output, memory_type_label,
-    normalize_login_provider, paginate_session_summaries, permission_rule_output,
-    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
-    usage_stats_query_from_args,
+    PluginInspectArgs, PluginLogOutputFormat, PluginLogsArgs, PluginStatusArgs, PluginStatusOutput,
+    PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand, ProviderListArgs,
+    ProviderListOutput, ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs,
+    ReviewArgs, SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput,
+    SessionListView, SessionOutput, SessionSummary, SessionsCommand, SessionsSubcommand,
+    ToolDescriptor, UsageArgs, async_trait, browser_login_redirect_uri,
+    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
+    format_plugin_logs_output, memory_type_label, normalize_login_provider,
+    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
+    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -46,8 +45,7 @@ use agena_api::{
 };
 use agena_application::dto::{
     AuthBrowserStartResource, AuthDeviceStartResource, AuthLoginKindResource,
-    AuthLoginResultResource, AuthProviderResource, GitCommitResource, GitPullRequestResource,
-    GitStatusResource, MemoryResource, OperatorToolResource,
+    AuthLoginResultResource, AuthProviderResource, MemoryResource, OperatorToolResource,
 };
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
@@ -411,13 +409,10 @@ async fn connect_workspace_bound_client(
     requested_workspace: &Path,
 ) -> Result<ServerMcpBackend, AppError> {
     let client = connect_server_client(cli).await?;
-    let status: GitStatusResource = decode_server_resource(
-        client
-            .git_status()
-            .await
-            .map_err(|error| client_error("failed to verify the server workspace", error))?,
-        "git-status",
-    )?;
+    let status = client
+        .git_status()
+        .await
+        .map_err(|error| client_error("failed to verify the server workspace", error))?;
     ensure_server_workspace_matches(status.workspace_root.as_str(), requested_workspace)?;
     let workspace = client
         .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -627,7 +622,7 @@ impl AgenaCli {
         };
         let mut record = mcp_plugin_record(current, inherited_enabled)?;
         apply_mcp_config_mutation(&mut record, mutation)?;
-        let mut response = client
+        let response = client
             .set_settings_layer_value_if_revision(
                 layer,
                 MCP_PLUGIN_SETTINGS_PATH,
@@ -638,6 +633,8 @@ impl AgenaCli {
             )
             .await
             .map_err(|error| client_error("failed to update server MCP settings", error))?;
+        // Redaction is a display boundary; typed transport values are kept intact.
+        let mut response = serde_json::to_value(response)?;
         redact_mcp_settings_edit(&mut response);
         render_serialized(format, &response)
     }
@@ -853,13 +850,10 @@ impl AgenaCli {
         args: GitArgs,
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let status: GitStatusResource = decode_server_resource(
-            client
-                .git_status()
-                .await
-                .map_err(|error| client_error("failed to read git status from server", error))?,
-            "git-status",
-        )?;
+        let status = client
+            .git_status()
+            .await
+            .map_err(|error| client_error("failed to read git status from server", error))?;
         ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
         render_serialized(
             args.format,
@@ -886,26 +880,18 @@ impl AgenaCli {
         args: CommitArgs,
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let status: GitStatusResource = decode_server_resource(
-            client.git_status().await.map_err(|error| {
-                client_error(
-                    "failed to verify the server workspace before committing",
-                    error,
-                )
-            })?,
-            "git-status",
-        )?;
+        let status = client.git_status().await.map_err(|error| {
+            client_error(
+                "failed to verify the server workspace before committing",
+                error,
+            )
+        })?;
         ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
 
-        let result: GitCommitResource = decode_server_resource(
-            client
-                .create_git_commit(args.message)
-                .await
-                .map_err(|error| {
-                    client_error("failed to create git commit through server", error)
-                })?,
-            "git-commit",
-        )?;
+        let result = client
+            .create_git_commit(args.message)
+            .await
+            .map_err(|error| client_error("failed to create git commit through server", error))?;
         ensure_server_workspace_matches_cli(result.status.workspace_root.as_str())?;
         render_serialized(
             args.format,
@@ -919,30 +905,22 @@ impl AgenaCli {
 
     pub(super) async fn render_server_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let status: GitStatusResource = decode_server_resource(
-            client.git_status().await.map_err(|error| {
-                client_error(
-                    "failed to verify the server workspace before creating a pull request",
-                    error,
-                )
-            })?,
-            "git-status",
-        )?;
+        let status = client.git_status().await.map_err(|error| {
+            client_error(
+                "failed to verify the server workspace before creating a pull request",
+                error,
+            )
+        })?;
         ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
         let branch = args
             .head
             .clone()
             .or(status.branch)
             .ok_or_else(|| AppError::Config("could not determine current branch".to_owned()))?;
-        let created: GitPullRequestResource = decode_server_resource(
-            client
-                .create_git_pull_request(args.title, args.body, args.base, args.head)
-                .await
-                .map_err(|error| {
-                    client_error("failed to create pull request through server", error)
-                })?,
-            "git-pull-request",
-        )?;
+        let created = client
+            .create_git_pull_request(args.title, args.body, args.base, args.head)
+            .await
+            .map_err(|error| client_error("failed to create pull request through server", error))?;
         render_serialized(
             args.format,
             &PrOutput {
@@ -1176,13 +1154,7 @@ impl AgenaCli {
             .plugin_statuses()
             .await
             .map_err(|error| client_error("failed to read plugin status from server", error))?;
-        let statuses = value
-            .get("items")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Internal("server returned an invalid plugin-status response".to_owned())
-            })?;
+        let statuses = value.items;
         render_serialized(args.format, &PluginStatusOutput { statuses })
     }
 
@@ -1195,10 +1167,7 @@ impl AgenaCli {
             .plugin_inspect(args.plugin_id.as_str())
             .await
             .map_err(|error| client_error("failed to inspect plugin through server", error))?;
-        let plugin = value.get("plugin").cloned().ok_or_else(|| {
-            AppError::Internal("server returned an invalid plugin-inspect response".to_owned())
-        })?;
-        render_serialized(args.format, &PluginInspectOutput { plugin })
+        render_serialized(args.format, &value)
     }
 
     pub(super) async fn render_server_plugin_architecture(
@@ -1224,11 +1193,7 @@ impl AgenaCli {
             .plugin_logs(args.plugin_id.as_str(), args.after_seq, args.limit)
             .await
             .map_err(|error| client_error("failed to read plugin logs from server", error))?;
-        let output: PluginLogsOutput = serde_json::from_value(value).map_err(|error| {
-            AppError::Internal(format!(
-                "server returned an invalid plugin-log response: {error}"
-            ))
-        })?;
+        let output = value;
         match args.format {
             PluginLogOutputFormat::Text => Ok(format_plugin_logs_output(&output)),
             PluginLogOutputFormat::Json => serde_json::to_string_pretty(&output).map_err(|error| {

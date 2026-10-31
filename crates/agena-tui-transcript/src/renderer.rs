@@ -50,8 +50,7 @@ pub use self::transcript_tool_summary::*;
 pub(super) use crate::{
     TableColumnAlignment, fit_table_column_widths, is_markdown_table_header,
     markdown_fence_delimiter, push_multiline, push_table_border, push_wrapped_line,
-    push_wrapped_rich_line, sanitize_terminal_text, strip_terminal_ansi_sequences,
-    truncate_display_width, wrap_rich_line,
+    push_wrapped_rich_line, sanitize_terminal_text, truncate_display_width, wrap_rich_line,
 };
 
 pub(crate) const TOOL_CARD_PREVIEW_LINES: usize = 8;
@@ -548,7 +547,6 @@ pub fn entry_activity_summary_keys(entry: &TranscriptEntry<'_>) -> Vec<Transcrip
 }
 
 use self::should_suppress_markdown_block;
-pub(crate) use self::transcript_aux::tool_invocation_label;
 
 /// Preserve one Markdown parse context around native embeds (links, footnotes,
 /// code/quote boundaries and source semantics remain owned by the host parser).

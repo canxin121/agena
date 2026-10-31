@@ -42,16 +42,8 @@ impl BlockingPool {
             let _permit = permit;
             operation()
         });
-        let _abort = AbortQueuedWork(worker.abort_handle());
+        let _abort = AbortOnDrop::new(&worker);
         worker.await
-    }
-}
-
-struct AbortQueuedWork(AbortHandle);
-
-impl Drop for AbortQueuedWork {
-    fn drop(&mut self) {
-        self.0.abort();
     }
 }
 
@@ -68,5 +60,31 @@ impl AbortOnDrop {
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::AbortOnDrop;
+
+    #[tokio::test]
+    async fn dropping_guard_cancels_a_child_and_preserves_joining() {
+        let (started, running) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        let guard = AbortOnDrop::new(&task);
+        running.await.unwrap();
+        drop(guard);
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn guarded_child_can_complete_and_return_its_value() {
+        let task = tokio::spawn(async { 42 });
+        let guard = AbortOnDrop::new(&task);
+        assert_eq!(task.await.unwrap(), 42);
+        drop(guard);
     }
 }

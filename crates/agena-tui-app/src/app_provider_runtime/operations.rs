@@ -1,7 +1,6 @@
 impl App {
     pub(crate) fn session_model_chooser_items(&self) -> UiResult<Vec<SessionModelChoiceItem>> {
-        let providers =
-            crate::app_backend::operations::list_configured_providers(&self.application);
+        let providers = self.application.provider_summaries();
         let mut items = Vec::new();
         for provider in providers {
             let models = crate::app_backend::provider_mappings::list_local_provider_models(

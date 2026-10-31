@@ -1,204 +1,89 @@
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of the model catalog.
-pub struct ModelCatalogResponse {
-    #[serde(default)]
-    pub refreshing: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_refresh_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_failure: Option<agena_failure::UserProblem>,
-    pub model_count: usize,
-}
+//! Explicit projection between internal catalog records and the public API.
+//! Public catalog DTOs are defined only in `agena-api`.
 
-#[derive(Debug, Clone, Serialize)]
-/// Response to refreshing the model catalog.
-pub struct ModelCatalogRefreshResponse {
-    pub started: bool,
-    pub task: RuntimeBackgroundTaskResource,
-    pub summary: ModelCatalogResponse,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Paginated listing of catalog models with a summary.
-pub struct ModelCatalogListResponse {
-    pub summary: ModelCatalogResponse,
-    pub total: usize,
-    pub offset: usize,
-    pub limit: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub available_origins: Vec<String>,
-    pub items: Vec<CatalogModelResource>,
-}
-
-/// A verified, display-only catalog suggestion for a provider model ID.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogModelMatchResource {
-    pub model_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<CatalogModelResource>,
-}
-
-impl ModelCatalogListResponse {
-    /// An empty listing used by synchronous remote-client consumers before a
-    /// catalog page has been fetched from the server.
-    pub fn empty() -> Self {
-        Self {
-            summary: ModelCatalogResponse {
-                refreshing: false,
-                last_refresh_at: None,
-                last_successful_source: None,
-                last_failure: None,
-                model_count: 0,
-            },
-            total: 0,
-            offset: 0,
-            limit: 0,
-            available_origins: Vec::new(),
-            items: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Source of a catalog model entry.
-pub enum ModelCatalogSourceKind {
-    Generated,
-    Cache,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A model entry in the catalog.
-pub struct CatalogModelResource {
-    pub model_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub provider_sources: Vec<String>,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub verbosity_by_provider:
-        std::collections::BTreeMap<String, agena_provider::CatalogProviderVerbosityProfile>,
-    pub source: ModelCatalogSourceKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub origin: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lifecycle: Option<agena_domain::ModelLifecycle>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_window_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_input_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub knowledge_cutoff: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub release_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_updated: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub open_weights: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_parallel_tool_calls: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_verbosity: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_verbosity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_temperature: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_top_p: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_top_k: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assistant_reasoning_interleaved: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assistant_reasoning_field: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output_modalities: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pricing: Option<agena_domain::ModelPricing>,
-    #[serde(
-        default,
-        skip_serializing_if = "agena_provider::ConfiguredModelModeMap::is_empty"
-    )]
-    pub thinking_modes:
-        agena_provider::ConfiguredModelModeMap<agena_provider::ConfiguredModelThinkingMode>,
-    #[serde(
-        default,
-        skip_serializing_if = "agena_provider::ConfiguredModelModeMap::is_empty"
-    )]
-    pub speed_modes:
-        agena_provider::ConfiguredModelModeMap<agena_provider::ConfiguredModelSpeedMode>,
-    #[serde(flatten)]
-    pub capabilities: agena_provider::ModelCapabilityPatch,
-}
-
-impl From<CatalogModelRecord> for CatalogModelResource {
-    fn from(value: CatalogModelRecord) -> Self {
-        Self::from_record(value, None)
-    }
-}
-
-impl CatalogModelResource {
-    pub fn from_record(
-        value: CatalogModelRecord,
-        last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
-    ) -> Self {
-        let source =
-            match last_successful_source.unwrap_or(ModelCatalogSnapshotSourceKind::Generated) {
-                ModelCatalogSnapshotSourceKind::Generated => ModelCatalogSourceKind::Generated,
-                ModelCatalogSnapshotSourceKind::Cache => ModelCatalogSourceKind::Cache,
-            };
-        let source_label = Some(str::to_owned(match source {
-            ModelCatalogSourceKind::Generated => "generated catalog",
-            ModelCatalogSourceKind::Cache => "cached catalog",
-        }));
-
-        Self {
-            model_id: value.model_id,
-            provider_sources: value.provider_sources,
-            verbosity_by_provider: value.verbosity_by_provider,
-            source,
-            source_label,
-            display_name: value.display_name,
-            origin: value.origin,
-            lifecycle: value.lifecycle,
-            context_window_tokens: value.context_window_tokens,
-            max_input_tokens: value.max_input_tokens,
-            max_output_tokens: value.max_output_tokens,
-            description: value.description,
-            knowledge_cutoff: value.knowledge_cutoff,
-            release_date: value.release_date,
-            last_updated: value.last_updated,
-            open_weights: value.open_weights,
-            supports_parallel_tool_calls: value.supports_parallel_tool_calls,
-            supports_verbosity: value.supports_verbosity,
-            default_verbosity: value.default_verbosity,
-            default_temperature: value.default_temperature,
-            default_top_p: value.default_top_p,
-            default_top_k: value.default_top_k,
-            assistant_reasoning_interleaved: value.assistant_reasoning_interleaved,
-            assistant_reasoning_field: value.assistant_reasoning_field,
-            output_modalities: value.output_modalities,
-            pricing: value.pricing,
-            thinking_modes: value.thinking_modes,
-            speed_modes: value.speed_modes,
-            capabilities: value.capabilities,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-/// Request to look up catalog models by id.
-pub struct ModelCatalogLookupRequest {
-    #[serde(default)]
-    pub model_ids: Vec<String>,
-}
-use super::{DateTime, Deserialize, RuntimeBackgroundTaskResource, Serialize, Utc};
+use agena_api::resource::*;
 use agena_provider::{CatalogModelRecord, ModelCatalogSnapshotSourceKind};
+
+pub(crate) fn catalog_model_resource_from_record(
+    value: CatalogModelRecord,
+    last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
+) -> CatalogModelResource {
+    let source = match last_successful_source.unwrap_or(ModelCatalogSnapshotSourceKind::Generated) {
+        ModelCatalogSnapshotSourceKind::Generated => ModelCatalogSourceKind::Generated,
+        ModelCatalogSnapshotSourceKind::Cache => ModelCatalogSourceKind::Cache,
+    };
+    let source_label = Some(str::to_owned(match source {
+        ModelCatalogSourceKind::Generated => "generated catalog",
+        ModelCatalogSourceKind::Cache => "cached catalog",
+    }));
+
+    CatalogModelResource {
+        model_id: value.model_id,
+        provider_sources: value.provider_sources,
+        verbosity_by_provider: value.verbosity_by_provider,
+        source,
+        source_label,
+        display_name: value.display_name,
+        origin: value.origin,
+        lifecycle: value.lifecycle,
+        context_window_tokens: value.context_window_tokens,
+        max_input_tokens: value.max_input_tokens,
+        max_output_tokens: value.max_output_tokens,
+        description: value.description,
+        knowledge_cutoff: value.knowledge_cutoff,
+        release_date: value.release_date,
+        last_updated: value.last_updated,
+        open_weights: value.open_weights,
+        supports_parallel_tool_calls: value.supports_parallel_tool_calls,
+        supports_verbosity: value.supports_verbosity,
+        default_verbosity: value.default_verbosity,
+        default_temperature: value.default_temperature,
+        default_top_p: value.default_top_p,
+        default_top_k: value.default_top_k,
+        assistant_reasoning_interleaved: value.assistant_reasoning_interleaved,
+        assistant_reasoning_field: value.assistant_reasoning_field,
+        output_modalities: value.output_modalities,
+        pricing: value.pricing,
+        thinking_modes: value.thinking_modes,
+        speed_modes: value.speed_modes,
+        capabilities: value.capabilities,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn catalog_projection_preserves_rest_shape_and_roundtrips_configuration() {
+        let record: CatalogModelRecord = serde_json::from_value(json!({
+            "model_id": "fixture-model",
+            "provider_sources": ["fixture"],
+            "verbosity_by_provider": { "fixture": { "supported": true, "levels": ["low", "high"], "provider_default": "low" } },
+            "lifecycle": "preview",
+            "pricing": {"input_usd_per_million_tokens": "0.123400"},
+            "input": {"supported": ["text", "image"], "unsupported": ["audio"]},
+            "features": ["tool_calling", "reasoning"],
+            "thinking_modes": {
+                "default": "custom",
+                "custom": { "strategy": "adaptive", "effort": "high", "display": "summarized", "request_override": { "body_patch": { "nested": {"value": null} } } }
+            },
+            "speed_modes": {
+                "default": null,
+                "fast": { "request_override": { "headers": {"x-mode": "fast"} }, "disabled": true }
+            }
+        })).unwrap();
+        let resource = catalog_model_resource_from_record(
+            record.clone(),
+            Some(ModelCatalogSnapshotSourceKind::Cache),
+        );
+        let mut expected = serde_json::to_value(&record).unwrap();
+        expected["source"] = json!("cache");
+        expected["source_label"] = json!("cached catalog");
+        assert_eq!(serde_json::to_value(&resource).unwrap(), expected);
+        assert_eq!(resource.thinking_modes, record.thinking_modes);
+        assert_eq!(resource.speed_modes, record.speed_modes);
+        assert_eq!(resource.capabilities, record.capabilities);
+    }
+}

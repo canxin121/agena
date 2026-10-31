@@ -227,33 +227,11 @@ pub fn truncate_display_text_with_suffix(text: &str, max_width: usize, suffix: &
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
     }
-
     let suffix_width = UnicodeWidthStr::width(suffix);
     if max_width <= suffix_width {
-        let mut clipped_suffix = String::new();
-        let mut width = 0usize;
-        for grapheme in UnicodeSegmentation::graphemes(suffix, true) {
-            let grapheme_width = UnicodeWidthStr::width(grapheme);
-            if width.saturating_add(grapheme_width) > max_width {
-                break;
-            }
-            clipped_suffix.push_str(grapheme);
-            width = width.saturating_add(grapheme_width);
-        }
-        return clipped_suffix;
+        return clip_display_width(suffix, max_width);
     }
-
-    let budget = max_width.saturating_sub(suffix_width);
-    let mut width = 0usize;
-    let mut truncated = String::new();
-    for grapheme in UnicodeSegmentation::graphemes(text, true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if width.saturating_add(grapheme_width) > budget {
-            break;
-        }
-        truncated.push_str(grapheme);
-        width = width.saturating_add(grapheme_width);
-    }
+    let mut truncated = clip_display_width(text, max_width.saturating_sub(suffix_width));
     truncated.push_str(suffix);
     truncated
 }
@@ -301,4 +279,168 @@ pub fn bordered_text_height(text: &Text<'_>, width: u16, min_body: u16, max_body
     wrapped_text_height_for_text(text, width.saturating_sub(2))
         .clamp(min_body, max_body)
         .saturating_add(2)
+}
+
+/// Strip CSI, OSC and single-character terminal escapes without consuming a
+/// partial UTF-8 character after a malformed sequence. Does not change text
+/// layout or control-character policy; those belong to the display consumer.
+pub fn strip_terminal_ansi_sequences(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            let ch = text[index..].chars().next().unwrap_or_default();
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+
+        index += 1;
+        if index >= bytes.len() {
+            break;
+        }
+
+        match bytes[index] {
+            b'[' => {
+                index += 1;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    // Escape sequences may only contain ASCII parameter bytes.
+                    // A non-ASCII byte means the sequence was truncated and the
+                    // rest is real text: stop so it is emitted below and we
+                    // never land mid-way through a multi-byte char.
+                    if !byte.is_ascii() {
+                        break;
+                    }
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            b']' => {
+                index += 1;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        0x07 => {
+                            index += 1;
+                            break;
+                        }
+                        0x1b if bytes.get(index + 1) == Some(&b'\\') => {
+                            index += 2;
+                            break;
+                        }
+                        byte if !byte.is_ascii() => break,
+                        _ => index += 1,
+                    }
+                }
+            }
+            _ => {
+                // Single-char escape (e.g. ESC M). Skip it only when it is a
+                // plain ASCII byte; a non-ASCII leading byte is the start of a
+                // multi-byte char and must be emitted as text.
+                if bytes[index].is_ascii() {
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// Terminal-safe multiline display text. Preserve LF and tab for callers that
+/// lay out paragraphs or expand tab stops; remove CR and bidi controls, and
+/// replace other control characters with spaces. This never mutates source or
+/// clipboard text. Editor storage applies its own explicit tab expansion.
+pub fn sanitize_terminal_text(text: &str) -> String {
+    let stripped = strip_terminal_ansi_sequences(text).replace('\r', "");
+    stripped
+        .chars()
+        .filter_map(|ch| match ch {
+            '\n' | '\t' => Some(ch),
+            '\u{200e}' | '\u{200f}' => None,
+            '\u{202a}'..='\u{202e}' => None,
+            '\u{2066}'..='\u{2069}' => None,
+            ch if ch.is_control() => Some(' '),
+            _ => Some(ch),
+        })
+        .collect()
+}
+
+/// Take a prefix that fits the display-column budget, without splitting a
+/// grapheme (including combining marks and ZWJ emoji). The input is already
+/// display text: sanitization and ellipsis policy belong to the caller.
+pub fn clip_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    let mut width = 0_usize;
+    text.graphemes(true)
+        .take_while(|grapheme| {
+            let next = width.saturating_add(UnicodeWidthStr::width(*grapheme));
+            if next > max_width {
+                return false;
+            }
+            width = next;
+            true
+        })
+        .collect()
+}
+
+/// Copy complete graphemes overlapping a display-column range. Do not apply
+/// display sanitization: the caller has already selected its copy projection.
+pub fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
+    let mut column = 0_usize;
+    text.graphemes(true)
+        .filter(|grapheme| {
+            let width = UnicodeWidthStr::width(*grapheme);
+            let start = column;
+            let end = column.saturating_add(width);
+            column = end;
+            start < range.end && end > range.start
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod terminal_text_tests {
+    use super::*;
+
+    #[test]
+    fn display_sanitization_preserves_multiline_layout_and_unicode() {
+        let text = "\u{1b}[31m中\u{1b}[0m\t🙂\r\nnext\u{7}\u{202e}";
+        assert_eq!(sanitize_terminal_text(text), "中\t🙂\nnext ");
+        assert_eq!(text, "\u{1b}[31m中\u{1b}[0m\t🙂\r\nnext\u{7}\u{202e}");
+    }
+
+    #[test]
+    fn strips_osc_and_preserves_unicode_after_partial_escapes() {
+        assert_eq!(strip_terminal_ansi_sequences("a\u{1b}]0;title\u{7}b"), "ab");
+        assert_eq!(
+            strip_terminal_ansi_sequences("a\u{1b}]0;title\u{1b}\\b"),
+            "ab"
+        );
+        for text in ["\u{1b}[中", "\u{1b}]中", "\u{1b}中"] {
+            assert_eq!(strip_terminal_ansi_sequences(text), "中");
+        }
+    }
+
+    #[test]
+    fn clipping_never_splits_wide_or_combining_graphemes() {
+        assert_eq!(clip_display_width("中a", 1), "");
+        assert_eq!(clip_display_width("中a", 2), "中");
+        assert_eq!(clip_display_width("e\u{301}x", 1), "e\u{301}");
+        assert_eq!(clip_display_width("👩\u{200d}💻x", 2), "👩\u{200d}💻");
+        assert_eq!(clip_display_width("a", 0), "");
+    }
+
+    #[test]
+    fn cell_slices_copy_whole_overlapping_graphemes() {
+        assert_eq!(display_cell_slice("a中b", 2..3), "中");
+        assert_eq!(display_cell_slice("a👩\u{200d}💻b", 2..3), "👩\u{200d}💻");
+        assert_eq!(display_cell_slice("ae\u{301}b", 1..2), "e\u{301}");
+    }
 }

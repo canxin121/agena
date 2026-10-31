@@ -258,7 +258,7 @@ fn take_plugin_notify(app: &mut App) -> Option<(NotificationMethod, String)> {
     None
 }
 
-fn notification_key(notification: &agena_plugin_host::HostNotification) -> String {
+fn notification_key(notification: &agena_plugin_sdk::inspection::HostNotification) -> String {
     notification
         .attention
         .as_ref()

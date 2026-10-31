@@ -153,38 +153,7 @@ pub struct ConfigSettingsListResponse {
     pub items: Vec<ConfigSettingsListItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of a settings edit.
-pub struct ConfigSettingsEditResponse {
-    #[serde(default)]
-    pub before_revision: String,
-    #[serde(default)]
-    pub after_revision: String,
-    pub config_path: PathBuf,
-    pub config_found: bool,
-    pub operation: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    pub dry_run: bool,
-    pub changed: bool,
-    pub created: bool,
-    pub deleted: bool,
-    pub validated: bool,
-    pub reload_requested: bool,
-    pub reload_required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reload: Option<ConfigSettingsReloadResponse>,
-    pub previous: JsonValue,
-    pub current: JsonValue,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of a settings reload.
-pub struct ConfigSettingsReloadResponse {
-    pub previous_generation: u64,
-    pub generation: u64,
-    pub loaded_at: String,
-}
+pub use agena_api::resource::{ConfigSettingsEditResponse, ConfigSettingsReloadResponse};
 
 #[derive(Debug, Clone, Serialize)]
 /// Response of a settings validation.

@@ -348,13 +348,13 @@ impl ApplicationService {
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
                 agent_id: context.agent_id,
-                selected_permission: permission_config_resource_from_domain(
+                selected_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.selected_permission,
                 ),
-                effective_permission: permission_config_resource_from_domain(
+                effective_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.effective_permission,
                 ),
-                permission_ceiling: permission_config_resource_from_domain(
+                permission_ceiling: agena_api::resource::PermissionConfigResource::from(
                     &context.permission_ceiling,
                 ),
                 model_provider_id: context.model_provider_id,
@@ -739,143 +739,6 @@ pub(crate) const fn permission_scope_from_domain(
         agena_domain::PermissionScope::Session => agena_api::resource::PermissionScope::Session,
         agena_domain::PermissionScope::Workspace => agena_api::resource::PermissionScope::Workspace,
         agena_domain::PermissionScope::Global => agena_api::resource::PermissionScope::Global,
-    }
-}
-
-pub fn permission_config_resource_from_domain(
-    value: &agena_domain::PermissionConfig,
-) -> agena_api::resource::PermissionConfigResource {
-    use agena_api::resource::{
-        NetworkPermissionConfigResource, PathPermissionConfigResource, PermissionConfigResource,
-        ToolPermissionConfigResource, ToolPermissionRulesResource,
-    };
-
-    PermissionConfigResource {
-        path: value
-            .path
-            .as_ref()
-            .map(|path| PathPermissionConfigResource {
-                workspace: path
-                    .workspace
-                    .as_ref()
-                    .map(path_access_modes_resource_from_domain),
-                external: path
-                    .external
-                    .as_ref()
-                    .map(path_access_modes_resource_from_domain),
-                rules: path
-                    .rules
-                    .iter()
-                    .map(|(pattern, modes)| {
-                        (
-                            pattern.clone(),
-                            path_access_modes_resource_from_domain(modes),
-                        )
-                    })
-                    .collect(),
-            }),
-        network: value
-            .network
-            .as_ref()
-            .map(|network| NetworkPermissionConfigResource {
-                internet: network.internet.map(permission_mode_resource_from_domain),
-                private: network.private.map(permission_mode_resource_from_domain),
-                loopback: network.loopback.map(permission_mode_resource_from_domain),
-                rules: network
-                    .rules
-                    .iter()
-                    .map(|(pattern, mode)| {
-                        (pattern.clone(), permission_mode_resource_from_domain(*mode))
-                    })
-                    .collect(),
-            }),
-        tools: value
-            .tools
-            .as_ref()
-            .map(|tools| ToolPermissionConfigResource {
-                default: tools.default.map(permission_mode_resource_from_domain),
-                names: tools
-                    .names
-                    .iter()
-                    .chain(tools.plugin.iter())
-                    .map(|(name, mode)| (name.clone(), permission_mode_resource_from_domain(*mode)))
-                    .collect(),
-                rules: tools
-                    .rules
-                    .iter()
-                    .map(|(name, rules)| {
-                        let rules = match rules {
-                            agena_domain::ToolPermissionRules::Mode(mode) => {
-                                ToolPermissionRulesResource::Mode(
-                                    permission_mode_resource_from_domain(*mode),
-                                )
-                            }
-                            agena_domain::ToolPermissionRules::Ordered(rules) => {
-                                ToolPermissionRulesResource::Ordered(
-                                    rules
-                                        .iter()
-                                        .map(|(pattern, mode)| {
-                                            (
-                                                pattern.clone(),
-                                                permission_mode_resource_from_domain(*mode),
-                                            )
-                                        })
-                                        .collect(),
-                                )
-                            }
-                        };
-                        (name.clone(), rules)
-                    })
-                    .collect(),
-            }),
-        approval_model: value.approval_model.as_ref().map(|model| {
-            agena_api::resource::ApprovalModelSelectionResource {
-                provider: model.provider.clone(),
-                adapter: model.adapter.clone(),
-                model: model.model.clone(),
-                thinking_mode: model.thinking_mode.clone(),
-                speed_mode: model.speed_mode.clone(),
-                verbosity: model.verbosity.clone(),
-            }
-        }),
-    }
-}
-
-/// Convert the public permission configuration back to the domain-owned
-/// policy value. Both sides intentionally use the same JSON shape; going
-/// through serde here keeps the transport contract and the strict runtime
-/// `deny_unknown_fields` validation in lockstep.
-pub fn permission_config_domain_from_resource(
-    value: agena_api::resource::PermissionConfigResource,
-) -> ApplicationResult<agena_domain::PermissionConfig> {
-    let json = serde_json::to_value(value).map_err(|error| {
-        ApplicationError::internal(format!("invalid permission config: {error}"))
-    })?;
-    serde_json::from_value(json).map_err(|error| {
-        ApplicationError::bad_request_with_diagnostic(
-            "The permission configuration is invalid.",
-            error.to_string(),
-        )
-    })
-}
-
-fn path_access_modes_resource_from_domain(
-    value: &agena_domain::PathAccessModes,
-) -> agena_api::resource::PathAccessModesResource {
-    agena_api::resource::PathAccessModesResource {
-        read: value.read.map(permission_mode_resource_from_domain),
-        write: value.write.map(permission_mode_resource_from_domain),
-    }
-}
-
-const fn permission_mode_resource_from_domain(
-    value: agena_domain::PermissionMode,
-) -> agena_api::resource::PermissionMode {
-    match value {
-        agena_domain::PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
-        agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
-        agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
-        agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }
 }
 

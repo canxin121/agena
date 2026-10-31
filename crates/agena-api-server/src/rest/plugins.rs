@@ -38,7 +38,7 @@ pub async fn get_plugin_surface_catalog(
             )
             .collect(),
         notifications: plugin_runtime.host_notifications(),
-        notifications_at_ms: chrono::Utc::now().timestamp_millis(),
+        notifications_at_ms: Some(chrono::Utc::now().timestamp_millis()),
         activity_kinds: state.application().activity_kind_catalog(),
         tool_registry_generation: plugin_runtime.tool_registry_generation(),
         tool_registry_last_event: plugin_runtime
@@ -153,11 +153,11 @@ pub async fn run_plugin_command(
         )
         .await
         .map_err(server_error_from_application)?;
-    Ok(Json(serde_json::json!({
-        "plugin_id": plugin_id,
-        "command_id": command_id,
-        "result": result,
-    })))
+    Ok(Json(agena_api::resource::PluginCommandInvokeResponse {
+        plugin_id,
+        command_id,
+        result,
+    }))
 }
 
 async fn command_workspace_root(

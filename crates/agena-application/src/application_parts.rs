@@ -666,6 +666,290 @@ pub(crate) async fn project_kernel_entry(
     Ok(part)
 }
 
+fn project_interaction(
+    session: SessionId,
+    interaction: &agena_storage::kernel::InteractionView,
+    authorization: &mut agena_domain::OperationAuthorization,
+    user_input: &mut agena_domain::OperationUserInput,
+) -> Result<(), ApplicationError> {
+    use agena_storage::kernel::{InteractionDecision, InteractionRequest};
+    let request_id = interaction.id.get().to_string();
+    match &interaction.request {
+        InteractionRequest::Permission {
+            action_key,
+            description,
+        } => {
+            let request = agena_domain::PermissionRequest {
+                request_id: request_id.clone(),
+                session_id: Some(session.get()),
+                action: serde_json::from_str(action_key)
+                    .map_err(|error| ApplicationError::internal_error(&error))?,
+                related_actions: Vec::new(),
+                requested_actions: Vec::new(),
+                reason: description.clone(),
+                explanation: String::new(),
+                source: Some("kernel".into()),
+                scope: None,
+                operator: None,
+                trace: Vec::new(),
+                created_at: chrono::DateTime::from_timestamp_millis(interaction.created_at_ms)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+            };
+            let reply = match &interaction.decision {
+                Some(InteractionDecision::Permission { reply, .. }) => Some(reply.clone()),
+                Some(InteractionDecision::Cancel) => Some(agena_domain::PermissionReply {
+                    request_id,
+                    kind: agena_domain::PermissionReplyKind::DenyOnce,
+                    reason: None,
+                    scope: None,
+                }),
+                Some(_) => {
+                    return Err(ApplicationError::internal(
+                        "A permission interaction has an invalid decision.",
+                    ));
+                }
+                None => None,
+            };
+            authorization
+                .permissions
+                .push(agena_domain::OperationPermission {
+                    request,
+                    reply,
+                    replied_at_ms: interaction.decided_at_ms,
+                });
+        }
+        InteractionRequest::Input { request } => {
+            let mut request = request.clone();
+            request.request_id = request_id.clone();
+            request.session_id = Some(session.get());
+            let reply = match &interaction.decision {
+                Some(InteractionDecision::Input(value)) => {
+                    let mut reply: agena_domain::UserInputReply = serde_json::from_str(value)
+                        .map_err(|error| ApplicationError::internal_error(&error))?;
+                    reply.request_id = request_id;
+                    Some(reply)
+                }
+                Some(_) => Some(agena_domain::UserInputReply {
+                    request_id,
+                    kind: agena_domain::UserInputReplyKind::Cancel,
+                    answers: Default::default(),
+                    reason: None,
+                }),
+                None => None,
+            };
+            user_input
+                .requests
+                .push(agena_domain::OperationUserInputRecord {
+                    request,
+                    reply,
+                    replied_at_ms: interaction.decided_at_ms,
+                });
+        }
+    }
+    Ok(())
+}
+
+impl Application {
+    /// Read only live tool entries owned by this session. Non-tool history and
+    /// inherited tools are excluded by the indexed kernel query before bodies
+    /// are loaded. File evidence uses raw facts, so no presentation is rendered.
+    pub async fn read_owned_tool_parts(
+        &self,
+        session_id: i64,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<OwnedToolPartsPage, ApplicationError> {
+        let session = crate::kernel_session_id(session_id)?;
+        let cursor = cursor.map(decode_cursor::<OwnedToolCursor>).transpose()?;
+        if cursor.is_some_and(|cursor| cursor.session != session) {
+            return Err(ApplicationError::bad_request(
+                "The cursor belongs to a different session.",
+            ));
+        }
+        let reader = &self.session_kernel()?.reader;
+        let page = reader
+            .owned_tool_entries(session, cursor, limit.clamp(1, 128))
+            .await
+            .map_err(crate::kernel_error)?;
+        let mut parts = Vec::with_capacity(page.entries.len());
+        for entry in &page.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await?);
+        }
+        // Each tool detail is an authoritative read. Session control changes
+        // (titles, rounds, text, etc.) do not invalidate durable tool evidence.
+        // Transports retain the resource token captured before this read, so
+        // concurrent edits get a trailing validation rather than a false 409.
+        Ok(OwnedToolPartsPage {
+            parts,
+            control_version: page.control_version,
+            next_cursor: page.next.map(|cursor| encode_cursor(&cursor)).transpose()?,
+            has_more: page.has_more,
+        })
+    }
+
+    pub async fn project_entry(
+        &self,
+        session_id: i64,
+        entry: &EntryView,
+        sections: &[ToolDetailSection],
+    ) -> Result<PartResource, ApplicationError> {
+        let mut part = project_kernel_entry(
+            &self.session_kernel()?.reader,
+            crate::kernel_session_id(session_id)?,
+            entry,
+        )
+        .await?;
+        self.project_part_resource(&mut part, sections).await;
+        Ok(part)
+    }
+
+    pub async fn read_parts(
+        &self,
+        request: ReadPartsParams,
+    ) -> Result<SessionPartsResource, ApplicationError> {
+        if request.ids.len() > 256
+            || request.run_ids.len() > 32
+            || request
+                .ids
+                .iter()
+                .chain(&request.run_ids)
+                .any(|id| *id <= 0)
+        {
+            return Err(ApplicationError::bad_request(
+                "The entry selection exceeds its limit or contains an invalid identity.",
+            ));
+        }
+        let session = crate::kernel_session_id(request.session_id)?;
+        let reader = &self.session_kernel()?.reader;
+        let (metadata, entries, next, has_more) = if request.ids.is_empty() {
+            let page = reader
+                .history_window(
+                    session,
+                    decode_part_cursor(request.session_id, request.cursor.as_deref())?,
+                    &request.run_ids,
+                    request.limit.unwrap_or(64).clamp(1, 256) as usize,
+                )
+                .await
+                .map_err(crate::kernel_error)?;
+            (
+                page.metadata.clone(),
+                page.entries.clone(),
+                page.next,
+                page.has_more,
+            )
+        } else {
+            if !request.run_ids.is_empty() || request.cursor.is_some() || request.limit.is_some() {
+                return Err(ApplicationError::bad_request(
+                    "Explicit entry identities cannot be combined with a history range.",
+                ));
+            }
+            let metadata = reader
+                .metadata(session)
+                .await
+                .map_err(crate::kernel_error)?;
+            let mut entries = Vec::with_capacity(request.ids.len());
+            for id in request
+                .ids
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+            {
+                let id = id
+                    .try_into()
+                    .map_err(|error| ApplicationError::bad_request_error(&error))?;
+                match reader.entry(session, id).await {
+                    Ok(entry) => entries.push((*entry).clone()),
+                    Err(agena_storage::kernel::KernelError::NotFound(_)) => {}
+                    Err(error) => return Err(crate::kernel_error(error)),
+                }
+            }
+            ((*metadata).clone(), entries, None, false)
+        };
+        let mut parts = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            if !matches!(entry.payload, EntryPayload::Interaction { .. }) {
+                parts.push(
+                    self.project_entry(
+                        request.session_id,
+                        entry,
+                        requested_sections(&request.sections),
+                    )
+                    .await?,
+                );
+            }
+        }
+        append_execution_failures(reader, &entries, &mut parts).await?;
+        let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
+        Ok(SessionPartsResource {
+            session_id: request.session_id,
+            version: metadata.metadata_version.get(),
+            page: agena_api::pagination::PageInfo {
+                returned: parts.len() as u64,
+                has_more,
+                next_cursor: encode_part_cursor(request.session_id, next)?,
+            },
+            parts,
+            runs: Vec::new(),
+            user_message_count: Some(summary.user_message_count),
+        })
+    }
+
+    pub async fn read_runs(
+        &self,
+        request: ReadRunsParams,
+    ) -> Result<SessionPartsResource, ApplicationError> {
+        let session = crate::kernel_session_id(request.session_id)?;
+        let reader = &self.session_kernel()?.reader;
+        let page = reader
+            .message_history(
+                session,
+                decode_part_cursor(request.session_id, request.cursor.as_deref())?,
+                request.limit.unwrap_or(8).clamp(1, 32) as usize,
+                request.part_limit.unwrap_or(32).clamp(1, 128) as usize,
+            )
+            .await
+            .map_err(crate::kernel_error)?;
+        let mut parts = Vec::with_capacity(page.entries.len());
+        for entry in &page.entries {
+            parts.push(
+                self.project_entry(
+                    request.session_id,
+                    entry,
+                    requested_sections(&request.sections),
+                )
+                .await?,
+            );
+        }
+        append_execution_failures(reader, &page.entries, &mut parts).await?;
+        let runs = page
+            .messages
+            .iter()
+            .map(|message| {
+                Ok(RunSummaryResource {
+                    run_id: message.id.get(),
+                    part_count: message.entry_count,
+                    page: agena_api::pagination::PageInfo {
+                        returned: message.loaded_count,
+                        has_more: message.loaded_count < message.entry_count,
+                        next_cursor: encode_part_cursor(request.session_id, message.next)?,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, ApplicationError>>()?;
+        Ok(SessionPartsResource {
+            session_id: request.session_id,
+            version: page.metadata.metadata_version.get(),
+            parts,
+            runs,
+            user_message_count: Some(page.user_message_count),
+            page: agena_api::pagination::PageInfo {
+                returned: page.messages.len() as u64,
+                has_more: page.has_more,
+                next_cursor: encode_part_cursor(request.session_id, page.next)?,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tool_input_projection_tests {
     use super::*;
@@ -1466,289 +1750,5 @@ mod tool_input_projection_tests {
             parts.iter().filter(|part| part.kind == "tool_call").count(),
             7
         );
-    }
-}
-
-fn project_interaction(
-    session: SessionId,
-    interaction: &agena_storage::kernel::InteractionView,
-    authorization: &mut agena_domain::OperationAuthorization,
-    user_input: &mut agena_domain::OperationUserInput,
-) -> Result<(), ApplicationError> {
-    use agena_storage::kernel::{InteractionDecision, InteractionRequest};
-    let request_id = interaction.id.get().to_string();
-    match &interaction.request {
-        InteractionRequest::Permission {
-            action_key,
-            description,
-        } => {
-            let request = agena_domain::PermissionRequest {
-                request_id: request_id.clone(),
-                session_id: Some(session.get()),
-                action: serde_json::from_str(action_key)
-                    .map_err(|error| ApplicationError::internal_error(&error))?,
-                related_actions: Vec::new(),
-                requested_actions: Vec::new(),
-                reason: description.clone(),
-                explanation: String::new(),
-                source: Some("kernel".into()),
-                scope: None,
-                operator: None,
-                trace: Vec::new(),
-                created_at: chrono::DateTime::from_timestamp_millis(interaction.created_at_ms)
-                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
-            };
-            let reply = match &interaction.decision {
-                Some(InteractionDecision::Permission { reply, .. }) => Some(reply.clone()),
-                Some(InteractionDecision::Cancel) => Some(agena_domain::PermissionReply {
-                    request_id,
-                    kind: agena_domain::PermissionReplyKind::DenyOnce,
-                    reason: None,
-                    scope: None,
-                }),
-                Some(_) => {
-                    return Err(ApplicationError::internal(
-                        "A permission interaction has an invalid decision.",
-                    ));
-                }
-                None => None,
-            };
-            authorization
-                .permissions
-                .push(agena_domain::OperationPermission {
-                    request,
-                    reply,
-                    replied_at_ms: interaction.decided_at_ms,
-                });
-        }
-        InteractionRequest::Input { request } => {
-            let mut request = request.clone();
-            request.request_id = request_id.clone();
-            request.session_id = Some(session.get());
-            let reply = match &interaction.decision {
-                Some(InteractionDecision::Input(value)) => {
-                    let mut reply: agena_domain::UserInputReply = serde_json::from_str(value)
-                        .map_err(|error| ApplicationError::internal_error(&error))?;
-                    reply.request_id = request_id;
-                    Some(reply)
-                }
-                Some(_) => Some(agena_domain::UserInputReply {
-                    request_id,
-                    kind: agena_domain::UserInputReplyKind::Cancel,
-                    answers: Default::default(),
-                    reason: None,
-                }),
-                None => None,
-            };
-            user_input
-                .requests
-                .push(agena_domain::OperationUserInputRecord {
-                    request,
-                    reply,
-                    replied_at_ms: interaction.decided_at_ms,
-                });
-        }
-    }
-    Ok(())
-}
-
-impl Application {
-    /// Read only live tool entries owned by this session. Non-tool history and
-    /// inherited tools are excluded by the indexed kernel query before bodies
-    /// are loaded. File evidence uses raw facts, so no presentation is rendered.
-    pub async fn read_owned_tool_parts(
-        &self,
-        session_id: i64,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Result<OwnedToolPartsPage, ApplicationError> {
-        let session = crate::kernel_session_id(session_id)?;
-        let cursor = cursor.map(decode_cursor::<OwnedToolCursor>).transpose()?;
-        if cursor.is_some_and(|cursor| cursor.session != session) {
-            return Err(ApplicationError::bad_request(
-                "The cursor belongs to a different session.",
-            ));
-        }
-        let reader = &self.session_kernel()?.reader;
-        let page = reader
-            .owned_tool_entries(session, cursor, limit.clamp(1, 128))
-            .await
-            .map_err(crate::kernel_error)?;
-        let mut parts = Vec::with_capacity(page.entries.len());
-        for entry in &page.entries {
-            parts.push(project_kernel_entry(reader, session, entry).await?);
-        }
-        // Each tool detail is an authoritative read. Session control changes
-        // (titles, rounds, text, etc.) do not invalidate durable tool evidence.
-        // Transports retain the resource token captured before this read, so
-        // concurrent edits get a trailing validation rather than a false 409.
-        Ok(OwnedToolPartsPage {
-            parts,
-            control_version: page.control_version,
-            next_cursor: page.next.map(|cursor| encode_cursor(&cursor)).transpose()?,
-            has_more: page.has_more,
-        })
-    }
-
-    pub async fn project_entry(
-        &self,
-        session_id: i64,
-        entry: &EntryView,
-        sections: &[ToolDetailSection],
-    ) -> Result<PartResource, ApplicationError> {
-        let mut part = project_kernel_entry(
-            &self.session_kernel()?.reader,
-            crate::kernel_session_id(session_id)?,
-            entry,
-        )
-        .await?;
-        self.project_part_resource(&mut part, sections).await;
-        Ok(part)
-    }
-
-    pub async fn read_parts(
-        &self,
-        request: ReadPartsParams,
-    ) -> Result<SessionPartsResource, ApplicationError> {
-        if request.ids.len() > 256
-            || request.run_ids.len() > 32
-            || request
-                .ids
-                .iter()
-                .chain(&request.run_ids)
-                .any(|id| *id <= 0)
-        {
-            return Err(ApplicationError::bad_request(
-                "The entry selection exceeds its limit or contains an invalid identity.",
-            ));
-        }
-        let session = crate::kernel_session_id(request.session_id)?;
-        let reader = &self.session_kernel()?.reader;
-        let (metadata, entries, next, has_more) = if request.ids.is_empty() {
-            let page = reader
-                .history_window(
-                    session,
-                    decode_part_cursor(request.session_id, request.cursor.as_deref())?,
-                    &request.run_ids,
-                    request.limit.unwrap_or(64).clamp(1, 256) as usize,
-                )
-                .await
-                .map_err(crate::kernel_error)?;
-            (
-                page.metadata.clone(),
-                page.entries.clone(),
-                page.next,
-                page.has_more,
-            )
-        } else {
-            if !request.run_ids.is_empty() || request.cursor.is_some() || request.limit.is_some() {
-                return Err(ApplicationError::bad_request(
-                    "Explicit entry identities cannot be combined with a history range.",
-                ));
-            }
-            let metadata = reader
-                .metadata(session)
-                .await
-                .map_err(crate::kernel_error)?;
-            let mut entries = Vec::with_capacity(request.ids.len());
-            for id in request
-                .ids
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-            {
-                let id = id
-                    .try_into()
-                    .map_err(|error| ApplicationError::bad_request_error(&error))?;
-                match reader.entry(session, id).await {
-                    Ok(entry) => entries.push((*entry).clone()),
-                    Err(agena_storage::kernel::KernelError::NotFound(_)) => {}
-                    Err(error) => return Err(crate::kernel_error(error)),
-                }
-            }
-            ((*metadata).clone(), entries, None, false)
-        };
-        let mut parts = Vec::with_capacity(entries.len());
-        for entry in &entries {
-            if !matches!(entry.payload, EntryPayload::Interaction { .. }) {
-                parts.push(
-                    self.project_entry(
-                        request.session_id,
-                        entry,
-                        requested_sections(&request.sections),
-                    )
-                    .await?,
-                );
-            }
-        }
-        append_execution_failures(reader, &entries, &mut parts).await?;
-        let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
-        Ok(SessionPartsResource {
-            session_id: request.session_id,
-            version: metadata.metadata_version.get(),
-            page: agena_api::pagination::PageInfo {
-                returned: parts.len() as u64,
-                has_more,
-                next_cursor: encode_part_cursor(request.session_id, next)?,
-            },
-            parts,
-            runs: Vec::new(),
-            user_message_count: Some(summary.user_message_count),
-        })
-    }
-
-    pub async fn read_runs(
-        &self,
-        request: ReadRunsParams,
-    ) -> Result<SessionPartsResource, ApplicationError> {
-        let session = crate::kernel_session_id(request.session_id)?;
-        let reader = &self.session_kernel()?.reader;
-        let page = reader
-            .message_history(
-                session,
-                decode_part_cursor(request.session_id, request.cursor.as_deref())?,
-                request.limit.unwrap_or(8).clamp(1, 32) as usize,
-                request.part_limit.unwrap_or(32).clamp(1, 128) as usize,
-            )
-            .await
-            .map_err(crate::kernel_error)?;
-        let mut parts = Vec::with_capacity(page.entries.len());
-        for entry in &page.entries {
-            parts.push(
-                self.project_entry(
-                    request.session_id,
-                    entry,
-                    requested_sections(&request.sections),
-                )
-                .await?,
-            );
-        }
-        append_execution_failures(reader, &page.entries, &mut parts).await?;
-        let runs = page
-            .messages
-            .iter()
-            .map(|message| {
-                Ok(RunSummaryResource {
-                    run_id: message.id.get(),
-                    part_count: message.entry_count,
-                    page: agena_api::pagination::PageInfo {
-                        returned: message.loaded_count,
-                        has_more: message.loaded_count < message.entry_count,
-                        next_cursor: encode_part_cursor(request.session_id, message.next)?,
-                    },
-                })
-            })
-            .collect::<Result<Vec<_>, ApplicationError>>()?;
-        Ok(SessionPartsResource {
-            session_id: request.session_id,
-            version: page.metadata.metadata_version.get(),
-            parts,
-            runs,
-            user_message_count: Some(page.user_message_count),
-            page: agena_api::pagination::PageInfo {
-                returned: page.messages.len() as u64,
-                has_more: page.has_more,
-                next_cursor: encode_part_cursor(request.session_id, page.next)?,
-            },
-        })
     }
 }

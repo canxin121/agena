@@ -78,3 +78,73 @@ impl fmt::Display for ThinkingDisplay {
         f.write_str(self.as_ref())
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// A missing mode default inherits, null clears, and a string selects a mode.
+pub enum ConfiguredModeDefault {
+    #[default]
+    Inherit,
+    Clear,
+    Mode(String),
+}
+
+impl ConfiguredModeDefault {
+    pub fn is_inherit(&self) -> bool {
+        matches!(self, Self::Inherit)
+    }
+
+    pub fn mode(&self) -> Option<&str> {
+        match self {
+            Self::Mode(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ConfiguredModeDefault {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Inherit | Self::Clear => serializer.serialize_none(),
+            Self::Mode(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfiguredModeDefault {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Option::<String>::deserialize(deserializer)? {
+            Some(value) => Self::Mode(value),
+            None => Self::Clear,
+        })
+    }
+}
+
+/// Stable strategy for interpreting a configured thinking mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfiguredThinkingStrategy {
+    Disabled,
+    Effort,
+    Budget,
+    Adaptive,
+    RequestOnly,
+}
+
+impl ConfiguredThinkingStrategy {
+    pub fn request(
+        self,
+        effort: Option<ReasoningEffort>,
+        budget_tokens: Option<u32>,
+        display: Option<ThinkingDisplay>,
+    ) -> Option<ThinkingRequest> {
+        match self {
+            Self::Disabled => Some(ThinkingRequest::Disabled),
+            Self::Effort => effort.map(|effort| ThinkingRequest::Effort { effort }),
+            Self::Budget => {
+                budget_tokens.map(|budget_tokens| ThinkingRequest::Budget { budget_tokens })
+            }
+            Self::Adaptive => Some(ThinkingRequest::Adaptive { effort, display }),
+            Self::RequestOnly => None,
+        }
+    }
+}

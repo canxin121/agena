@@ -1,7 +1,7 @@
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
     SessionCreateRequest, SessionResource, SessionState, SessionUpdateRequest, build_page,
-    decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc,
+    decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc,
 };
 use agena_storage::kernel::{
     MetadataChange, RequestId, SessionSummaryCursor, SessionSummaryView, SummaryQuery,
@@ -12,7 +12,7 @@ impl ApplicationService {
         &self,
         query: crate::dto::SessionListQuery,
     ) -> ApplicationResult<PaginatedResponse<SessionResource>> {
-        let limit = normalize_limit(query.pagination.limit());
+        let limit = normalize_resource_limit(query.pagination.limit());
         let before = query
             .pagination
             .cursor()

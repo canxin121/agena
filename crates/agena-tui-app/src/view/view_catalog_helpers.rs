@@ -238,7 +238,7 @@ pub(crate) fn model_catalog_token_count(i18n: &I18n, value: Option<u32>) -> Stri
 
 pub(crate) fn model_catalog_input_capability_summary(
     i18n: &I18n,
-    capabilities: &agena_provider::ModelCapabilityPatch,
+    capabilities: &agena_api::resource::ModelCapabilityPatchResource,
 ) -> String {
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
@@ -265,16 +265,16 @@ pub(crate) fn model_catalog_input_capability_summary(
 
 pub(crate) fn model_catalog_feature_capability_summary(
     i18n: &I18n,
-    capabilities: &agena_provider::ModelCapabilityPatch,
+    capabilities: &agena_api::resource::ModelCapabilityPatchResource,
 ) -> String {
     let mut supported = Vec::new();
     let mut unsupported = Vec::new();
     for feature in [
-        agena_provider::ModelCapabilityFeature::ToolCalling,
-        agena_provider::ModelCapabilityFeature::Streaming,
-        agena_provider::ModelCapabilityFeature::Reasoning,
-        agena_provider::ModelCapabilityFeature::StructuredOutput,
-        agena_provider::ModelCapabilityFeature::Temperature,
+        agena_api::resource::ModelCapabilityFeatureResource::ToolCalling,
+        agena_api::resource::ModelCapabilityFeatureResource::Streaming,
+        agena_api::resource::ModelCapabilityFeatureResource::Reasoning,
+        agena_api::resource::ModelCapabilityFeatureResource::StructuredOutput,
+        agena_api::resource::ModelCapabilityFeatureResource::Temperature,
     ] {
         match capabilities.feature_support(feature) {
             Some(agena_domain::CapabilitySupport::Supported) => {
@@ -290,14 +290,14 @@ pub(crate) fn model_catalog_feature_capability_summary(
 }
 
 pub(crate) fn model_catalog_supported_feature_summary(
-    capabilities: &agena_provider::ModelCapabilityPatch,
+    capabilities: &agena_api::resource::ModelCapabilityPatchResource,
 ) -> String {
     [
-        agena_provider::ModelCapabilityFeature::ToolCalling,
-        agena_provider::ModelCapabilityFeature::Streaming,
-        agena_provider::ModelCapabilityFeature::Reasoning,
-        agena_provider::ModelCapabilityFeature::StructuredOutput,
-        agena_provider::ModelCapabilityFeature::Temperature,
+        agena_api::resource::ModelCapabilityFeatureResource::ToolCalling,
+        agena_api::resource::ModelCapabilityFeatureResource::Streaming,
+        agena_api::resource::ModelCapabilityFeatureResource::Reasoning,
+        agena_api::resource::ModelCapabilityFeatureResource::StructuredOutput,
+        agena_api::resource::ModelCapabilityFeatureResource::Temperature,
     ]
     .into_iter()
     .filter(|feature| {
@@ -312,14 +312,14 @@ pub(crate) fn model_catalog_supported_feature_summary(
 }
 
 pub(crate) fn model_catalog_feature_label(
-    feature: agena_provider::ModelCapabilityFeature,
+    feature: agena_api::resource::ModelCapabilityFeatureResource,
 ) -> &'static str {
     match feature {
-        agena_provider::ModelCapabilityFeature::ToolCalling => "tools",
-        agena_provider::ModelCapabilityFeature::Streaming => "stream",
-        agena_provider::ModelCapabilityFeature::Reasoning => "reasoning",
-        agena_provider::ModelCapabilityFeature::StructuredOutput => "structured",
-        agena_provider::ModelCapabilityFeature::Temperature => "temperature",
+        agena_api::resource::ModelCapabilityFeatureResource::ToolCalling => "tools",
+        agena_api::resource::ModelCapabilityFeatureResource::Streaming => "stream",
+        agena_api::resource::ModelCapabilityFeatureResource::Reasoning => "reasoning",
+        agena_api::resource::ModelCapabilityFeatureResource::StructuredOutput => "structured",
+        agena_api::resource::ModelCapabilityFeatureResource::Temperature => "temperature",
     }
 }
 

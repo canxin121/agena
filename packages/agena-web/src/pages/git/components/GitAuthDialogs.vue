@@ -5,7 +5,7 @@ import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
 import { useI18n } from 'vue-i18n'
 
-type PendingRemoteAction = 'fetch' | 'pull' | 'push'
+import type { PendingRemoteAction } from '@/types/git'
 
 type ToastKind = 'info' | 'success' | 'error'
 type Toasts = { push: (kind: ToastKind, message: string, timeoutMs?: number) => void }

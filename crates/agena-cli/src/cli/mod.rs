@@ -9,7 +9,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use agena_domain::UsagePeriod;
 use agena_mcp_client::protocol::{CallToolParams, CallToolResult, ToolDescriptor};
@@ -1614,18 +1614,7 @@ struct ProviderCapabilitiesOutput {
 
 #[derive(Debug, Serialize)]
 struct PluginStatusOutput {
-    statuses: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Serialize)]
-struct PluginInspectOutput {
-    plugin: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct PluginLogsOutput {
-    plugin_id: String,
-    logs: Vec<agena_plugin_host::PluginLogRecord>,
+    statuses: Vec<agena_api::resource::PluginListItem>,
 }
 
 #[derive(Debug, Serialize)]

@@ -251,7 +251,7 @@ export type MessagePart = {
   agenaPresentation?: JsonLike
   runId?: number | null
   parentPartId?: number | null
-  // For tool parts (ToolInvocation.vue contract).
+  // Tool state consumed by transcriptProjection and the AgenaOperationPart presentation.
   tool?: string
   state?: JsonLike
   metadata?: JsonLike

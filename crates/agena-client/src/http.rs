@@ -666,6 +666,10 @@ impl AgenaClient {
             }
             bytes.extend_from_slice(&chunk);
         }
+        // Validate the complete JSON before projecting the typed response:
+        // this preserves numeric checks even in unknown fields, last-
+        // duplicate-field behavior, and the Protocol/Decode error boundary.
+        // Value stays inside this boundary; callers receive T directly.
         let value = response_json(&bytes, status, "server API")?;
         if !status.is_success() {
             if let Ok(api) = serde_json::from_value::<agena_api::error::ApiError>(value.clone()) {
@@ -868,7 +872,7 @@ impl AgenaClient {
         &self,
         session_id: i64,
         force: bool,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::PluginToolInvokeResponse, ClientError> {
         self.conditional_json(
             &format!("session:{session_id}:plan"),
             self.endpoint(&format!("/api/v1/sessions/{session_id}/plan")),
@@ -1117,7 +1121,7 @@ impl AgenaClient {
         depth: usize,
         limit: usize,
         respect_ignores: bool,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::WorkspaceFileTreeResource, ClientError> {
         let mut url = self.endpoint(&format!("/api/v1/workspaces/{workspace_id}/files"));
         {
             let mut query = url.query_pairs_mut();
@@ -1137,7 +1141,7 @@ impl AgenaClient {
     }
 
     /// Upload one client-local file into the server-owned workspace's managed
-    /// upload directory. The returned JSON contains the server-managed path
+    /// upload directory. The returned resource contains the server-managed path
     /// clients should preserve verbatim as a `WorkspacePath` reference.
     pub async fn upload_workspace_file(
         &self,
@@ -1145,7 +1149,7 @@ impl AgenaClient {
         filename: &str,
         data_base64: &str,
         mime: Option<&str>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::WorkspaceFileUploadResource, ClientError> {
         self.post_json(
             &format!("/api/v1/workspaces/{workspace_id}/files"),
             serde_json::json!({
@@ -1347,12 +1351,16 @@ impl AgenaClient {
     /// detailed host DTOs have not yet moved into `agena-api`, so this SDK
     /// method preserves the public REST JSON without depending on the host
     /// implementation crate.
-    pub async fn plugin_statuses(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn plugin_statuses(
+        &self,
+    ) -> Result<agena_api::resource::PluginListResponse, ClientError> {
         self.get_json("/api/v1/plugins").await
     }
 
     /// Fetch the neutral plugin operation catalog plus terminal decorations.
-    pub async fn plugin_surface_catalog(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn plugin_surface_catalog(
+        &self,
+    ) -> Result<agena_api::resource::PluginSurfaceCatalogResponse, ClientError> {
         self.get_json("/api/v1/plugins/surface").await
     }
 
@@ -1363,7 +1371,10 @@ impl AgenaClient {
         self.get_json("/api/v1/plugins/architecture").await
     }
 
-    pub async fn plugin_inspect(&self, plugin_id: &str) -> Result<serde_json::Value, ClientError> {
+    pub async fn plugin_inspect(
+        &self,
+        plugin_id: &str,
+    ) -> Result<agena_api::resource::PluginInspectResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1379,7 +1390,7 @@ impl AgenaClient {
         plugin_id: &str,
         after_seq: Option<u64>,
         limit: usize,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::PluginLogListResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1399,15 +1410,15 @@ impl AgenaClient {
     }
 
     /// Invoke a plugin Tool API endpoint through `POST /api/v1/plugins/tools/invoke`,
-    /// returning the raw plugin tool invoke response JSON.
+    /// returning its typed public response while maintaining plan-cache invalidation.
     pub async fn invoke_plugin_tool(
         &self,
         plugin_id: &str,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
-    ) -> Result<serde_json::Value, ClientError> {
-        let response: serde_json::Value = self
+    ) -> Result<agena_api::resource::PluginToolInvokeResponse, ClientError> {
+        let response: agena_api::resource::PluginToolInvokeResponse = self
             .post_json(
                 "/api/v1/plugins/tools/invoke",
                 serde_json::json!({
@@ -1424,7 +1435,11 @@ impl AgenaClient {
         {
             let resource = format!("session:{id}:plan");
             let mut reads = self.reads.lock().await;
-            if let Some(next) = response.pointer("/payload/plan") {
+            if let Some(next) = response
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("plan"))
+            {
                 let keys = reads
                     .bodies
                     .iter()
@@ -1437,7 +1452,12 @@ impl AgenaClient {
                 for key in keys {
                     reads.forget(&key);
                 }
-            } else if response.pointer("/payload/cleared") == Some(&serde_json::Value::Bool(true)) {
+            } else if response
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("cleared"))
+                == Some(&serde_json::Value::Bool(true))
+            {
                 let keys = reads
                     .bodies
                     .iter()
@@ -1461,7 +1481,7 @@ impl AgenaClient {
         session_id: Option<i64>,
         slash: Option<&str>,
         raw: &str,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::PluginCommandInvokeResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1669,7 +1689,7 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    pub async fn git_status(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn git_status(&self) -> Result<agena_api::resource::GitStatusResource, ClientError> {
         self.get_json("/api/v1/git/status").await
     }
 
@@ -1805,7 +1825,7 @@ impl AgenaClient {
         value: serde_json::Value,
         dry_run: bool,
         reload: bool,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ConfigSettingsEditResponse, ClientError> {
         self.set_settings_layer_value_if_revision(layer, path, value, dry_run, reload, None)
             .await
     }
@@ -1820,7 +1840,7 @@ impl AgenaClient {
         dry_run: bool,
         reload: bool,
         expected_revision: Option<&str>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ConfigSettingsEditResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1849,7 +1869,7 @@ impl AgenaClient {
         path: &str,
         dry_run: bool,
         reload: bool,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ConfigSettingsEditResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1879,7 +1899,7 @@ impl AgenaClient {
         origin: Option<&str>,
         offset: usize,
         limit: usize,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ModelCatalogListResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/model-catalog");
         {
             let mut params = url.query_pairs_mut();
@@ -1902,7 +1922,7 @@ impl AgenaClient {
     pub async fn model_catalog_matches(
         &self,
         model_ids: &[String],
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ModelCatalogMatchResponse, ClientError> {
         self.post_json(
             "/api/v1/model-catalog/match",
             serde_json::json!({ "model_ids": model_ids }),
@@ -1912,7 +1932,9 @@ impl AgenaClient {
 
     /// Request the server to refresh its model catalog through
     /// `POST /api/v1/model-catalog/refresh`.
-    pub async fn refresh_model_catalog(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn refresh_model_catalog(
+        &self,
+    ) -> Result<agena_api::resource::ModelCatalogRefreshResponse, ClientError> {
         self.post_json("/api/v1/model-catalog/refresh", serde_json::json!({}))
             .await
     }
@@ -1986,7 +2008,7 @@ impl AgenaClient {
     pub async fn create_git_commit(
         &self,
         message: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::GitCommitResource, ClientError> {
         self.create_git_commit_in_workspace(None, message).await
     }
 
@@ -1994,7 +2016,7 @@ impl AgenaClient {
         &self,
         workspace_id: Option<i64>,
         message: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::GitCommitResource, ClientError> {
         self.post_json(
             "/api/v1/git/commits",
             serde_json::json!({ "workspace_id": workspace_id, "message": message }),
@@ -2008,7 +2030,7 @@ impl AgenaClient {
         body: Option<String>,
         base: Option<String>,
         head: Option<String>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::GitPullRequestResource, ClientError> {
         self.create_git_pull_request_in_workspace(None, title, body, base, head)
             .await
     }
@@ -2020,7 +2042,7 @@ impl AgenaClient {
         body: Option<String>,
         base: Option<String>,
         head: Option<String>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::GitPullRequestResource, ClientError> {
         self.post_json(
             "/api/v1/git/pull-requests",
             serde_json::json!({

@@ -9,7 +9,7 @@ use super::{schema_const_value, schema_enum_values, validate_schema_at};
 /// editor shape. This adapter never accepts plugin-authored JSON Schema: every
 /// keyword below is generated from the bounded wire contract.
 pub(crate) fn plugin_settings_schema(
-    manifest: &agena_plugin_host::PluginManifest,
+    manifest: &agena_plugin_sdk::PluginManifest,
 ) -> Option<JsonValue> {
     manifest
         .settings
@@ -18,7 +18,7 @@ pub(crate) fn plugin_settings_schema(
 }
 
 pub(crate) fn settings_contract_editor_schema(
-    contract: &agena_plugin_host::sdk::SettingsContract,
+    contract: &agena_plugin_sdk::SettingsContract,
 ) -> JsonValue {
     let mut schema = settings_node_editor_schema(&contract.root);
     if let Ok(default) = contract.default_value()
@@ -29,8 +29,8 @@ pub(crate) fn settings_contract_editor_schema(
     schema
 }
 
-fn settings_node_editor_schema(node: &agena_plugin_host::sdk::SettingsNode) -> JsonValue {
-    use agena_plugin_host::sdk::SettingsNodeKind;
+fn settings_node_editor_schema(node: &agena_plugin_sdk::SettingsNode) -> JsonValue {
+    use agena_plugin_sdk::SettingsNodeKind;
 
     let mut schema = JsonMap::new();
     schema.insert("title".to_string(), JsonValue::String(node.title.clone()));

@@ -12,7 +12,7 @@ impl ApplicationService {
         &self,
         query: WorkspaceListQuery,
     ) -> ApplicationResult<PaginatedResponse<WorkspaceResource>> {
-        let limit = normalize_limit(query.pagination.limit());
+        let limit = normalize_resource_limit(query.pagination.limit());
         let cursor = query
             .pagination
             .cursor()
@@ -1332,7 +1332,7 @@ use super::{
     WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
     WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
     WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, decode_cursor,
-    fs, io, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    fs, io, non_empty, normalize_resource_limit, timestamp_millis_to_utc, trim_page,
 };
 
 #[cfg(test)]

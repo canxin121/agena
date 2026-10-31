@@ -7,10 +7,8 @@ use agena_api::{
     resource::{
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
         ProviderAdapterSummaryResource, ProviderModelCapabilitiesResource,
-        ProviderModelMetadataResource, ProviderModelRequestOverrideResource, ProviderModelResource,
-        ProviderModelSpeedModeResource, ProviderModelThinkingModeResource, ProviderModelsResponse,
-        ProviderSummaryResource, ReasoningEffortResource, ThinkingDisplayResource,
-        ThinkingRequestResource,
+        ProviderModelMetadataResource, ProviderModelResource, ProviderModelSpeedModeResource,
+        ProviderModelThinkingModeResource, ProviderModelsResponse, ProviderSummaryResource,
     },
 };
 use agena_domain::{Model, ModelCapabilities, ProviderId};
@@ -271,7 +269,7 @@ fn provider_model_metadata_resource_from_domain(
     value: agena_domain::ModelMetadata,
 ) -> ProviderModelMetadataResource {
     ProviderModelMetadataResource {
-        lifecycle: value.lifecycle.map(model_lifecycle_resource_from_domain),
+        lifecycle: value.lifecycle,
         context_window_tokens: value.limits.context_window_tokens,
         max_input_tokens: value.limits.max_input_tokens,
         max_output_tokens: value.limits.max_output_tokens,
@@ -291,41 +289,7 @@ fn provider_model_metadata_resource_from_domain(
         assistant_reasoning_interleaved: value.assistant_reasoning_interleaved,
         assistant_reasoning_field: value.assistant_reasoning_field,
         output_modalities: value.output_modalities,
-        pricing: value
-            .pricing
-            .map(|pricing| agena_api::resource::ModelPricing {
-                input_usd_per_million_tokens: pricing.input_usd_per_million_tokens,
-                output_usd_per_million_tokens: pricing.output_usd_per_million_tokens,
-                cache_read_usd_per_million_tokens: pricing.cache_read_usd_per_million_tokens,
-                cache_write_usd_per_million_tokens: pricing.cache_write_usd_per_million_tokens,
-                tiers: pricing
-                    .tiers
-                    .into_iter()
-                    .map(|tier| agena_api::resource::ModelPricingTier {
-                        tier_type: tier.tier_type,
-                        size_tokens: tier.size_tokens,
-                        input_usd_per_million_tokens: tier.input_usd_per_million_tokens,
-                        output_usd_per_million_tokens: tier.output_usd_per_million_tokens,
-                        cache_read_usd_per_million_tokens: tier.cache_read_usd_per_million_tokens,
-                        cache_write_usd_per_million_tokens: tier.cache_write_usd_per_million_tokens,
-                    })
-                    .collect(),
-            }),
-    }
-}
-
-const fn model_lifecycle_resource_from_domain(
-    value: agena_domain::ModelLifecycle,
-) -> agena_api::resource::ModelLifecycle {
-    match value {
-        agena_domain::ModelLifecycle::Active => agena_api::resource::ModelLifecycle::Active,
-        agena_domain::ModelLifecycle::Preview => agena_api::resource::ModelLifecycle::Preview,
-        agena_domain::ModelLifecycle::Beta => agena_api::resource::ModelLifecycle::Beta,
-        agena_domain::ModelLifecycle::Alpha => agena_api::resource::ModelLifecycle::Alpha,
-        agena_domain::ModelLifecycle::Experimental => {
-            agena_api::resource::ModelLifecycle::Experimental
-        }
-        agena_domain::ModelLifecycle::Deprecated => agena_api::resource::ModelLifecycle::Deprecated,
+        pricing: value.pricing,
     }
 }
 
@@ -337,20 +301,9 @@ fn provider_model_thinking_mode_resource_from_domain(
         display_name: value.display_name,
         description: value.description,
         preset: value.preset,
-        thinking: value.thinking.map(thinking_request_resource_from_domain),
-        request_override: provider_model_request_override_resource_from_domain(
-            value.request_override,
-        ),
-        adapter_overrides: value
-            .adapter_overrides
-            .into_iter()
-            .map(|(adapter, override_patch)| {
-                (
-                    adapter,
-                    provider_model_request_override_resource_from_domain(override_patch),
-                )
-            })
-            .collect(),
+        thinking: value.thinking,
+        request_override: value.request_override,
+        adapter_overrides: value.adapter_overrides,
     }
 }
 
@@ -361,70 +314,8 @@ fn provider_model_speed_mode_resource_from_domain(
         is_default: value.is_default,
         display_name: value.display_name,
         description: value.description,
-        request_override: provider_model_request_override_resource_from_domain(
-            value.request_override,
-        ),
-        adapter_overrides: value
-            .adapter_overrides
-            .into_iter()
-            .map(|(adapter, override_patch)| {
-                (
-                    adapter,
-                    provider_model_request_override_resource_from_domain(override_patch),
-                )
-            })
-            .collect(),
-    }
-}
-
-fn provider_model_request_override_resource_from_domain(
-    value: agena_domain::ModelSpeedModeRequestOverride,
-) -> ProviderModelRequestOverrideResource {
-    ProviderModelRequestOverrideResource {
-        headers: value.headers,
-        body_patch: value.body_patch,
-    }
-}
-
-fn thinking_request_resource_from_domain(
-    value: agena_domain::ThinkingRequest,
-) -> ThinkingRequestResource {
-    match value {
-        agena_domain::ThinkingRequest::Budget { budget_tokens } => {
-            ThinkingRequestResource::Budget { budget_tokens }
-        }
-        agena_domain::ThinkingRequest::Adaptive { effort, display } => {
-            ThinkingRequestResource::Adaptive {
-                effort: effort.map(reasoning_effort_resource_from_domain),
-                display: display.map(thinking_display_resource_from_domain),
-            }
-        }
-        agena_domain::ThinkingRequest::Effort { effort } => ThinkingRequestResource::Effort {
-            effort: reasoning_effort_resource_from_domain(effort),
-        },
-        agena_domain::ThinkingRequest::Disabled => ThinkingRequestResource::Disabled,
-    }
-}
-
-const fn reasoning_effort_resource_from_domain(
-    value: agena_domain::ReasoningEffort,
-) -> ReasoningEffortResource {
-    match value {
-        agena_domain::ReasoningEffort::Minimal => ReasoningEffortResource::Minimal,
-        agena_domain::ReasoningEffort::Low => ReasoningEffortResource::Low,
-        agena_domain::ReasoningEffort::Medium => ReasoningEffortResource::Medium,
-        agena_domain::ReasoningEffort::High => ReasoningEffortResource::High,
-        agena_domain::ReasoningEffort::Xhigh => ReasoningEffortResource::Xhigh,
-        agena_domain::ReasoningEffort::Max => ReasoningEffortResource::Max,
-    }
-}
-
-const fn thinking_display_resource_from_domain(
-    value: agena_domain::ThinkingDisplay,
-) -> ThinkingDisplayResource {
-    match value {
-        agena_domain::ThinkingDisplay::Summarized => ThinkingDisplayResource::Summarized,
-        agena_domain::ThinkingDisplay::Omitted => ThinkingDisplayResource::Omitted,
+        request_override: value.request_override,
+        adapter_overrides: value.adapter_overrides,
     }
 }
 

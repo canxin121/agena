@@ -327,9 +327,7 @@ pub fn store_rwlock_option<T>(cell: &RwLock<Option<T>>, value: T, poisoned: &str
     Ok(())
 }
 
-pub fn normalize_schema_json(value: Value) -> Value {
-    normalize_schema_json_value(value, true)
-}
+pub use crate::manifest_support::normalize_schema_json;
 
 /// Normalize structural Schemars output while preserving author-facing
 /// titles/descriptions. Settings contracts use this path so Rust type names and
@@ -337,104 +335,7 @@ pub fn normalize_schema_json(value: Value) -> Value {
 /// schemas keep using `normalize_schema_json`, which intentionally strips
 /// presentation metadata from their machine-facing schema.
 pub(crate) fn normalize_settings_schema_json(value: Value) -> Value {
-    normalize_schema_json_value(value, false)
-}
-
-fn normalize_schema_json_value(value: Value, remove_titles: bool) -> Value {
-    match value {
-        Value::Object(mut object) => {
-            object.remove("$schema");
-            if remove_titles {
-                object.remove("title");
-            }
-            let mut cleaned = serde_json::Map::new();
-            for (key, value) in object {
-                let normalized = match key.as_str() {
-                    "properties" => match value {
-                        Value::Object(map) => Value::Object(
-                            map.into_iter()
-                                .map(|(nested_key, nested_value)| {
-                                    (
-                                        nested_key,
-                                        normalize_schema_json_value(nested_value, remove_titles),
-                                    )
-                                })
-                                .collect(),
-                        ),
-                        other => normalize_schema_json_value(other, remove_titles),
-                    },
-                    "required" => match value {
-                        Value::Array(items) => Value::Array(items),
-                        other => normalize_schema_json_value(other, remove_titles),
-                    },
-                    "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
-                        match value {
-                            Value::Object(map) => Value::Object(
-                                map.into_iter()
-                                    .map(|(nested_key, nested_value)| {
-                                        (
-                                            nested_key,
-                                            normalize_schema_json_value(
-                                                nested_value,
-                                                remove_titles,
-                                            ),
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                            other => normalize_schema_json_value(other, remove_titles),
-                        }
-                    }
-                    _ => normalize_schema_json_value(value, remove_titles),
-                };
-                cleaned.insert(key, normalized);
-            }
-            if !cleaned.contains_key("type") && schema_map_is_object_like(&cleaned) {
-                cleaned.insert("type".to_string(), Value::String("object".to_string()));
-            }
-            if cleaned
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| kind == "object")
-                && !cleaned.contains_key("properties")
-            {
-                cleaned.insert(
-                    "properties".to_string(),
-                    Value::Object(serde_json::Map::new()),
-                );
-            }
-            Value::Object(cleaned)
-        }
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(|item| normalize_schema_json_value(item, remove_titles))
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
-fn schema_map_is_object_like(map: &serde_json::Map<String, Value>) -> bool {
-    if map
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind == "object")
-    {
-        return true;
-    }
-    if map.contains_key("properties") || map.contains_key("required") {
-        return true;
-    }
-    ["oneOf", "anyOf", "allOf"].into_iter().any(|key| {
-        map.get(key)
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty() && items.iter().all(schema_value_is_object_like))
-    })
-}
-
-fn schema_value_is_object_like(value: &Value) -> bool {
-    value.as_object().is_some_and(schema_map_is_object_like)
+    crate::manifest_support::normalize_schema_json_value(value, false)
 }
 
 pub fn normalize_typed_json_value<T, F>(value: &T, normalize: F) -> Result<T>
@@ -446,4 +347,90 @@ where
         serde_json::to_value(value).map_err(|err| PluginError::invalid_params_error(&err))?;
     normalize(&mut json);
     parse_typed_json_value(json)
+}
+
+#[cfg(test)]
+mod numeric_generation_tests {
+    use serde_json::json;
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(
+        minimum("limit", 0), maximum("ceiling", 10),
+        exclusive_minimum("after", -1), exclusive_maximum("before", 11),
+        item_minimum("samples", 0), item_maximum("samples", 10),
+        item_exclusive_minimum("samples", -1), item_exclusive_maximum("samples", 11)
+    )]
+    struct NumericInput {
+        #[serde(rename = "limit")]
+        #[arg(minimum = 1)]
+        lower: i64,
+        #[arg(maximum = 9)]
+        ceiling: i64,
+        #[arg(exclusive_minimum = 2)]
+        after: i64,
+        #[arg(exclusive_maximum = 8)]
+        before: i64,
+        #[arg(
+            item_minimum = 1,
+            item_maximum = 9,
+            item_exclusive_minimum = 2,
+            item_exclusive_maximum = 8
+        )]
+        samples: Vec<i64>,
+    }
+
+    fn valid() -> serde_json::Value {
+        json!({"limit": 1, "ceiling": 9, "after": 3, "before": 7, "samples": [3, 7]})
+    }
+
+    #[test]
+    fn numeric_field_overrides_and_array_items_keep_schema_bounds() {
+        let schema = NumericInput::input_schema();
+        assert_eq!(schema["properties"]["limit"]["minimum"], 1);
+        assert_eq!(schema["properties"]["ceiling"]["maximum"], 9);
+        assert_eq!(schema["properties"]["after"]["exclusiveMinimum"], 2);
+        assert_eq!(schema["properties"]["before"]["exclusiveMaximum"], 8);
+        let items = &schema["properties"]["samples"]["items"];
+        assert_eq!(items["minimum"], 1);
+        assert_eq!(items["maximum"], 9);
+        assert_eq!(items["exclusiveMinimum"], 2);
+        assert_eq!(items["exclusiveMaximum"], 8);
+        assert!(NumericInput::parse_input(valid()).is_ok());
+    }
+
+    #[test]
+    fn numeric_runtime_boundaries_keep_field_and_item_error_paths() {
+        for (field, invalid) in [
+            ("limit", json!(0)),
+            ("ceiling", json!(10)),
+            ("after", json!(2)),
+            ("before", json!(8)),
+            ("samples", json!([2])),
+        ] {
+            let mut input = valid();
+            input[field] = invalid;
+            let error = NumericInput::parse_input(input).unwrap_err();
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct PreciseInteger {
+        #[arg(minimum = 9_007_199_254_740_993_u64)]
+        value: u64,
+    }
+
+    #[test]
+    fn numeric_schema_and_validation_preserve_large_integer_precision() {
+        assert_eq!(
+            PreciseInteger::input_schema()["properties"]["value"]["minimum"],
+            json!(9_007_199_254_740_993_u64),
+        );
+        assert!(PreciseInteger::parse_input(json!({"value": 9_007_199_254_740_993_u64})).is_ok());
+        assert!(PreciseInteger::parse_input(json!({"value": 9_007_199_254_740_992_u64})).is_err());
+    }
 }

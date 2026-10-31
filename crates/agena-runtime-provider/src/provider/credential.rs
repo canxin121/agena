@@ -694,9 +694,11 @@ async fn resolve_inline_auth_credential(
                 return selected;
             };
 
-            let refreshed =
-                crate::provider::auth::refresh_openai_token(identity, refresh_token.as_str())
-                    .await?;
+            let refreshed = crate::provider::auth::refresh_openai_token(
+                &identity.codex_user_agent(),
+                refresh_token.as_str(),
+            )
+            .await?;
             let updated = AuthData::OAuth {
                 issuer,
                 refresh: refreshed.refresh,

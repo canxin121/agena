@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ComponentPublicInstance } from 'vue'
+import type { SidebarSession as SessionLike, SessionMenuTarget, MenuRefEl, SessionToggleSelectionOptions, DirectoryToggleSelectionOptions } from '@/layout/chatSidebar/sessionMenu.types'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { RiCloseLine, RiDeleteBinLine, RiFileList2Line, RiListCheck3, RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
@@ -17,15 +17,6 @@ import DirectoryRow from '@/layout/chatSidebar/components/DirectoryRow.vue'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SessionRow from '@/layout/chatSidebar/components/SessionRow.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
-
-type SessionLike = {
-  id: string
-  title?: string
-  slug?: string
-  directory?: string
-  time?: { updated?: number | null } | null
-  [k: string]: JsonValue
-}
 
 type SessionSearchHit = {
   directory: DirectoryEntry
@@ -48,17 +39,6 @@ type ThreadSessionRow = {
 }
 
 type DirectoryActivityState = 'running' | 'attention' | 'mixed' | null
-
-type SessionMenuTarget = { directory: DirectoryEntry; session: SessionLike }
-type MenuRefEl = Element | ComponentPublicInstance | null
-type DirectoryToggleSelectionOptions = {
-  event?: MouseEvent
-  orderedDirectoryIds?: string[]
-}
-type SessionToggleSelectionOptions = {
-  event?: MouseEvent
-  orderedSessionIds?: string[]
-}
 
 const props = defineProps<{
   uiIsCompactLayout: boolean

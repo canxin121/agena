@@ -206,72 +206,13 @@ impl ProviderModelMetadataResource {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// Per-model request overrides (headers and body patch).
-pub struct ProviderModelRequestOverrideResource {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub headers: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub body_patch: BTreeMap<String, serde_json::Value>,
-}
-
-impl ProviderModelRequestOverrideResource {
-    pub fn is_empty(&self) -> bool {
-        self.headers.is_empty() && self.body_patch.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-/// How thinking is requested from a model.
-pub enum ThinkingRequestResource {
-    Budget {
-        budget_tokens: u32,
-    },
-    Adaptive {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        effort: Option<ReasoningEffortResource>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        display: Option<ThinkingDisplayResource>,
-    },
-    Effort {
-        effort: ReasoningEffortResource,
-    },
-    Disabled,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Reasoning effort level of a model.
-pub enum ReasoningEffortResource {
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-impl AsRef<str> for ReasoningEffortResource {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// How model thinking is displayed.
-pub enum ThinkingDisplayResource {
-    Summarized,
-    Omitted,
-}
+// These protocol values are shared with the domain; no runtime behavior or
+// credential storage is part of the types.
+pub use agena_domain::{
+    ModelSpeedModeRequestOverride as ProviderModelRequestOverrideResource,
+    ReasoningEffort as ReasoningEffortResource, ThinkingDisplay as ThinkingDisplayResource,
+    ThinkingRequest as ThinkingRequestResource,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// A thinking mode offered by a model.

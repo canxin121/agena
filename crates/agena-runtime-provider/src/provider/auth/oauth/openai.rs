@@ -6,8 +6,8 @@ use agena_provider::{DeviceCodeStart, OAuthAuthorizeStart, ProviderErrorKind};
 
 use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, ensure_http_success, expires_at_ms_from_seconds,
-    extract_openai_account_id, extract_openai_fedramp_account, oauth_authorize_start, oauth_client,
-    oauth_error_code, oauth_error_summary, parse_device_auth_interval, provider_http_client,
+    oauth_authorize_start, oauth_client, oauth_error_code, oauth_error_summary,
+    openai_account_identity, parse_device_auth_interval, provider_http_client,
     response_body_bounded, response_json_bounded,
 };
 use agena_provider::OAuthTokenResponse;
@@ -15,12 +15,21 @@ use agena_provider::OAuthTokenResponse;
 /// Request-local identity keeps the shared HTTP pool independent of any
 /// runtime generation, including token refreshes and device authorization.
 fn openai_auth_post(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
     endpoint: impl reqwest::IntoUrl,
-) -> reqwest::RequestBuilder {
-    provider_http_client()
+) -> Result<reqwest::RequestBuilder, ProviderError> {
+    Ok(provider_http_client()?
         .post(endpoint)
-        .header(reqwest::header::USER_AGENT, identity.codex_user_agent())
+        .header(reqwest::header::USER_AGENT, user_agent))
+}
+
+/// Payload compatibility is explicit: device and draft flows historically
+/// accept a present empty refresh value; saved browser login rejects it.
+/// This controls decoding only and grants no credential-store access.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiRefreshTokenRequirement {
+    Present,
+    NonEmpty,
 }
 
 pub fn start_openai_browser_oauth(
@@ -47,33 +56,27 @@ pub fn start_openai_browser_oauth(
 }
 
 pub async fn exchange_openai_oauth_code(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
     code: &str,
     pkce_verifier: &str,
     redirect_uri: &str,
+    refresh_requirement: OpenAiRefreshTokenRequirement,
 ) -> Result<OAuthTokenResponse, ProviderError> {
-    let encoded_form = {
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("grant_type", "authorization_code");
-        form.append_pair("code", code);
-        form.append_pair("redirect_uri", redirect_uri);
-        form.append_pair("client_id", OPENAI_CLIENT_ID);
-        form.append_pair("code_verifier", pkce_verifier);
-        form.finish()
-    };
+    let encoded_form = authorization_code_form(code, pkce_verifier, redirect_uri);
 
     request_openai_oauth_token(
-        identity,
+        user_agent,
         encoded_form,
         "openai oauth token exchange failed",
         None,
         false,
+        refresh_requirement,
     )
     .await
 }
 
 pub async fn refresh_openai_token(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
     refresh_token: &str,
 ) -> Result<OAuthTokenResponse, ProviderError> {
     let refresh_token = refresh_token.trim();
@@ -92,17 +95,18 @@ pub async fn refresh_openai_token(
     };
 
     request_openai_oauth_token(
-        identity,
+        user_agent,
         encoded_form,
         "openai oauth token refresh failed",
         Some(refresh_token),
         true,
+        OpenAiRefreshTokenRequirement::NonEmpty,
     )
     .await
 }
 
 pub async fn start_openai_headless_device_code(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
 ) -> Result<DeviceCodeStart, ProviderError> {
     #[derive(Debug, Deserialize)]
     struct DeviceCodeResponse {
@@ -113,9 +117,9 @@ pub async fn start_openai_headless_device_code(
     }
 
     let response = openai_auth_post(
-        identity,
+        user_agent,
         format!("{OPENAI_ISSUER}/api/accounts/deviceauth/usercode"),
-    )
+    )?
     .header(reqwest::header::CONTENT_TYPE, "application/json")
     .json(&serde_json::json!({
         "client_id": OPENAI_CLIENT_ID,
@@ -134,7 +138,7 @@ pub async fn start_openai_headless_device_code(
 }
 
 pub async fn poll_openai_headless_device_code(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
     device_auth_id: &str,
     user_code: &str,
 ) -> Result<Option<OAuthTokenResponse>, ProviderError> {
@@ -144,21 +148,10 @@ pub async fn poll_openai_headless_device_code(
         code_verifier: String,
     }
 
-    #[derive(Debug, Deserialize)]
-    struct TokenResponseBody {
-        #[serde(default)]
-        id_token: Option<String>,
-        access_token: String,
-        #[serde(default)]
-        refresh_token: Option<String>,
-        #[serde(default)]
-        expires_in: Option<u64>,
-    }
-
     let poll_response = openai_auth_post(
-        identity,
+        user_agent,
         format!("{OPENAI_ISSUER}/api/accounts/deviceauth/token"),
-    )
+    )?
     .header(reqwest::header::CONTENT_TYPE, "application/json")
     .json(&serde_json::json!({
         "device_auth_id": device_auth_id,
@@ -167,29 +160,20 @@ pub async fn poll_openai_headless_device_code(
     .send()
     .await?;
 
-    if poll_response.status() == reqwest::StatusCode::FORBIDDEN
-        || poll_response.status() == reqwest::StatusCode::NOT_FOUND
-    {
+    if openai_device_authorization_pending(poll_response.status()) {
         return Ok(None);
     }
 
     let poll_response = ensure_http_success("openai", None, poll_response).await?;
     let poll_data: DevicePollResponse = response_json_bounded(poll_response).await?;
 
-    let encoded_form = {
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("grant_type", "authorization_code");
-        form.append_pair("code", poll_data.authorization_code.as_str());
-        form.append_pair(
-            "redirect_uri",
-            "https://auth.openai.com/deviceauth/callback",
-        );
-        form.append_pair("client_id", OPENAI_CLIENT_ID);
-        form.append_pair("code_verifier", poll_data.code_verifier.as_str());
-        form.finish()
-    };
+    let encoded_form = authorization_code_form(
+        &poll_data.authorization_code,
+        &poll_data.code_verifier,
+        &format!("{OPENAI_ISSUER}/deviceauth/callback"),
+    );
 
-    let token_response = openai_auth_post(identity, format!("{OPENAI_ISSUER}/oauth/token"))
+    let token_response = openai_auth_post(user_agent, format!("{OPENAI_ISSUER}/oauth/token"))?
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -199,26 +183,28 @@ pub async fn poll_openai_headless_device_code(
         .await?;
 
     let token_response = ensure_http_success("openai", None, token_response).await?;
-    let token_data: TokenResponseBody = response_json_bounded(token_response).await?;
-    let refresh_token = token_data.refresh_token.ok_or_else(|| {
+    let mut token_data: OpenAiTokenResponseBody = response_json_bounded(token_response).await?;
+    let refresh_token = token_data.refresh_token.take().ok_or_else(|| {
         ProviderError::Provider("openai device oauth response missing refresh_token".to_owned())
     })?;
+    Ok(Some(token_data.into_response(refresh_token)))
+}
 
-    Ok(Some(OAuthTokenResponse {
-        refresh: refresh_token,
-        access: token_data.access_token.clone(),
-        id_token: token_data.id_token.clone(),
-        expires_at_ms: expires_at_ms_from_seconds(token_data.expires_in),
-        account_id: openai_account_id_from_token_bodies(
-            token_data.id_token.as_deref(),
-            token_data.access_token.as_str(),
-        ),
-        chatgpt_account_is_fedramp: openai_fedramp_from_token_bodies(
-            token_data.id_token.as_deref(),
-            token_data.access_token.as_str(),
-        ),
-        user: None,
-    }))
+fn openai_device_authorization_pending(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+    )
+}
+
+fn authorization_code_form(code: &str, verifier: &str, redirect_uri: &str) -> String {
+    let mut form = url::form_urlencoded::Serializer::new(String::new());
+    form.append_pair("grant_type", "authorization_code");
+    form.append_pair("code", code);
+    form.append_pair("redirect_uri", redirect_uri);
+    form.append_pair("client_id", OPENAI_CLIENT_ID);
+    form.append_pair("code_verifier", verifier);
+    form.finish()
 }
 
 fn openai_oauth_client(
@@ -246,13 +232,14 @@ struct OpenAiTokenResponseBody {
 }
 
 async fn request_openai_oauth_token(
-    identity: &crate::ProviderClientIdentity,
+    user_agent: &str,
     encoded_form: String,
     error_context: &str,
     refresh_fallback: Option<&str>,
     refresh_flow: bool,
+    refresh_requirement: OpenAiRefreshTokenRequirement,
 ) -> Result<OAuthTokenResponse, ProviderError> {
-    let response = openai_auth_post(identity, format!("{OPENAI_ISSUER}/oauth/token"))
+    let response = openai_auth_post(user_agent, format!("{OPENAI_ISSUER}/oauth/token"))?
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -266,45 +253,42 @@ async fn request_openai_oauth_token(
     }
 
     let token: OpenAiTokenResponseBody = response_json_bounded(response).await?;
-    let refresh = token
-        .refresh_token
-        .or_else(|| refresh_fallback.map(str::to_owned))
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            ProviderError::Provider(format!("{error_context}: missing refresh_token"))
-        })?;
-
-    Ok(OAuthTokenResponse {
-        refresh,
-        access: token.access_token.clone(),
-        id_token: token.id_token.clone(),
-        expires_at_ms: expires_at_ms_from_seconds(token.expires_in),
-        account_id: openai_account_id_from_token_bodies(
-            token.id_token.as_deref(),
-            token.access_token.as_str(),
-        ),
-        chatgpt_account_is_fedramp: openai_fedramp_from_token_bodies(
-            token.id_token.as_deref(),
-            token.access_token.as_str(),
-        ),
-        user: None,
-    })
+    token.require_refresh(refresh_fallback, refresh_requirement, error_context)
 }
 
-fn openai_account_id_from_token_bodies(
-    id_token: Option<&str>,
-    access_token: &str,
-) -> Option<String> {
-    id_token
-        .and_then(extract_openai_account_id)
-        .or_else(|| extract_openai_account_id(access_token))
-}
+impl OpenAiTokenResponseBody {
+    fn require_refresh(
+        mut self,
+        fallback: Option<&str>,
+        requirement: OpenAiRefreshTokenRequirement,
+        error_context: &str,
+    ) -> Result<OAuthTokenResponse, ProviderError> {
+        let refresh = self
+            .refresh_token
+            .take()
+            .or_else(|| fallback.map(str::to_owned))
+            .filter(|value| {
+                requirement == OpenAiRefreshTokenRequirement::Present || !value.trim().is_empty()
+            })
+            .ok_or_else(|| {
+                ProviderError::Provider(format!("{error_context}: missing refresh_token"))
+            })?;
+        Ok(self.into_response(refresh))
+    }
 
-fn openai_fedramp_from_token_bodies(id_token: Option<&str>, access_token: &str) -> bool {
-    id_token
-        .and_then(extract_openai_fedramp_account)
-        .or_else(|| extract_openai_fedramp_account(access_token))
-        .unwrap_or(false)
+    fn into_response(self, refresh: String) -> OAuthTokenResponse {
+        let (account_id, chatgpt_account_is_fedramp) =
+            openai_account_identity(self.id_token.as_deref(), &self.access_token);
+        OAuthTokenResponse {
+            refresh,
+            access: self.access_token,
+            id_token: self.id_token,
+            expires_at_ms: expires_at_ms_from_seconds(self.expires_in),
+            account_id,
+            chatgpt_account_is_fedramp,
+            user: None,
+        }
+    }
 }
 
 async fn openai_oauth_token_error(
@@ -360,4 +344,122 @@ fn openai_refresh_failure_message(body: &str) -> Option<String> {
         _ => return None,
     };
     Some(message.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn browser_start_keeps_pkce_state_scopes_and_originator() {
+        let start = start_openai_browser_oauth("http://localhost:3210/callback").unwrap();
+        let url = url::Url::parse(&start.authorize_url).unwrap();
+        let query: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query["state"], start.state);
+        assert!(!start.state.is_empty());
+        assert_eq!(query["client_id"], OPENAI_CLIENT_ID);
+        assert_eq!(query["originator"], RUNTIME_CODEX_ORIGINATOR);
+        assert_eq!(query["redirect_uri"], "http://localhost:3210/callback");
+        assert_eq!(query["code_challenge_method"], "S256");
+        let challenge = oauth2::PkceCodeChallenge::from_code_verifier_sha256(
+            &oauth2::PkceCodeVerifier::new(start.pkce_verifier),
+        );
+        assert_eq!(&query["code_challenge"], challenge.as_str());
+        assert!(
+            query["scope"]
+                .split_whitespace()
+                .any(|scope| scope == "offline_access")
+        );
+        assert!(
+            query["scope"]
+                .split_whitespace()
+                .any(|scope| scope == "api.connectors.invoke")
+        );
+    }
+
+    #[test]
+    fn token_form_and_request_keep_exact_request_local_identity() {
+        let form =
+            authorization_code_form("code & +", "verifier/=", "http://localhost/callback?q=1");
+        let values: std::collections::BTreeMap<_, _> = url::form_urlencoded::parse(form.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(values["code"], "code & +");
+        assert_eq!(values["code_verifier"], "verifier/=");
+        assert_eq!(values["grant_type"], "authorization_code");
+        assert_eq!(values["client_id"], OPENAI_CLIENT_ID);
+        let request = openai_auth_post("test-agent/1", "https://example.invalid/oauth/token")
+            .unwrap()
+            .body(form)
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()[reqwest::header::USER_AGENT],
+            "test-agent/1"
+        );
+    }
+
+    #[test]
+    fn token_refresh_requirements_preserve_draft_and_saved_login_compatibility() {
+        let parse = |value| serde_json::from_value::<OpenAiTokenResponseBody>(value).unwrap();
+        let empty = json!({"access_token": "access", "refresh_token": ""});
+        assert!(
+            parse(empty.clone())
+                .require_refresh(None, OpenAiRefreshTokenRequirement::Present, "exchange")
+                .is_ok()
+        );
+        assert!(
+            parse(empty)
+                .require_refresh(None, OpenAiRefreshTokenRequirement::NonEmpty, "exchange")
+                .is_err()
+        );
+        assert!(
+            parse(json!({"access_token": "access"}))
+                .require_refresh(None, OpenAiRefreshTokenRequirement::Present, "exchange")
+                .is_err()
+        );
+        let refreshed = parse(json!({"access_token": "access"}))
+            .require_refresh(
+                Some("previous"),
+                OpenAiRefreshTokenRequirement::NonEmpty,
+                "refresh",
+            )
+            .unwrap();
+        assert_eq!(refreshed.refresh, "previous");
+        assert_eq!(refreshed.expires_at_ms, 0);
+    }
+
+    #[test]
+    fn pending_statuses_and_refresh_failures_keep_protocol_meaning() {
+        assert!(openai_device_authorization_pending(
+            reqwest::StatusCode::FORBIDDEN
+        ));
+        assert!(openai_device_authorization_pending(
+            reqwest::StatusCode::NOT_FOUND
+        ));
+        for status in [
+            reqwest::StatusCode::OK,
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(!openai_device_authorization_pending(status));
+        }
+        assert!(
+            openai_refresh_failure_message(r#"{"error":"refresh_token_expired"}"#)
+                .unwrap()
+                .contains("expired")
+        );
+        assert!(
+            openai_refresh_failure_message(r#"{"error":{"code":"refresh_token_reused"}}"#)
+                .unwrap()
+                .contains("already used")
+        );
+        assert!(
+            openai_refresh_failure_message(r#"{"error":"refresh_token_invalidated"}"#)
+                .unwrap()
+                .contains("revoked")
+        );
+    }
 }

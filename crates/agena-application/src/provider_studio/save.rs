@@ -18,40 +18,13 @@ use super::catalog::{
     provider_model_selection_contains, provider_model_settings_path, provider_settings_path,
     quoted_settings_segment, required_provider_save_field, required_trimmed,
 };
-use super::draft_auth_data::{
-    ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
-};
-use super::draft_config::ProviderConfigDraft;
 use crate::Application;
 use crate::provider_queries::provider_adapter_models_response;
 use agena_domain::ProviderId;
-
-pub(crate) fn parse_credential_issuer(
-    value: &str,
-) -> anyhow::Result<agena_provider::CredentialIssuer> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "openai_chatgpt" => Ok(agena_provider::CredentialIssuer::OpenaiChatgpt),
-        "github_copilot" => Ok(agena_provider::CredentialIssuer::GithubCopilot),
-        "gitlab" => Ok(agena_provider::CredentialIssuer::Gitlab),
-        "google_adc" => Ok(agena_provider::CredentialIssuer::GoogleAdc),
-        "sap_ai_core" => Ok(agena_provider::CredentialIssuer::SapAiCore),
-        _ => Err(anyhow!(
-            "unsupported credential issuer `{}`; expected openai_chatgpt, github_copilot, gitlab, google_adc, or sap_ai_core",
-            value.trim()
-        )),
-    }
-}
-
-pub(crate) fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
-pub(crate) fn trimmed_owned(value: &str) -> Option<String> {
-    non_empty(Some(value)).map(ToOwned::to_owned)
-}
+use agena_provider::draft::ProviderConfigDraft;
+use agena_provider::draft::{
+    ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
+};
 
 // ---------------------------------------------------------------------------
 // Config JSON helpers
@@ -545,7 +518,7 @@ pub(crate) fn provider_model_draft_value(
                 && let Some(catalog_model) =
                     preferred_catalog_model_for_lookup_ids(&catalog_entries, &catalog_lookup_ids)
             {
-                return crate::provider_studio::apply_catalog_template_to_model_value(
+                return agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
                     configured,
                     catalog_model,
                 )
@@ -943,14 +916,15 @@ pub(crate) async fn patch_provider_settings(
             )
         })
         .await
-        .map_err(ProviderStudioSaveError::other)??;
+        .map_err(ProviderStudioSaveError::other)?
+        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
 
     if response.reload_required {
         app.runtime_control()
             .reload()
             .await
             .context("failed to reload runtime after provider settings change")
-            .map_err(ProviderStudioSaveError::other_anyhow)?;
+            .map_err(provider_studio_save_error_from_anyhow)?;
     }
     Ok(response)
 }
@@ -979,14 +953,15 @@ pub(crate) async fn patch_provider_settings_root(
             )
         })
         .await
-        .map_err(ProviderStudioSaveError::other)??;
+        .map_err(ProviderStudioSaveError::other)?
+        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
 
     if response.reload_required {
         app.runtime_control()
             .reload()
             .await
             .context("failed to reload runtime after provider settings change")
-            .map_err(ProviderStudioSaveError::other_anyhow)?;
+            .map_err(provider_studio_save_error_from_anyhow)?;
     }
     Ok(response)
 }
@@ -1012,14 +987,15 @@ pub(crate) async fn set_provider_settings(
                 })
         })
         .await
-        .map_err(ProviderStudioSaveError::other)??;
+        .map_err(ProviderStudioSaveError::other)?
+        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
 
     if response.reload_required {
         app.runtime_control()
             .reload()
             .await
             .context("failed to reload runtime after provider settings change")
-            .map_err(ProviderStudioSaveError::other_anyhow)?;
+            .map_err(provider_studio_save_error_from_anyhow)?;
     }
     Ok(response)
 }
@@ -1049,4 +1025,24 @@ pub(crate) fn default_speed_mode_name(
         .iter()
         .find(|(_, mode)| mode.is_default)
         .map(|(name, _)| name.clone())
+}
+
+/// Preserve every `anyhow` context/source layer before projecting the
+/// diagnostic into the user-safe Provider Studio failure channel.
+pub(crate) fn provider_studio_save_error_from_anyhow(
+    error: anyhow::Error,
+) -> ProviderStudioSaveError {
+    let diagnostic = agena_failure::diagnostic::format_error_chain(error.as_ref());
+    if matches!(
+        error.downcast_ref::<agena_runtime::RuntimeControlServiceError>(),
+        Some(agena_runtime::RuntimeControlServiceError::Shutdown)
+    ) {
+        return ProviderStudioSaveError::Other(
+            crate::ApplicationError::service_unavailable(diagnostic)
+                .failure
+                .as_ref()
+                .into(),
+        );
+    }
+    ProviderStudioSaveError::other(diagnostic)
 }

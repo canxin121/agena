@@ -2090,7 +2090,7 @@ mod provider_transport_error_tests {
             );
             assert_eq!(transport_io_reason(&error), Some(expected));
         }
-        let error = Error::new(ErrorKind::Other, "private-unknown-cause-canary");
+        let error = Error::other("private-unknown-cause-canary");
         assert_eq!(transport_io_reason(&error), None);
     }
 

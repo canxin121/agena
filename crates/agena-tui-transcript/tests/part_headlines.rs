@@ -556,3 +556,39 @@ fn lifecycle_and_fold_parts_keep_their_meaningful_state_labels() {
         }
     }
 }
+
+#[test]
+fn tool_subject_fallback_uses_shared_file_targets_without_rewriting_input() {
+    let input = json!({
+        "paths": ["中文.rs", "second.rs"],
+        "description": "unrelated description",
+        "api_key": "private credential",
+    });
+    let content = agena_runtime_contracts::part_content::ToolCallContent {
+        name: "agena.fs.read_many".into(),
+        input: input.clone(),
+        call_id: 91,
+        state: agena_domain::ToolResultState::Completed,
+        ..Default::default()
+    };
+    let mut part = wire("tool_call", content.as_value());
+    part.presentation = Some(PartDocument {
+        title: "Read files".into(),
+        summary: String::new(),
+        blocks: vec![],
+    });
+    let entry = projected(part);
+    for expanded in [false, true] {
+        let rendered = render(&entry, expanded, 100, &I18n::english());
+        let headline = &rendered.lines[1];
+        assert!(headline.text.contains("中文.rs +1"), "{}", headline.text);
+        assert!(!headline.text.contains("unrelated description"));
+        assert!(!headline.text.contains("private credential"));
+    }
+    let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) =
+        &entry.parts[0].content
+    else {
+        panic!("expected operation");
+    };
+    assert_eq!(Value::from(tool.operation.invocation.input.clone()), input);
+}

@@ -45,8 +45,7 @@ use crate::sdk::host_api::{
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
     MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    PluginNotifyAction, PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind,
-    ToolRegistryChangedEvent,
+    PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -56,13 +55,13 @@ use crate::sdk::{
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforeResponse, CommandDefinition, CommandInvokeInput,
     CommandResult, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    NotificationInput, PluginDisplayContribution, PluginError, PluginErrorKind, PluginKey,
-    PluginManifest, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
-    PluginServiceInvokeOutput, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
-    ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    NotificationInput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
+    PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput,
+    PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput,
+    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
+    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
@@ -351,74 +350,10 @@ impl LoadedPlugin {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of a plugin authority and capabilities.
-pub struct PluginAuthoritySummary {
-    pub trust_level: String,
-    pub provenance: Vec<String>,
-    pub plugin_capabilities: Vec<String>,
-    pub tool_capabilities: BTreeMap<String, Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Inspection view of a plugin.
-pub struct PluginInspect {
-    pub status: crate::status::PluginStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<PluginManifest>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority: Option<PluginAuthoritySummary>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hooks: Vec<HostHookRegistration>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub configured_plugin: Option<crate::config::ConfiguredPlugin>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub activation: Option<PluginActivationInspect>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub services: Option<PluginServiceInspect>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effects: Option<PluginEffectScopeInspect>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginServiceInspect {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exports: Vec<PluginServiceExport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub imports: Vec<PluginServiceImportInspect>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginServiceImportInspect {
-    #[serde(flatten)]
-    pub declaration: PluginServiceImport,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resolved_provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub methods: Vec<crate::sdk::PluginServiceMethod>,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Safe, structured activation state shown even when a plugin never reached
-/// `meta/init`. Raw transport/init diagnostics remain in protected host logs.
-pub struct PluginActivationInspect {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<PluginKey>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub after: Vec<PluginKey>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocked: Option<PluginActivationDiagnostic>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Non-sensitive reason an activation was blocked.
-pub struct PluginActivationDiagnostic {
-    pub code: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<PluginKey>,
-}
+pub use agena_plugin_sdk::inspection::{
+    PluginActivationDiagnostic, PluginActivationInspect, PluginAuthoritySummary, PluginInspect,
+    PluginServiceImportInspect, PluginServiceInspect,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -490,38 +425,9 @@ pub struct PluginArchitectureCatalog {
     pub command_registrations: Vec<crate::scoped_registry::ScopedRegistryEntryDescriptor<String>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Neutral plugin surface catalog. Executable commands and terminal-only
-/// presentation are deliberately separate from one another and from any
-/// particular renderer.
-pub struct PluginSurfaceCatalog {
-    #[serde(default)]
-    pub commands: Vec<CommandCatalogItem>,
-    #[serde(default)]
-    pub terminal: PluginTerminalSurfaceCatalog,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Terminal-only presentation catalog.
-pub struct PluginTerminalSurfaceCatalog {
-    #[serde(default)]
-    pub display: Vec<HostDisplayContribution>,
-    #[serde(default)]
-    pub themes: Vec<HostThemePalette>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Catalog item of a plugin command.
-pub struct CommandCatalogItem {
-    pub plugin_id: PluginKey,
-    /// Host-derived fact used by every command palette. This is computed from
-    /// the validated SettingsContract and cannot drift between clients.
-    pub accepts_empty_input: bool,
-    /// Deterministic editor/invocation seed produced by the shared contract.
-    pub default_input: serde_json::Value,
-    #[serde(flatten)]
-    pub command: CommandDefinition,
-}
+pub use agena_plugin_sdk::inspection::{
+    CommandCatalogItem, PluginSurfaceCatalog, PluginTerminalSurfaceCatalog,
+};
 
 fn command_registry_name(plugin_id: &PluginKey, command_id: &str) -> String {
     format!("{plugin_id}/{command_id}")
@@ -543,14 +449,7 @@ fn sort_command_catalog(commands: &mut [CommandCatalogItem]) {
     });
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Status of an explicit user-driven plugin tool invocation.
-pub enum PluginToolInvokeStatus {
-    Completed,
-    CapabilityUnavailable,
-    ToolUnavailable,
-}
+pub use agena_plugin_sdk::inspection::PluginToolInvokeStatus;
 
 #[derive(Clone)]
 struct ToolBeforeDispatch {
@@ -617,28 +516,7 @@ impl CommandDispatch {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Presentation-neutral result of an explicit plugin tool invocation.
-pub struct PluginToolInvokeResponse {
-    pub plugin_id: PluginKey,
-    pub tool: String,
-    pub status: PluginToolInvokeStatus,
-    pub title: String,
-    pub output_text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, String>,
-}
-
-/// Host-resolved declarative display contribution: the contributing plugin
-/// plus its pure content contribution. The host owns placement and priority
-/// ordering; plugins never target a location or color (Phase 6).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HostDisplayContribution {
-    pub plugin_id: PluginKey,
-    pub contribution: PluginDisplayContribution,
-}
+pub use agena_plugin_sdk::inspection::{HostDisplayContribution, PluginToolInvokeResponse};
 
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
 /// output; once the stream closes (sender dropped), inspect `end` for the
@@ -840,26 +718,7 @@ impl StaticPluginRegistration {
     }
 }
 
-/// A plugin-emitted notification intent through the unified `host.notify`
-/// entry (Phase 6). The host keeps a bounded recent queue for frontends;
-/// surface/priority/dedupe decisions stay on the host side.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct HostNotification {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attention: Option<crate::sdk::AttentionNotification>,
-    pub plugin_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body: String,
-    /// One of `info` | `success` | `warning` | `error`.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub severity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<PluginNotifyAction>,
-}
+pub use agena_plugin_sdk::inspection::HostNotification;
 
 /// Configuration for building a plugin host.
 pub struct PluginHostBuildConfig {

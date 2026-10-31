@@ -32,21 +32,7 @@ pub struct RuntimeDiagnosticsResource {
     pub session_runtime_available: bool,
 }
 
-/// Complete JSON configuration-source projection for presentation and
-/// application-level configuration use cases. Runtime retains configuration
-/// resolution and file settings implementation; consumers never assemble this
-/// view from Runtime snapshots themselves.
-#[derive(Debug, Clone)]
-pub struct ConfigJsonSources {
-    pub config_path: std::path::PathBuf,
-    pub config_found: bool,
-    pub project_config_path: std::path::PathBuf,
-    pub project_config_found: bool,
-    pub applied_layers: Vec<String>,
-    pub file: serde_json::Value,
-    pub project_file: serde_json::Value,
-    pub effective: serde_json::Value,
-}
+pub use agena_api::resource::ConfigJsonSources;
 
 impl From<agena_runtime::RuntimeMetricsSnapshot> for RuntimeMetricsResource {
     fn from(value: agena_runtime::RuntimeMetricsSnapshot) -> Self {

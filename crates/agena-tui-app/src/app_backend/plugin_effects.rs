@@ -11,11 +11,11 @@ use anyhow::{Context, Result, anyhow, bail};
 
 /// The TUI consumes the exact final result returned by the server-owned
 /// operation resolver; it never follows plugin actions recursively.
-pub type PluginCommandEffect = agena_plugin_host::CommandResult;
+pub type PluginCommandEffect = agena_plugin_sdk::CommandResult;
 
 pub(crate) fn plugin_display_contributions(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::HostDisplayContribution> {
+) -> Vec<agena_plugin_sdk::inspection::HostDisplayContribution> {
     application
         .plugin_catalog()
         .map(|catalog| catalog.terminal.display)
@@ -24,7 +24,7 @@ pub(crate) fn plugin_display_contributions(
 
 pub(crate) fn plugin_host_notifications(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::HostNotification> {
+) -> Vec<agena_plugin_sdk::inspection::HostNotification> {
     application.plugin_notifications()
 }
 
@@ -40,7 +40,7 @@ pub(crate) fn workspace_name(application: &super::TuiBackend) -> String {
 
 pub(crate) fn plugin_theme_palettes(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::HostThemePalette> {
+) -> Vec<agena_plugin_sdk::host_api::HostThemePalette> {
     application
         .plugin_catalog()
         .map(|catalog| catalog.terminal.themes)
@@ -49,14 +49,14 @@ pub(crate) fn plugin_theme_palettes(
 
 pub(crate) fn plugin_statuses(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::status::PluginStatus> {
+) -> Vec<agena_plugin_sdk::inspection::PluginStatus> {
     application.plugin_statuses()
 }
 
 pub(crate) fn plugin_inspect(
     application: &super::TuiBackend,
     plugin_id: &str,
-) -> Option<agena_plugin_host::PluginInspect> {
+) -> Option<agena_plugin_sdk::inspection::PluginInspect> {
     application.plugin_inspect(plugin_id)
 }
 
@@ -65,7 +65,7 @@ pub(crate) fn plugin_logs(
     plugin_id: &str,
     after_seq: Option<u64>,
     limit: usize,
-) -> Vec<agena_plugin_host::PluginLogRecord> {
+) -> Vec<agena_plugin_sdk::inspection::PluginLogRecord> {
     application.plugin_logs(plugin_id, after_seq, limit)
 }
 
@@ -76,7 +76,7 @@ pub(crate) fn plugin_logs(
 /// both duplicate the palette row and offer a round trip the server refuses.
 pub(crate) fn plugin_slash_commands(
     application: &super::TuiBackend,
-) -> Vec<agena_plugin_host::CommandCatalogItem> {
+) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
     application
         .plugin_catalog()
         .map(|catalog| {
@@ -86,7 +86,7 @@ pub(crate) fn plugin_slash_commands(
                 .filter(|entry| {
                     !matches!(
                         entry.command.target,
-                        agena_plugin_host::sdk::CommandTarget::Client { .. }
+                        agena_plugin_sdk::CommandTarget::Client { .. }
                     ) && !entry
                         .command
                         .category
@@ -105,7 +105,7 @@ pub(crate) fn plugin_slash_commands(
 
 pub(crate) async fn invoke_plugin_slash_command(
     application: &super::TuiBackend,
-    entry: &agena_plugin_host::CommandCatalogItem,
+    entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
 ) -> Result<PluginCommandEffect> {
@@ -122,12 +122,7 @@ pub(crate) async fn invoke_plugin_slash_command(
         )
         .await
         .context("failed to invoke plugin command through the server")?;
-    let result = response
-        .get("result")
-        .cloned()
-        .ok_or_else(|| anyhow!("server response omitted plugin command result"))?;
-    let result = serde_json::from_value::<agena_plugin_host::CommandResult>(result)
-        .context("the server returned an undecodable plugin command result")?;
+    let result = response.result;
     if let Err(error) = application.refresh_plugin_presentation_snapshot().await {
         tracing::warn!(
             diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
@@ -150,9 +145,9 @@ pub(crate) async fn invoke_plugin_workbench_tool(
         .invoke_plugin_tool(plugin_id, tool_name, input, session_id)
         .await?;
     match response.status {
-        agena_plugin_host::PluginToolInvokeStatus::Completed => Ok(response.output_text),
-        agena_plugin_host::PluginToolInvokeStatus::CapabilityUnavailable
-        | agena_plugin_host::PluginToolInvokeStatus::ToolUnavailable => {
+        agena_plugin_sdk::inspection::PluginToolInvokeStatus::Completed => Ok(response.output_text),
+        agena_plugin_sdk::inspection::PluginToolInvokeStatus::CapabilityUnavailable
+        | agena_plugin_sdk::inspection::PluginToolInvokeStatus::ToolUnavailable => {
             Err(anyhow!(if response.output_text.trim().is_empty() {
                 response.title
             } else {
@@ -217,13 +212,11 @@ pub(crate) async fn create_commit(
     application: &super::TuiBackend,
     message: String,
 ) -> Result<(String, String)> {
-    let commit: agena_application::dto::GitCommitResource = serde_json::from_value(
-        application
-            .client()
-            .create_git_commit_in_workspace(Some(application.workspace_id()), message)
-            .await?,
-    )
-    .context("the server returned an undecodable git commit result")?;
+    let commit = application
+        .client()
+        .create_git_commit_in_workspace(Some(application.workspace_id()), message)
+        .await
+        .context("failed to create a git commit")?;
     Ok((commit.commit, commit.summary))
 }
 
@@ -234,18 +227,16 @@ pub(crate) async fn create_pr(
     base: Option<String>,
     head: Option<String>,
 ) -> Result<String> {
-    let pull_request: agena_application::dto::GitPullRequestResource = serde_json::from_value(
-        application
-            .client()
-            .create_git_pull_request_in_workspace(
-                Some(application.workspace_id()),
-                title,
-                body,
-                base,
-                head,
-            )
-            .await?,
-    )
-    .context("the server returned an undecodable git pull-request result")?;
+    let pull_request = application
+        .client()
+        .create_git_pull_request_in_workspace(
+            Some(application.workspace_id()),
+            title,
+            body,
+            base,
+            head,
+        )
+        .await
+        .context("failed to create a git pull request")?;
     Ok(pull_request.url)
 }

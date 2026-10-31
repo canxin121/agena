@@ -365,32 +365,6 @@ function asObject(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
 }
 
-function toolCallView(content: JsonObject, presentationValue: JsonValue): JsonObject {
-  const presentation = asObject(presentationValue)
-  const title = stringField(presentation, ['title'])
-  const summary = stringField(presentation, ['summary'])
-  const invocation = {
-    name: stringField(content, ['name']) || 'unknown',
-    plugin_name: content.plugin,
-    input: toolInputRecord(content.input),
-    tool_api_call: asObject(content.tool_api_call),
-  }
-  const blocks = Array.isArray(presentation.blocks) ? presentation.blocks : []
-  return {
-    call_id: content.call_id ?? 0,
-    invocation,
-    title,
-    summary,
-    blocks,
-    user_input: asObject(content.user_input),
-    authorization: asObject(content.authorization),
-    metadata: asObject(content.metadata),
-    error: content.error ?? null,
-    lifecycle: asObject(content.lifecycle),
-    output: content.output ?? null,
-  }
-}
-
 function stringField(value: JsonValue, keys: string[]): string {
   const rec = asObject(value)
   for (const key of keys) {
@@ -425,8 +399,8 @@ function operationFailureMessage(value: JsonValue): string {
 
 /**
  * Map an agena part (PartResource / SessionTranscriptPart) into the frontend
- * MessagePart shape consumed by ToolInvocation.vue / ReasoningInvocation.vue /
- * MessageItem.vue. Content is parsed defensively per part kind:
+ * MessagePart shape projected by pages/chat/transcriptProjection.ts and
+ * rendered by components/chat/AgenaOperationPart.vue. Content is parsed defensively per part kind:
  *
  *   run           → message marker (handled by entriesFromParts)
  *   text          → type 'text', text = content.text
@@ -503,24 +477,21 @@ export function normalizeAgenaPart(
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
-      const operation = toolCallView(asObject(content), agenaPresentation)
-      const invocation = asObject(operation.invocation)
-      const toolName = stringField(content, ['name']) || stringField(invocation, ['name']) || 'unknown'
-      const input = toolInputRecord(asObject(content).input)
-      const outputRecord = asObject(operation.output)
+      const contentRecord = asObject(content)
+      const toolName = stringField(contentRecord, ['name']) || 'unknown'
+      const input = toolInputRecord(contentRecord.input)
+      const outputRecord = asObject(contentRecord.output)
       const payloadRecord = asObject(outputRecord.payload)
       const output =
         stringField(agenaPresentation, ['summary']) ||
         stringField(outputRecord, ['text']) ||
-        stringField(payloadRecord, ['text']) ||
-        stringField(operation, ['summary'])
-      const error = operationFailureMessage(operation.error)
+        stringField(payloadRecord, ['text'])
+      const error = operationFailureMessage(contentRecord.error)
       const metaCandidate = {
-        ...asObject(operation.metadata),
         ...asObject(outputRecord.metadata),
-        ...asObject(asObject(content).metadata),
+        ...asObject(contentRecord.metadata),
       }
-      const title = stringField(operation, ['title'])
+      const title = stringField(agenaPresentation, ['title'])
       const status = toStatus(stringField(content, ['state']) || state)
       const toolState: JsonObject = {
         ...(status ? { status } : {}),

@@ -103,10 +103,6 @@ export const sessionStorageKeys = {
   },
 } as const
 
-export const indexedDbNames = {
-  directorySessionSnapshot: namespacedKey('directory-session-snapshot'),
-} as const
-
 export function gitRepoScopedStorageKey(scope: string, repoRoot: string | null | undefined): string {
   const suffix = String(scope || '').trim()
   const root = String(repoRoot || '').trim()

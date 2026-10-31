@@ -1,24 +1,4 @@
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Git status of a workspace.
-pub struct GitStatusResource {
-    pub workspace_root: String,
-    pub git_available: bool,
-    pub repo: bool,
-    pub gh_available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ahead: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub behind: Option<u64>,
-    pub staged_files: u64,
-    pub unstaged_files: u64,
-    pub untracked_files: u64,
-    pub changed_files: u64,
-    pub clean: bool,
-}
+pub use agena_api::resource::GitStatusResource;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Request to stage paths in git.
@@ -35,13 +15,7 @@ pub struct GitCommitRequest {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Result of a git commit.
-pub struct GitCommitResource {
-    pub commit: String,
-    pub summary: String,
-    pub status: GitStatusResource,
-}
+pub use agena_api::resource::GitCommitResource;
 
 #[derive(Debug, Clone, Deserialize)]
 /// Request to create a pull request.
@@ -57,11 +31,7 @@ pub struct GitPullRequestCreateRequest {
     pub head: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A created pull request.
-pub struct GitPullRequestResource {
-    pub url: String,
-}
+pub use agena_api::resource::GitPullRequestResource;
 
 #[derive(Debug, Clone, Deserialize)]
 /// Request to write a permission rule.

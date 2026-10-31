@@ -82,10 +82,11 @@ impl<S: AuthStore + 'static> AuthManager<S> {
         let pkce_verifier = pkce_verifier.into();
         let redirect_uri = redirect_uri.into();
         let token = exchange_openai_oauth_code(
-            &self.client_identity,
+            &self.client_identity.codex_user_agent(),
             code.as_str(),
             pkce_verifier.as_str(),
             redirect_uri.as_str(),
+            super::OpenAiRefreshTokenRequirement::NonEmpty,
         )
         .await?;
         let auth = oauth_auth_data(
@@ -103,7 +104,7 @@ impl<S: AuthStore + 'static> AuthManager<S> {
     }
 
     pub async fn start_openai_headless_login(&self) -> Result<DeviceCodeStart, ProviderError> {
-        start_openai_headless_device_code(&self.client_identity).await
+        start_openai_headless_device_code(&self.client_identity.codex_user_agent()).await
     }
 
     pub async fn poll_openai_headless_login(
@@ -115,7 +116,7 @@ impl<S: AuthStore + 'static> AuthManager<S> {
         let device_code = device_code.into();
         let user_code = user_code.into();
         let token = poll_openai_headless_device_code(
-            &self.client_identity,
+            &self.client_identity.codex_user_agent(),
             device_code.as_str(),
             user_code.as_str(),
         )
@@ -140,7 +141,11 @@ impl<S: AuthStore + 'static> AuthManager<S> {
 
     pub async fn refresh_openai_login(&self, provider_id: &str) -> Result<AuthData, ProviderError> {
         let stored = self.stored_oauth_credential(provider_id).await?;
-        let token = refresh_openai_token(&self.client_identity, stored.refresh.as_str()).await?;
+        let token = refresh_openai_token(
+            &self.client_identity.codex_user_agent(),
+            stored.refresh.as_str(),
+        )
+        .await?;
         let auth = oauth_auth_data_with_user(
             provider_id,
             CredentialIssuer::OpenaiChatgpt,
@@ -431,4 +436,89 @@ fn normalize_domain(url_or_domain: &str) -> String {
         .or_else(|| trimmed.strip_prefix("http://"))
         .unwrap_or(trimmed);
     without_scheme.trim_end_matches('/').to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct MemoryStore {
+        credentials: Arc<Mutex<Vec<(String, AuthData)>>>,
+    }
+
+    impl AuthStore for MemoryStore {
+        fn get(&self, provider_id: &str) -> Result<Option<AuthData>, ProviderError> {
+            Ok(self
+                .credentials
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(id, _)| id == provider_id)
+                .map(|(_, auth)| auth.clone()))
+        }
+        fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), ProviderError> {
+            self.credentials
+                .lock()
+                .unwrap()
+                .push((provider_id.to_owned(), auth));
+            Ok(())
+        }
+        fn remove(&self, provider_id: &str) -> Result<(), ProviderError> {
+            self.credentials
+                .lock()
+                .unwrap()
+                .retain(|(id, _)| id != provider_id);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn protocol_start_has_no_store_write_and_only_explicit_persistence_saves_credentials() {
+        let store = MemoryStore::default();
+        let manager = AuthManager::new(store.clone());
+        let start = manager
+            .start_openai_browser_login("http://localhost/callback")
+            .unwrap();
+        assert!(!start.state.is_empty());
+        assert!(store.credentials.lock().unwrap().is_empty());
+
+        let auth = oauth_auth_data(
+            "provider",
+            CredentialIssuer::OpenaiChatgpt,
+            "refresh".into(),
+            "access".into(),
+            Some("id-token".into()),
+            123456,
+            Some("account".into()),
+            true,
+            None,
+        )
+        .unwrap();
+        assert!(store.credentials.lock().unwrap().is_empty());
+        manager.persist_auth("provider", auth).await.unwrap();
+        let stored = store.credentials.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].0, "provider");
+        match &stored[0].1 {
+            AuthData::OAuth {
+                refresh,
+                access,
+                id_token,
+                expires_at_ms,
+                account_id,
+                chatgpt_account_is_fedramp,
+                ..
+            } => {
+                assert_eq!(refresh, "refresh");
+                assert_eq!(access, "access");
+                assert_eq!(id_token.as_deref(), Some("id-token"));
+                assert_eq!(*expires_at_ms, 123456);
+                assert_eq!(account_id.as_deref(), Some("account"));
+                assert!(*chatgpt_account_is_fedramp);
+            }
+            _ => panic!("OAuth credentials changed kind while saving"),
+        }
+    }
 }

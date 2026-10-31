@@ -10,8 +10,8 @@ use super::super::{
     markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
     push_label_value, push_literal_activity_headline, push_markdown_document, push_markdown_rule,
     push_section_heading, push_wrapped_line, push_wrapped_rich_line, render_entry_detailed,
-    render_expanded_tool_text_block, render_markdown_block, should_suppress_markdown_block,
-    strip_terminal_ansi_sequences, style_for_role, transcript_message_parts,
+    render_expanded_tool_text_block, render_markdown_block, sanitize_terminal_text,
+    should_suppress_markdown_block, style_for_role, transcript_message_parts,
     transcript_part_content, transcript_spinner_placeholder, trim_empty_line_edges,
     truncate_display_width,
 };
@@ -30,7 +30,6 @@ use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
-use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -887,56 +886,6 @@ pub(crate) fn append_message_markdown_blocks(
     }
 }
 
-fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
-    let kind = match resource.kind {
-        agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
-        agena_domain::ResourceKind::Audio => PartAttachmentKind::Audio,
-        agena_domain::ResourceKind::Video => PartAttachmentKind::Video,
-        agena_domain::ResourceKind::Pdf => PartAttachmentKind::Pdf,
-        agena_domain::ResourceKind::File
-        | agena_domain::ResourceKind::Directory
-        | agena_domain::ResourceKind::Url
-        | agena_domain::ResourceKind::Artifact => PartAttachmentKind::File,
-    };
-    let (source, sha256) = match &resource.reference {
-        agena_domain::ResourceReference::Artifact { sha256, uri } => (
-            if uri.starts_with("data:") {
-                PartAttachmentSource::DataUrl { url: uri.clone() }
-            } else {
-                PartAttachmentSource::FileId {
-                    file_id: uri.clone(),
-                }
-            },
-            Some(sha256.clone()),
-        ),
-        agena_domain::ResourceReference::WorkspacePath { path } => {
-            (PartAttachmentSource::LocalPath { path: path.clone() }, None)
-        }
-        agena_domain::ResourceReference::Url { url } => {
-            (PartAttachmentSource::Url { url: url.clone() }, None)
-        }
-        agena_domain::ResourceReference::ProviderFile { file_id, .. } => (
-            PartAttachmentSource::FileId {
-                file_id: file_id.clone(),
-            },
-            None,
-        ),
-    };
-    PartAttachment {
-        kind,
-        mime: resource.media_type.clone().unwrap_or_default(),
-        source,
-        filename: Some(resource.name.clone()),
-        title: None,
-        size_bytes: resource.size_bytes,
-        sha256,
-        width: resource.width,
-        height: resource.height,
-        duration_ms: resource.duration_ms,
-        page_count: resource.page_count,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A rendered markdown block.
 pub struct MarkdownBlock {
@@ -1138,21 +1087,6 @@ pub(crate) fn tool_output_preview_with_limits(
         text: preview,
         omitted_lines,
     }
-}
-
-pub(crate) fn sanitize_terminal_text(text: &str) -> String {
-    let stripped = strip_terminal_ansi_sequences(text).replace('\r', "");
-    stripped
-        .chars()
-        .filter_map(|ch| match ch {
-            '\n' | '\t' => Some(ch),
-            '\u{200e}' | '\u{200f}' => None,
-            '\u{202a}'..='\u{202e}' => None,
-            '\u{2066}'..='\u{2069}' => None,
-            ch if ch.is_control() => Some(' '),
-            _ => Some(ch),
-        })
-        .collect()
 }
 
 pub(crate) fn push_message_header(
@@ -2859,7 +2793,7 @@ fn render_activity_canonical(
         }
         if let agena_domain::ActivityPayload::Resource(resource) = payload {
             let section_start = out.len();
-            let attachment = canonical_resource_attachment(resource);
+            let attachment = crate::parts::resource_attachment(resource);
             let _ = render_attachment_image(out, BODY_PREFIX, &attachment, width, i18n);
             if let Some(child) = rendered_activity_section_node(
                 TranscriptNodeKey::ActivitySection {

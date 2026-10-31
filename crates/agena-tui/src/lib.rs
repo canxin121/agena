@@ -56,25 +56,4 @@ pub mod timeline;
 pub mod usage;
 pub mod user_input;
 
-pub fn sanitize_picker_text(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                let _ = chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        match ch {
-            '\r' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {}
-            _ => out.push(ch),
-        }
-    }
-    out
-}
+pub use agena_tui_components::text::sanitize_terminal_text as sanitize_picker_text;

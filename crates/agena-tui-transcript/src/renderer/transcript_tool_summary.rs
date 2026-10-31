@@ -361,17 +361,7 @@ fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
     if max_width == 1 {
         return "…".to_string();
     }
-    let content_width = max_width - 1;
-    let mut width = 0_usize;
-    let mut bounded = String::new();
-    for grapheme in value.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if width.saturating_add(grapheme_width) > content_width {
-            break;
-        }
-        bounded.push_str(grapheme);
-        width = width.saturating_add(grapheme_width);
-    }
+    let mut bounded = agena_tui_components::text::clip_display_width(value, max_width - 1);
     bounded.truncate(bounded.trim_end().len());
     bounded.push('…');
     bounded
@@ -402,6 +392,9 @@ pub(crate) fn compact_tool_name(name: &str) -> String {
     if let Some(display_name) = tool_api_display_name(name) {
         return display_name.to_owned();
     }
+    if let Some(name) = agena_domain::ToolPermissionConfig::canonical_shell_tool_name(name.trim()) {
+        return name.strip_prefix("agena.").unwrap_or(name).to_owned();
+    }
     match name.trim() {
         "agena_web__fetch" | "web.fetch" | "web_fetch" | "fetch" => "web.fetch".to_string(),
         "agena_web__search" | "web.search" | "web_search" | "search" => "web.search".to_string(),
@@ -411,18 +404,6 @@ pub(crate) fn compact_tool_name(name: &str) -> String {
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             "fs.apply_patch".to_string()
         }
-        "agena_shell_exec" | "agena.shell.exec" => "shell.exec".to_string(),
-        "agena_shell_spawn" | "agena.shell.spawn" => "shell.spawn".to_string(),
-        "agena_shell_watch" | "agena.shell.watch" => "shell.watch".to_string(),
-        "agena_shell_open" | "agena.shell.open" => "shell.open".to_string(),
-        "agena_shell_read" | "agena.shell.read" => "shell.read".to_string(),
-
-        "agena_shell_list" | "agena.shell.list" => "shell.list".to_string(),
-        "agena_shell_logs" | "agena.shell.logs" => "shell.logs".to_string(),
-        "agena_shell_stop" | "agena.shell.stop" => "shell.stop".to_string(),
-        "agena_shell_write" | "agena.shell.write" => "shell.write".to_string(),
-        "agena_shell_resize" | "agena.shell.resize" => "shell.resize".to_string(),
-        "agena_shell_signal" | "agena.shell.signal" => "shell.signal".to_string(),
         other => other.strip_prefix("agena.").unwrap_or(other).to_string(),
     }
 }
@@ -442,7 +423,6 @@ use super::{
     tool_api_display_name, tool_output_preview, truncate_display_width,
 };
 use crate::{PartExecutionStatusResource, truncate_rich_line};
-use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(test)]
 mod terminal_title_tests {

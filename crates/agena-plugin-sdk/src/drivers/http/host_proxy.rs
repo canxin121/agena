@@ -102,24 +102,12 @@ crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
             .await
     }
 
-    async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
-        self.run(self.current().ask_user(_req)).await
-    }
 
-    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {
-        self.run(self.current().list_tools()).await
-    }
 
     async fn get_session(&self, _req: HostGetSessionRequest) -> Result<HostGetSessionResponse> {
         self.run(self.current().get_session(_req)).await
     }
 
-    async fn get_context_status(
-        &self,
-        _req: HostContextStatusRequest,
-    ) -> Result<HostContextStatusResponse> {
-        self.run(self.current().get_context_status(_req)).await
-    }
 
     async fn rename_session(
         &self,
@@ -128,172 +116,43 @@ crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
         self.run(self.current().rename_session(_req)).await
     }
 
-    async fn set_session_model(
-        &self,
-        _req: HostSetSessionModelRequest,
-    ) -> Result<HostSetSessionModelResponse> {
-        self.run(self.current().set_session_model(_req)).await
-    }
 
-    async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
-        self.run(self.current().monitor_start(_req)).await
-    }
 
-    async fn monitor_list(&self) -> Result<Vec<MonitorHandle>> {
-        self.run(self.current().monitor_list()).await
-    }
 
-    async fn monitor_read(&self, _req: MonitorReadRequest) -> Result<MonitorReadResponse> {
-        self.run(self.current().monitor_read(_req)).await
-    }
 
-    async fn monitor_stop(&self, _req: MonitorStopRequest) -> Result<MonitorHandle> {
-        self.run(self.current().monitor_stop(_req)).await
-    }
 
-    async fn register_tool(
-        &self,
-        _req: HostToolRegisterRequest,
-    ) -> Result<HostToolMutationResponse> {
-        self.run(self.current().register_tool(_req)).await
-    }
 
-    async fn update_tool(&self, _req: HostToolUpdateRequest) -> Result<HostToolMutationResponse> {
-        self.run(self.current().update_tool(_req)).await
-    }
 
-    async fn remove_tool(&self, _req: HostToolRemoveRequest) -> Result<HostToolMutationResponse> {
-        self.run(self.current().remove_tool(_req)).await
-    }
 
-    async fn list_registered_tools(&self) -> Result<HostRegisteredToolListResponse> {
-        self.run(self.current().list_registered_tools()).await
-    }
 
     async fn list_plugins(&self) -> Result<HostPluginListResponse> {
         self.run(self.current().list_plugins()).await
     }
 
-    async fn storage_get(&self, _req: HostStorageGetRequest) -> Result<HostStorageGetResponse> {
-        self.run(self.current().storage_get(_req)).await
-    }
 
-    async fn storage_set(&self, _req: HostStorageSetRequest) -> Result<()> {
-        self.run(self.current().storage_set(_req)).await
-    }
 
-    async fn storage_delete(&self, _req: HostStorageDeleteRequest) -> Result<()> {
-        self.run(self.current().storage_delete(_req)).await
-    }
 
-    async fn storage_list(&self, _req: HostStorageListRequest) -> Result<HostStorageListResponse> {
-        self.run(self.current().storage_list(_req)).await
-    }
 
-    async fn secret_get(&self, _req: HostSecretGetRequest) -> Result<HostSecretGetResponse> {
-        self.run(self.current().secret_get(_req)).await
-    }
 
-    async fn secret_set(&self, _req: HostSecretSetRequest) -> Result<()> {
-        self.run(self.current().secret_set(_req)).await
-    }
 
-    async fn secret_delete(&self, _req: HostSecretDeleteRequest) -> Result<()> {
-        self.run(self.current().secret_delete(_req)).await
-    }
 
-    async fn secret_list(&self) -> Result<HostSecretListResponse> {
-        self.run(self.current().secret_list()).await
-    }
 
-    async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse> {
-        self.run(self.current().plugin_status_list()).await
-    }
 
-    async fn plugin_status_get(
-        &self,
-        _req: HostPluginStatusGetRequest,
-    ) -> Result<HostPluginStatusGetResponse> {
-        self.run(self.current().plugin_status_get(_req)).await
-    }
 
-    async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse> {
-        self.run(self.current().lsp_list_servers()).await
-    }
 
-    async fn lsp_list_diagnostics(
-        &self,
-        _req: HostLspListDiagnosticsRequest,
-    ) -> Result<HostLspListDiagnosticsResponse> {
-        self.run(self.current().lsp_list_diagnostics(_req)).await
-    }
 
-    async fn scheduler_list(&self) -> Result<HostSchedulerListResponse> {
-        self.run(self.current().scheduler_list()).await
-    }
 
-    async fn scheduler_create(
-        &self,
-        _req: HostSchedulerCreateRequest,
-    ) -> Result<HostSchedulerCreateResponse> {
-        self.run(self.current().scheduler_create(_req)).await
-    }
 
-    async fn scheduler_delete(
-        &self,
-        _req: HostSchedulerDeleteRequest,
-    ) -> Result<HostSchedulerDeleteResponse> {
-        self.run(self.current().scheduler_delete(_req)).await
-    }
 
-    async fn hook_list(&self) -> Result<HostHookListResponse> {
-        self.run(self.current().hook_list()).await
-    }
 
-    async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse> {
-        self.run(self.current().mcp_list_servers()).await
-    }
 
-    async fn mcp_add_server(&self, _req: HostMcpAddServerRequest) -> Result<()> {
-        self.run(self.current().mcp_add_server(_req)).await
-    }
 
-    async fn mcp_remove_server(
-        &self,
-        _req: HostMcpRemoveServerRequest,
-    ) -> Result<HostMcpRemoveServerResponse> {
-        self.run(self.current().mcp_remove_server(_req)).await
-    }
 
-    async fn display_contribute(&self, _req: HostDisplayContributeRequest) -> Result<()> {
-        self.run(self.current().display_contribute(_req)).await
-    }
 
-    async fn display_remove(
-        &self,
-        _req: HostDisplayRemoveRequest,
-    ) -> Result<HostDisplayRemoveResponse> {
-        self.run(self.current().display_remove(_req)).await
-    }
 
-    async fn notify(&self, _req: PluginNotifyRequest) -> Result<()> {
-        self.run(self.current().notify(_req)).await
-    }
 
-    async fn ui_theme_register(&self, _req: HostThemeRegisterRequest) -> Result<()> {
-        self.run(self.current().ui_theme_register(_req)).await
-    }
 
-    async fn ui_theme_list(&self) -> Result<HostThemeListResponse> {
-        self.run(self.current().ui_theme_list()).await
-    }
 
-    async fn ui_theme_remove(
-        &self,
-        _req: HostThemeRemoveRequest,
-    ) -> Result<HostThemeRemoveResponse> {
-        self.run(self.current().ui_theme_remove(_req)).await
-    }
 });
 
 #[cfg(test)]
@@ -324,6 +183,15 @@ mod generated_callback_tests {
             input: serde_json::Value,
         ) -> Result<ToolInvokeOutput> {
             NoopHostClient.invoke_tool(tool, input).await
+        }
+        async fn storage_get(
+            &self,
+            request: HostStorageGetRequest,
+        ) -> Result<HostStorageGetResponse> {
+            self.check_network_permission(request.key).await?;
+            Ok(HostStorageGetResponse {
+                value: Some(request.namespace),
+            })
         }
         async fn check_network_permission(&self, target: String) -> Result<PermissionQuery> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -363,6 +231,16 @@ mod generated_callback_tests {
                 .unwrap(),
             PermissionQuery::Allow {}
         ));
+        let stored = proxy
+            .storage_get(HostStorageGetRequest {
+                scope: Default::default(),
+                visibility: Default::default(),
+                namespace: "replacement-host".into(),
+                key: "ready".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(stored.value.as_deref(), Some("replacement-host"));
         let pending = tokio::spawn({
             let proxy = proxy.clone();
             async move { proxy.check_network_permission("pending".into()).await }
@@ -382,8 +260,21 @@ mod generated_callback_tests {
             PluginErrorKind::HostUnavailable
         );
         assert_eq!(
+            proxy
+                .storage_get(HostStorageGetRequest {
+                    scope: Default::default(),
+                    visibility: Default::default(),
+                    namespace: "replacement-host".into(),
+                    key: "ready".into(),
+                })
+                .await
+                .unwrap_err()
+                .kind,
+            PluginErrorKind::HostUnavailable,
+        );
+        assert_eq!(
             calls.load(Ordering::SeqCst),
-            2,
+            3,
             "stopped callbacks must not reach the replacement host"
         );
     }

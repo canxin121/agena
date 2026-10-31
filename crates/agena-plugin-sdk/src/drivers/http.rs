@@ -1222,6 +1222,20 @@ mod permission_tests {
             );
         })
         .await;
+        // Sharing declarations with stdio must not enable unsupported HTTP callbacks.
+        assert_eq!(
+            proxy
+                .storage_get(crate::host_api::HostStorageGetRequest {
+                    scope: Default::default(),
+                    visibility: Default::default(),
+                    namespace: "fixture".into(),
+                    key: "key".into(),
+                })
+                .await
+                .unwrap_err()
+                .kind,
+            PluginErrorKind::HostUnavailable,
+        );
         server.abort();
     }
 }

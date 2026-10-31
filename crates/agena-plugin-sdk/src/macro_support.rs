@@ -47,10 +47,11 @@ pub use schema_metadata_support::{
     merge_flattened_schema_at_pointer, merge_schema_overlay_at_pointer,
     prefix_schema_order_metadata, prefixed_input_error_path_mappings, remap_invalid_params_paths,
     remap_invalid_params_paths_owned, rename_schema_property, set_schema_bool_metadata,
-    set_schema_metadata, set_schema_minimum_u64_metadata, set_schema_non_empty_metadata,
-    set_schema_number_metadata, set_schema_string_list_metadata, set_schema_string_metadata,
-    set_schema_u64_metadata, set_schema_value_list_metadata, set_schema_value_metadata,
-    suggest_name_candidates, unknown_name_message,
+    set_schema_input_default_metadata, set_schema_metadata, set_schema_minimum_u64_metadata,
+    set_schema_non_empty_metadata, set_schema_number_metadata,
+    set_schema_strict_non_empty_path_metadata, set_schema_string_list_metadata,
+    set_schema_string_metadata, set_schema_u64_metadata, set_schema_value_list_metadata,
+    set_schema_value_metadata, suggest_name_candidates, unknown_name_message,
 };
 pub(crate) use schema_support::{
     ordered_schema_properties, resolve_schema_value, schema_order_key, string_literals,
@@ -881,5 +882,843 @@ mod count_generation_tests {
         let error =
             CountMode::parse_input(json!({"mode":"read","caption":"🙂🙂🙂🙂"})).unwrap_err();
         assert!(error.to_string().contains("caption"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod strict_non_empty_path_tests {
+    use serde_json::{Value, json};
+
+    fn agrees<T: crate::ToolInput>(input: Value, accepted: bool) {
+        #[cfg(feature = "schema-validation")]
+        {
+            let schema = T::input_schema();
+            let normalized = crate::manifest_support::normalize_schema_json(schema.clone());
+            for candidate in [&schema, &normalized] {
+                assert_eq!(
+                    jsonschema::is_valid(candidate, &input),
+                    accepted,
+                    "schema for {}: {input}",
+                    std::any::type_name::<T>(),
+                );
+            }
+        }
+        let result = T::parse_input(input.clone());
+        assert_eq!(result.is_ok(), accepted, "runtime: {input}");
+        if let Err(error) = result {
+            assert_eq!(error.kind, crate::PluginErrorKind::InvalidParams);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(deny_unknown_fields)]
+    #[input(non_empty("entries"))]
+    struct SourceItems {
+        entries: Vec<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(deny_unknown_fields)]
+    struct FieldItems {
+        #[arg(item_non_empty)]
+        entries: Vec<String>,
+    }
+
+    #[test]
+    fn strict_source_and_field_items_require_a_match() {
+        for (input, accepted) in [
+            (json!({"entries": ["a"]}), true),
+            (json!({"entries": []}), false),
+            (json!({"entries": [""]}), false),
+            (json!({"entries": ["a", ""]}), false),
+            (json!({"entries": ["a"], "unexpected": true}), false),
+        ] {
+            agrees::<SourceItems>(input.clone(), accepted);
+            agrees::<FieldItems>(input, accepted);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"))]
+    struct StrictOptional {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entries: Option<Vec<String>>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty_if_present("entries"))]
+    struct OptionalItems {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entries: Option<Vec<String>>,
+    }
+
+    #[test]
+    fn strict_optional_and_if_present_keep_distinct_zero_match_rules() {
+        for input in [json!({}), json!({"entries": null}), json!({"entries": []})] {
+            agrees::<StrictOptional>(input.clone(), false);
+            agrees::<OptionalItems>(input, true);
+        }
+        for (input, accepted) in [
+            (json!({"entries": ["a"]}), true),
+            (json!({"entries": [""]}), false),
+        ] {
+            agrees::<StrictOptional>(input.clone(), accepted);
+            agrees::<OptionalItems>(input, accepted);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct StrictText {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[arg(non_empty)]
+        text: Option<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct OptionalText {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[arg(non_empty_if_present)]
+        text: Option<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct NullableItems {
+        #[arg(item_non_empty)]
+        entries: Vec<Option<String>>,
+    }
+
+    #[test]
+    fn nullable_values_and_rust_whitespace_keep_runtime_meaning() {
+        for input in [json!({}), json!({"text": null})] {
+            agrees::<StrictText>(input.clone(), false);
+            agrees::<OptionalText>(input, true);
+        }
+        let whitespace = "\u{0009}\u{000a}\u{000b}\u{000c}\u{000d}\u{0020}\u{0085}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+        assert!(whitespace.chars().all(char::is_whitespace));
+        for (text, accepted) in [
+            (String::new(), false),
+            (whitespace.to_owned(), false),
+            (format!("{whitespace}a{whitespace}"), true),
+            ("\u{200b}".to_owned(), true),
+            ("\u{feff}".to_owned(), true),
+        ] {
+            agrees::<StrictText>(json!({"text": text}), accepted);
+            agrees::<OptionalText>(json!({"text": text}), accepted);
+            agrees::<NullableItems>(json!({"entries": [text]}), accepted);
+        }
+        for (entries, accepted) in [
+            (json!([]), false),
+            (json!([null]), false),
+            (json!(["a", null]), false),
+            (json!(["a", " "]), false),
+            (json!(["a", "b"]), true),
+        ] {
+            agrees::<NullableItems>(json!({"entries": entries}), accepted);
+        }
+    }
+
+    #[test]
+    fn whitespace_schema_tracks_rust_unicode_white_space() {
+        for whitespace in (0..=u32::from(char::MAX))
+            .filter_map(char::from_u32)
+            .filter(|ch| ch.is_whitespace())
+        {
+            agrees::<StrictText>(json!({"text": whitespace.to_string()}), false);
+        }
+        for visible in ['\u{200b}', '\u{feff}'] {
+            assert!(!visible.is_whitespace());
+            agrees::<StrictText>(json!({"text": visible.to_string()}), true);
+        }
+    }
+
+    fn comma_values<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(text.split(',').map(ToOwned::to_owned).collect())
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct ParsedStrings {
+        #[serde(deserialize_with = "comma_values")]
+        #[schemars(with = "String")]
+        #[arg(non_empty)]
+        entries: Vec<String>,
+    }
+
+    #[test]
+    fn parsed_validation_paths_do_not_replace_the_wire_shape() {
+        agrees::<ParsedStrings>(json!({"entries":"a,b"}), true);
+        // The parser owns interpretation of the comma-separated values. The
+        // public string schema must not invent an array requirement for it.
+        assert_eq!(
+            ParsedStrings::input_schema()["properties"]["entries"]["type"],
+            "string"
+        );
+        assert!(ParsedStrings::parse_input(json!({"entries":"a,,b"})).is_err());
+    }
+
+    fn good_default() -> Vec<String> {
+        vec!["a".to_owned()]
+    }
+
+    fn mixed_default() -> Vec<String> {
+        vec!["a".to_owned(), String::new()]
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"))]
+    struct SerdeDefaultItems {
+        #[serde(default = "good_default")]
+        entries: Vec<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"))]
+    struct ArgDefaultItems {
+        #[arg(default = good_default())]
+        entries: Vec<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"))]
+    struct MixedDefaultItems {
+        #[serde(default = "mixed_default")]
+        entries: Vec<String>,
+    }
+
+    #[test]
+    fn defaults_preserve_omission_without_hiding_invalid_values() {
+        agrees::<SerdeDefaultItems>(json!({}), true);
+        agrees::<ArgDefaultItems>(json!({}), true);
+        assert!(ArgDefaultItems::input_schema().get("required").is_none());
+        agrees::<MixedDefaultItems>(json!({}), false);
+        for (input, accepted) in [
+            (json!({"entries": ["a"]}), true),
+            (json!({"entries": []}), false),
+            (json!({"entries": ["a", ""]}), false),
+            (json!({"entries": [" "]}), false),
+        ] {
+            agrees::<SerdeDefaultItems>(input.clone(), accepted);
+            agrees::<ArgDefaultItems>(input.clone(), accepted);
+            agrees::<MixedDefaultItems>(input, accepted);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    #[input(non_empty("entries"))]
+    enum DefaultedMode {
+        Values {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind", content = "payload")]
+    enum AdjacentValues {
+        #[input(non_empty("entries"))]
+        Values { entries: Vec<String> },
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    enum ExternalValues {
+        #[input(non_empty("entries"))]
+        Values { entries: Vec<String> },
+    }
+
+    #[test]
+    fn wrapped_variant_payloads_keep_their_public_envelopes() {
+        agrees::<AdjacentValues>(json!({"kind":"Values", "payload":{"entries":["a"]}}), true);
+        agrees::<ExternalValues>(json!({"Values":{"entries":["a"]}}), true);
+        // The existing metadata path does not describe these envelope forms.
+        // Preserve accepted wire data; typed variant validation still rejects
+        // empty entries rather than requiring a nonexistent top-level key.
+        assert!(
+            AdjacentValues::parse_input(json!({"kind":"Values", "payload":{"entries":[]}}))
+                .is_err()
+        );
+        assert!(ExternalValues::parse_input(json!({"Values":{"entries":[]}})).is_err());
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind")]
+    enum OmittedSchemaVariants {
+        #[serde(skip)]
+        #[input(non_empty("entries"))]
+        Skipped {
+            entries: Vec<String>,
+        },
+        #[serde(skip_deserializing)]
+        #[input(non_empty("entries"))]
+        OutputOnly {
+            entries: Vec<String>,
+        },
+        #[schemars(skip)]
+        #[input(non_empty("entries"))]
+        Hidden {
+            entries: Vec<String>,
+        },
+        Ordinary {
+            entries: Vec<String>,
+        },
+        #[input(non_empty("entries"))]
+        Required {
+            entries: Vec<String>,
+        },
+    }
+
+    #[test]
+    fn omitted_variants_do_not_shift_constraints_to_other_branches() {
+        assert!(serde_json::to_value(OmittedSchemaVariants::Skipped { entries: vec![] }).is_err());
+        for entries in [json!([]), json!([""]), json!(["a"])] {
+            agrees::<OmittedSchemaVariants>(json!({"kind":"Ordinary", "entries":entries}), true);
+        }
+        agrees::<OmittedSchemaVariants>(json!({"kind":"Required", "entries":["a"]}), true);
+        agrees::<OmittedSchemaVariants>(json!({"kind":"Required", "entries":[]}), false);
+        agrees::<OmittedSchemaVariants>(json!({"kind":"Required", "entries":[""]}), false);
+        let output_only = serde_json::to_value(OmittedSchemaVariants::OutputOnly {
+            entries: good_default(),
+        })
+        .unwrap();
+        assert!(OmittedSchemaVariants::parse_input(output_only).is_err());
+        // A schema-only omission does not disable the serde/runtime variant.
+        assert!(
+            OmittedSchemaVariants::parse_input(json!({"kind":"Hidden", "entries":["a"]})).is_ok()
+        );
+    }
+
+    #[test]
+    fn variant_defaults_are_visible_to_global_strict_constraints() {
+        agrees::<DefaultedMode>(json!({"kind":"values"}), true);
+        agrees::<DefaultedMode>(json!({"kind":"values", "entries":[]}), false);
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind")]
+    enum DefaultSpelling {
+        ReadHTTP {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+        #[serde(rename = "renamed_values", alias = "old_values")]
+        Renamed {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum SnakeSpelling {
+        ReadHTTP {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+    }
+
+    #[test]
+    fn variant_names_follow_serde_spelling_and_aliases() {
+        for mut input in [
+            serde_json::to_value(DefaultSpelling::ReadHTTP {
+                entries: good_default(),
+            })
+            .unwrap(),
+            serde_json::to_value(DefaultSpelling::Renamed {
+                entries: good_default(),
+            })
+            .unwrap(),
+        ] {
+            input.as_object_mut().unwrap().remove("entries");
+            agrees::<DefaultSpelling>(input, true);
+        }
+        let mut input = serde_json::to_value(SnakeSpelling::ReadHTTP {
+            entries: good_default(),
+        })
+        .unwrap();
+        input.as_object_mut().unwrap().remove("entries");
+        agrees::<SnakeSpelling>(input, true);
+        assert!(DefaultSpelling::parse_input(json!({"kind":"old_values"})).is_ok());
+        let error = DefaultSpelling::parse_input(json!({"kind":"Renmaed"})).unwrap_err();
+        assert!(error.to_string().contains("kind"));
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind", rename_all(serialize = "snake_case"))]
+    enum OutputOnlySpelling {
+        ReadHTTP {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+        #[serde(rename(serialize = "output_value"))]
+        OutputValue {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+        #[serde(rename(deserialize = "input_value", serialize = "output_both"))]
+        BothDirections {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(
+        tag = "kind",
+        rename_all(deserialize = "snake_case", serialize = "PascalCase")
+    )]
+    enum InputOnlySpelling {
+        ReadHTTP {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+    }
+
+    #[test]
+    fn deserialize_names_ignore_output_only_renames() {
+        for name in ["ReadHTTP", "OutputValue", "input_value"] {
+            assert!(
+                OutputOnlySpelling::parse_input(json!({"kind":name})).is_ok(),
+                "{name}"
+            );
+        }
+        for name in ["read_h_t_t_p", "output_value", "output_both"] {
+            assert!(
+                OutputOnlySpelling::parse_input(json!({"kind":name})).is_err(),
+                "{name}"
+            );
+        }
+        assert!(InputOnlySpelling::parse_input(json!({"kind":"read_h_t_t_p"})).is_ok());
+        assert!(InputOnlySpelling::parse_input(json!({"kind":"ReadHTTP"})).is_err());
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind")]
+    enum OtherFallback {
+        Values {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+        #[serde(other)]
+        Other,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind")]
+    enum UntaggedFallback {
+        Values {
+            #[arg(default = good_default())]
+            entries: Vec<String>,
+        },
+        #[serde(untagged)]
+        Raw(serde_json::Value),
+    }
+
+    #[test]
+    fn serde_fallback_variants_keep_unknown_inputs() {
+        assert!(matches!(
+            OtherFallback::parse_input(json!({"kind":"future"})).unwrap(),
+            OtherFallback::Other
+        ));
+        for input in [
+            json!({"kind":"future", "x":1}),
+            json!({"kind":"Raw", "x":1}),
+            json!({"x":1}),
+        ] {
+            let UntaggedFallback::Raw(raw) = UntaggedFallback::parse_input(input.clone()).unwrap()
+            else {
+                panic!("fallback not selected");
+            };
+            assert_eq!(raw, input);
+        }
+        assert!(matches!(
+            OtherFallback::parse_input(json!({"kind":"Values"})).unwrap(),
+            OtherFallback::Values { .. }
+        ));
+        assert!(matches!(
+            UntaggedFallback::parse_input(json!({"kind":"Values"})).unwrap(),
+            UntaggedFallback::Values { .. }
+        ));
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "action", rename_all = "snake_case")]
+    enum ActionCompatibility {
+        #[input(
+            default_when_empty = true,
+            infer_when_present("entries"),
+            drop_keys("obsolete")
+        )]
+        ReadValues {
+            #[arg(default = good_default(), alias = "names", item_trim)]
+            entries: Vec<String>,
+        },
+    }
+
+    #[test]
+    fn action_tag_inference_aliases_drop_and_errors_are_preserved() {
+        assert!(ActionCompatibility::parse_input(json!({})).is_ok());
+        let parsed =
+            ActionCompatibility::parse_input(json!({"names":[" a "], "obsolete":true})).unwrap();
+        let ActionCompatibility::ReadValues { entries } = parsed;
+        assert_eq!(entries, ["a"]);
+        let error = ActionCompatibility::parse_input(json!({"action":"read_valeus"})).unwrap_err();
+        assert!(error.to_string().contains("action"));
+        assert!(error.to_string().contains("read_values"));
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct DefaultRow {
+        #[serde(default = "mixed_default")]
+        entries: Vec<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("rows[].entries[]"))]
+    struct DefaultRows {
+        rows: Vec<DefaultRow>,
+    }
+
+    #[test]
+    fn invalid_default_sibling_is_not_hidden_by_a_valid_match() {
+        agrees::<DefaultRows>(json!({"rows":[{}, {"entries":["a"]}]}), false);
+        agrees::<DefaultRows>(json!({"rows":[{"entries":[]}, {"entries":["a"]}]}), true);
+        agrees::<DefaultRows>(json!({"rows":[{"entries":["b"]}, {"entries":["a"]}]}), true);
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("matrix[][]"))]
+    struct MatrixItems {
+        matrix: Vec<Vec<String>>,
+    }
+
+    #[test]
+    fn consecutive_wildcards_share_runtime_and_schema_meaning() {
+        for (matrix, accepted) in [
+            (json!([]), false),
+            (json!([[]]), false),
+            (json!([[], []]), false),
+            (json!([[], ["a"], []]), true),
+            (json!([["a"], [""]]), false),
+        ] {
+            agrees::<MatrixItems>(json!({"matrix": matrix}), accepted);
+        }
+        let mut value = json!({"matrix":[[" a "],[],[" b "]]});
+        super::normalize_trim_paths(&mut value, &["matrix[][]"]);
+        assert_eq!(value, json!({"matrix":[["a"],[],["b"]]}));
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        children: Option<Vec<String>>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(deny_unknown_fields)]
+    #[input(non_empty("rows[].children[]"))]
+    struct NestedItems {
+        rows: Vec<Row>,
+    }
+
+    #[test]
+    fn nested_existence_allows_empty_or_missing_siblings() {
+        for (rows, accepted) in [
+            (json!([]), false),
+            (json!([{}]), false),
+            (json!([{"children":null}, {"children":[]}]), false),
+            (json!([{}, {"children":[]}, {"children":["a"]}]), true),
+            (json!([{"children":null}, {"children":["a"]}]), true),
+            (json!([{"children":[""]}, {"children":["a"]}]), false),
+        ] {
+            agrees::<NestedItems>(json!({"rows": rows}), accepted);
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct ChildItems {
+        #[serde(default = "good_default")]
+        entries: Vec<String>,
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct OptionalChild {
+        children: Option<ChildItems>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("rows[].children.entries[]"))]
+    struct OptionalChildRows {
+        rows: Vec<OptionalChild>,
+    }
+
+    #[test]
+    fn nullable_parent_is_no_match_instead_of_an_invalid_leaf() {
+        for (rows, accepted) in [
+            (json!([{"children":null}]), false),
+            (
+                json!([{"children":null}, {"children":{"entries":["a"]}}]),
+                true,
+            ),
+            (json!([{}, {"children":{"entries":["a"]}}]), true),
+            (json!([{"children":{}}]), true),
+            (
+                json!([{"children":{"entries":[""]}}, {"children":{"entries":["a"]}}]),
+                false,
+            ),
+        ] {
+            agrees::<OptionalChildRows>(json!({"rows": rows}), accepted);
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[serde(untagged)]
+    enum RuntimeSelectedDefaults {
+        First {
+            #[serde(default = "good_default")]
+            entries: Vec<String>,
+        },
+        Second {
+            #[serde(default = "mixed_default")]
+            entries: Vec<String>,
+            other: Option<bool>,
+        },
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("choice.entries[]"))]
+    struct AmbiguousDefaultShape {
+        choice: RuntimeSelectedDefaults,
+    }
+
+    #[test]
+    fn opaque_branch_defaults_keep_valid_input_compatibility() {
+        // JSON Schema does not describe serde's first-success selection for
+        // overlapping untagged branches. Do not guess its injected defaults.
+        agrees::<AmbiguousDefaultShape>(json!({"choice":{}}), true);
+        assert!(AmbiguousDefaultShape::parse_input(json!({"choice":{"entries":[]}})).is_err());
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(deny_unknown_fields)]
+    #[input(non_empty("entries"))]
+    struct RenamedItems {
+        #[serde(rename = "serialized_entries")]
+        #[arg(name = "public_entries")]
+        entries: Vec<String>,
+    }
+
+    #[test]
+    fn source_paths_follow_serialization_and_public_field_names() {
+        for (entries, accepted) in [
+            (json!(["a"]), true),
+            (json!([]), false),
+            (json!([""]), false),
+        ] {
+            agrees::<RenamedItems>(json!({"public_entries": entries}), accepted);
+        }
+        let schema = RenamedItems::input_schema();
+        assert_eq!(
+            schema["properties"]["public_entries"]["items"]["minLength"],
+            1
+        );
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum ItemMode {
+        #[input(non_empty("entries"))]
+        Required {
+            entries: Vec<String>,
+        },
+        Ordinary {
+            entries: Vec<String>,
+        },
+    }
+
+    #[test]
+    fn existence_stays_inside_its_enum_branch() {
+        agrees::<ItemMode>(json!({"kind":"required", "entries":[]}), false);
+        agrees::<ItemMode>(json!({"kind":"required", "entries":["a"]}), true);
+        agrees::<ItemMode>(json!({"kind":"ordinary", "entries":[]}), true);
+    }
+
+    #[cfg(feature = "schema-validation")]
+    #[test]
+    fn existence_preserves_original_not_and_closed_properties() {
+        let mut schema = json!({
+            "type":"object",
+            "properties": {
+                "entries":{"type":"array", "items":{"type":"string"}},
+                "blocked":{"type":"boolean"}
+            },
+            "required":["entries"],
+            "additionalProperties":false,
+            "not":{"properties":{"blocked":{"const":true}}, "required":["blocked"]}
+        });
+        super::set_schema_strict_non_empty_path_metadata(&mut schema, "", "entries[]");
+        let once = schema.clone();
+        super::set_schema_strict_non_empty_path_metadata(&mut schema, "", "entries[]");
+        assert_eq!(schema, once);
+        for (input, accepted) in [
+            (json!({"entries":["a"], "blocked":false}), true),
+            (json!({"entries":[]}), false),
+            (json!({"entries":["a"], "blocked":true}), false),
+            (json!({"entries":["a"], "extra":true}), false),
+        ] {
+            assert_eq!(jsonschema::is_valid(&schema, &input), accepted, "{input}");
+        }
+        let mut text_schema =
+            json!({"type":"string", "pattern":"^[a-z ]+$", "not":{"const":"bad"}});
+        super::set_schema_non_empty_metadata(&mut text_schema, "");
+        assert_eq!(text_schema["pattern"], "^[a-z ]+$");
+        for (input, accepted) in [
+            (json!("good"), true),
+            (json!("bad"), false),
+            (json!("  "), false),
+            (json!("123"), false),
+        ] {
+            assert_eq!(
+                jsonschema::is_valid(&text_schema, &input),
+                accepted,
+                "{input}"
+            );
+        }
+    }
+
+    struct RequiredCommandPlugin;
+
+    #[crate::agena_plugin(
+        namespace = "pathfixture",
+        name = "required",
+        version = "0.0.0",
+        summary = "Verify strict wildcard input paths"
+    )]
+    impl RequiredCommandPlugin {
+        #[tool(name = "collect", summary = "Collect child values", command)]
+        async fn collect(&self, input: NestedItems) -> crate::Result<String> {
+            Ok(input.rows.len().to_string())
+        }
+
+        #[command(id = "collect_direct", title = "Collect child values")]
+        async fn collect_direct(&self, input: NestedItems) -> crate::Result<crate::CommandResult> {
+            Ok(crate::CommandResult::succeeded(
+                input.rows.len().to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_command_keeps_form_shape_and_authoritative_runtime_validation() {
+        let plugin = RequiredCommandPlugin;
+        let manifest = crate::Plugin::manifest(&plugin);
+        let tool_schema = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == "collect")
+            .unwrap()
+            .input_schema();
+        assert!(tool_schema.get("not").is_some());
+        let command = manifest
+            .commands
+            .iter()
+            .find(|command| command.id == "collect_direct")
+            .unwrap();
+        command.input.validate().unwrap();
+        let valid = json!({"rows":[{}, {"children":["a"]}]});
+        command.input.validate_value(&valid).unwrap();
+        let empty = json!({"rows":[]});
+        #[cfg(feature = "schema-validation")]
+        {
+            assert!(jsonschema::is_valid(&tool_schema, &valid));
+            assert!(!jsonschema::is_valid(&tool_schema, &empty));
+        }
+        // The closed form contract represents shape and local bounds, not
+        // relational path existence. Typed command parsing still enforces it.
+        command.input.validate_value(&empty).unwrap();
+        let invoke = |input| crate::CommandInvokeInput {
+            command_id: "collect_direct".to_owned(),
+            input,
+            session_id: Some(1),
+            call_id: Some(1),
+            workspace_root: Some("/fixture".to_owned()),
+            slash: None,
+            raw: String::new(),
+        };
+        let mut tool_command = invoke(valid.clone());
+        tool_command.command_id = "collect".to_owned();
+        let host_owned = crate::Plugin::command_invoke(&plugin, tool_command)
+            .await
+            .unwrap();
+        assert_eq!(host_owned.status, crate::CommandStatus::Unavailable);
+        let result = crate::Plugin::command_invoke(&plugin, invoke(valid))
+            .await
+            .unwrap();
+        assert_eq!(result.status, crate::CommandStatus::Succeeded);
+        let error = crate::Plugin::command_invoke(&plugin, invoke(empty))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, crate::PluginErrorKind::InvalidParams);
     }
 }

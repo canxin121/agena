@@ -6,7 +6,6 @@ use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Data, Expr, Fields, Ident, LitStr, Result, Token, Variant};
 
-use super::input_schema_path_support::escape_json_pointer_segment;
 use super::{
     PluginInputFieldAliasSpec, PluginInputFieldDefaultSpec, PluginInputFieldMetadata,
     dispatch_variant_pattern_and_args, input_variant_action_name, normalized_input_variant_config,
@@ -320,13 +319,6 @@ pub fn expand_input_alias_normalize_tokens(
     }
 }
 
-pub fn expand_input_default_schema_metadata_tokens(
-    defaults: &[PluginInputFieldDefaultSpec],
-) -> proc_macro2::TokenStream {
-    let calls = input_default_schema_metadata_calls("", defaults);
-    quote! { #(#calls)* }
-}
-
 pub fn input_default_schema_metadata_calls(
     prefix: &str,
     defaults: &[PluginInputFieldDefaultSpec],
@@ -334,25 +326,15 @@ pub fn input_default_schema_metadata_calls(
     defaults
         .iter()
         .map(|default| {
-            let pointer = if prefix.is_empty() {
-                format!(
-                    "/properties/{}",
-                    escape_json_pointer_segment(default.schema_path.value().as_str())
-                )
-            } else {
-                format!(
-                    "{prefix}/properties/{}",
-                    escape_json_pointer_segment(default.schema_path.value().as_str())
-                )
-            };
-            let pointer = LitStr::new(pointer.as_str(), default.schema_path.span());
+            let pointer = LitStr::new(prefix, default.schema_path.span());
+            let field = &default.schema_path;
             let ty = &default.ty;
             if let Some(expr) = default.default_expr.as_ref() {
                 quote! {
-                    ::agena_plugin_sdk::macro_support::set_schema_value_metadata(
+                    ::agena_plugin_sdk::macro_support::set_schema_input_default_metadata(
                         schema,
                         #pointer,
-                        "default",
+                        #field,
                         ::agena_plugin_sdk::serde_json::json!(#expr),
                     );
                 }
@@ -361,10 +343,10 @@ pub fn input_default_schema_metadata_calls(
                     if let Ok(__default) = ::agena_plugin_sdk::serde_json::to_value(
                         <#ty as ::core::default::Default>::default(),
                     ) {
-                        ::agena_plugin_sdk::macro_support::set_schema_value_metadata(
+                        ::agena_plugin_sdk::macro_support::set_schema_input_default_metadata(
                             schema,
                             #pointer,
-                            "default",
+                            #field,
                             __default,
                         );
                     }

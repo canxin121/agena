@@ -9,13 +9,14 @@ use super::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
     PathValueConstraint, PathValuesConstraint, PluginPickerKind, SerdeRenameRule, ToolInputConfig,
     ToolInputVariantConfig, append_constraint_path_suffix, field_has_serde_default,
-    field_schema_aliases, field_schema_property_name_with_rule, input_type_semantic_shape,
+    field_schema_property_name_with_rule, input_type_semantic_shape,
     normalize_array_value_constraints, normalize_array_value_lit_paths,
     normalize_array_value_nested_path_constraints, parse_input_variant_config,
     prefixed_constraint_group, resolve_constraint_expr_paths, resolve_constraint_group_paths,
     resolve_constraint_lit_paths, resolve_constraint_pair_paths, resolve_constraint_string_paths,
     resolve_constraint_strings_paths, resolve_constraint_usize_paths,
-    resolve_constraint_values_paths, resolve_known_constraint_path, serde_rename_all_rule,
+    resolve_constraint_values_paths, resolve_known_constraint_path, serde_attribute_aliases,
+    serde_rename_all_rule,
 };
 
 use super::input_arg_output_support::{
@@ -158,7 +159,7 @@ pub fn prepare_input_field_names(
         .name
         .clone()
         .unwrap_or_else(|| parse_path.clone());
-    let serde_aliases = field_schema_aliases(field)?;
+    let serde_aliases = serde_attribute_aliases(&field.attrs)?;
 
     let mut schema_side_aliases = serde_aliases.clone();
     if schema_path.value() != parse_path.value() {

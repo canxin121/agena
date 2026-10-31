@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use quote::quote;
-use syn::{Attribute, Data, LitStr, Result, Variant};
+use syn::punctuated::Punctuated;
+use syn::{Attribute, Data, LitStr, Meta, Result, Token, Variant};
 
 use super::input_builtin_support::{
     count_constraint_schema_calls, count_field_schema_calls, numeric_constraint_schema_calls,
@@ -13,10 +14,34 @@ use super::input_schema_metadata_fields::tool_input_struct_field_schema_metadata
 use super::input_schema_path_support::{
     schema_pointer_from_logical_path, schema_relation_display_path,
 };
+use super::serde_rename_support::serde_variant_input;
 use super::{
     SchemaConstraintSource, SchemaRelationSource, ToolSpecConfig, doc_text, picker_kind_label,
     serde_rename_all_fields_rule, serde_rename_all_rule,
 };
+
+// Schemars compacts omitted input variants before assigning branch indexes.
+// Reuse the input parser's serde skip facts, then honor its schema-only skip.
+fn variant_has_input_schema(variant: &Variant) -> Result<bool> {
+    let input = serde_variant_input(variant, None)?;
+    if input.name.is_none() && !input.fallback {
+        return Ok(false);
+    }
+    for attr in variant
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("schemars"))
+    {
+        let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+        if metas
+            .iter()
+            .any(|meta| matches!(meta, Meta::Path(path) if path.is_ident("skip")))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 pub fn expand_schema_metadata_fn<C, F>(
     attrs: &[Attribute],
@@ -42,7 +67,16 @@ where
         }
         Data::Enum(data_enum) => {
             let enum_field_rule = serde_rename_all_fields_rule(attrs)?;
-            for (index, variant) in data_enum.variants.iter().enumerate() {
+            let variants = data_enum
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    variant_has_input_schema(variant)
+                        .map(|included| included.then_some(variant))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (index, variant) in variants.into_iter().enumerate() {
                 if let Some(description) = doc_text(&variant.attrs).and_then(|text| {
                     let trimmed = text.trim().to_string();
                     (!trimmed.is_empty()).then_some(trimmed)
@@ -455,7 +489,9 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
             .chain(constraints.non_empty_if_present().iter())
             .filter(|path| !non_empty_metadata_parse_paths.contains(&path.value()))
             .map(|path| {
-                let pointer = schema_pointer_from_logical_path(prefix, &path.value())?;
+                let schema_path =
+                    schema_relation_display_path(&path.value(), constraints.input_field_metadata());
+                let pointer = schema_pointer_from_logical_path(prefix, &schema_path)?;
                 let pointer = LitStr::new(pointer.as_str(), path.span());
                 Ok(quote! {
                     ::agena_plugin_sdk::macro_support::set_schema_non_empty_metadata(
@@ -468,6 +504,21 @@ pub fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
     );
     calls.extend(numeric_constraint_schema_calls(prefix, constraints)?);
     calls.extend(count_constraint_schema_calls(prefix, constraints)?);
+    // Strict non-empty paths require a match. The if-present form intentionally
+    // keeps zero matches valid; leaf metadata is shared by both policies.
+    for path in constraints.non_empty() {
+        let schema_path =
+            schema_relation_display_path(&path.value(), constraints.input_field_metadata());
+        let schema_path = LitStr::new(&schema_path, path.span());
+        let pointer = LitStr::new(prefix, path.span());
+        calls.push(quote! {
+            ::agena_plugin_sdk::macro_support::set_schema_strict_non_empty_path_metadata(
+                schema,
+                #pointer,
+                #schema_path,
+            );
+        });
+    }
     calls.extend(
         constraints
             .formats()

@@ -2,7 +2,7 @@
 
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Field, Ident, LitStr, Meta, Result, Token};
+use syn::{Attribute, Field, Ident, LitStr, Meta, Result, Token, Variant};
 
 use super::{expr_lit_str, ident_to_snake_case};
 
@@ -34,6 +34,39 @@ impl SerdeRenameRule {
                 value,
                 format!("unsupported serde rename_all rule '{other}'"),
             )),
+        }
+    }
+
+    /// Serde treats variant identifiers differently from field names: a
+    /// default/PascalCase variant keeps its spelling, including acronyms.
+    pub fn apply_to_variant(self, ident: &Ident) -> String {
+        let value = ident.to_string();
+        match self {
+            Self::Lower => value.to_ascii_lowercase(),
+            Self::Upper => value.to_ascii_uppercase(),
+            Self::Pascal => value,
+            Self::Camel => {
+                let mut chars = value.chars();
+                let Some(first) = chars.next() else {
+                    return value;
+                };
+                format!("{}{}", first.to_ascii_lowercase(), chars.as_str())
+            }
+            Self::Snake | Self::ScreamingSnake | Self::Kebab | Self::ScreamingKebab => {
+                let mut snake = String::new();
+                for (index, ch) in value.chars().enumerate() {
+                    if ch.is_uppercase() && index > 0 {
+                        snake.push('_');
+                    }
+                    snake.push(ch.to_ascii_lowercase());
+                }
+                match self {
+                    Self::ScreamingSnake => snake.to_ascii_uppercase(),
+                    Self::Kebab => snake.replace('_', "-"),
+                    Self::ScreamingKebab => snake.replace('_', "-").to_ascii_uppercase(),
+                    _ => snake,
+                }
+            }
         }
     }
 
@@ -71,16 +104,17 @@ fn pascal_case_from_snake(snake: &str) -> String {
 }
 
 pub fn serde_rename_all_rule(attrs: &[Attribute]) -> Result<Option<SerdeRenameRule>> {
-    serde_rename_all_rule_for_key(attrs, "rename_all")
+    serde_rename_all_rule_for_key(attrs, "rename_all", Some("serialize"))
 }
 
 pub fn serde_rename_all_fields_rule(attrs: &[Attribute]) -> Result<Option<SerdeRenameRule>> {
-    serde_rename_all_rule_for_key(attrs, "rename_all_fields")
+    serde_rename_all_rule_for_key(attrs, "rename_all_fields", Some("serialize"))
 }
 
 fn serde_rename_all_rule_for_key(
     attrs: &[Attribute],
     key: &str,
+    fallback_key: Option<&str>,
 ) -> Result<Option<SerdeRenameRule>> {
     let mut rule = None;
     for attr in attrs {
@@ -94,10 +128,18 @@ fn serde_rename_all_rule_for_key(
                     rule = Some(SerdeRenameRule::parse(&expr_lit_str(&value.value, key)?)?);
                 }
                 Meta::List(list) if list.path.is_ident(key) => {
-                    if let Some(value) =
-                        serde_rename_rule_list_value(list.tokens.clone(), key, "deserialize")?
-                            .or(serde_rename_rule_list_value(list.tokens, key, "serialize")?)
-                    {
+                    let value =
+                        serde_rename_rule_list_value(list.tokens.clone(), key, "deserialize")?;
+                    let value = if let Some(fallback_key) = fallback_key {
+                        value.or(serde_rename_rule_list_value(
+                            list.tokens,
+                            key,
+                            fallback_key,
+                        )?)
+                    } else {
+                        value
+                    };
+                    if let Some(value) = value {
                         rule = Some(SerdeRenameRule::parse(&value)?);
                     }
                 }
@@ -184,6 +226,83 @@ pub fn field_schema_property_name_with_rule(
     })))
 }
 
+/// The flat enum payload normalizer can select an internally tagged
+/// variant. Adjacent/external/untagged payloads have different locations.
+pub fn serde_internal_tag(attrs: &[Attribute]) -> Result<Option<LitStr>> {
+    let mut tag = None;
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("serde")) {
+        for meta in attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+            match meta {
+                Meta::Path(path) if path.is_ident("untagged") => return Ok(None),
+                Meta::NameValue(value) if value.path.is_ident("content") => return Ok(None),
+                Meta::NameValue(value) if value.path.is_ident("tag") => {
+                    tag = Some(expr_lit_str(&value.value, "tag")?);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(tag)
+}
+
+pub fn serde_variant_rename_all_rule(attrs: &[Attribute]) -> Result<Option<SerdeRenameRule>> {
+    serde_rename_all_rule_for_key(attrs, "rename_all", None)
+}
+
+pub struct SerdeVariantInput {
+    pub name: Option<LitStr>,
+    pub fallback: bool,
+}
+
+pub fn serde_variant_input(
+    variant: &Variant,
+    rename_rule: Option<SerdeRenameRule>,
+) -> Result<SerdeVariantInput> {
+    let mut rename = None;
+    let mut untagged = false;
+    let mut fallback = false;
+    for attr in variant
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("serde"))
+    {
+        for meta in attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)? {
+            match meta {
+                Meta::Path(path)
+                    if path.is_ident("skip") || path.is_ident("skip_deserializing") =>
+                {
+                    return Ok(SerdeVariantInput {
+                        name: None,
+                        fallback: false,
+                    });
+                }
+                Meta::Path(path) if path.is_ident("other") => fallback = true,
+                Meta::Path(path) if path.is_ident("untagged") => {
+                    untagged = true;
+                    fallback = true;
+                }
+                Meta::NameValue(value) if value.path.is_ident("rename") => {
+                    rename = Some(expr_lit_str(&value.value, "rename")?);
+                }
+                Meta::List(list) if list.path.is_ident("rename") => {
+                    rename = serde_rename_rule_list_value(list.tokens, "rename", "deserialize")?;
+                }
+                _ => {}
+            }
+        }
+    }
+    let name = (!untagged).then(|| {
+        rename.unwrap_or_else(|| {
+            let value = rename_rule.map_or_else(
+                || variant.ident.to_string(),
+                |rule| rule.apply_to_variant(&variant.ident),
+            );
+            LitStr::new(&value, variant.ident.span())
+        })
+    });
+    Ok(SerdeVariantInput { name, fallback })
+}
+
 pub fn field_has_serde_default(field: &Field) -> Result<bool> {
     for attr in &field.attrs {
         if !attr.path().is_ident("serde") {
@@ -201,9 +320,9 @@ pub fn field_has_serde_default(field: &Field) -> Result<bool> {
     Ok(false)
 }
 
-pub fn field_schema_aliases(field: &Field) -> Result<Vec<String>> {
+pub fn serde_attribute_aliases(attrs: &[Attribute]) -> Result<Vec<String>> {
     let mut aliases = Vec::new();
-    for attr in &field.attrs {
+    for attr in attrs {
         if !attr.path().is_ident("serde") {
             continue;
         }

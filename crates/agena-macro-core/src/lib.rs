@@ -83,8 +83,8 @@ pub use input_path_support::{
 };
 pub use input_postprocess_support::{
     expand_input_alias_normalize_tokens, expand_input_default_insert_tokens,
-    expand_input_default_schema_metadata_tokens, expand_input_example_expr,
-    expand_input_root_default_insert_tokens, expand_input_root_default_schema_metadata_tokens,
+    expand_input_example_expr, expand_input_root_default_insert_tokens,
+    expand_input_root_default_schema_metadata_tokens,
     expand_input_root_example_schema_metadata_tokens,
     expand_input_shape_enum_parse_error_remap_expr,
     expand_input_shape_enum_validate_error_remap_expr, expand_result_path_remap_expr,
@@ -146,8 +146,8 @@ pub use plugin_types::{
     PluginToolStreamHandler, PluginToolStreamSignature, plugin_attr_has_explicit_args,
 };
 pub use serde_rename_support::{
-    SerdeRenameRule, field_has_serde_default, field_schema_aliases,
-    field_schema_property_name_with_rule, serde_rename_all_fields_rule, serde_rename_all_rule,
+    SerdeRenameRule, field_has_serde_default, field_schema_property_name_with_rule,
+    serde_attribute_aliases, serde_rename_all_fields_rule, serde_rename_all_rule,
 };
 pub use tool_spec_support::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,

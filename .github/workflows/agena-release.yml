@@ -570,11 +570,11 @@ jobs:
             -ServiceMode detached `
             -NoPathUpdate
           Write-Host "[published-smoke] status + health"
-          & $installer -Action Status -InstallDir $installDir -NoPathUpdate
+          & $installer -Action Status -InstallDir $installDir
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
           Write-Host "[published-smoke] stop + start"
-          & $installer -Action Stop -InstallDir $installDir -NoPathUpdate
-          & $installer -Action Start -InstallDir $installDir -NoPathUpdate
+          & $installer -Action Stop -InstallDir $installDir
+          & $installer -Action Start -InstallDir $installDir
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" -TimeoutSec 15 | Out-Null
           Write-Host "[published-smoke] reinstall"
           & $installer -Action Reinstall -InstallDir $installDir -NoPathUpdate

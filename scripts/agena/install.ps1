@@ -1,3 +1,4 @@
+[CmdletBinding()]
 Param(
   [ValidateSet("Install", "Reinstall", "Upgrade", "Uninstall", "Start", "Stop", "Restart", "Status")]
   [string]$Action = "Install",
@@ -13,7 +14,6 @@ Param(
   [string]$ListenHost = "127.0.0.1",
   [int]$Port = 3210,
   [string]$Workspace = "",
-  [Alias("UiPassword")]
   [string]$ServerPassword = $env:AGENA_SERVER_PASSWORD,
   [ValidateSet("auto", "native", "detached")]
   [string]$ServiceMode = "auto",
@@ -356,8 +356,9 @@ function Load-State {
   }
   $selectedInstallDir = $InstallDir
   $state = Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
-  if ($state.schema -ne 2 -or -not $state.dataDir) {
-    throw "installer state is incompatible; reinstall with an explicit -DataDir"
+  if ($state.schema -ne 2 -or -not $state.dataDir -or
+      $state.PSObject.Properties.Name -notcontains "serverPassword") {
+    throw "installer state is incompatible; use a new installation directory and an explicit -DataDir"
   }
   $script:Repo = [string]$state.repo
   $script:Version = [string]$state.version
@@ -368,10 +369,7 @@ function Load-State {
   $script:ListenHost = [string]$state.host
   $script:Port = [int]$state.port
   $script:Workspace = [string]$state.workspace
-  # Read the previous installer-state key once; save only the shared name.
-  $script:ServerPassword = if ($state.PSObject.Properties.Name -contains "serverPassword") {
-    [string]$state.serverPassword
-  } else { [string]$state.uiPassword }
+  $script:ServerPassword = [string]$state.serverPassword
   $script:ServiceMode = [string]$state.serviceMode
   Assert-StoragePaths
   $script:StateFile = Join-Path $script:InstallDir "install-state.json"

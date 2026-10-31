@@ -500,11 +500,13 @@ export AGENA_SERVER_PASSWORD='choose-your-server-password'
 `agena server --password` accepts the same credential; prefer the environment
 variable to keep the secret out of process arguments. MCP has no separate
 password. Without a server password, OAuth authorization is unavailable.
-The removed `--ui-password` flag is rejected. A service configured only with
-`AGENA_SERVER_UI_PASSWORD` fails startup rather than disabling login protection;
-set `AGENA_SERVER_PASSWORD` explicitly. Installer state must contain the current
-`SERVER_PASSWORD` field, including an explicit empty value for an unprotected
-local instance. The installer does not import the retired `UI_PASSWORD` field.
+The removed `--ui-password` flag and PowerShell `-UiPassword` alias are rejected.
+A service configured only with `AGENA_SERVER_UI_PASSWORD` fails startup rather
+than disabling login protection; set `AGENA_SERVER_PASSWORD` explicitly.
+Installer state must contain the current password field (`SERVER_PASSWORD` in
+shell state, `serverPassword` in PowerShell state), including an explicit empty
+value for an unprotected local instance. Neither installer imports the retired
+`UI_PASSWORD` / `uiPassword` field.
 
 On macOS/Linux the installer writes `client-env.sh` under the installation
 root, and the managed shell block sources it. The file exports `AGENA_DATA_DIR`
